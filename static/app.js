@@ -65,12 +65,28 @@ function fmtDate(value) {
   if (Number.isNaN(d.getTime())) return value;
   return d.toLocaleString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" });
 }
+// Awareness for the two-people-editing-the-same-car case: seeing "updated 2
+// minutes ago" is often enough to make someone check with a coworker before
+// saving over their still-fresh change.
+function relativeTime(value) {
+  if (!value) return "";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return "";
+  const minutes = Math.round((Date.now() - d.getTime()) / 60000);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes} minute${minutes === 1 ? "" : "s"} ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours} hour${hours === 1 ? "" : "s"} ago`;
+  const days = Math.round(hours / 24);
+  return `${days} day${days === 1 ? "" : "s"} ago`;
+}
 
 /* ---------- state ---------- */
 const state = {
   vehicles: [],
   filter: "",
   search: "",
+  sortByAge: null, // null | "asc" | "desc"
   staff: [],
   vendors: [],
   orders: [],
@@ -176,6 +192,15 @@ function renderStats() {
   $("#stat-actual-total").textContent = money(open.reduce((s, v) => s + v.actual_cost, 0));
 }
 
+// Age severity: how long a car has actually been sitting is the natural
+// companion to "what we have in it" -- color makes the outliers jump out
+// without having to read every row.
+function ageClass(days) {
+  if (days >= 30) return "age-crit";
+  if (days >= 14) return "age-warn";
+  return "age-ok";
+}
+
 function renderVehiclesTable() {
   let rows = state.vehicles;
   if (state.filter) rows = rows.filter((v) => v.segment === state.filter);
@@ -188,10 +213,13 @@ function renderVehiclesTable() {
       v.vehicle.toLowerCase().includes(q)
     );
   }
+  if (state.sortByAge) {
+    rows = rows.slice().sort((a, b) => state.sortByAge === "desc" ? b.age_days - a.age_days : a.age_days - b.age_days);
+  }
   $("#vehicles-count").textContent = `${rows.length} vehicle${rows.length === 1 ? "" : "s"}`;
   const body = $("#vehicles-table");
   if (!rows.length) {
-    body.innerHTML = `<tr><td colspan="6" style="text-align:center;color:var(--ink-faint);padding:30px">No vehicles match.</td></tr>`;
+    body.innerHTML = `<tr><td colspan="7" style="text-align:center;color:var(--ink-faint);padding:30px">No vehicles match.</td></tr>`;
     return;
   }
   body.innerHTML = rows.map((v) => `
@@ -204,6 +232,7 @@ function renderVehiclesTable() {
       <td><span class="pill ${v.segment === "recon" ? "pill-recon" : "pill-weowe"}">${v.segment === "recon" ? "Recon" : "We-Owe"}</span></td>
       <td><span class="pill ${v.status_bucket === "finished" ? "pill-done" : "pill-progress"}">${esc(STATUS_LABEL[v.status] || v.status)}</span></td>
       <td>${v.technicians.length ? `<span class="tech"><span class="tech-dot"></span>${esc(v.technicians.join(", "))}</span>` : `<span style="color:var(--ink-faint)">—</span>`}</td>
+      <td class="num-col ${ageClass(v.age_days)}">${v.age_days}d</td>
       <td class="num-col">${money(v.actual_cost)}</td>
     </tr>
   `).join("");
@@ -228,6 +257,12 @@ function wireVehiclesView() {
   });
   $("#add-recon-btn").addEventListener("click", () => openReconDialog());
   $("#add-we-owe-btn").addEventListener("click", () => openWeOweDialog());
+
+  $("#th-age").addEventListener("click", () => {
+    state.sortByAge = state.sortByAge === "desc" ? "asc" : "desc";
+    $("#th-age .sort-arrow").textContent = state.sortByAge === "desc" ? "▼" : "▲";
+    renderVehiclesTable();
+  });
 }
 
 /* ==================================================================
@@ -284,10 +319,19 @@ async function loadVehicleDetail() {
 
 function renderDetailHead() {
   const { segment, item } = state.detail;
+  const updatedEl = $("#vd-updated");
+  if (item.updated_at) {
+    const minutesAgo = (Date.now() - new Date(item.updated_at).getTime()) / 60000;
+    updatedEl.textContent = `Updated ${relativeTime(item.updated_at)}`;
+    updatedEl.classList.toggle("recent", minutesAgo < 10);
+  } else {
+    updatedEl.textContent = "";
+  }
   if (segment === "recon") {
     $("#vd-title").textContent = `${item.stock_number} — ${item.year} ${item.make} ${item.model}`;
     $("#vd-sub").textContent = [item.vin, item.mileage ? `${item.mileage.toLocaleString()} mi` : "", item.trim].filter(Boolean).join(" · ");
     $("#vd-we-owe-status-card").style.display = "none";
+    $("#vd-deposits-card").style.display = "none";
     $("#vd-recon-info-card").style.display = "";
     $("#vd-recon-vin").value = item.vin || "";
     $("#vd-recon-mileage").value = item.mileage || 0;
@@ -306,6 +350,8 @@ function renderDetailHead() {
     $("#vd-we-owe-description").value = item.description || "";
     $("#vd-we-owe-category").value = item.category || "";
     $("#vd-we-owe-target").value = item.target_date || "";
+    $("#vd-deposits-card").style.display = "";
+    renderDeposits();
   }
   renderCostSummary();
   renderTraceability();
@@ -318,8 +364,40 @@ function renderCostSummary() {
   if (state.detail.segment === "recon") {
     lines += `<div class="cost-line"><span>Purchase price</span><span class="num">${money(item.purchase_price)}</span></div>`;
     lines += `<div class="cost-line total"><span>Total invested</span><span class="num">${money(item.purchase_price + item.total_cost)}</span></div>`;
+  } else if (item.customer_paid) {
+    lines += `<div class="cost-line"><span>Customer paid</span><span class="num">${money(item.customer_paid)}</span></div>`;
+    lines += `<div class="cost-line total"><span>Net to shop</span><span class="num">${money(item.net_cost)}</span></div>`;
   }
   box.innerHTML = lines;
+}
+
+function renderDeposits() {
+  const { item } = state.detail;
+  const payments = item.payments || [];
+  $("#vd-deposits-summary").innerHTML = `
+    <div class="cost-line"><span>Customer paid</span><span class="num">${money(item.customer_paid || 0)}</span></div>
+    <div class="cost-line total"><span>Net to shop</span><span class="num">${money(item.net_cost ?? item.total_cost)}</span></div>
+  `;
+  $("#vd-deposits-list").innerHTML = payments.length ? payments.map((p) => `
+    <div class="mini-item">
+      <div>${money(p.amount)} · ${esc(p.method)} ${p.note ? `— ${esc(p.note)}` : ""}
+        <button type="button" class="rm-btn deposit-rm" data-id="${p.id}" title="Remove">×</button>
+      </div>
+      <div class="mi-meta">${esc(p.actor || "Unspecified")} · ${fmtDate(p.created_at)}</div>
+    </div>
+  `).join("") : `<div style="color:var(--ink-faint);font-size:12px;padding:0 16px 14px">No deposits recorded yet.</div>`;
+  $$(".deposit-rm", $("#vd-deposits-list")).forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      if (!confirm("Remove this deposit?")) return;
+      try {
+        await api(`/api/we-owe/${item.id}/payments/${btn.dataset.id}`, { method: "DELETE" });
+        toast("Deposit removed");
+        await loadVehicleDetail();
+      } catch (err) {
+        toast(err.message, true);
+      }
+    });
+  });
 }
 
 async function renderTraceability() {
@@ -475,12 +553,18 @@ async function persistEstimate() {
   if (!order) return;
   const items = collectEstimateItems();
   const token = ++estimateSaveToken;
+  const expectedVersion = order.estimate ? order.estimate.edit_version : null;
   try {
-    const estimate = await post(`/api/orders/${order.id}/estimate`, { labor_rate: 0, tax_rate: 0, actor: currentActor(), items });
+    const estimate = await post(`/api/orders/${order.id}/estimate`, { labor_rate: 0, tax_rate: 0, actor: currentActor(), items, expected_version: expectedVersion });
     if (token !== estimateSaveToken) return; // a newer edit has already been sent; drop this stale response
     order.estimate = estimate;
     renderEstimate(order);
   } catch (err) {
+    if (String(err.message).includes("Someone else changed")) {
+      toast(err.message, true);
+      await loadVehicleDetail(); // pull the latest version instead of leaving stale data on screen
+      return;
+    }
     toast(err.message, true);
   }
 }
@@ -630,7 +714,7 @@ function wireVehicleDetail() {
   });
 
   $("#vd-we-owe-save").addEventListener("click", async (e) => {
-    const { id } = state.detail;
+    const { id, item } = state.detail;
     await withLoading(e.target, "Saving…", async () => {
       try {
         await patch(`/api/we-owe/${id}`, {
@@ -638,8 +722,32 @@ function wireVehicleDetail() {
           description: $("#vd-we-owe-description").value.trim(),
           category: $("#vd-we-owe-category").value.trim(),
           target_date: $("#vd-we-owe-target").value,
+          expected_version: item.edit_version,
         });
         toast("We-owe item updated");
+        await loadVehicleDetail();
+      } catch (err) {
+        if (String(err.message).includes("Someone else changed")) await loadVehicleDetail();
+        toast(err.message, true);
+      }
+    });
+  });
+
+  $("#vd-deposit-add").addEventListener("click", async (e) => {
+    const { id } = state.detail;
+    const amount = Number($("#vd-deposit-amount").value || 0);
+    if (!amount || amount <= 0) return toast("Enter a deposit amount first", true);
+    await withLoading(e.target, "Saving…", async () => {
+      try {
+        await post(`/api/we-owe/${id}/payments`, {
+          amount,
+          method: $("#vd-deposit-method").value,
+          note: $("#vd-deposit-note").value.trim(),
+          actor: currentActor(),
+        });
+        $("#vd-deposit-amount").value = "";
+        $("#vd-deposit-note").value = "";
+        toast("Deposit recorded");
         await loadVehicleDetail();
       } catch (err) {
         toast(err.message, true);
@@ -648,7 +756,7 @@ function wireVehicleDetail() {
   });
 
   $("#vd-recon-info-save").addEventListener("click", async (e) => {
-    const { id } = state.detail;
+    const { id, item } = state.detail;
     await withLoading(e.target, "Saving…", async () => {
       try {
         await patch(`/api/recon/vehicles/${id}`, {
@@ -660,10 +768,12 @@ function wireVehicleDetail() {
           trim: $("#vd-recon-trim").value.trim(),
           color: $("#vd-recon-color").value.trim(),
           purchase_price: Number($("#vd-recon-purchase-price").value || 0),
+          expected_version: item.edit_version,
         });
         toast("Vehicle info updated");
         await loadVehicleDetail();
       } catch (err) {
+        if (String(err.message).includes("Someone else changed")) await loadVehicleDetail();
         toast(err.message, true);
       }
     });
@@ -762,11 +872,12 @@ function wireReconDialog() {
    ================================================================== */
 async function openWeOweDialog() {
   $("#we-owe-form").reset();
-  $("#we-owe-new-customer").style.display = "none";
-  $("#we-owe-new-vehicle").style.display = "none";
   $("#we-owe-new-year").value = new Date().getFullYear();
   const customers = await get("/api/customers");
   $("#we-owe-customer").innerHTML = `<option value="__new__">＋ New customer…</option>` + customers.map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join("");
+  // The select always defaults to its first option ("__new__") on open --
+  // show the matching fields instead of hardcoding them hidden.
+  $("#we-owe-new-customer").style.display = $("#we-owe-customer").value === "__new__" ? "" : "none";
   await refreshWeOweVehicleOptions();
   $("#we-owe-dialog").showModal();
 }
@@ -890,11 +1001,13 @@ function renderReportTable(rows, type) {
       <tbody>${rows.map((r) => `<tr><td>${esc(r.technician)}</td><td class="num-col">${r.ro_count}</td><td class="num-col">${r.completed_count}</td><td class="num-col">${r.labor_hours}</td><td class="num-col">${money(r.labor_cost)}</td></tr>`).join("")}</tbody></table></div>`;
   }
   const totalActual = rows.reduce((s, r) => s + r.actual_cost, 0);
-  return `<div class="panel"><table><thead><tr><th>Stock #</th><th>Vehicle</th><th>Type</th><th>Status</th><th>Technicians</th><th class="num-col">What's In It</th></tr></thead>
+  const totalPaid = rows.reduce((s, r) => s + (r.customer_paid || 0), 0);
+  const hasDeposits = totalPaid > 0;
+  return `<div class="panel"><table><thead><tr><th>Stock #</th><th>Vehicle</th><th>Type</th><th>Status</th><th>Technicians</th><th class="num-col">What's In It</th>${hasDeposits ? `<th class="num-col">Customer Paid</th><th class="num-col">Net to Shop</th>` : ""}</tr></thead>
     <tbody>${rows.map((r) => `<tr><td class="num">${esc(r.stock_number || "—")}</td><td>${esc(r.vehicle)}${r.customer_name ? ` <span style="color:var(--ink-faint)">(${esc(r.customer_name)})</span>` : ""}</td>
     <td>${r.segment === "recon" ? "Recon" : "We-Owe"}</td><td><span class="pill ${r.status_bucket === "finished" ? "pill-done" : "pill-progress"}">${esc(STATUS_LABEL[r.status] || r.status)}</span></td>
-    <td>${esc(r.technicians.join(", "))}</td><td class="num-col">${money(r.actual_cost)}</td></tr>`).join("")}
-    <tr style="font-weight:700"><td colspan="5">Total</td><td class="num-col">${money(totalActual)}</td></tr></tbody></table></div>`;
+    <td>${esc(r.technicians.join(", "))}</td><td class="num-col">${money(r.actual_cost)}</td>${hasDeposits ? `<td class="num-col">${r.customer_paid ? money(r.customer_paid) : "—"}</td><td class="num-col">${r.customer_paid ? money(r.net_cost) : "—"}</td>` : ""}</tr>`).join("")}
+    <tr style="font-weight:700"><td colspan="5">Total</td><td class="num-col">${money(totalActual)}</td>${hasDeposits ? `<td class="num-col">${money(totalPaid)}</td><td class="num-col">${money(totalActual - totalPaid)}</td>` : ""}</tr></tbody></table></div>`;
 }
 
 const REPORT_TITLES = {
@@ -930,13 +1043,15 @@ function renderPrintReport(rows, type, start, end) {
       </table>`;
   } else {
     const totalActual = rows.reduce((s, r) => s + r.actual_cost, 0);
+    const totalPaid = rows.reduce((s, r) => s + (r.customer_paid || 0), 0);
+    const hasDeposits = totalPaid > 0;
     body = `
       <table class="print-table">
-        <thead><tr><th>Stock #</th><th>Vehicle</th><th>Type</th><th>Status</th><th>Technician(s)</th><th class="num-col">What's In It</th></tr></thead>
+        <thead><tr><th>Stock #</th><th>Vehicle</th><th>Type</th><th>Status</th><th>Technician(s)</th><th class="num-col">What's In It</th>${hasDeposits ? `<th class="num-col">Customer Paid</th><th class="num-col">Net to Shop</th>` : ""}</tr></thead>
         <tbody>${rows.map((r) => `<tr><td class="num">${esc(r.stock_number || "—")}</td><td>${esc(r.vehicle)}${r.customer_name ? ` (${esc(r.customer_name)})` : ""}</td>
         <td>${r.segment === "recon" ? "Recon" : "We-Owe"}</td><td>${esc(STATUS_LABEL[r.status] || r.status)}</td>
-        <td>${esc(r.technicians.join(", ")) || "—"}</td><td class="num-col">${money(r.actual_cost)}</td></tr>`).join("")}</tbody>
-        <tfoot><tr><td colspan="4">Total (${rows.length} vehicle${rows.length === 1 ? "" : "s"})</td><td class="num-col"></td><td class="num-col">${money(totalActual)}</td></tr></tfoot>
+        <td>${esc(r.technicians.join(", ")) || "—"}</td><td class="num-col">${money(r.actual_cost)}</td>${hasDeposits ? `<td class="num-col">${r.customer_paid ? money(r.customer_paid) : "—"}</td><td class="num-col">${r.customer_paid ? money(r.net_cost) : "—"}</td>` : ""}</tr>`).join("")}</tbody>
+        <tfoot><tr><td colspan="4">Total (${rows.length} vehicle${rows.length === 1 ? "" : "s"})</td><td class="num-col"></td><td class="num-col">${money(totalActual)}</td>${hasDeposits ? `<td class="num-col">${money(totalPaid)}</td><td class="num-col">${money(totalActual - totalPaid)}</td>` : ""}</tr></tfoot>
       </table>`;
   }
   return `
@@ -1248,6 +1363,34 @@ async function loadIntegrationsView() {
   } catch (err) {
     toast(`Could not load PartsTech connection info: ${err.message}`, true);
   }
+  try {
+    const creds = await get("/api/integrations/partstech/credentials");
+    $("#partstech-api-status").textContent = creds.configured
+      ? `Key saved for ${creds.username}.`
+      : "No key saved yet.";
+    $("#partstech-username").value = creds.username || "";
+  } catch (err) {
+    $("#partstech-api-status").textContent = "Could not check key status.";
+  }
+}
+
+function wireIntegrationsView() {
+  $("#partstech-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    await withLoading(e.submitter, "Saving…", async () => {
+      try {
+        await put("/api/integrations/partstech/credentials", {
+          username: $("#partstech-username").value.trim(),
+          api_key: $("#partstech-api-key").value.trim(),
+        });
+        $("#partstech-api-key").value = "";
+        toast("PartsTech key saved");
+        loadIntegrationsView();
+      } catch (err) {
+        toast(err.message, true);
+      }
+    });
+  });
 }
 
 /* ==================================================================
@@ -1263,6 +1406,7 @@ document.addEventListener("DOMContentLoaded", () => {
   wireReportsView();
   wireAccountingView();
   wireStaffView();
+  wireIntegrationsView();
 
   $$(".rail-item").forEach((btn) => btn.addEventListener("click", () => showView(btn.dataset.view)));
 

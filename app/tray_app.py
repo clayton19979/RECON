@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import socket
 import subprocess
 import threading
 import time
@@ -13,11 +14,9 @@ import uvicorn
 from PIL import Image, ImageDraw
 
 from app.backup import backup_database, most_recent_backup_age_hours, prune_backups
-from app.main import DATA_ROOT, DEFAULT_DB, create_app
+from app.main import DATA_ROOT, DEFAULT_DB, NETWORK_FLAG, create_app
 
-HOST = "127.0.0.1"
 PORT = 8787
-URL = f"http://{HOST}:{PORT}"
 AUTO_BACKUP_INTERVAL_HOURS = 24
 BACKUP_RETENTION_COUNT = 14
 
@@ -26,6 +25,33 @@ CHROME_CANDIDATES = [
     Path(os.environ.get("PROGRAMFILES(X86)", r"C:\Program Files (x86)")) / "Google" / "Chrome" / "Application" / "chrome.exe",
     Path(os.environ.get("LOCALAPPDATA", "")) / "Google" / "Chrome" / "Application" / "chrome.exe",
 ]
+
+
+def network_mode_enabled() -> bool:
+    return NETWORK_FLAG.is_file()
+
+
+def local_lan_ip() -> str:
+    """Best-effort LAN IP for this machine -- opens a UDP socket to a
+    public address without sending anything, just to see which local
+    interface the OS would route through."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        sock.connect(("8.8.8.8", 80))
+        return sock.getsockname()[0]
+    except OSError:
+        return "127.0.0.1"
+    finally:
+        sock.close()
+
+
+def current_host() -> str:
+    return "0.0.0.0" if network_mode_enabled() else "127.0.0.1"
+
+
+def local_url() -> str:
+    host = local_lan_ip() if network_mode_enabled() else "127.0.0.1"
+    return f"http://{host}:{PORT}"
 
 
 def open_in_chrome(url: str) -> None:
@@ -66,13 +92,14 @@ class TrayApp:
 
     def start_server(self) -> bool:
         try:
+            host = current_host()
             # log_config=None: uvicorn's default formatter calls sys.stdout.isatty(),
             # which crashes under a --windowed PyInstaller build where stdout is None.
-            config = uvicorn.Config(create_app(), host=HOST, port=PORT, log_level="warning", log_config=None, access_log=False)
+            config = uvicorn.Config(create_app(), host=host, port=PORT, log_level="warning", log_config=None, access_log=False)
             self.server = uvicorn.Server(config)
             self.thread = threading.Thread(target=self.server.run, daemon=True)
             self.thread.start()
-            log.info("Server starting on %s", URL)
+            log.info("Server starting on %s:%s (network mode: %s)", host, PORT, network_mode_enabled())
             return True
         except Exception:
             log.exception("Server failed to start")
@@ -94,7 +121,29 @@ class TrayApp:
             self.icon.icon = ICON_OK if ok else ICON_DOWN
 
     def open_browser(self, _icon: pystray.Icon, _item: pystray.MenuItem) -> None:
-        open_in_chrome(URL)
+        open_in_chrome(local_url())
+
+    def toggle_network_mode(self, _icon: pystray.Icon, _item: pystray.MenuItem) -> None:
+        if network_mode_enabled():
+            NETWORK_FLAG.unlink(missing_ok=True)
+            log.info("Network access disabled from tray")
+        else:
+            NETWORK_FLAG.write_text("enabled")
+            log.info("Network access enabled from tray")
+        self.stop_server()
+        ok = self.start_server()
+        if self.icon is not None:
+            self.icon.icon = ICON_OK if ok else ICON_DOWN
+            if network_mode_enabled() and ok:
+                self.icon.notify(f"Network access on. Other PCs go to: {local_url()}", "Discount Auto Ops")
+            elif ok:
+                self.icon.notify("Network access off -- only this PC can reach it now.", "Discount Auto Ops")
+
+    def show_server_address(self, _icon: pystray.Icon, _item: pystray.MenuItem) -> None:
+        if network_mode_enabled():
+            self.icon.notify(f"Other PCs go to: {local_url()}", "Discount Auto Ops")
+        else:
+            self.icon.notify("Network access is off -- enable it first to share with other PCs.", "Discount Auto Ops")
 
     def _run_backup(self, notify: bool) -> None:
         backups_dir = DATA_ROOT / "backups"
@@ -136,6 +185,12 @@ class TrayApp:
         threading.Thread(target=self._auto_backup_loop, daemon=True).start()
         menu = pystray.Menu(
             pystray.MenuItem("Open Discount Auto Ops", self.open_browser, default=True),
+            pystray.MenuItem(
+                "Allow other PCs on this network",
+                self.toggle_network_mode,
+                checked=lambda _item: network_mode_enabled(),
+            ),
+            pystray.MenuItem("Show Server Address", self.show_server_address),
             pystray.MenuItem("Backup Now", self.backup_now),
             pystray.MenuItem("Restart Server", self.restart),
             pystray.MenuItem("Exit", self.quit_app),

@@ -1,12 +1,22 @@
 from __future__ import annotations
 
 import sqlite3
+from datetime import datetime, timezone
 from typing import Callable, Literal
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from .db import RECON_SHOP_CUSTOMER_ID
+
+
+def age_days(created_at: str) -> int:
+    """Whole days since created_at (an ISO timestamp) -- how long a car has
+    actually been sitting, the natural companion to "what we have in it"."""
+    created = datetime.fromisoformat(created_at)
+    if created.tzinfo is None:
+        created = created.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - created).days
 
 RECON_STATUSES = {"acquired", "in_repair", "ready", "sold", "retained"}
 WE_OWE_STATUSES = {"open", "fulfilled", "waived"}
@@ -45,6 +55,7 @@ class RecondVehiclePatch(BaseModel):
     engine: str | None = None
     color: str | None = None
     mileage: int | None = Field(default=None, ge=0)
+    expected_version: int | None = None
 
 
 class WeOweIn(BaseModel):
@@ -63,6 +74,17 @@ class WeOwePatch(BaseModel):
     category: str | None = None
     target_date: str | None = None
     lot_stock_number: str | None = None
+    expected_version: int | None = None
+
+
+class WeOwePaymentIn(BaseModel):
+    """Customers are sometimes talked into putting money down toward a
+    we-owe repair -- tracked separately from shop cost so the net amount
+    the shop is actually out of pocket is visible, not just gross spend."""
+    amount: float = Field(gt=0)
+    method: Literal["cash", "card", "check", "bank", "other"] = "cash"
+    note: str = ""
+    actor: str = ""
 
 
 def cost_rollup(db: sqlite3.Connection, column: str, ref_id: int) -> dict:
@@ -148,6 +170,7 @@ def vehicle_board_rows(db: sqlite3.Connection, start: str | None = None, end: st
                 "quoted_cost": rollup["quoted_cost"],
                 "technicians": technician_names(db, order_ids),
                 "updated_at": row["updated_at"],
+                "age_days": age_days(row["created_at"]),
             })
     if segment in (None, "we_owe"):
         rows = db.execute(
@@ -160,6 +183,9 @@ def vehicle_board_rows(db: sqlite3.Connection, start: str | None = None, end: st
         for row in rows:
             rollup = cost_rollup(db, "we_owe_id", row["id"])
             order_ids = [o["id"] for o in rollup["orders"]]
+            customer_paid = round(db.execute(
+                "SELECT coalesce(sum(amount),0) FROM we_owe_payments WHERE we_owe_id=?", (row["id"],)
+            ).fetchone()[0], 2)
             result.append({
                 "segment": "we_owe",
                 "recon_id": None,
@@ -173,8 +199,11 @@ def vehicle_board_rows(db: sqlite3.Connection, start: str | None = None, end: st
                 "status_bucket": "finished" if row["status"] in ("fulfilled", "waived") else "in_progress",
                 "actual_cost": rollup["total_cost"],
                 "quoted_cost": rollup["quoted_cost"],
+                "customer_paid": customer_paid,
+                "net_cost": round(rollup["total_cost"] - customer_paid, 2),
                 "technicians": technician_names(db, order_ids),
                 "updated_at": row["updated_at"],
+                "age_days": age_days(row["created_at"]),
             })
     return result
 
@@ -222,6 +251,12 @@ def build_recon_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
         detail["orders"] = rollup["orders"]
         detail["total_cost"] = rollup["total_cost"]
         detail["quoted_cost"] = rollup["quoted_cost"]
+        payments = [dict(row) for row in db.execute(
+            "SELECT * FROM we_owe_payments WHERE we_owe_id=? ORDER BY id DESC", (we_owe_id,)
+        )]
+        detail["payments"] = payments
+        detail["customer_paid"] = round(sum(p["amount"] for p in payments), 2)
+        detail["net_cost"] = round(detail["total_cost"] - detail["customer_paid"], 2)
         return detail
 
     @router.get("/vehicles-board")
@@ -280,6 +315,8 @@ def build_recon_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
     def update_recon_vehicle(recon_id: int, item: RecondVehiclePatch):
         with connect() as db:
             row = recon_row(db, recon_id)
+            if item.expected_version is not None and item.expected_version != row["edit_version"]:
+                raise HTTPException(409, "Someone else changed this vehicle since you loaded it -- reload to see their update")
             fields: list[str] = []
             params: list[object] = []
             if item.status is not None:
@@ -302,12 +339,6 @@ def build_recon_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
             if item.purchase_price is not None:
                 fields.append("purchase_price=?")
                 params.append(item.purchase_price)
-            if fields:
-                fields.append("updated_at=?")
-                params.append(now_fn())
-                params.append(recon_id)
-                db.execute(f"UPDATE recon_vehicles SET {','.join(fields)} WHERE id=?", params)
-
             # Core vehicle info (VIN, make/model, etc.) lives on the shared
             # vehicles table, not recon_vehicles -- correcting a typo here
             # shouldn't require touching the database directly.
@@ -329,6 +360,13 @@ def build_recon_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
             if vehicle_fields:
                 vehicle_params.append(row["vehicle_id"])
                 db.execute(f"UPDATE vehicles SET {','.join(vehicle_fields)} WHERE id=?", vehicle_params)
+
+            if fields or vehicle_fields:
+                fields.append("updated_at=?")
+                params.append(now_fn())
+                fields.append("edit_version=edit_version+1")
+                params.append(recon_id)
+                db.execute(f"UPDATE recon_vehicles SET {','.join(fields)} WHERE id=?", params)
 
             return recon_detail(db, recon_id)
 
@@ -377,7 +415,9 @@ def build_recon_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
     @router.patch("/we-owe/{we_owe_id}")
     def update_we_owe_item(we_owe_id: int, item: WeOwePatch):
         with connect() as db:
-            we_owe_row(db, we_owe_id)
+            row = we_owe_row(db, we_owe_id)
+            if item.expected_version is not None and item.expected_version != row["edit_version"]:
+                raise HTTPException(409, "Someone else changed this item since you loaded it -- reload to see their update")
             fields: list[str] = []
             params: list[object] = []
             if item.status is not None:
@@ -400,6 +440,7 @@ def build_recon_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
             if fields:
                 fields.append("updated_at=?")
                 params.append(now_fn())
+                fields.append("edit_version=edit_version+1")
                 params.append(we_owe_id)
                 db.execute(f"UPDATE we_owe_items SET {','.join(fields)} WHERE id=?", params)
             return we_owe_detail(db, we_owe_id)
@@ -411,6 +452,25 @@ def build_recon_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
             if db.execute("SELECT 1 FROM orders WHERE we_owe_id=?", (we_owe_id,)).fetchone():
                 raise HTTPException(409, "Can't delete a we-owe item with repair order history -- cancel or close its orders instead")
             db.execute("DELETE FROM we_owe_items WHERE id=?", (we_owe_id,))
+        return None
+
+    @router.post("/we-owe/{we_owe_id}/payments", status_code=201)
+    def add_we_owe_payment(we_owe_id: int, item: WeOwePaymentIn):
+        with connect() as db:
+            we_owe_row(db, we_owe_id)
+            db.execute(
+                "INSERT INTO we_owe_payments(we_owe_id,amount,method,note,actor,created_at) VALUES(?,?,?,?,?,?)",
+                (we_owe_id, item.amount, item.method, item.note.strip(), item.actor.strip(), now_fn()),
+            )
+            return we_owe_detail(db, we_owe_id)
+
+    @router.delete("/we-owe/{we_owe_id}/payments/{payment_id}", status_code=204)
+    def delete_we_owe_payment(we_owe_id: int, payment_id: int):
+        with connect() as db:
+            we_owe_row(db, we_owe_id)
+            if not db.execute("SELECT 1 FROM we_owe_payments WHERE id=? AND we_owe_id=?", (payment_id, we_owe_id)).fetchone():
+                raise HTTPException(404, "Payment not found")
+            db.execute("DELETE FROM we_owe_payments WHERE id=?", (payment_id,))
         return None
 
     return router

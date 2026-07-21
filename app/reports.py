@@ -101,15 +101,24 @@ def technician_productivity_rows(db: sqlite3.Connection, start: str | None, end:
 def _section(rows: list[dict], title: str) -> str:
     """One number per vehicle -- what's actually been spent. Showing a
     second 'quoted' figure alongside it reads as if the total were their
-    sum, which is exactly the confusion this format used to cause."""
+    sum, which is exactly the confusion this format used to cause. We-owe
+    rows get a customer-deposit note when one exists, since that reduces
+    what the shop is actually out of pocket."""
     lines = [f"{title} ({len(rows)} total)", "-" * 40]
-    total_cost = 0.0
+    total_cost = total_paid = 0.0
     for row in rows:
         total_cost += row["actual_cost"]
         label = row["stock_number"] or row.get("customer_name", "")
-        lines.append(f"  {label} - {row['vehicle']} [{row['status']}] what we have in it: ${row['actual_cost']:.2f}")
+        deposit_note = ""
+        if row.get("customer_paid"):
+            total_paid += row["customer_paid"]
+            deposit_note = f", customer paid ${row['customer_paid']:.2f} (net to shop: ${row['net_cost']:.2f})"
+        lines.append(f"  {label} - {row['vehicle']} [{row['status']}] what we have in it: ${row['actual_cost']:.2f}{deposit_note}")
     lines.append("")
-    lines.append(f"  Total: ${total_cost:.2f}")
+    if total_paid:
+        lines.append(f"  Total: ${total_cost:.2f}  |  Customer deposits: ${total_paid:.2f}  |  Net to shop: ${total_cost - total_paid:.2f}")
+    else:
+        lines.append(f"  Total: ${total_cost:.2f}")
     return "\n".join(lines)
 
 

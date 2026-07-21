@@ -50,7 +50,8 @@ CREATE TABLE IF NOT EXISTS recon_vehicles (
   sale_customer_id INTEGER REFERENCES customers(id),
   notes TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
+  updated_at TEXT NOT NULL,
+  edit_version INTEGER NOT NULL DEFAULT 1
 );
 
 CREATE TABLE IF NOT EXISTS we_owe_items (
@@ -66,7 +67,18 @@ CREATE TABLE IF NOT EXISTS we_owe_items (
   sale_reference TEXT NOT NULL DEFAULT '',
   lot_stock_number TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
+  updated_at TEXT NOT NULL,
+  edit_version INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE TABLE IF NOT EXISTS we_owe_payments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  we_owe_id INTEGER NOT NULL REFERENCES we_owe_items(id) ON DELETE CASCADE,
+  amount REAL NOT NULL,
+  method TEXT NOT NULL DEFAULT 'cash',
+  note TEXT NOT NULL DEFAULT '',
+  actor TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS orders (
@@ -92,7 +104,8 @@ CREATE TABLE IF NOT EXISTS estimates (
   tax REAL NOT NULL,
   total REAL NOT NULL,
   status TEXT NOT NULL DEFAULT 'draft',
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  edit_version INTEGER NOT NULL DEFAULT 1
 );
 
 CREATE TABLE IF NOT EXISTS estimate_items (
@@ -273,6 +286,8 @@ CREATE TABLE IF NOT EXISTS app_settings (
   gmail_address TEXT NOT NULL DEFAULT '',
   gmail_app_password TEXT NOT NULL DEFAULT '',
   report_recipient TEXT NOT NULL DEFAULT '',
+  partstech_username TEXT NOT NULL DEFAULT '',
+  partstech_api_key TEXT NOT NULL DEFAULT '',
   updated_at TEXT NOT NULL DEFAULT ''
 );
 
@@ -300,6 +315,22 @@ def _migrate(db: sqlite3.Connection) -> None:
     columns = {row[1] for row in db.execute("PRAGMA table_info(estimate_items)")}
     if "received_invoice_number" not in columns:
         db.execute("ALTER TABLE estimate_items ADD COLUMN received_invoice_number TEXT NOT NULL DEFAULT ''")
+
+    settings_columns = {row[1] for row in db.execute("PRAGMA table_info(app_settings)")}
+    if "partstech_username" not in settings_columns:
+        db.execute("ALTER TABLE app_settings ADD COLUMN partstech_username TEXT NOT NULL DEFAULT ''")
+    if "partstech_api_key" not in settings_columns:
+        db.execute("ALTER TABLE app_settings ADD COLUMN partstech_api_key TEXT NOT NULL DEFAULT ''")
+
+    # order_workflow gets a version bump on every assignment save already;
+    # recon_vehicles/we_owe_items/estimates need one too, so two people
+    # editing the same record at once can be detected instead of one
+    # silently overwriting the other's changes (the estimate is the highest
+    # risk -- saving replaces the whole line-item set).
+    for table in ("recon_vehicles", "we_owe_items", "estimates"):
+        cols = {row[1] for row in db.execute(f"PRAGMA table_info({table})")}
+        if "edit_version" not in cols:
+            db.execute(f"ALTER TABLE {table} ADD COLUMN edit_version INTEGER NOT NULL DEFAULT 1")
 
 
 def init_db(path: Path) -> None:

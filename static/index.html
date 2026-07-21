@@ -116,6 +116,7 @@
                 <th>Type</th>
                 <th>Status</th>
                 <th>Technician</th>
+                <th class="num-col sortable" id="th-age" title="Click to sort by age">Age <span class="sort-arrow"></span></th>
                 <th class="num-col">What's In It</th>
               </tr>
             </thead>
@@ -135,6 +136,7 @@
           <div>
             <div class="detail-title" id="vd-title"></div>
             <div class="detail-sub" id="vd-sub"></div>
+            <div class="detail-updated" id="vd-updated"></div>
           </div>
           <div style="display:flex;gap:10px" id="vd-actions">
             <button class="btn btn-ghost btn-sm" id="vd-delete" style="display:none;color:var(--crit)">Delete</button>
@@ -269,6 +271,24 @@
                 </select></label>
               </div>
               <div style="padding:0 16px 14px"><button class="btn btn-ghost btn-sm" id="vd-we-owe-save">Save</button></div>
+            </div>
+
+            <div class="card" id="vd-deposits-card" style="display:none">
+              <div class="card-head"><p class="section-eyebrow" style="margin:0">Customer Deposits</p></div>
+              <div class="cost-summary" id="vd-deposits-summary"></div>
+              <div class="form-row" style="padding:0 16px 14px">
+                <label>Amount<input id="vd-deposit-amount" type="number" min="0.01" step="0.01"></label>
+                <label>Method<select id="vd-deposit-method">
+                  <option value="cash">Cash</option>
+                  <option value="card">Card</option>
+                  <option value="check">Check</option>
+                  <option value="bank">Bank</option>
+                  <option value="other">Other</option>
+                </select></label>
+              </div>
+              <div style="padding:0 16px 14px"><input id="vd-deposit-note" placeholder="Note (optional)"></div>
+              <div style="padding:0 16px 14px"><button class="btn btn-ghost btn-sm" id="vd-deposit-add">Record Deposit</button></div>
+              <div id="vd-deposits-list" class="mini-list"></div>
             </div>
           </div>
         </div>
@@ -451,6 +471,19 @@
             <p class="page-desc">Opens the official PartsTech login directly. Discount Auto Ops never asks for or stores your PartsTech password.</p>
           </div>
           <a class="btn btn-primary" id="partstech-login" target="_blank" rel="noopener">Log in ↗</a>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><p class="section-eyebrow" style="margin:0">API Key</p><h3 class="section-title">Live Search (Not Yet Available)</h3></div>
+          <div style="padding:0 16px 12px"><p class="page-desc" id="partstech-api-status">Checking…</p></div>
+          <form id="partstech-form" style="padding:0 16px 16px">
+            <div class="form-row">
+              <label>Username (PartsTech email)<input name="username" id="partstech-username" placeholder="you@example.com"></label>
+              <label>API Key<input name="api_key" id="partstech-api-key" type="password" placeholder="From PartsTech → Profile → Shop → API Options" autocomplete="off"></label>
+            </div>
+            <button class="btn btn-primary" type="submit" style="align-self:flex-start">Save Key</button>
+          </form>
+          <p class="hint" style="padding:0 16px 16px">Stored and ready to go, but PartsTech doesn't publish its search/quote API publicly -- it's issued to approved partners directly. Search PartsTech in its own tab above and add what you find to the RO at cost until that's sorted out.</p>
         </div>
       </section>
 

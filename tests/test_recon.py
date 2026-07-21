@@ -117,6 +117,72 @@ def test_delete_we_owe_item_with_orders_blocked(client):
     assert client.get(f"/api/we-owe/{item['id']}").status_code == 200
 
 
+def test_we_owe_customer_deposit_reduces_net_cost(client):
+    """Customers are sometimes talked into putting money down toward a
+    we-owe repair -- that must show up separately from shop spend, netting
+    against it, not just get lost."""
+    item = make_we_owe(client, description="Fix AC")
+    order = client.post("/api/orders", json={"concern": "AC repair", "segment": "we_owe", "we_owe_id": item["id"]}).json()
+    save_estimate(client, order["id"], [{"kind": "labor", "description": "Diag", "quantity": 1, "unit_price": 200, "unit_cost": 200}])
+
+    res = client.post(f"/api/we-owe/{item['id']}/payments", json={"amount": 75, "method": "cash", "note": "Down payment"})
+    assert res.status_code == 201
+    body = res.json()
+    assert body["customer_paid"] == 75
+    assert body["net_cost"] == 125  # 200 - 75
+    assert len(body["payments"]) == 1
+
+    board = client.get("/api/vehicles-board", params={"segment": "we_owe"}).json()
+    row = next(r for r in board if r["we_owe_id"] == item["id"])
+    assert row["customer_paid"] == 75
+    assert row["net_cost"] == 125
+
+    payment_id = body["payments"][0]["id"]
+    res = client.delete(f"/api/we-owe/{item['id']}/payments/{payment_id}")
+    assert res.status_code == 204
+    detail = client.get(f"/api/we-owe/{item['id']}").json()
+    assert detail["customer_paid"] == 0
+    assert detail["net_cost"] == 200
+
+
+def test_we_owe_payment_requires_positive_amount(client):
+    item = make_we_owe(client)
+    res = client.post(f"/api/we-owe/{item['id']}/payments", json={"amount": 0})
+    assert res.status_code == 422
+
+
+def test_vehicle_board_rows_include_age_days(client):
+    make_recon_vehicle(client, stock_number="R-6701")
+    board = client.get("/api/vehicles-board", params={"segment": "recon"}).json()
+    assert board[0]["age_days"] == 0  # created moments ago
+
+
+def test_recon_patch_conflict_when_stale_version(client):
+    """Two people editing the same car at once: the second save with a
+    stale expected_version must be rejected, not silently overwrite."""
+    vehicle = make_recon_vehicle(client, stock_number="R-6801")
+    assert vehicle["edit_version"] == 1
+
+    res = client.patch(f"/api/recon/vehicles/{vehicle['id']}", json={"purchase_price": 5000, "expected_version": 1})
+    assert res.status_code == 200
+    assert res.json()["edit_version"] == 2
+
+    # A second client still holding the old version=1 tries to save
+    res = client.patch(f"/api/recon/vehicles/{vehicle['id']}", json={"purchase_price": 6000, "expected_version": 1})
+    assert res.status_code == 409
+
+    # Without expected_version, no conflict check is performed (backwards compatible)
+    res = client.patch(f"/api/recon/vehicles/{vehicle['id']}", json={"notes": "no version check"})
+    assert res.status_code == 200
+
+
+def test_we_owe_patch_conflict_when_stale_version(client):
+    item = make_we_owe(client)
+    client.patch(f"/api/we-owe/{item['id']}", json={"category": "mirror", "expected_version": item["edit_version"]})
+    res = client.patch(f"/api/we-owe/{item['id']}", json={"category": "seatbelt", "expected_version": item["edit_version"]})
+    assert res.status_code == 409
+
+
 def test_cancelled_order_does_not_count_toward_vehicle_cost(client):
     """A cancelled RO is kept in the vehicle's order history for traceability
     but its cost must never count toward the vehicle's actual/quoted totals --

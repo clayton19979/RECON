@@ -81,6 +81,11 @@ class VinDecodeIn(BaseModel):
     vin: str = Field(min_length=5, max_length=17)
 
 
+class PartsTechCredentialsIn(BaseModel):
+    username: str = ""
+    api_key: str = ""
+
+
 class OrderIn(BaseModel):
     customer_id: int | None = None
     vehicle_id: int | None = None
@@ -105,16 +110,27 @@ class EstimateIn(BaseModel):
     tax_rate: float = Field(default=0, ge=0, le=1)
     actor: str = Field(default="ui", min_length=1, max_length=120)
     items: list[EstimateItem]
+    expected_version: int | None = None
 
 
 def rowdict(row: sqlite3.Row | None) -> dict[str, Any] | None:
     return dict(row) if row else None
 
 
+NETWORK_FLAG = DATA_ROOT / "network_mode.flag"
+
+
 def create_app(db_path: Path = DEFAULT_DB) -> FastAPI:
     init_db(db_path)
     app = FastAPI(title="Discount Auto Ops", version="0.1.0")
-    allowed_hosts = [h.strip() for h in os.getenv("DISCOUNT_AUTO_OPS_ALLOWED_HOSTS", "127.0.0.1,localhost,testserver").split(",") if h.strip()]
+    # Single-PC mode only trusts localhost. Network mode (toggled from the
+    # tray icon so other PCs can reach this one) needs to accept requests
+    # addressed to this machine's LAN IP/hostname instead -- there's no way
+    # to know that address in advance, so trust any Host header while it's
+    # on. This machine is still only reachable from inside the LAN unless
+    # the router is explicitly configured to forward the port.
+    default_hosts = "*" if NETWORK_FLAG.is_file() else "127.0.0.1,localhost,testserver"
+    allowed_hosts = [h.strip() for h in os.getenv("DISCOUNT_AUTO_OPS_ALLOWED_HOSTS", default_hosts).split(",") if h.strip()]
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=allowed_hosts)
 
     @app.middleware("http")
@@ -322,10 +338,15 @@ def create_app(db_path: Path = DEFAULT_DB) -> FastAPI:
             if not db.execute("SELECT 1 FROM orders WHERE id=?", (order_id,)).fetchone():
                 raise HTTPException(404, "Repair order not found")
             assert_estimate_editable(db, order_id)
-            old = db.execute("SELECT id FROM estimates WHERE order_id=?", (order_id,)).fetchone()
+            old = db.execute("SELECT id, edit_version FROM estimates WHERE order_id=?", (order_id,)).fetchone()
+            if old and estimate.expected_version is not None and old["edit_version"] != estimate.expected_version:
+                raise HTTPException(409, "Someone else changed this estimate since you loaded it -- reload to see their update")
             if old:
-                estimate_id = old[0]
-                db.execute("UPDATE estimates SET labor_rate=?,tax_rate=?,subtotal=?,tax=?,total=?,status='draft' WHERE id=?", (estimate.labor_rate, estimate.tax_rate, subtotal, tax, total, estimate_id))
+                estimate_id = old["id"]
+                db.execute(
+                    "UPDATE estimates SET labor_rate=?,tax_rate=?,subtotal=?,tax=?,total=?,status='draft',edit_version=edit_version+1 WHERE id=?",
+                    (estimate.labor_rate, estimate.tax_rate, subtotal, tax, total, estimate_id),
+                )
             else:
                 cur = db.execute("INSERT INTO estimates(order_id,labor_rate,tax_rate,subtotal,tax,total,created_at) VALUES(?,?,?,?,?,?,?)", (order_id, estimate.labor_rate, estimate.tax_rate, subtotal, tax, total, now()))
                 estimate_id = cur.lastrowid
@@ -357,6 +378,8 @@ def create_app(db_path: Path = DEFAULT_DB) -> FastAPI:
 
     @app.get("/api/integrations/partstech")
     def partstech():
+        with connect() as db:
+            settings = db.execute("SELECT partstech_username, partstech_api_key FROM app_settings WHERE id=1").fetchone()
         return {
             "name": "PartsTech",
             "login_url": PARTSTECH_LOGIN_URL,
@@ -364,7 +387,33 @@ def create_app(db_path: Path = DEFAULT_DB) -> FastAPI:
             "mode": "secure_external_login",
             "api_key_url": "https://app.partstech.com/profile/shop/api-options",
             "note": "Discount Auto Ops opens PartsTech directly for cost lookup; add the part here at your cost, no markup.",
+            "credentials_configured": bool(settings["partstech_username"] and settings["partstech_api_key"]),
+            "live_search_available": False,
+            "live_search_note": (
+                "PartsTech's parts-search API isn't publicly documented -- it's issued to approved "
+                "partners directly (PartsTech-Partner-API@oeconnection.com). Your API key is stored and "
+                "ready to use the moment real endpoint docs are available; until then, search PartsTech "
+                "in its own tab and add what you find here at cost."
+            ),
         }
+
+    @app.get("/api/integrations/partstech/credentials")
+    def get_partstech_credentials():
+        with connect() as db:
+            settings = db.execute("SELECT partstech_username, partstech_api_key FROM app_settings WHERE id=1").fetchone()
+        return {
+            "username": settings["partstech_username"],
+            "configured": bool(settings["partstech_username"] and settings["partstech_api_key"]),
+        }
+
+    @app.put("/api/integrations/partstech/credentials")
+    def save_partstech_credentials(item: PartsTechCredentialsIn):
+        with connect() as db:
+            db.execute(
+                "UPDATE app_settings SET partstech_username=?,partstech_api_key=?,updated_at=? WHERE id=1",
+                (item.username.strip(), item.api_key.strip(), now()),
+            )
+        return {"ok": True}
 
     static = ROOT / "static"
     app.mount("/assets", StaticFiles(directory=static), name="assets")

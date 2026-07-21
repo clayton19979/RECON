@@ -232,6 +232,12 @@ tbody tr.clickable { cursor: pointer; }
 tbody tr.clickable:hover { background: var(--paper-raise); }
 .num-col { text-align: right; font-family: "Cascadia Mono", Consolas, monospace; }
 td.num-col { font-variant-numeric: tabular-nums; }
+th.sortable { cursor: pointer; user-select: none; }
+th.sortable:hover { color: var(--ink); }
+.sort-arrow { font-size: 9px; }
+td.age-ok { color: var(--ink-soft); }
+td.age-warn { color: var(--warn); font-weight: 700; }
+td.age-crit { color: var(--crit); font-weight: 700; }
 
 /* ---------- pills / status badges ---------- */
 .pill {
@@ -262,6 +268,8 @@ td.num-col { font-variant-numeric: tabular-nums; }
 .detail-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 20px; margin-bottom: 20px; }
 .detail-title { font-family: Bahnschrift, sans-serif; font-size: 22px; font-weight: 600; }
 .detail-sub { font-size: 12.5px; color: var(--ink-faint); margin-top: 4px; }
+.detail-updated { font-size: 11px; color: var(--ink-faint); margin-top: 6px; }
+.detail-updated.recent { color: var(--warn); font-weight: 600; }
 
 .grid-2 { display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr); gap: 18px; align-items: start; }
 @media (max-width: 980px) { .grid-2 { grid-template-columns: 1fr; } }

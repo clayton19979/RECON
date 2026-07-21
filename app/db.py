@@ -107,6 +107,7 @@ CREATE TABLE IF NOT EXISTS estimate_items (
   received_quantity REAL NOT NULL DEFAULT 0,
   line_total REAL NOT NULL,
   status TEXT NOT NULL DEFAULT 'quoted',
+  received_invoice_number TEXT NOT NULL DEFAULT '',
   source TEXT NOT NULL DEFAULT 'manual',
   review_required INTEGER NOT NULL DEFAULT 0,
   reviewed_by TEXT NOT NULL DEFAULT '',
@@ -292,10 +293,20 @@ def now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+def _migrate(db: sqlite3.Connection) -> None:
+    """Idempotent ALTER TABLE steps for databases created before a column
+    existed -- CREATE TABLE IF NOT EXISTS skips tables that already exist,
+    so new columns need to be added in place for live databases."""
+    columns = {row[1] for row in db.execute("PRAGMA table_info(estimate_items)")}
+    if "received_invoice_number" not in columns:
+        db.execute("ALTER TABLE estimate_items ADD COLUMN received_invoice_number TEXT NOT NULL DEFAULT ''")
+
+
 def init_db(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(path) as db:
         db.executescript(SCHEMA)
+        _migrate(db)
         db.execute(
             "INSERT OR IGNORE INTO customers(id,name,phone,email,is_shop_owned,created_at) VALUES(?,?,?,?,1,?)",
             (RECON_SHOP_CUSTOMER_ID, RECON_SHOP_CUSTOMER_NAME, "", "", now()),

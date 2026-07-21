@@ -11,6 +11,7 @@ PART_STATUSES = {"quoted", "ordered", "received"}
 
 class ItemStatusIn(BaseModel):
     status: Literal["quoted", "ordered", "received"]
+    invoice_number: str = ""
 
 
 def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callable[[], str]) -> APIRouter:
@@ -34,14 +35,28 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
 
     @router.patch("/orders/{order_id}/estimate/items/{item_id}/status")
     def set_item_status(order_id: int, item_id: int, item: ItemStatusIn):
+        if item.status == "received" and not item.invoice_number.strip():
+            raise HTTPException(422, "An invoice number is required to mark a part received, for proper tracking")
         with connect() as db:
             estimate = estimate_for_order(db, order_id)
             row = db.execute(
-                "SELECT id FROM estimate_items WHERE id=? AND estimate_id=?", (item_id, estimate["id"])
+                "SELECT id, quantity, kind FROM estimate_items WHERE id=? AND estimate_id=?", (item_id, estimate["id"])
             ).fetchone()
             if not row:
                 raise HTTPException(404, "Estimate item not found on this repair order")
-            db.execute("UPDATE estimate_items SET status=? WHERE id=?", (item.status, item_id))
-        return {"id": item_id, "status": item.status}
+            # Marking a part received here (a cash-and-carry parts-store run with
+            # no formal vendor invoice) must actually count toward actual cost --
+            # otherwise the status label lies about what's really been spent.
+            # Stepping back off "received" clears it so cost doesn't stay stale.
+            if row["kind"] == "part":
+                received_quantity = row["quantity"] if item.status == "received" else 0
+                invoice_number = item.invoice_number.strip() if item.status == "received" else ""
+                db.execute(
+                    "UPDATE estimate_items SET status=?,received_quantity=?,received_invoice_number=? WHERE id=?",
+                    (item.status, received_quantity, invoice_number, item_id),
+                )
+            else:
+                db.execute("UPDATE estimate_items SET status=? WHERE id=?", (item.status, item_id))
+        return {"id": item_id, "status": item.status, "invoice_number": item.invoice_number.strip()}
 
     return router

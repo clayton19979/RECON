@@ -120,16 +120,13 @@ def initialize_order_workflow(db: sqlite3.Connection, order_id: int, now_fn: Cal
 
 
 def assert_estimate_editable(db: sqlite3.Connection, order_id: int) -> None:
-    estimate = db.execute("SELECT status FROM estimates WHERE order_id=?", (order_id,)).fetchone()
-    if estimate and estimate[0] == "approved":
-        raise HTTPException(409, "Approved estimates are locked; create a revision before changing authorized work")
+    """Recon/we-owe work is internal at-cost tracking with no customer
+    authorization step, so the advisor has full control to correct a line at
+    any time -- approval status and received parts no longer lock editing.
+    The one real boundary is a customer invoice that's already been billed
+    out (retail only): once that exists, line items are frozen."""
     if db.execute("SELECT 1 FROM customer_invoices WHERE order_id=?", (order_id,)).fetchone():
         raise HTTPException(409, "Invoiced estimates are locked")
-    if db.execute(
-        "SELECT 1 FROM estimate_items i JOIN estimates e ON e.id=i.estimate_id WHERE e.order_id=? AND i.received_quantity>0",
-        (order_id,),
-    ).fetchone():
-        raise HTTPException(409, "Estimates with received parts are locked")
 
 
 def invoice_dict(db: sqlite3.Connection, row: sqlite3.Row | None) -> dict | None:

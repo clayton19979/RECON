@@ -77,6 +77,25 @@ def test_authorization_flow(client):
     assert order_after["status"] == "approved"
 
 
+def test_estimate_stays_editable_after_approval_for_recon(client):
+    """Recon/we-owe work is internal at-cost tracking with no customer
+    authorization requirement -- the advisor keeps full control to add or
+    correct a line at any point in the RO's life, even after approval."""
+    vehicle = make_recon_vehicle(client)
+    order = make_recon_order(client, vehicle["id"])
+    save_estimate(client, order["id"], [{"kind": "labor", "description": "Diag", "quantity": 1, "unit_price": 50, "unit_cost": 50}])
+    client.patch(f"/api/orders/{order['id']}/status", json={"status": "inspection"})
+    client.patch(f"/api/orders/{order['id']}/status", json={"status": "awaiting_approval"})
+    client.post(f"/api/orders/{order['id']}/authorization", json={"status": "approved", "approved_by": "Clay", "method": "in_person"})
+
+    res = client.post(
+        f"/api/orders/{order['id']}/estimate",
+        json={"actor": "Clay", "items": [{"kind": "part", "description": "Brake pads", "part_number": "BP-1", "quantity": 1, "unit_price": 45, "unit_cost": 45}]},
+    )
+    assert res.status_code == 200
+    assert len(res.json()["items"]) == 1
+
+
 def test_findings_require_part_number(client):
     vehicle = make_recon_vehicle(client)
     order = make_recon_order(client, vehicle["id"])

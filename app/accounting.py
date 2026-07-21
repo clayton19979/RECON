@@ -220,13 +220,13 @@ def build_accounting_router(connect: Callable[[], sqlite3.Connection], now: Call
                 existing = existing_by_part.get(key)
                 if existing:
                     db.execute(
-                        "UPDATE estimate_items SET received_quantity=received_quantity+?,unit_cost=?,status='received' WHERE id=?",
-                        (item.quantity, item.unit_cost, existing["id"]),
+                        "UPDATE estimate_items SET received_quantity=received_quantity+?,unit_cost=?,status='received',received_invoice_number=? WHERE id=?",
+                        (item.quantity, item.unit_cost, invoice.invoice_number.strip(), existing["id"]),
                     )
                 else:
                     db.execute(
-                        "INSERT INTO estimate_items(estimate_id,kind,description,part_number,quantity,unit_price,unit_cost,received_quantity,line_total,status) VALUES(?,?,?,?,?,?,?,?,?,?)",
-                        (estimate_id, "part", item.description.strip(), item.part_number.strip().upper(), item.quantity, item.unit_cost, item.unit_cost, item.quantity, round(item.quantity * item.unit_cost, 2), "received"),
+                        "INSERT INTO estimate_items(estimate_id,kind,description,part_number,quantity,unit_price,unit_cost,received_quantity,line_total,status,received_invoice_number) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                        (estimate_id, "part", item.description.strip(), item.part_number.strip().upper(), item.quantity, item.unit_cost, item.unit_cost, item.quantity, round(item.quantity * item.unit_cost, 2), "received", invoice.invoice_number.strip()),
                     )
                     added_parts.append({"part_number": item.part_number.strip().upper(), "cost": item.unit_cost})
                 received_parts.append({"part_number": item.part_number.strip().upper(), "quantity": item.quantity, "unit_cost": item.unit_cost})

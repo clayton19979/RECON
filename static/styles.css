@@ -1,56 +1,50 @@
 :root {
-  --paper: #f6f2ea;
-  --paper-raise: #fdfbf7;
-  --surface: #ffffff;
-  --ink: #211d18;
-  --ink-soft: #5c5548;
-  --ink-faint: #948c7c;
-  --line: #ddd4c2;
-  --line-soft: #eae3d3;
-  --accent: #234a6b;
-  --accent-strong: #17334c;
-  --accent-tint: #e7edf2;
-  --recon: #5c6470;
-  --recon-tint: #eceeef;
-  --weowe: #93672c;
-  --weowe-tint: #f3e9db;
-  --good: #3f7d4a;
-  --good-tint: #e7f1e8;
-  --warn: #b8722b;
-  --warn-tint: #f6ebdd;
-  --crit: #a6392e;
-  --crit-tint: #f5e5e2;
   --rail-w: 76px;
   --radius: 8px;
-  --shadow: 0 1px 2px rgba(33,29,24,.06), 0 8px 24px -12px rgba(33,29,24,.18);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --paper: #1a1815; --paper-raise: #211f1b; --surface: #242220;
-    --ink: #eee8dc; --ink-soft: #b8ae9c; --ink-faint: #837a6a;
-    --line: #3a362e; --line-soft: #2c2924;
-    --accent: #6f9dc4; --accent-strong: #94bcdf; --accent-tint: #22323f;
-    --recon: #9aa2ac; --recon-tint: #2a2c2f;
-    --weowe: #d1a35e; --weowe-tint: #362c1c;
-    --good: #7cbf87; --good-tint: #1e3123;
-    --warn: #dfa15c; --warn-tint: #3a2c18;
-    --crit: #e28577; --crit-tint: #3c211d;
-    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
-  }
+/* ---------- theme tokens ---------- */
+/* "midnight" is the default look -- dark, steel-blue accent. */
+:root, :root[data-theme="midnight"] {
+  --paper: #14161a; --paper-raise: #1b1e24; --surface: #20232a;
+  --ink: #eef1f5; --ink-soft: #a8b0bd; --ink-faint: #6b7280;
+  --line: #2e333c; --line-soft: #262a32;
+  --accent: #5b9bd5; --accent-strong: #7db4e3; --accent-tint: #1c2b3a;
+  --recon: #9aa4b2; --recon-tint: #262a32;
+  --weowe: #d1a35e; --weowe-tint: #33291a;
+  --good: #6fbf7a; --good-tint: #1a2e1e;
+  --warn: #e0a15c; --warn-tint: #362a18;
+  --crit: #e2837a; --crit-tint: #3a221e;
+  --shadow: 0 1px 2px rgba(0,0,0,.35), 0 8px 24px -12px rgba(0,0,0,.55);
 }
-:root[data-theme="dark"] {
-  --paper: #1a1815; --paper-raise: #211f1b; --surface: #242220;
-  --ink: #eee8dc; --ink-soft: #b8ae9c; --ink-faint: #837a6a;
-  --line: #3a362e; --line-soft: #2c2924;
-  --accent: #6f9dc4; --accent-strong: #94bcdf; --accent-tint: #22323f;
-  --recon: #9aa2ac; --recon-tint: #2a2c2f;
-  --weowe: #d1a35e; --weowe-tint: #362c1c;
-  --good: #7cbf87; --good-tint: #1e3123;
-  --warn: #dfa15c; --warn-tint: #3a2c18;
-  --crit: #e28577; --crit-tint: #3c211d;
+/* "carbon" -- near-black, warm copper accent. */
+:root[data-theme="carbon"] {
+  --paper: #121110; --paper-raise: #191715; --surface: #1e1b19;
+  --ink: #f0ebe4; --ink-soft: #b3a99c; --ink-faint: #756c60;
+  --line: #332e29; --line-soft: #2a2521;
+  --accent: #d98a4f; --accent-strong: #e8a06b; --accent-tint: #34241a;
+  --recon: #a39a8e; --recon-tint: #2a2521;
+  --weowe: #c9a15e; --weowe-tint: #322a1a;
+  --good: #7dbb7f; --good-tint: #1e2c1e;
+  --warn: #e0a15c; --warn-tint: #362a18;
+  --crit: #d9705f; --crit-tint: #35211c;
+  --shadow: 0 1px 2px rgba(0,0,0,.35), 0 8px 24px -12px rgba(0,0,0,.55);
 }
-:root[data-theme="light"] {
+/* "slate" -- dark blue-gray, teal accent. */
+:root[data-theme="slate"] {
+  --paper: #10171a; --paper-raise: #161e22; --surface: #1a2327;
+  --ink: #e6f0f2; --ink-soft: #9fb3b8; --ink-faint: #647579;
+  --line: #263136; --line-soft: #1f292d;
+  --accent: #4fb8b0; --accent-strong: #6fcec6; --accent-tint: #16302e;
+  --recon: #93a5aa; --recon-tint: #1f292d;
+  --weowe: #cf9f5c; --weowe-tint: #332918;
+  --good: #6fbf85; --good-tint: #1a2d21;
+  --warn: #dea25f; --warn-tint: #35291a;
+  --crit: #de8478; --crit-tint: #382220;
+  --shadow: 0 1px 2px rgba(0,0,0,.35), 0 8px 24px -12px rgba(0,0,0,.55);
+}
+/* "paper" -- light, warm paper ground, steel-blue accent. */
+:root[data-theme="paper"] {
   --paper: #f6f2ea; --paper-raise: #fdfbf7; --surface: #ffffff;
   --ink: #211d18; --ink-soft: #5c5548; --ink-faint: #948c7c;
   --line: #ddd4c2; --line-soft: #eae3d3;
@@ -60,6 +54,7 @@
   --good: #3f7d4a; --good-tint: #e7f1e8;
   --warn: #b8722b; --warn-tint: #f6ebdd;
   --crit: #a6392e; --crit-tint: #f5e5e2;
+  --shadow: 0 1px 2px rgba(33,29,24,.06), 0 8px 24px -12px rgba(33,29,24,.18);
 }
 
 * { box-sizing: border-box; }
@@ -110,6 +105,7 @@ button { font-family: inherit; }
 .rail-item:hover { background: rgba(255,255,255,.08); color: #fff; }
 .rail-item.active { background: rgba(255,255,255,.16); color: #fff; }
 .rail-spacer { flex: 1; }
+.theme-picker { position: relative; }
 .rail-theme {
   width: 36px; height: 36px; border-radius: 50%; border: none;
   background: rgba(255,255,255,.1); color: rgba(255,255,255,.8);
@@ -117,6 +113,26 @@ button { font-family: inherit; }
 }
 .rail-theme svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.8; }
 .rail-theme:hover { background: rgba(255,255,255,.18); color: #fff; }
+
+.theme-menu {
+  position: absolute; bottom: 0; left: calc(100% + 10px);
+  background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+  box-shadow: var(--shadow); padding: 6px; display: none; z-index: 50;
+  min-width: 168px;
+}
+.theme-menu.open { display: block; }
+.theme-option {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  background: none; border: none; border-radius: 7px; padding: 8px 10px;
+  cursor: pointer; font-size: 12.5px; font-weight: 600; color: var(--ink);
+  text-align: left;
+}
+.theme-option:hover { background: var(--paper-raise); }
+.theme-option.active { background: var(--accent-tint); color: var(--accent); }
+.theme-swatch {
+  width: 18px; height: 18px; border-radius: 50%; flex-shrink: 0;
+  border: 1px solid rgba(0,0,0,.15); box-shadow: inset 0 0 0 2px var(--surface);
+}
 
 .main { display: flex; flex-direction: column; min-width: 0; }
 
@@ -172,7 +188,7 @@ button { font-family: inherit; }
 .btn[disabled] { opacity: .5; cursor: not-allowed; }
 
 /* ---------- stats ---------- */
-.stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 20px; }
+.stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-bottom: 20px; }
 .stat {
   background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
   padding: 16px 18px;
@@ -340,12 +356,38 @@ dialog::backdrop { background: rgba(20, 18, 14, .45); }
 #toast.error { background: var(--crit); }
 
 /* ---------- print ---------- */
+.print-only { display: none; }
+
 @media print {
-  .rail, .topbar, .page-head, .filters, #report-generate, #report-print,
-  #email-settings-form, .card:has(#email-settings-form), .btn, #toast { display: none !important; }
-  body, .content { padding: 0; background: #fff; }
-  .view { display: none !important; }
-  .view.printing { display: block !important; }
-  #report-output { padding: 0; }
-  #report-output table { font-size: 11px; }
+  @page { margin: 14mm 12mm; }
+  html, body { background: #fff !important; }
+  .app, #toast { display: none !important; }
+  .print-only { display: block !important; }
+
+  .print-letterhead {
+    display: flex; justify-content: space-between; align-items: flex-end;
+    border-bottom: 2px solid #000; padding-bottom: 10px; margin-bottom: 16px;
+  }
+  .print-shop-name { font-family: Bahnschrift, "Segoe UI Semibold", sans-serif; font-size: 20px; font-weight: 700; color: #000; }
+  .print-shop-sub { font-size: 11px; color: #333; margin-top: 2px; }
+  .print-meta { text-align: right; font-size: 11px; color: #333; }
+  .print-report-title { font-family: Bahnschrift, "Segoe UI Semibold", sans-serif; font-size: 14px; font-weight: 700; color: #000; }
+  .print-generated { color: #666; margin-top: 2px; }
+
+  .print-table {
+    width: 100%; border-collapse: collapse; font-size: 10.5px; color: #000;
+    font-family: "Segoe UI", sans-serif;
+  }
+  .print-table thead th {
+    text-align: left; font-size: 9.5px; text-transform: uppercase; letter-spacing: .03em;
+    border-bottom: 1.5px solid #000; padding: 6px 8px; color: #000; background: none;
+  }
+  .print-table tbody td { padding: 5px 8px; border-bottom: 0.5px solid #999; background: none; color: #000; }
+  .print-table tbody tr { break-inside: avoid; }
+  .print-table tfoot td {
+    padding: 8px 8px 0; border-top: 1.5px solid #000; font-weight: 700; font-size: 11px; background: none; color: #000;
+  }
+  .print-table .num-col {
+    text-align: right; font-family: "Cascadia Mono", Consolas, monospace; font-variant-numeric: tabular-nums;
+  }
 }

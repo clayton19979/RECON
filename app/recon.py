@@ -73,10 +73,13 @@ def cost_rollup(db: sqlite3.Connection, column: str, ref_id: int) -> dict:
         value = dict(row)
         value["total_cost"] = round(value["parts_cost"] + value["labor_cost"] + value["fee_cost"], 2)
         orders.append(value)
+    # Cancelled ROs are kept in the order history (traceability) but never
+    # count toward the vehicle's cost -- that work was never actually done.
+    countable = [o for o in orders if o["status"] != "cancelled"]
     return {
         "orders": orders,
-        "total_cost": round(sum(o["total_cost"] for o in orders), 2),
-        "quoted_cost": round(sum(o["quoted_cost"] for o in orders), 2),
+        "total_cost": round(sum(o["total_cost"] for o in countable), 2),
+        "quoted_cost": round(sum(o["quoted_cost"] for o in countable), 2),
     }
 
 
@@ -109,6 +112,13 @@ def vehicle_board_rows(db: sqlite3.Connection, start: str | None = None, end: st
         for row in rows:
             rollup = cost_rollup(db, "recon_vehicle_id", row["id"])
             order_ids = [o["id"] for o in rollup["orders"]]
+            # Recon status/sale tracking isn't used here -- the repair order's
+            # own status is what the advisor actually maintains, so that's
+            # what drives the displayed status and in-progress/finished bucket.
+            active_order = next((o for o in reversed(rollup["orders"]) if o["status"] not in ("closed", "cancelled")), None)
+            latest_order = rollup["orders"][-1] if rollup["orders"] else None
+            has_closed_order = any(o["status"] == "closed" for o in rollup["orders"])
+            display_status = (active_order or latest_order)["status"] if (active_order or latest_order) else "acquired"
             result.append({
                 "segment": "recon",
                 "recon_id": row["id"],
@@ -116,13 +126,11 @@ def vehicle_board_rows(db: sqlite3.Connection, start: str | None = None, end: st
                 "stock_number": row["stock_number"],
                 "vehicle": f"{row['year']} {row['make']} {row['model']}",
                 "vin": row["vin"],
-                "status": row["status"],
-                "status_bucket": "finished" if row["status"] in ("sold", "retained") else "in_progress",
+                "status": display_status,
+                "status_bucket": "finished" if (active_order is None and has_closed_order) else "in_progress",
                 "purchase_price": row["purchase_price"],
-                "sale_price": row["sale_price"],
                 "actual_cost": rollup["total_cost"],
                 "quoted_cost": rollup["quoted_cost"],
-                "profit": round(row["sale_price"] - row["purchase_price"] - rollup["total_cost"], 2) if row["sale_price"] is not None else None,
                 "technicians": technician_names(db, order_ids),
                 "updated_at": row["updated_at"],
             })

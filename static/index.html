@@ -31,9 +31,17 @@
       <span>Connect</span>
     </button>
     <div class="rail-spacer"></div>
-    <button class="rail-theme" id="theme-toggle" aria-label="Toggle theme" title="Toggle theme">
-      <svg viewBox="0 0 24 24"><path d="M12 3a6 6 0 009 9 9 9 0 11-9-9z"/></svg>
-    </button>
+    <div class="theme-picker">
+      <button class="rail-theme" id="theme-toggle" aria-label="Choose theme" title="Choose theme">
+        <svg viewBox="0 0 24 24"><path d="M12 3a6 6 0 009 9 9 9 0 11-9-9z"/></svg>
+      </button>
+      <div class="theme-menu" id="theme-menu">
+        <button type="button" class="theme-option" data-theme="midnight"><span class="theme-swatch" style="background:#5b9bd5"></span>Midnight</button>
+        <button type="button" class="theme-option" data-theme="carbon"><span class="theme-swatch" style="background:#d98a4f"></span>Carbon</button>
+        <button type="button" class="theme-option" data-theme="slate"><span class="theme-swatch" style="background:#4fb8b0"></span>Slate</button>
+        <button type="button" class="theme-option" data-theme="paper"><span class="theme-swatch" style="background:#234a6b"></span>Paper</button>
+      </div>
+    </div>
   </nav>
 
   <div class="main">
@@ -46,15 +54,6 @@
         <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
         <input id="global-search" placeholder="Search stock #, VIN, customer…" autocomplete="off">
       </label>
-      <div class="topbar-right">
-        <div class="who">
-          <div class="who-badge">CS</div>
-          <div>
-            <div class="who-name">Clay</div>
-            <div class="who-role">Service Advisor</div>
-          </div>
-        </div>
-      </div>
     </header>
 
     <div class="content">
@@ -90,14 +89,9 @@
             <div class="stat-sub" id="stat-we-owe-actual">$0 actual spend</div>
           </div>
           <div class="stat">
-            <div class="stat-label">Actual Spend (Open)</div>
+            <div class="stat-label">What's In It (Open)</div>
             <div class="stat-value num" id="stat-actual-total">$0</div>
             <div class="stat-sub">received parts + labor</div>
-          </div>
-          <div class="stat">
-            <div class="stat-label">Quoted, Not Landed</div>
-            <div class="stat-value num warn" id="stat-quoted-total">$0</div>
-            <div class="stat-sub">ordered or awaiting parts</div>
           </div>
         </div>
 
@@ -118,8 +112,7 @@
                 <th>Type</th>
                 <th>Status</th>
                 <th>Technician</th>
-                <th class="num-col">Actual Cost</th>
-                <th class="num-col">Outstanding</th>
+                <th class="num-col">What's In It</th>
               </tr>
             </thead>
             <tbody id="vehicles-table"></tbody>
@@ -183,27 +176,7 @@
                 </div>
                 <div id="vd-estimate-items"></div>
                 <div class="cost-summary" style="border-top:1px solid var(--line)">
-                  <div class="cost-line"><span>Actual cost</span><span id="vd-actual-cost">$0.00</span></div>
-                  <div class="cost-line"><span>Quoted, not received</span><span id="vd-quoted-note" style="color:var(--warn)"></span></div>
-                </div>
-              </div>
-
-              <div class="card">
-                <div class="card-head">
-                  <div>
-                    <p class="section-eyebrow">Inspection</p>
-                    <h3 class="section-title">Digital Condition Check</h3>
-                  </div>
-                  <div style="display:flex;gap:8px">
-                    <button class="btn btn-ghost btn-sm" id="vd-add-inspection-item">＋ Item</button>
-                    <button class="btn btn-primary btn-sm" id="vd-save-inspection">Save</button>
-                  </div>
-                </div>
-                <div class="table-wrap">
-                  <table>
-                    <thead><tr><th>Area / Item</th><th>Condition</th><th>Measurement / Notes</th><th></th></tr></thead>
-                    <tbody id="vd-inspection-items"></tbody>
-                  </table>
+                  <div class="cost-line total"><span>What we have in it</span><span id="vd-actual-cost">$0.00</span></div>
                 </div>
               </div>
 
@@ -261,24 +234,6 @@
               <div class="card" id="vd-traceability-card">
                 <div class="card-head"><p class="section-eyebrow" style="margin:0">Traceability</p></div>
                 <div class="kv-list" id="vd-traceability"></div>
-              </div>
-
-              <div class="card" id="vd-recon-status-card" style="display:none">
-                <div class="card-head"><p class="section-eyebrow" style="margin:0">Recon Status</p></div>
-                <div class="form-row" style="padding:14px 16px">
-                  <label>Status<select id="vd-recon-status">
-                    <option value="acquired">Acquired</option>
-                    <option value="in_repair">In repair</option>
-                    <option value="ready">Ready</option>
-                    <option value="sold">Sold</option>
-                    <option value="retained">Retained</option>
-                  </select></label>
-                </div>
-                <div class="form-row" style="padding:0 16px 14px">
-                  <label>Sale price<input id="vd-recon-sale-price" type="number" min="0" step="0.01"></label>
-                  <label>Sale date<input id="vd-recon-sale-date" type="date"></label>
-                </div>
-                <div style="padding:0 16px 14px"><button class="btn btn-ghost btn-sm" id="vd-recon-save">Update</button></div>
               </div>
 
               <div class="card" id="vd-we-owe-status-card" style="display:none">
@@ -583,6 +538,7 @@
 </dialog>
 
 <div id="toast"></div>
+<div id="print-report" class="print-only"></div>
 <script src="/assets/app.js"></script>
 </body>
 </html>

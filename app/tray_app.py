@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import logging
+import os
+import subprocess
 import threading
 import webbrowser
+from pathlib import Path
 
 import pystray
 import uvicorn
@@ -14,6 +17,22 @@ from app.main import DATA_ROOT, DEFAULT_DB, create_app
 HOST = "127.0.0.1"
 PORT = 8787
 URL = f"http://{HOST}:{PORT}"
+
+CHROME_CANDIDATES = [
+    Path(os.environ.get("PROGRAMFILES", r"C:\Program Files")) / "Google" / "Chrome" / "Application" / "chrome.exe",
+    Path(os.environ.get("PROGRAMFILES(X86)", r"C:\Program Files (x86)")) / "Google" / "Chrome" / "Application" / "chrome.exe",
+    Path(os.environ.get("LOCALAPPDATA", "")) / "Google" / "Chrome" / "Application" / "chrome.exe",
+]
+
+
+def open_in_chrome(url: str) -> None:
+    """Launch Chrome directly rather than whatever the OS default handler
+    resolves to (which can land on Explorer instead of a browser)."""
+    chrome_path = next((p for p in CHROME_CANDIDATES if p.is_file()), None)
+    if chrome_path is not None:
+        subprocess.Popen([str(chrome_path), url])
+        return
+    webbrowser.open(url)
 
 DATA_ROOT.mkdir(parents=True, exist_ok=True)
 logging.basicConfig(
@@ -72,7 +91,7 @@ class TrayApp:
             self.icon.icon = ICON_OK if ok else ICON_DOWN
 
     def open_browser(self, _icon: pystray.Icon, _item: pystray.MenuItem) -> None:
-        webbrowser.open(URL)
+        open_in_chrome(URL)
 
     def backup_now(self, _icon: pystray.Icon, _item: pystray.MenuItem) -> None:
         try:

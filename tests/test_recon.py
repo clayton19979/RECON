@@ -33,6 +33,40 @@ def test_recon_patch_status_and_sale(client):
     assert body["profit"] == 4000
 
 
+def test_recon_patch_edits_core_vehicle_info(client):
+    """Correcting a typo'd purchase price or VIN shouldn't require touching
+    the database directly."""
+    vehicle = make_recon_vehicle(client, stock_number="R-2101", purchase_price=4000, vin="OLDVIN")
+    res = client.patch(
+        f"/api/recon/vehicles/{vehicle['id']}",
+        json={"purchase_price": 4500, "vin": "1hgcm82633a004352", "make": "Honda", "model": "Accord", "year": 2021, "mileage": 12345},
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert body["purchase_price"] == 4500
+    assert body["vin"] == "1HGCM82633A004352"  # normalized uppercase like creation does
+    assert body["make"] == "Honda"
+    assert body["model"] == "Accord"
+    assert body["year"] == 2021
+    assert body["mileage"] == 12345
+
+
+def test_delete_recon_vehicle_without_orders(client):
+    vehicle = make_recon_vehicle(client, stock_number="R-2201")
+    res = client.delete(f"/api/recon/vehicles/{vehicle['id']}")
+    assert res.status_code == 204
+    assert client.get(f"/api/recon/vehicles/{vehicle['id']}").status_code == 404
+    assert not any(row["stock_number"] == "R-2201" for row in client.get("/api/vehicles-board").json())
+
+
+def test_delete_recon_vehicle_with_orders_blocked(client):
+    vehicle = make_recon_vehicle(client, stock_number="R-2301")
+    make_recon_order(client, vehicle["id"])
+    res = client.delete(f"/api/recon/vehicles/{vehicle['id']}")
+    assert res.status_code == 409
+    assert client.get(f"/api/recon/vehicles/{vehicle['id']}").status_code == 200
+
+
 def test_we_owe_requires_vehicle_belongs_to_customer(client):
     customer = client.post("/api/customers", json={"name": "A"}).json()
     other_customer = client.post("/api/customers", json={"name": "B"}).json()
@@ -53,6 +87,34 @@ def test_we_owe_fulfilled_sets_timestamp(client):
     body = res.json()
     assert body["status"] == "fulfilled"
     assert body["fulfilled_at"]
+
+
+def test_we_owe_patch_edits_description_and_category(client):
+    item = make_we_owe(client, description="Fix mirror")
+    res = client.patch(
+        f"/api/we-owe/{item['id']}",
+        json={"description": "Replace passenger mirror", "category": "mirror", "target_date": "2026-08-01"},
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert body["description"] == "Replace passenger mirror"
+    assert body["category"] == "mirror"
+    assert body["target_date"] == "2026-08-01"
+
+
+def test_delete_we_owe_item_without_orders(client):
+    item = make_we_owe(client)
+    res = client.delete(f"/api/we-owe/{item['id']}")
+    assert res.status_code == 204
+    assert client.get(f"/api/we-owe/{item['id']}").status_code == 404
+
+
+def test_delete_we_owe_item_with_orders_blocked(client):
+    item = make_we_owe(client)
+    client.post("/api/orders", json={"concern": "Fix it", "segment": "we_owe", "we_owe_id": item["id"]})
+    res = client.delete(f"/api/we-owe/{item['id']}")
+    assert res.status_code == 409
+    assert client.get(f"/api/we-owe/{item['id']}").status_code == 200
 
 
 def test_cancelled_order_does_not_count_toward_vehicle_cost(client):

@@ -99,18 +99,17 @@ def technician_productivity_rows(db: sqlite3.Connection, start: str | None, end:
 
 
 def _section(rows: list[dict], title: str) -> str:
+    """One number per vehicle -- what's actually been spent. Showing a
+    second 'quoted' figure alongside it reads as if the total were their
+    sum, which is exactly the confusion this format used to cause."""
     lines = [f"{title} ({len(rows)} total)", "-" * 40]
-    total_cost = total_quoted = 0.0
+    total_cost = 0.0
     for row in rows:
         total_cost += row["actual_cost"]
-        total_quoted += row["quoted_cost"]
         label = row["stock_number"] or row.get("customer_name", "")
-        note = ""
-        if row.get("profit") is not None:
-            note = f", sold ${row['sale_price']:.2f} (profit ${row['profit']:.2f})"
-        lines.append(f"  {label} - {row['vehicle']} [{row['status']}] actual ${row['actual_cost']:.2f} (quoted ${row['quoted_cost']:.2f}){note}")
+        lines.append(f"  {label} - {row['vehicle']} [{row['status']}] what we have in it: ${row['actual_cost']:.2f}")
     lines.append("")
-    lines.append(f"  Total actual: ${total_cost:.2f}  |  Quoted (not yet received): ${total_quoted:.2f}")
+    lines.append(f"  Total: ${total_cost:.2f}")
     return "\n".join(lines)
 
 

@@ -35,7 +35,26 @@ function toast(message, isError = false) {
   toastTimer = setTimeout(() => el.classList.remove("show"), 3200);
 }
 function money(value) {
-  return `$${Number(value || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const n = Number(value || 0);
+  const formatted = Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return n < 0 ? `-$${formatted}` : `$${formatted}`;
+}
+function currentActor() {
+  return state.currentUser || "Unspecified";
+}
+// Disables a button and swaps its label while an async action is in
+// flight, so a slow save doesn't look like nothing happened (and can't be
+// double-submitted by an impatient extra click).
+async function withLoading(button, label, fn) {
+  const original = button.textContent;
+  button.disabled = true;
+  button.textContent = label;
+  try {
+    await fn();
+  } finally {
+    button.disabled = false;
+    button.textContent = original;
+  }
 }
 function esc(value) {
   return String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -55,8 +74,28 @@ const state = {
   staff: [],
   vendors: [],
   orders: [],
+  currentUser: localStorage.getItem("dao-current-user") || "",
   detail: { segment: null, id: null, item: null, order: null },
 };
+
+// Who's actually using the app right now -- every save used to hardcode
+// "Clay" as the actor, misattributing everything when anyone else touched
+// it. Populated from the staff list, remembered in localStorage.
+async function refreshCurrentUserOptions() {
+  const select = $("#current-user");
+  try {
+    const staff = await get("/api/staff");
+    select.innerHTML = `<option value="">Unspecified</option>` + staff.map((s) => `<option value="${esc(s.name)}">${esc(s.name)}</option>`).join("");
+    select.value = state.currentUser;
+  } catch {}
+}
+function initCurrentUser() {
+  refreshCurrentUserOptions();
+  $("#current-user").addEventListener("change", () => {
+    state.currentUser = $("#current-user").value;
+    localStorage.setItem("dao-current-user", state.currentUser);
+  });
+}
 
 const TRANSITIONS = {
   draft: ["inspection", "cancelled"],
@@ -131,9 +170,9 @@ function renderStats() {
   const weOwe = state.vehicles.filter((v) => v.segment === "we_owe" && v.status_bucket === "in_progress");
   const open = [...recon, ...weOwe];
   $("#stat-recon-open").textContent = recon.length;
-  $("#stat-recon-actual").textContent = `${money(recon.reduce((s, v) => s + v.actual_cost, 0))} actual spend`;
+  $("#stat-recon-actual").textContent = `${money(recon.reduce((s, v) => s + v.actual_cost, 0))} in it`;
   $("#stat-we-owe-open").textContent = weOwe.length;
-  $("#stat-we-owe-actual").textContent = `${money(weOwe.reduce((s, v) => s + v.actual_cost, 0))} actual spend`;
+  $("#stat-we-owe-actual").textContent = `${money(weOwe.reduce((s, v) => s + v.actual_cost, 0))} in it`;
   $("#stat-actual-total").textContent = money(open.reduce((s, v) => s + v.actual_cost, 0));
 }
 
@@ -221,6 +260,9 @@ async function loadVehicleDetail() {
   const active = orders.find((o) => !["closed", "cancelled"].includes(o.status)) || null;
   enterVehicleDetailView();
   renderDetailHead();
+  // Deleting a vehicle with real order history would silently orphan its
+  // cost data -- only offer it while there's nothing to lose yet.
+  $("#vd-delete").style.display = orders.length === 0 ? "" : "none";
   if (!active) {
     $("#vd-no-order").style.display = "";
     $("#vd-order-content").style.display = "none";
@@ -246,11 +288,24 @@ function renderDetailHead() {
     $("#vd-title").textContent = `${item.stock_number} — ${item.year} ${item.make} ${item.model}`;
     $("#vd-sub").textContent = [item.vin, item.mileage ? `${item.mileage.toLocaleString()} mi` : "", item.trim].filter(Boolean).join(" · ");
     $("#vd-we-owe-status-card").style.display = "none";
+    $("#vd-recon-info-card").style.display = "";
+    $("#vd-recon-vin").value = item.vin || "";
+    $("#vd-recon-mileage").value = item.mileage || 0;
+    $("#vd-recon-year").value = item.year;
+    $("#vd-recon-make").value = item.make;
+    $("#vd-recon-model").value = item.model;
+    $("#vd-recon-trim").value = item.trim || "";
+    $("#vd-recon-color").value = item.color || "";
+    $("#vd-recon-purchase-price").value = item.purchase_price || 0;
   } else {
     $("#vd-title").textContent = `${item.year} ${item.make} ${item.model}`;
     $("#vd-sub").textContent = [item.customer_name, item.description].filter(Boolean).join(" · ");
+    $("#vd-recon-info-card").style.display = "none";
     $("#vd-we-owe-status-card").style.display = "";
     $("#vd-we-owe-status").value = item.status;
+    $("#vd-we-owe-description").value = item.description || "";
+    $("#vd-we-owe-category").value = item.category || "";
+    $("#vd-we-owe-target").value = item.target_date || "";
   }
   renderCostSummary();
   renderTraceability();
@@ -286,11 +341,9 @@ function renderOrderPanel() {
   $("#vd-ro-number").textContent = `Repair Order ${order.number}`;
   renderStatusFlow(order);
   renderEstimate(order);
-  renderFindings(order);
   renderNotes(order);
   renderActivity(order);
   renderAssignment(order);
-  renderAuthorization(order);
 }
 
 function renderStatusFlow(order) {
@@ -350,7 +403,10 @@ function renderEstimate(order) {
   });
   $$(".rm-btn", box).forEach((btn) => {
     btn.addEventListener("click", (e) => {
-      e.target.closest(".part-row").remove();
+      const row = e.target.closest(".part-row");
+      const desc = row.querySelector(".ei-desc").value.trim();
+      if (desc && !confirm(`Remove "${desc}" from this repair order?`)) return;
+      row.remove();
       persistEstimate();
     });
   });
@@ -408,12 +464,20 @@ function collectEstimateItems() {
 // unsaved in the browser waiting to be wiped out by an unrelated action
 // elsewhere on the page (that was the bug: adding a part, then clicking any
 // other Save/Advance/Order-Parts button, reloaded the page and discarded it).
+//
+// Fast successive edits (tabbing through several fields) fire several of
+// these calls in flight at once; an earlier, slower response landing after
+// a newer one would overwrite fresher data with stale data. estimateSaveToken
+// tags each call so only the most recently *started* one is allowed to render.
+let estimateSaveToken = 0;
 async function persistEstimate() {
   const order = state.detail.order;
   if (!order) return;
   const items = collectEstimateItems();
+  const token = ++estimateSaveToken;
   try {
-    const estimate = await post(`/api/orders/${order.id}/estimate`, { labor_rate: 0, tax_rate: 0, actor: "Clay", items });
+    const estimate = await post(`/api/orders/${order.id}/estimate`, { labor_rate: 0, tax_rate: 0, actor: currentActor(), items });
+    if (token !== estimateSaveToken) return; // a newer edit has already been sent; drop this stale response
     order.estimate = estimate;
     renderEstimate(order);
   } catch (err) {
@@ -459,14 +523,6 @@ function addEstimateRow(kind, defaults = {}) {
   });
 }
 
-/* ---------- findings ---------- */
-function renderFindings(order) {
-  const box = $("#vd-findings-history");
-  box.innerHTML = order.findings.length ? order.findings.map((f) => `
-    <div class="mini-item"><div>${esc(f.summary)}</div><div class="mi-meta">${esc(f.actor)} · ${fmtDate(f.created_at)}</div></div>
-  `).join("") : `<div style="color:var(--ink-faint);font-size:12px">No findings recorded yet.</div>`;
-}
-
 /* ---------- notes / activity ---------- */
 function renderNotes(order) {
   const box = $("#vd-note-list");
@@ -490,16 +546,6 @@ function renderAssignment(order) {
   $("#vd-advisor").innerHTML = `<option value="">Unassigned</option>` + advisors.map((t) => `<option value="${t.id}" ${a && a.advisor_id === t.id ? "selected" : ""}>${esc(t.name)}</option>`).join("");
   $("#vd-odometer").value = (a && a.odometer_in) || "";
   $("#vd-promised").value = (a && a.promised_at) || "";
-}
-
-/* ---------- authorization ---------- */
-function renderAuthorization(order) {
-  const auth = order.authorization;
-  const box = $("#vd-auth-state");
-  box.innerHTML = auth
-    ? `<div class="kv-row"><span class="kv-label">Last recorded</span><span class="kv-value">${esc(auth.status)} by ${esc(auth.approved_by)} (${esc(auth.method)})</span></div>`
-    : `<div class="kv-row"><span class="kv-label">Status</span><span class="kv-value" style="color:var(--ink-faint)">Not yet recorded</span></div>`;
-  $("#vd-record-authorization").disabled = order.status !== "awaiting_approval";
 }
 
 /* ---------- vehicle-detail event wiring (wired once) ---------- */
@@ -527,7 +573,7 @@ function wireVehicleDetail() {
     const status = $("#vd-status-select").value;
     if (!status) return;
     try {
-      await patch(`/api/orders/${state.detail.order.id}/status`, { status, actor: "Clay" });
+      await patch(`/api/orders/${state.detail.order.id}/status`, { status, actor: currentActor() });
       toast(`Status set to ${STATUS_LABEL[status]}`);
       await loadVehicleDetail();
     } catch (err) {
@@ -548,80 +594,89 @@ function wireVehicleDetail() {
     }
   });
 
-  // Every field on an estimate line auto-saves on change now (see
-  // persistEstimate), so this button is a manual "save now" for anything
-  // mid-edit -- not the only path to persisting a line.
-  $("#vd-save-estimate").addEventListener("click", async () => {
-    await persistEstimate();
-    toast("Estimate saved");
-  });
-
-  $("#vd-save-findings").addEventListener("click", async () => {
-    const summary = $("#vd-finding-summary").value.trim();
-    if (!summary) return toast("Write a summary first", true);
-    try {
-      await post(`/api/orders/${state.detail.order.id}/findings`, { summary, actor: "technician", items: [] });
-      $("#vd-finding-summary").value = "";
-      toast("Finding recorded");
-      await loadVehicleDetail();
-    } catch (err) {
-      toast(err.message, true);
-    }
-  });
-
-  $("#vd-add-note").addEventListener("click", async () => {
+  const addNote = async () => {
     const text = $("#vd-note-text").value.trim();
     if (!text) return;
     try {
-      await post(`/api/orders/${state.detail.order.id}/notes`, { text, visibility: $("#vd-note-visibility").value, actor: "Clay" });
+      await post(`/api/orders/${state.detail.order.id}/notes`, { text, visibility: $("#vd-note-visibility").value, actor: currentActor() });
       $("#vd-note-text").value = "";
       toast("Note added");
       await loadVehicleDetail();
     } catch (err) {
       toast(err.message, true);
     }
+  };
+  $("#vd-add-note").addEventListener("click", addNote);
+  $("#vd-note-text").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); addNote(); }
   });
 
-  $("#vd-save-assignment").addEventListener("click", async () => {
-    try {
-      await put(`/api/orders/${state.detail.order.id}/assignment`, {
-        advisor_id: $("#vd-advisor").value ? Number($("#vd-advisor").value) : null,
-        technician_id: $("#vd-technician").value ? Number($("#vd-technician").value) : null,
-        odometer_in: Number($("#vd-odometer").value || 0),
-        promised_at: $("#vd-promised").value,
-        actor: "Clay",
-      });
-      toast("Assignment saved");
-      await loadVehicleDetail();
-    } catch (err) {
-      toast(err.message, true);
-    }
+  $("#vd-save-assignment").addEventListener("click", async (e) => {
+    await withLoading(e.target, "Saving…", async () => {
+      try {
+        await put(`/api/orders/${state.detail.order.id}/assignment`, {
+          advisor_id: $("#vd-advisor").value ? Number($("#vd-advisor").value) : null,
+          technician_id: $("#vd-technician").value ? Number($("#vd-technician").value) : null,
+          odometer_in: Number($("#vd-odometer").value || 0),
+          promised_at: $("#vd-promised").value,
+          actor: currentActor(),
+        });
+        toast("Assignment saved");
+        await loadVehicleDetail();
+      } catch (err) {
+        toast(err.message, true);
+      }
+    });
   });
 
-  $("#vd-we-owe-save").addEventListener("click", async () => {
+  $("#vd-we-owe-save").addEventListener("click", async (e) => {
     const { id } = state.detail;
-    try {
-      await patch(`/api/we-owe/${id}`, { status: $("#vd-we-owe-status").value });
-      toast("We-owe status updated");
-      await loadVehicleDetail();
-    } catch (err) {
-      toast(err.message, true);
-    }
+    await withLoading(e.target, "Saving…", async () => {
+      try {
+        await patch(`/api/we-owe/${id}`, {
+          status: $("#vd-we-owe-status").value,
+          description: $("#vd-we-owe-description").value.trim(),
+          category: $("#vd-we-owe-category").value.trim(),
+          target_date: $("#vd-we-owe-target").value,
+        });
+        toast("We-owe item updated");
+        await loadVehicleDetail();
+      } catch (err) {
+        toast(err.message, true);
+      }
+    });
   });
 
-  $("#vd-record-authorization").addEventListener("click", async () => {
-    const approvedBy = $("#vd-auth-by").value.trim();
-    if (!approvedBy) return toast("Who approved this?", true);
+  $("#vd-recon-info-save").addEventListener("click", async (e) => {
+    const { id } = state.detail;
+    await withLoading(e.target, "Saving…", async () => {
+      try {
+        await patch(`/api/recon/vehicles/${id}`, {
+          vin: $("#vd-recon-vin").value.trim(),
+          mileage: Number($("#vd-recon-mileage").value || 0),
+          year: Number($("#vd-recon-year").value),
+          make: $("#vd-recon-make").value.trim(),
+          model: $("#vd-recon-model").value.trim(),
+          trim: $("#vd-recon-trim").value.trim(),
+          color: $("#vd-recon-color").value.trim(),
+          purchase_price: Number($("#vd-recon-purchase-price").value || 0),
+        });
+        toast("Vehicle info updated");
+        await loadVehicleDetail();
+      } catch (err) {
+        toast(err.message, true);
+      }
+    });
+  });
+
+  $("#vd-delete").addEventListener("click", async () => {
+    const { segment, id, item } = state.detail;
+    const label = segment === "recon" ? item.stock_number : `${item.year} ${item.make} ${item.model}`;
+    if (!confirm(`Delete ${label}? This can't be undone.`)) return;
     try {
-      await post(`/api/orders/${state.detail.order.id}/authorization`, {
-        status: $("#vd-auth-status").value,
-        approved_by: approvedBy,
-        method: $("#vd-auth-method").value,
-        actor: "Clay",
-      });
-      toast("Authorization recorded");
-      $("#vd-auth-by").value = "";
-      await loadVehicleDetail();
+      await api(segment === "recon" ? `/api/recon/vehicles/${id}` : `/api/we-owe/${id}`, { method: "DELETE" });
+      toast("Deleted");
+      showView("vehicles");
     } catch (err) {
       toast(err.message, true);
     }
@@ -675,28 +730,30 @@ function wireReconDialog() {
   });
   $("#recon-form").addEventListener("submit", async (e) => {
     e.preventDefault();
-    try {
-      await post("/api/recon/vehicles", {
-        stock_number: $("#recon-stock").value.trim(),
-        vin: $("#recon-vin").value.trim(),
-        year: Number($("#recon-year").value),
-        make: $("#recon-make").value.trim(),
-        model: $("#recon-model").value.trim(),
-        trim: $("#recon-trim").value.trim(),
-        engine: $("#recon-engine").value.trim(),
-        color: $("#recon-color").value.trim(),
-        mileage: Number($("#recon-mileage").value || 0),
-        purchase_price: Number($("#recon-price").value || 0),
-        acquisition_source: $("#recon-source").value.trim(),
-        acquisition_date: $("#recon-date").value,
-        notes: $("#recon-notes").value.trim(),
-      });
-      $("#recon-dialog").close();
-      toast("Recon vehicle added");
-      loadVehiclesView();
-    } catch (err) {
-      toast(err.message, true);
-    }
+    await withLoading(e.submitter, "Saving…", async () => {
+      try {
+        await post("/api/recon/vehicles", {
+          stock_number: $("#recon-stock").value.trim(),
+          vin: $("#recon-vin").value.trim(),
+          year: Number($("#recon-year").value),
+          make: $("#recon-make").value.trim(),
+          model: $("#recon-model").value.trim(),
+          trim: $("#recon-trim").value.trim(),
+          engine: $("#recon-engine").value.trim(),
+          color: $("#recon-color").value.trim(),
+          mileage: Number($("#recon-mileage").value || 0),
+          purchase_price: Number($("#recon-price").value || 0),
+          acquisition_source: $("#recon-source").value.trim(),
+          acquisition_date: $("#recon-date").value,
+          notes: $("#recon-notes").value.trim(),
+        });
+        $("#recon-dialog").close();
+        toast("Recon vehicle added");
+        loadVehiclesView();
+      } catch (err) {
+        toast(err.message, true);
+      }
+    });
   });
 }
 
@@ -718,11 +775,15 @@ async function refreshWeOweVehicleOptions() {
   const select = $("#we-owe-vehicle");
   if (customerId === "__new__" || !customerId) {
     select.innerHTML = `<option value="__new__">＋ New vehicle…</option>`;
-    return;
+  } else {
+    const vehicles = await get("/api/vehicles");
+    const owned = vehicles.filter((v) => v.customer_id === Number(customerId));
+    select.innerHTML = `<option value="__new__">＋ New vehicle…</option>` + owned.map((v) => `<option value="${v.id}">${v.year} ${esc(v.make)} ${esc(v.model)}</option>`).join("");
   }
-  const vehicles = await get("/api/vehicles");
-  const owned = vehicles.filter((v) => v.customer_id === Number(customerId));
-  select.innerHTML = `<option value="__new__">＋ New vehicle…</option>` + owned.map((v) => `<option value="${v.id}">${v.year} ${esc(v.make)} ${esc(v.model)}</option>`).join("");
+  // Rebuilding the options resets the select's value to "__new__" (its
+  // first option) without firing a change event -- without this, the
+  // fields to actually type the new vehicle stay hidden.
+  $("#we-owe-new-vehicle").style.display = select.value === "__new__" ? "" : "none";
 }
 function wireWeOweDialog() {
   $("#we-owe-cancel").addEventListener("click", () => $("#we-owe-dialog").close());
@@ -736,53 +797,55 @@ function wireWeOweDialog() {
   });
   $("#we-owe-form").addEventListener("submit", async (e) => {
     e.preventDefault();
-    try {
-      let customerId = $("#we-owe-customer").value;
-      if (customerId === "__new__") {
-        const name = $("#we-owe-new-customer-name").value.trim();
-        if (!name) return toast("Enter the customer's name", true);
-        const customer = await post("/api/customers", { name, phone: $("#we-owe-new-customer-phone").value.trim(), email: "" });
-        customerId = customer.id;
-      } else {
-        customerId = Number(customerId);
-      }
-      let vehicleId = $("#we-owe-vehicle").value;
-      if (vehicleId === "__new__") {
-        const make = $("#we-owe-new-make").value.trim();
-        const model = $("#we-owe-new-model").value.trim();
-        if (!make || !model) return toast("Enter the vehicle's make and model", true);
-        const vehicle = await post("/api/vehicles", {
+    await withLoading(e.submitter, "Saving…", async () => {
+      try {
+        let customerId = $("#we-owe-customer").value;
+        if (customerId === "__new__") {
+          const name = $("#we-owe-new-customer-name").value.trim();
+          if (!name) return toast("Enter the customer's name", true);
+          const customer = await post("/api/customers", { name, phone: $("#we-owe-new-customer-phone").value.trim(), email: "" });
+          customerId = customer.id;
+        } else {
+          customerId = Number(customerId);
+        }
+        let vehicleId = $("#we-owe-vehicle").value;
+        if (vehicleId === "__new__") {
+          const make = $("#we-owe-new-make").value.trim();
+          const model = $("#we-owe-new-model").value.trim();
+          if (!make || !model) return toast("Enter the vehicle's make and model", true);
+          const vehicle = await post("/api/vehicles", {
+            customer_id: customerId,
+            year: Number($("#we-owe-new-year").value),
+            make, model,
+            vin: $("#we-owe-new-vin").value.trim(),
+          });
+          vehicleId = vehicle.id;
+        } else {
+          vehicleId = Number(vehicleId);
+        }
+        await post("/api/we-owe", {
           customer_id: customerId,
-          year: Number($("#we-owe-new-year").value),
-          make, model,
-          vin: $("#we-owe-new-vin").value.trim(),
+          vehicle_id: vehicleId,
+          description: $("#we-owe-description").value.trim(),
+          category: $("#we-owe-category").value.trim() || "other",
+          target_date: $("#we-owe-target").value,
+          sale_reference: $("#we-owe-sale-ref").value.trim(),
+          lot_stock_number: $("#we-owe-lot-stock").value.trim(),
         });
-        vehicleId = vehicle.id;
-      } else {
-        vehicleId = Number(vehicleId);
+        $("#we-owe-dialog").close();
+        toast("We-owe item added");
+        loadVehiclesView();
+      } catch (err) {
+        toast(err.message, true);
       }
-      await post("/api/we-owe", {
-        customer_id: customerId,
-        vehicle_id: vehicleId,
-        description: $("#we-owe-description").value.trim(),
-        category: $("#we-owe-category").value.trim() || "other",
-        target_date: $("#we-owe-target").value,
-        sale_reference: $("#we-owe-sale-ref").value.trim(),
-        lot_stock_number: $("#we-owe-lot-stock").value.trim(),
-      });
-      $("#we-owe-dialog").close();
-      toast("We-owe item added");
-      loadVehiclesView();
-    } catch (err) {
-      toast(err.message, true);
-    }
+    });
   });
 }
 
 /* ==================================================================
    REPORTS
    ================================================================== */
-function quickRange(kind) {
+function quickRange(kind, chip) {
   const now = new Date();
   const iso = (d) => d.toISOString().slice(0, 10);
   let start, end = iso(now);
@@ -793,6 +856,8 @@ function quickRange(kind) {
   else { start = ""; end = ""; }
   $("#report-start").value = start;
   $("#report-end").value = end;
+  $$("#view-reports .chip").forEach((c) => c.classList.remove("active"));
+  chip.classList.add("active");
 }
 
 async function loadReportsView() {
@@ -915,11 +980,11 @@ async function generateReport() {
 }
 
 function wireReportsView() {
-  $("#report-quick-today").addEventListener("click", () => quickRange("today"));
-  $("#report-quick-week").addEventListener("click", () => quickRange("week"));
-  $("#report-quick-month").addEventListener("click", () => quickRange("month"));
-  $("#report-quick-year").addEventListener("click", () => quickRange("year"));
-  $("#report-quick-all").addEventListener("click", () => quickRange("all"));
+  $("#report-quick-today").addEventListener("click", (e) => quickRange("today", e.target));
+  $("#report-quick-week").addEventListener("click", (e) => quickRange("week", e.target));
+  $("#report-quick-month").addEventListener("click", (e) => quickRange("month", e.target));
+  $("#report-quick-year").addEventListener("click", (e) => quickRange("year", e.target));
+  $("#report-quick-all").addEventListener("click", (e) => quickRange("all", e.target));
   $("#report-generate").addEventListener("click", generateReport);
   $("#report-print").addEventListener("click", async () => {
     if (!state.report) await generateReport();
@@ -1017,6 +1082,21 @@ function renderAuditList(audits) {
   `).join("") : `<div style="color:var(--ink-faint);font-size:12px">No activity yet.</div>`;
 }
 
+// Subtotal is always exactly the sum of the line items, and Total is always
+// exactly Subtotal + Tax -- both fields are read-only precisely so this can
+// never drift out of sync and trip process_invoice's mismatch check, which
+// previously required hand-adding every line in your head.
+function recalcApTotals() {
+  const subtotal = $$("#ap-invoice-items tr").reduce((sum, tr) => {
+    const qty = parseFloat(tr.querySelector(".apl-qty").value || "0");
+    const cost = parseFloat(tr.querySelector(".apl-cost").value || "0");
+    return sum + qty * cost;
+  }, 0);
+  const tax = parseFloat($("#ap-tax").value || "0");
+  $("#ap-subtotal").value = subtotal.toFixed(2);
+  $("#ap-total").value = (subtotal + tax).toFixed(2);
+}
+
 function addApLine() {
   const box = $("#ap-invoice-items");
   const tr = document.createElement("tr");
@@ -1028,12 +1108,16 @@ function addApLine() {
     <td><input class="apl-cost" type="number" min="0" step="0.01" value="0" style="width:90px"></td>
     <td><button type="button" class="rm-btn">×</button></td>
   `;
-  tr.querySelector(".rm-btn").addEventListener("click", () => tr.remove());
+  tr.querySelector(".rm-btn").addEventListener("click", () => { tr.remove(); recalcApTotals(); });
+  tr.querySelector(".apl-qty").addEventListener("input", recalcApTotals);
+  tr.querySelector(".apl-cost").addEventListener("input", recalcApTotals);
   box.appendChild(tr);
+  recalcApTotals();
 }
 
 function wireAccountingView() {
   $("#ap-add-line").addEventListener("click", addApLine);
+  $("#ap-tax").addEventListener("input", recalcApTotals);
   $("#vendor-form").addEventListener("submit", async (e) => {
     e.preventDefault();
     const form = e.target;
@@ -1060,31 +1144,33 @@ function wireAccountingView() {
       kind: tr.querySelector(".apl-kind").value,
     })).filter((i) => i.description && i.quantity > 0);
     if (!items.length) return toast("Add at least one line item", true);
-    try {
-      const res = await post("/api/agent/invoices/process", {
-        vendor_name: $("#ap-vendor").value,
-        invoice_number: $("#ap-invoice-number").value.trim(),
-        po_number: $("#ap-po").value,
-        subtotal: parseFloat($("#ap-subtotal").value || "0"),
-        tax: parseFloat($("#ap-tax").value || "0"),
-        total: parseFloat($("#ap-total").value || "0"),
-        items,
-        source: "ui",
-      });
-      if (res.status === "posted") {
-        toast("Invoice posted — parts marked received");
-        $("#ap-invoice-form").reset();
-        $("#ap-invoice-items").innerHTML = "";
-        addApLine();
-        $("#ap-invoice-note").textContent = "";
-      } else {
-        $("#ap-invoice-note").textContent = (res.issues || []).join(" · ");
-        toast(`Invoice ${res.status.replace("_", " ")}`, true);
+    await withLoading(e.submitter, "Posting…", async () => {
+      try {
+        const res = await post("/api/agent/invoices/process", {
+          vendor_name: $("#ap-vendor").value,
+          invoice_number: $("#ap-invoice-number").value.trim(),
+          po_number: $("#ap-po").value,
+          subtotal: parseFloat($("#ap-subtotal").value || "0"),
+          tax: parseFloat($("#ap-tax").value || "0"),
+          total: parseFloat($("#ap-total").value || "0"),
+          items,
+          source: "ui",
+        });
+        if (res.status === "posted") {
+          toast("Invoice posted — parts marked received");
+          $("#ap-invoice-form").reset();
+          $("#ap-invoice-items").innerHTML = "";
+          addApLine();
+          $("#ap-invoice-note").textContent = "";
+        } else {
+          $("#ap-invoice-note").textContent = (res.issues || []).join(" · ");
+          toast(`Invoice ${res.status.replace("_", " ")}`, true);
+        }
+        loadAccountingView();
+      } catch (err) {
+        toast(err.message, true);
       }
-      loadAccountingView();
-    } catch (err) {
-      toast(err.message, true);
-    }
+    });
   });
 }
 
@@ -1097,6 +1183,7 @@ async function loadStaffView() {
   } catch (err) {
     return toast(`Could not load staff: ${err.message}`, true);
   }
+  refreshCurrentUserOptions();
   const roleLabel = { technician: "Technician", advisor: "Advisor / Service Writer", manager: "Manager" };
   $("#staff-table").innerHTML = state.staff.length ? state.staff.map((s) => `
     <tr data-id="${s.id}">
@@ -1158,7 +1245,9 @@ async function loadIntegrationsView() {
   try {
     const data = await get("/api/integrations/partstech");
     $("#partstech-login").href = data.login_url;
-  } catch {}
+  } catch (err) {
+    toast(`Could not load PartsTech connection info: ${err.message}`, true);
+  }
 }
 
 /* ==================================================================
@@ -1166,6 +1255,7 @@ async function loadIntegrationsView() {
    ================================================================== */
 document.addEventListener("DOMContentLoaded", () => {
   initTheme();
+  initCurrentUser();
   wireVehiclesView();
   wireVehicleDetail();
   wireReconDialog();

@@ -34,6 +34,17 @@ class RecondVehiclePatch(BaseModel):
     sale_date: str | None = None
     sale_customer_id: int | None = None
     notes: str | None = None
+    # Core vehicle info -- correcting a typo (wrong purchase price, VIN, etc.)
+    # shouldn't require touching the database directly.
+    purchase_price: float | None = Field(default=None, ge=0)
+    vin: str | None = None
+    year: int | None = Field(default=None, ge=1900, le=2100)
+    make: str | None = Field(default=None, min_length=1)
+    model: str | None = Field(default=None, min_length=1)
+    trim: str | None = None
+    engine: str | None = None
+    color: str | None = None
+    mileage: int | None = Field(default=None, ge=0)
 
 
 class WeOweIn(BaseModel):
@@ -48,6 +59,10 @@ class WeOweIn(BaseModel):
 
 class WeOwePatch(BaseModel):
     status: Literal["open", "fulfilled", "waived"] | None = None
+    description: str | None = Field(default=None, min_length=1)
+    category: str | None = None
+    target_date: str | None = None
+    lot_stock_number: str | None = None
 
 
 def cost_rollup(db: sqlite3.Connection, column: str, ref_id: int) -> dict:
@@ -264,7 +279,7 @@ def build_recon_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
     @router.patch("/recon/vehicles/{recon_id}")
     def update_recon_vehicle(recon_id: int, item: RecondVehiclePatch):
         with connect() as db:
-            recon_row(db, recon_id)
+            row = recon_row(db, recon_id)
             fields: list[str] = []
             params: list[object] = []
             if item.status is not None:
@@ -284,12 +299,48 @@ def build_recon_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
             if item.notes is not None:
                 fields.append("notes=?")
                 params.append(item.notes.strip())
+            if item.purchase_price is not None:
+                fields.append("purchase_price=?")
+                params.append(item.purchase_price)
             if fields:
                 fields.append("updated_at=?")
                 params.append(now_fn())
                 params.append(recon_id)
                 db.execute(f"UPDATE recon_vehicles SET {','.join(fields)} WHERE id=?", params)
+
+            # Core vehicle info (VIN, make/model, etc.) lives on the shared
+            # vehicles table, not recon_vehicles -- correcting a typo here
+            # shouldn't require touching the database directly.
+            vehicle_fields: list[str] = []
+            vehicle_params: list[object] = []
+            for name, value in (
+                ("vin", item.vin.strip().upper() if item.vin is not None else None),
+                ("year", item.year),
+                ("make", item.make.strip() if item.make is not None else None),
+                ("model", item.model.strip() if item.model is not None else None),
+                ("trim", item.trim.strip() if item.trim is not None else None),
+                ("engine", item.engine.strip() if item.engine is not None else None),
+                ("color", item.color.strip() if item.color is not None else None),
+                ("mileage", item.mileage),
+            ):
+                if value is not None:
+                    vehicle_fields.append(f"{name}=?")
+                    vehicle_params.append(value)
+            if vehicle_fields:
+                vehicle_params.append(row["vehicle_id"])
+                db.execute(f"UPDATE vehicles SET {','.join(vehicle_fields)} WHERE id=?", vehicle_params)
+
             return recon_detail(db, recon_id)
+
+    @router.delete("/recon/vehicles/{recon_id}", status_code=204)
+    def delete_recon_vehicle(recon_id: int):
+        with connect() as db:
+            row = recon_row(db, recon_id)
+            if db.execute("SELECT 1 FROM orders WHERE recon_vehicle_id=?", (recon_id,)).fetchone():
+                raise HTTPException(409, "Can't delete a vehicle with repair order history -- cancel or close its orders instead")
+            db.execute("DELETE FROM recon_vehicles WHERE id=?", (recon_id,))
+            db.execute("DELETE FROM vehicles WHERE id=?", (row["vehicle_id"],))
+        return None
 
     # --- We-owe items ---
 
@@ -327,9 +378,39 @@ def build_recon_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
     def update_we_owe_item(we_owe_id: int, item: WeOwePatch):
         with connect() as db:
             we_owe_row(db, we_owe_id)
+            fields: list[str] = []
+            params: list[object] = []
             if item.status is not None:
-                fulfilled_at = now_fn() if item.status == "fulfilled" else ""
-                db.execute("UPDATE we_owe_items SET status=?,fulfilled_at=?,updated_at=? WHERE id=?", (item.status, fulfilled_at, now_fn(), we_owe_id))
+                fields.append("status=?")
+                params.append(item.status)
+                fields.append("fulfilled_at=?")
+                params.append(now_fn() if item.status == "fulfilled" else "")
+            if item.description is not None:
+                fields.append("description=?")
+                params.append(item.description.strip())
+            if item.category is not None:
+                fields.append("category=?")
+                params.append(item.category.strip() or "other")
+            if item.target_date is not None:
+                fields.append("target_date=?")
+                params.append(item.target_date.strip())
+            if item.lot_stock_number is not None:
+                fields.append("lot_stock_number=?")
+                params.append(item.lot_stock_number.strip().upper())
+            if fields:
+                fields.append("updated_at=?")
+                params.append(now_fn())
+                params.append(we_owe_id)
+                db.execute(f"UPDATE we_owe_items SET {','.join(fields)} WHERE id=?", params)
             return we_owe_detail(db, we_owe_id)
+
+    @router.delete("/we-owe/{we_owe_id}", status_code=204)
+    def delete_we_owe_item(we_owe_id: int):
+        with connect() as db:
+            we_owe_row(db, we_owe_id)
+            if db.execute("SELECT 1 FROM orders WHERE we_owe_id=?", (we_owe_id,)).fetchone():
+                raise HTTPException(409, "Can't delete a we-owe item with repair order history -- cancel or close its orders instead")
+            db.execute("DELETE FROM we_owe_items WHERE id=?", (we_owe_id,))
+        return None
 
     return router

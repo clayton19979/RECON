@@ -4,6 +4,7 @@ import logging
 import os
 import subprocess
 import threading
+import time
 import webbrowser
 from pathlib import Path
 
@@ -11,12 +12,14 @@ import pystray
 import uvicorn
 from PIL import Image, ImageDraw
 
-from app.backup import backup_database
+from app.backup import backup_database, most_recent_backup_age_hours, prune_backups
 from app.main import DATA_ROOT, DEFAULT_DB, create_app
 
 HOST = "127.0.0.1"
 PORT = 8787
 URL = f"http://{HOST}:{PORT}"
+AUTO_BACKUP_INTERVAL_HOURS = 24
+BACKUP_RETENTION_COUNT = 14
 
 CHROME_CANDIDATES = [
     Path(os.environ.get("PROGRAMFILES", r"C:\Program Files")) / "Google" / "Chrome" / "Application" / "chrome.exe",
@@ -93,16 +96,35 @@ class TrayApp:
     def open_browser(self, _icon: pystray.Icon, _item: pystray.MenuItem) -> None:
         open_in_chrome(URL)
 
-    def backup_now(self, _icon: pystray.Icon, _item: pystray.MenuItem) -> None:
+    def _run_backup(self, notify: bool) -> None:
+        backups_dir = DATA_ROOT / "backups"
         try:
-            destination = backup_database(DEFAULT_DB, DATA_ROOT / "backups")
-            log.info("Backup written to %s", destination)
-            if self.icon is not None:
+            destination = backup_database(DEFAULT_DB, backups_dir)
+            removed = prune_backups(backups_dir, keep=BACKUP_RETENTION_COUNT)
+            log.info("Backup written to %s (pruned %d old backups)", destination, len(removed))
+            if notify and self.icon is not None:
                 self.icon.notify(f"Backup saved: {destination.name}", "Discount Auto Ops")
         except Exception as exc:
             log.exception("Backup failed")
-            if self.icon is not None:
+            if notify and self.icon is not None:
                 self.icon.notify(f"Backup failed: {exc}", "Discount Auto Ops")
+
+    def backup_now(self, _icon: pystray.Icon, _item: pystray.MenuItem) -> None:
+        self._run_backup(notify=True)
+
+    def _auto_backup_loop(self) -> None:
+        """Runs for the life of the process: backs up automatically if the
+        last backup is stale, then checks again once an hour. Protects
+        against data loss without Clay having to remember to click
+        Backup Now."""
+        while True:
+            try:
+                age = most_recent_backup_age_hours(DATA_ROOT / "backups")
+                if age is None or age >= AUTO_BACKUP_INTERVAL_HOURS:
+                    self._run_backup(notify=False)
+            except Exception:
+                log.exception("Auto-backup check failed")
+            time.sleep(3600)
 
     def quit_app(self, icon: pystray.Icon, _item: pystray.MenuItem) -> None:
         log.info("Exit requested from tray")
@@ -111,6 +133,7 @@ class TrayApp:
 
     def run(self) -> None:
         ok = self.start_server()
+        threading.Thread(target=self._auto_backup_loop, daemon=True).start()
         menu = pystray.Menu(
             pystray.MenuItem("Open Discount Auto Ops", self.open_browser, default=True),
             pystray.MenuItem("Backup Now", self.backup_now),

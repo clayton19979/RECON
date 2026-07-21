@@ -448,7 +448,7 @@ function renderEstimate(order) {
   const items = order.estimate ? order.estimate.items : [];
   const box = $("#vd-estimate-items");
   const rowHtml = (item, i) => `
-    <div class="part-row" data-index="${i}" data-id="${item.id || ""}">
+    <div class="part-row ${item.source === "partstech" ? "source-partstech" : ""}" data-index="${i}" data-id="${item.id || ""}" data-source="${item.source || "manual"}" ${item.source === "partstech" ? `title="Added from a PartsTech lookup"` : ""}>
       <select class="ei-kind">
         <option value="part" ${item.kind === "part" ? "selected" : ""}>Part</option>
         <option value="labor" ${item.kind === "labor" ? "selected" : ""}>Labor</option>
@@ -532,6 +532,7 @@ function collectEstimateItems() {
       quantity: parseFloat(row.querySelector(".ei-qty").value || "1"),
       unit_cost: cost,
       unit_price: cost,
+      source: row.dataset.source || "manual",
     };
   }).filter((i) => i.description);
 }
@@ -574,8 +575,11 @@ function addEstimateRow(kind, defaults = {}) {
   const empty = $(".ei-empty", box);
   if (empty) empty.remove();
   const row = document.createElement("div");
-  row.className = "part-row";
+  const source = defaults.source || "manual";
+  row.className = source === "partstech" ? "part-row source-partstech" : "part-row";
   row.dataset.id = "";
+  row.dataset.source = source;
+  if (source === "partstech") row.title = "Added from a PartsTech lookup";
   const label = kind === "labor" ? "Labor" : kind === "fee" ? "Fee" : "Part";
   row.innerHTML = `
     <select class="ei-kind">
@@ -667,6 +671,15 @@ function wireVehicleDetail() {
 
   $("#vd-add-part").addEventListener("click", () => addEstimateRow("part"));
   $("#vd-add-labor").addEventListener("click", () => addEstimateRow("labor"));
+  $("#vd-add-partstech").addEventListener("click", async () => {
+    try {
+      const data = await get("/api/integrations/partstech");
+      window.open(data.login_url, "_blank", "noopener");
+    } catch (err) {
+      toast(err.message, true);
+    }
+    addEstimateRow("part", { description: "New part (from PartsTech)", source: "partstech" });
+  });
 
   $("#vd-order-parts").addEventListener("click", async () => {
     try {
@@ -1177,9 +1190,13 @@ function renderVendorChips() {
 }
 function renderPoSelect() {
   const open = state.orders.filter((o) => !["closed", "cancelled"].includes(o.status));
+  // The PO# you actually give a vendor is the stock number, not the
+  // internal RO-2607-0012 format -- submit that as the value so a vendor
+  // invoice referencing "R-1042" matches straight back to this order.
   $("#ap-po").innerHTML = open.map((o) => {
-    const label = o.stock_number ? `${o.number} · ${o.stock_number} · ${o.year} ${o.make} ${o.model}` : `${o.number} · ${o.customer_name} · ${o.year} ${o.make} ${o.model}`;
-    return `<option value="${esc(o.number)}">${esc(label)}</option>`;
+    const poValue = o.stock_number || o.number;
+    const label = o.stock_number ? `${o.stock_number} · ${o.number} · ${o.year} ${o.make} ${o.model}` : `${o.number} · ${o.customer_name} · ${o.year} ${o.make} ${o.model}`;
+    return `<option value="${esc(poValue)}">${esc(label)}</option>`;
   }).join("") || `<option value="">No open repair orders</option>`;
 }
 function renderApTable(invoices) {

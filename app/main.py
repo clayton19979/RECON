@@ -103,6 +103,7 @@ class EstimateItem(BaseModel):
     unit_price: float = Field(ge=0)
     part_number: str = ""
     unit_cost: float = Field(default=0, ge=0)
+    source: Literal["manual", "partstech", "technician_finding"] = "manual"
 
 
 class EstimateIn(BaseModel):
@@ -362,7 +363,7 @@ def create_app(db_path: Path = DEFAULT_DB) -> FastAPI:
                 else:
                     cur = db.execute(
                         "INSERT INTO estimate_items(estimate_id,kind,description,part_number,quantity,unit_price,unit_cost,line_total,source,review_required,reviewed_by,reviewed_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
-                        (estimate_id, item.kind, item.description.strip(), item.part_number.strip().upper(), item.quantity, item.unit_price, item.unit_cost, round(item.quantity * item.unit_price, 2), "manual", 0, estimate.actor, now()),
+                        (estimate_id, item.kind, item.description.strip(), item.part_number.strip().upper(), item.quantity, item.unit_price, item.unit_cost, round(item.quantity * item.unit_price, 2), item.source, 0, estimate.actor, now()),
                     )
                     if cur.lastrowid is not None:
                         retained_ids.add(int(cur.lastrowid))

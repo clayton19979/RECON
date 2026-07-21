@@ -62,6 +62,29 @@ def test_process_invoice_posts_and_receives_parts(client):
     assert posted["vehicle_label"] == "R-5001"  # PO# -> RO# -> stock# traceability
 
 
+def test_process_invoice_matches_po_by_stock_number(client):
+    """Shops naturally give vendors the stock number as the PO reference
+    (it's what's on the car) rather than the internal RO-2607-0012 format
+    -- an invoice referencing the stock number must resolve to that
+    vehicle's repair order just as well as the formal RO number would."""
+    client.post("/api/vendors", json={"name": "WorldPac"})
+    vehicle = make_recon_vehicle(client, stock_number="R-9201")
+    order = make_recon_order(client, vehicle["id"])
+    save_estimate(
+        client,
+        order["id"],
+        [{"kind": "part", "description": "Brake pads", "part_number": "BP-1", "quantity": 1, "unit_price": 45, "unit_cost": 45}],
+    )
+    res = post_invoice(
+        client,
+        po_number="r-9201",  # lowercase, exactly what a vendor might scrawl on an invoice
+        subtotal=45, total=45,
+        items=[{"part_number": "BP-1", "description": "Brake pads", "quantity": 1, "unit_cost": 45, "kind": "part"}],
+    )
+    assert res.json()["status"] == "posted", res.text
+    assert res.json()["order_id"] == order["id"]
+
+
 def test_process_invoice_duplicate_rejected(client):
     client.post("/api/vendors", json={"name": "WorldPac"})
     vehicle = make_recon_vehicle(client, stock_number="R-6001")

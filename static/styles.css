@@ -324,6 +324,7 @@ textarea { min-height: 70px; resize: vertical; font-family: inherit; }
 }
 .part-row input, .part-row select { padding: 5px 7px; font-size: 12.5px; }
 .part-row .rm-btn { background: none; border: none; color: var(--crit); cursor: pointer; font-size: 15px; padding: 2px 6px; }
+.part-row.source-partstech { background: var(--accent-tint); border-left: 3px solid var(--accent); }
 
 /* ---------- cost summary ---------- */
 .cost-summary { padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; }

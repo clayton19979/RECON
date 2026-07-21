@@ -115,10 +115,26 @@ def build_accounting_router(connect: Callable[[], sqlite3.Connection], now: Call
         return None
 
     def find_order(db: sqlite3.Connection, po_number: str):
+        """Matches a PO# against either an RO number (RO-2607-0012) or a
+        vehicle's stock number (R-1042) -- shops naturally give vendors the
+        stock number as the PO reference since it's what's on the car, so
+        an invoice that comes back referencing the stock number needs to
+        resolve to that vehicle's repair order just as well as the formal
+        RO number would."""
         target = normalize(po_number)
         for row in db.execute("SELECT * FROM orders"):
             if normalize(row["number"]) == target:
                 return row
+        for recon_vehicle in db.execute("SELECT * FROM recon_vehicles"):
+            if normalize(recon_vehicle["stock_number"]) == target:
+                orders = db.execute(
+                    "SELECT * FROM orders WHERE recon_vehicle_id=? ORDER BY id DESC", (recon_vehicle["id"],)
+                ).fetchall()
+                active = next((o for o in orders if o["status"] not in ("closed", "cancelled")), None)
+                if active is not None:
+                    return active
+                if orders:
+                    return orders[0]
         return None
 
     def audit(db: sqlite3.Connection, invoice: InvoiceIn, status: str, issues: list[str], order_id: int | None, vendor_id: int | None):

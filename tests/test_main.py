@@ -63,6 +63,36 @@ def test_order_lifecycle_and_estimate_editing(client):
     assert estimate2["subtotal"] == 45  # 2*20 + 5, labor line dropped
 
 
+def test_estimate_item_source_is_recorded(client):
+    vehicle = make_recon_vehicle(client, stock_number="R-3401")
+    order = make_recon_order(client, vehicle["id"])
+    estimate = save_estimate(
+        client,
+        order["id"],
+        [
+            {"kind": "part", "description": "OEM sensor", "part_number": "PT-1", "quantity": 1, "unit_price": 80, "unit_cost": 80, "source": "partstech"},
+            {"kind": "part", "description": "Filter", "part_number": "F-1", "quantity": 1, "unit_price": 10, "unit_cost": 10},
+        ],
+    )
+    by_desc = {i["description"]: i for i in estimate["items"]}
+    assert by_desc["OEM sensor"]["source"] == "partstech"
+    assert by_desc["Filter"]["source"] == "manual"
+
+    # editing an existing line doesn't reset its source
+    partstech_id = by_desc["OEM sensor"]["id"]
+    estimate2 = save_estimate(
+        client,
+        order["id"],
+        [
+            {"id": partstech_id, "kind": "part", "description": "OEM sensor", "part_number": "PT-1", "quantity": 2, "unit_price": 80, "unit_cost": 80},
+            {"kind": "part", "description": "Filter", "part_number": "F-1", "quantity": 1, "unit_price": 10, "unit_cost": 10, "id": by_desc["Filter"]["id"]},
+        ],
+    )
+    updated = next(i for i in estimate2["items"] if i["id"] == partstech_id)
+    assert updated["source"] == "partstech"
+    assert updated["quantity"] == 2
+
+
 def test_estimate_save_conflict_when_stale_version(client):
     """The estimate save is a full replace of the line-item set -- the
     highest-risk spot for two people editing the same RO to silently

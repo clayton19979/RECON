@@ -1,0 +1,588 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Discount Auto Ops</title>
+<link rel="stylesheet" href="/assets/styles.css">
+</head>
+<body>
+<div class="app">
+  <nav class="rail">
+    <div class="rail-mark">DA</div>
+    <button class="rail-item active" data-view="vehicles">
+      <svg viewBox="0 0 24 24"><path d="M3 12l2-8h14l2 8M3 12v7a1 1 0 001 1h2a1 1 0 001-1v-2h10v2a1 1 0 001 1h2a1 1 0 001-1v-7M3 12h18M7 16h.01M17 16h.01"/></svg>
+      <span>Vehicles</span>
+    </button>
+    <button class="rail-item" data-view="reports">
+      <svg viewBox="0 0 24 24"><path d="M9 17H5a2 2 0 01-2-2V5a2 2 0 012-2h14a2 2 0 012 2v10a2 2 0 01-2 2h-4M9 17l3 4 3-4M9 17h6"/></svg>
+      <span>Reports</span>
+    </button>
+    <button class="rail-item" data-view="accounting">
+      <svg viewBox="0 0 24 24"><path d="M4 19V5a2 2 0 012-2h9l5 5v11a2 2 0 01-2 2H6a2 2 0 01-2-2z"/><path d="M14 3v5h5M9 13h6M9 17h6"/></svg>
+      <span>A/P</span>
+    </button>
+    <button class="rail-item" data-view="staff">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.4"/><path d="M4.5 20c1-3.6 4-5.6 7.5-5.6s6.5 2 7.5 5.6"/></svg>
+      <span>Staff</span>
+    </button>
+    <button class="rail-item" data-view="integrations">
+      <svg viewBox="0 0 24 24"><path d="M10 13a5 5 0 007.5.5l2-2a5 5 0 00-7-7l-1 1"/><path d="M14 11a5 5 0 00-7.5-.5l-2 2a5 5 0 007 7l1-1"/></svg>
+      <span>Connect</span>
+    </button>
+    <div class="rail-spacer"></div>
+    <button class="rail-theme" id="theme-toggle" aria-label="Toggle theme" title="Toggle theme">
+      <svg viewBox="0 0 24 24"><path d="M12 3a6 6 0 009 9 9 9 0 11-9-9z"/></svg>
+    </button>
+  </nav>
+
+  <div class="main">
+    <header class="topbar">
+      <div>
+        <div class="shop-name">Discount Auto Ops</div>
+        <div class="shop-sub">Merrillville, IN</div>
+      </div>
+      <label class="search">
+        <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+        <input id="global-search" placeholder="Search stock #, VIN, customer…" autocomplete="off">
+      </label>
+      <div class="topbar-right">
+        <div class="who">
+          <div class="who-badge">CS</div>
+          <div>
+            <div class="who-name">Clay</div>
+            <div class="who-role">Service Advisor</div>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <div class="content">
+
+      <!-- VEHICLES LIST -->
+      <section class="view active" id="view-vehicles">
+        <div class="page-head">
+          <div>
+            <h1>Vehicles</h1>
+            <p class="page-desc">Every recon car and we-owe promise, one list. Click a row for the full picture — cost, parts, technician, linked repair order.</p>
+          </div>
+          <div style="display:flex;gap:10px">
+            <button class="btn btn-ghost" id="add-we-owe-btn">
+              <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+              We-Owe Promise
+            </button>
+            <button class="btn btn-primary" id="add-recon-btn">
+              <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+              Recon Vehicle
+            </button>
+          </div>
+        </div>
+
+        <div class="stats">
+          <div class="stat">
+            <div class="stat-label">In Recon</div>
+            <div class="stat-value" id="stat-recon-open">0</div>
+            <div class="stat-sub" id="stat-recon-actual">$0 actual spend</div>
+          </div>
+          <div class="stat">
+            <div class="stat-label">Open We-Owe</div>
+            <div class="stat-value" id="stat-we-owe-open">0</div>
+            <div class="stat-sub" id="stat-we-owe-actual">$0 actual spend</div>
+          </div>
+          <div class="stat">
+            <div class="stat-label">Actual Spend (Open)</div>
+            <div class="stat-value num" id="stat-actual-total">$0</div>
+            <div class="stat-sub">received parts + labor</div>
+          </div>
+          <div class="stat">
+            <div class="stat-label">Quoted, Not Landed</div>
+            <div class="stat-value num warn" id="stat-quoted-total">$0</div>
+            <div class="stat-sub">ordered or awaiting parts</div>
+          </div>
+        </div>
+
+        <div class="filters">
+          <button class="chip active" data-filter="">All</button>
+          <button class="chip" data-filter="recon">Recon</button>
+          <button class="chip" data-filter="we_owe">We-Owe</button>
+          <div class="filters-gap"></div>
+          <span class="filters-note" id="vehicles-count">0 vehicles</span>
+        </div>
+
+        <div class="panel">
+          <table>
+            <thead>
+              <tr>
+                <th>Stock #</th>
+                <th>Vehicle</th>
+                <th>Type</th>
+                <th>Status</th>
+                <th>Technician</th>
+                <th class="num-col">Actual Cost</th>
+                <th class="num-col">Outstanding</th>
+              </tr>
+            </thead>
+            <tbody id="vehicles-table"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- VEHICLE DETAIL -->
+      <section class="view" id="view-vehicle-detail">
+        <a class="back-link" id="back-to-vehicles">
+          <svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg>
+          Back to Vehicles
+        </a>
+
+        <div class="detail-head">
+          <div>
+            <div class="detail-title" id="vd-title"></div>
+            <div class="detail-sub" id="vd-sub"></div>
+          </div>
+          <div style="display:flex;gap:10px" id="vd-actions"></div>
+        </div>
+
+        <div id="vd-no-order" class="card" style="display:none">
+          <div class="card-head"><p class="section-eyebrow" style="margin:0">No repair order yet</p></div>
+          <div style="padding:16px">
+            <p class="page-desc" style="margin-bottom:12px">Start one when work actually begins on this vehicle.</p>
+            <label>What's being done<textarea id="vd-new-ro-concern" placeholder="e.g. Front end recon prep, or: replace missing passenger mirror"></textarea></label>
+            <button class="btn btn-primary" id="vd-start-ro" style="margin-top:10px">Start Repair Order</button>
+          </div>
+        </div>
+
+        <div id="vd-order-content" style="display:none">
+          <div class="grid-2">
+            <div>
+              <div class="card">
+                <div class="card-head">
+                  <div>
+                    <p class="section-eyebrow" id="vd-ro-number">Repair Order</p>
+                    <h3 class="section-title">Status</h3>
+                  </div>
+                  <div style="display:flex;gap:8px;align-items:center">
+                    <select id="vd-status-select" class="inline-select"></select>
+                    <button class="btn btn-ghost btn-sm" id="vd-advance-status">Advance</button>
+                  </div>
+                </div>
+                <div class="status-flow" id="vd-status-flow"></div>
+              </div>
+
+              <div class="card">
+                <div class="card-head">
+                  <div>
+                    <p class="section-eyebrow">At Cost · No Markup</p>
+                    <h3 class="section-title">Parts &amp; Labor</h3>
+                  </div>
+                  <div style="display:flex;gap:8px">
+                    <button class="btn btn-ghost btn-sm" id="vd-add-part">＋ Part</button>
+                    <button class="btn btn-ghost btn-sm" id="vd-add-labor">＋ Labor</button>
+                    <button class="btn btn-ghost btn-sm" id="vd-order-parts">Order Parts</button>
+                    <button class="btn btn-primary btn-sm" id="vd-save-estimate">Save</button>
+                  </div>
+                </div>
+                <div id="vd-estimate-items"></div>
+                <div class="cost-summary" style="border-top:1px solid var(--line)">
+                  <div class="cost-line"><span>Actual cost</span><span id="vd-actual-cost">$0.00</span></div>
+                  <div class="cost-line"><span>Quoted, not received</span><span id="vd-quoted-note" style="color:var(--warn)"></span></div>
+                </div>
+              </div>
+
+              <div class="card">
+                <div class="card-head">
+                  <div>
+                    <p class="section-eyebrow">Inspection</p>
+                    <h3 class="section-title">Digital Condition Check</h3>
+                  </div>
+                  <div style="display:flex;gap:8px">
+                    <button class="btn btn-ghost btn-sm" id="vd-add-inspection-item">＋ Item</button>
+                    <button class="btn btn-primary btn-sm" id="vd-save-inspection">Save</button>
+                  </div>
+                </div>
+                <div class="table-wrap">
+                  <table>
+                    <thead><tr><th>Area / Item</th><th>Condition</th><th>Measurement / Notes</th><th></th></tr></thead>
+                    <tbody id="vd-inspection-items"></tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div class="card">
+                <div class="card-head">
+                  <div>
+                    <p class="section-eyebrow">Technician</p>
+                    <h3 class="section-title">Findings</h3>
+                  </div>
+                  <button class="btn btn-primary btn-sm" id="vd-save-findings">Save</button>
+                </div>
+                <div style="padding:14px 16px">
+                  <textarea id="vd-finding-summary" placeholder="What did you find? What was done?"></textarea>
+                </div>
+                <div id="vd-findings-history" class="mini-list"></div>
+              </div>
+
+              <div class="card">
+                <div class="card-head"><p class="section-eyebrow" style="margin:0">Notes</p></div>
+                <div style="padding:14px 16px" class="form-row">
+                  <label>Visibility<select id="vd-note-visibility"><option value="internal">Internal</option><option value="customer">Customer</option></select></label>
+                  <label>Note<input id="vd-note-text" placeholder="Add a note…"></label>
+                </div>
+                <div style="padding:0 16px 14px"><button class="btn btn-ghost btn-sm" id="vd-add-note">Add Note</button></div>
+                <div id="vd-note-list" class="mini-list"></div>
+              </div>
+
+              <div class="card">
+                <div class="card-head"><p class="section-eyebrow" style="margin:0">Activity</p></div>
+                <div id="vd-activity-list" class="mini-list"></div>
+              </div>
+            </div>
+
+            <div>
+              <div class="card" id="vd-cost-card">
+                <div class="card-head"><p class="section-eyebrow" style="margin:0">Cost Summary</p></div>
+                <div class="cost-summary" id="vd-cost-summary"></div>
+              </div>
+
+              <div class="card">
+                <div class="card-head">
+                  <p class="section-eyebrow" style="margin:0">Assigned</p>
+                </div>
+                <div class="form-row" style="padding:14px 16px">
+                  <label>Technician<select id="vd-technician"></select></label>
+                  <label>Advisor<select id="vd-advisor"></select></label>
+                </div>
+                <div class="form-row" style="padding:0 16px 14px">
+                  <label>Odometer in<input id="vd-odometer" type="number" min="0"></label>
+                  <label>Promised<input id="vd-promised" type="datetime-local"></label>
+                </div>
+                <div style="padding:0 16px 14px"><button class="btn btn-ghost btn-sm" id="vd-save-assignment">Save</button></div>
+              </div>
+
+              <div class="card" id="vd-traceability-card">
+                <div class="card-head"><p class="section-eyebrow" style="margin:0">Traceability</p></div>
+                <div class="kv-list" id="vd-traceability"></div>
+              </div>
+
+              <div class="card" id="vd-recon-status-card" style="display:none">
+                <div class="card-head"><p class="section-eyebrow" style="margin:0">Recon Status</p></div>
+                <div class="form-row" style="padding:14px 16px">
+                  <label>Status<select id="vd-recon-status">
+                    <option value="acquired">Acquired</option>
+                    <option value="in_repair">In repair</option>
+                    <option value="ready">Ready</option>
+                    <option value="sold">Sold</option>
+                    <option value="retained">Retained</option>
+                  </select></label>
+                </div>
+                <div class="form-row" style="padding:0 16px 14px">
+                  <label>Sale price<input id="vd-recon-sale-price" type="number" min="0" step="0.01"></label>
+                  <label>Sale date<input id="vd-recon-sale-date" type="date"></label>
+                </div>
+                <div style="padding:0 16px 14px"><button class="btn btn-ghost btn-sm" id="vd-recon-save">Update</button></div>
+              </div>
+
+              <div class="card" id="vd-we-owe-status-card" style="display:none">
+                <div class="card-head"><p class="section-eyebrow" style="margin:0">We-Owe Status</p></div>
+                <div class="form-row" style="padding:14px 16px">
+                  <label>Status<select id="vd-we-owe-status">
+                    <option value="open">Open</option>
+                    <option value="fulfilled">Fulfilled</option>
+                    <option value="waived">Waived</option>
+                  </select></label>
+                </div>
+                <div style="padding:0 16px 14px"><button class="btn btn-ghost btn-sm" id="vd-we-owe-save">Update</button></div>
+              </div>
+
+              <div class="card">
+                <div class="card-head">
+                  <div>
+                    <p class="section-eyebrow" style="margin:0">Authorization</p>
+                  </div>
+                  <button class="btn btn-ghost btn-sm" id="vd-record-authorization">Record</button>
+                </div>
+                <div class="form-row" style="padding:14px 16px">
+                  <label>Status<select id="vd-auth-status"><option>approved</option><option>declined</option></select></label>
+                  <label>Approved by<input id="vd-auth-by" placeholder="Name"></label>
+                  <label>Method<select id="vd-auth-method"><option value="in_person">In person</option><option value="phone">Phone</option><option value="sms">Text</option><option value="email">Email</option><option value="other">Other</option></select></label>
+                </div>
+                <div class="kv-list" id="vd-auth-state" style="padding-top:0"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- REPORTS -->
+      <section class="view" id="view-reports">
+        <div class="page-head">
+          <div>
+            <h1>Reports</h1>
+            <p class="page-desc">Printable vehicle and technician reports, plus one-click email to Walt.</p>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><p class="section-eyebrow" style="margin:0">Printable</p><h3 class="section-title">Vehicle &amp; Technician Reports</h3></div>
+          <div class="form-row" style="padding:14px 16px 0">
+            <label>From<input type="date" id="report-start"></label>
+            <label>To<input type="date" id="report-end"></label>
+            <label>Report<select id="report-type">
+              <option value="vehicle-spend">All Vehicles (Combined)</option>
+              <option value="vehicle-spend-recon">Recon Vehicles Only</option>
+              <option value="vehicle-spend-we_owe">We-Owe Only</option>
+              <option value="technicians">Technician Productivity</option>
+            </select></label>
+          </div>
+          <div class="form-row" style="padding:12px 16px">
+            <button type="button" class="chip" id="report-quick-today">Today</button>
+            <button type="button" class="chip" id="report-quick-week">This Week</button>
+            <button type="button" class="chip" id="report-quick-month">This Month</button>
+            <button type="button" class="chip" id="report-quick-year">This Year</button>
+            <button type="button" class="chip" id="report-quick-all">All Time</button>
+          </div>
+          <div class="form-row" style="padding:0 16px 16px">
+            <button type="button" class="btn btn-primary" id="report-generate">Generate Report</button>
+            <button type="button" class="btn btn-ghost" id="report-print">Print</button>
+          </div>
+          <div id="report-output" style="padding:0 16px 20px"></div>
+        </div>
+
+        <div class="grid-2">
+          <div class="card">
+            <div class="card-head"><p class="section-eyebrow" style="margin:0">Gmail</p><h3 class="section-title">Send Reports By Email</h3></div>
+            <div style="padding:0 16px 12px"><p class="page-desc" id="email-status">Checking connection…</p></div>
+            <form id="email-settings-form" style="padding:0 16px 16px">
+              <label>Your Gmail address<input name="gmail_address" id="email-gmail-address" type="email" placeholder="you@gmail.com"></label>
+              <label>Gmail app password<input name="gmail_app_password" id="email-gmail-password" type="password" placeholder="16-character app password" autocomplete="off"></label>
+              <p class="hint">Generate one at myaccount.google.com → Security → 2-Step Verification → App passwords.</p>
+              <label>Send reports to<input name="report_recipient" id="email-recipient" placeholder="walter4resultsnow@gmail.com"></label>
+              <button class="btn btn-primary" type="submit" style="align-self:flex-start">Save Connection</button>
+            </form>
+            <div class="form-row" style="padding:0 16px 16px">
+              <button class="btn btn-ghost btn-sm" id="send-recon-report">Email Recon</button>
+              <button class="btn btn-ghost btn-sm" id="send-we-owe-report">Email We-Owe</button>
+              <button class="btn btn-primary btn-sm" id="send-combined-report">Email Combined</button>
+            </div>
+          </div>
+
+          <div>
+            <div class="card">
+              <div class="card-head"><p class="section-eyebrow" style="margin:0">Replies</p><button class="btn btn-ghost btn-sm" id="check-replies">Check</button></div>
+              <div id="replies-list" class="mini-list">Click Check to look for recent email from Walt.</div>
+            </div>
+            <div class="card">
+              <div class="card-head"><p class="section-eyebrow" style="margin:0">Sent History</p></div>
+              <div class="table-wrap">
+                <table>
+                  <thead><tr><th>Sent</th><th>Type</th><th>Status</th></tr></thead>
+                  <tbody id="sent-reports-table"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ACCOUNTING / A-P -->
+      <section class="view" id="view-accounting">
+        <div class="page-head">
+          <div>
+            <h1>Accounts Payable</h1>
+            <p class="page-desc">Post a vendor invoice to receive parts against a repair order — priced at cost, traceable back to the vehicle.</p>
+          </div>
+        </div>
+
+        <div class="grid-2">
+          <div>
+            <div class="card">
+              <div class="card-head"><p class="section-eyebrow" style="margin:0">Post Vendor Invoice</p></div>
+              <form id="ap-invoice-form" style="padding:14px 16px">
+                <div class="form-row">
+                  <label>Vendor<select id="ap-vendor" required></select></label>
+                  <label>Invoice #<input id="ap-invoice-number" required placeholder="INV-1234"></label>
+                </div>
+                <label>PO # (Repair Order)<select id="ap-po" required></select></label>
+                <div class="form-row">
+                  <label>Subtotal<input id="ap-subtotal" type="number" min="0" step="0.01" required></label>
+                  <label>Tax<input id="ap-tax" type="number" min="0" step="0.01" value="0"></label>
+                  <label>Total<input id="ap-total" type="number" min="0" step="0.01" required></label>
+                </div>
+                <div class="table-wrap">
+                  <table>
+                    <thead><tr><th>Type</th><th>Part #</th><th>Description</th><th>Qty</th><th>Cost</th><th></th></tr></thead>
+                    <tbody id="ap-invoice-items"></tbody>
+                  </table>
+                </div>
+                <div class="form-row" style="margin-top:10px">
+                  <button type="button" class="btn btn-ghost btn-sm" id="ap-add-line">＋ Line</button>
+                  <button class="btn btn-primary" type="submit" style="align-self:flex-start">Post Invoice</button>
+                </div>
+                <p class="hint" id="ap-invoice-note"></p>
+              </form>
+            </div>
+          </div>
+          <div>
+            <div class="card">
+              <div class="card-head"><p class="section-eyebrow" style="margin:0">Vendors</p></div>
+              <form id="vendor-form" style="padding:14px 16px">
+                <label>Vendor name<input name="name" required placeholder="WorldPac"></label>
+                <label>Aliases<input name="aliases" placeholder="World Pac, WPAC"></label>
+                <button class="btn btn-primary" style="align-self:flex-start">Save Vendor</button>
+              </form>
+              <div id="vendor-list" class="vendor-chips"></div>
+            </div>
+            <div class="card">
+              <div class="card-head"><p class="section-eyebrow" style="margin:0">Control Log</p></div>
+              <div id="audit-list" class="mini-list"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel" style="margin-top:16px">
+          <table>
+            <thead><tr><th>Invoice</th><th>Vendor</th><th>RO / PO</th><th>Vehicle</th><th class="num-col">Total</th><th>Status</th></tr></thead>
+            <tbody id="ap-table"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- STAFF -->
+      <section class="view" id="view-staff">
+        <div class="page-head">
+          <div>
+            <h1>Staff</h1>
+            <p class="page-desc">Technicians and advisors. Deactivate rather than delete — history stays attributed.</p>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-head"><p class="section-eyebrow" style="margin:0">Add Staff</p></div>
+          <form id="staff-form" class="form-row" style="padding:14px 16px">
+            <label>Name<input name="name" required placeholder="Jordan Smith"></label>
+            <label>Role<select name="role">
+              <option value="technician">Technician</option>
+              <option value="advisor">Advisor / Service Writer</option>
+              <option value="manager">Manager</option>
+            </select></label>
+            <button class="btn btn-primary" style="align-self:flex-end">Add</button>
+          </form>
+        </div>
+        <div class="panel">
+          <table>
+            <thead><tr><th>Name</th><th>Role</th><th>Status</th><th></th></tr></thead>
+            <tbody id="staff-table"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- INTEGRATIONS -->
+      <section class="view" id="view-integrations">
+        <div class="page-head">
+          <div>
+            <h1>Connect</h1>
+            <p class="page-desc">PartsTech for looking up parts and cost — add what you find at cost, no markup, from a vehicle's Parts &amp; Labor card.</p>
+          </div>
+        </div>
+        <div class="card" style="padding:20px;display:flex;align-items:center;gap:16px">
+          <div class="who-badge" style="width:44px;height:44px;font-size:14px">PT</div>
+          <div style="flex:1">
+            <h3 class="section-title">PartsTech</h3>
+            <p class="page-desc">Opens the official PartsTech login directly. Discount Auto Ops never asks for or stores your PartsTech password.</p>
+          </div>
+          <a class="btn btn-primary" id="partstech-login" target="_blank" rel="noopener">Log in ↗</a>
+        </div>
+      </section>
+
+    </div>
+  </div>
+</div>
+
+<!-- New Recon Vehicle Dialog -->
+<dialog id="recon-dialog">
+  <form class="modal" id="recon-form">
+    <div class="modal-head">
+      <div><p class="eyebrow">NEW STOCK</p><h2>Add Recon Vehicle</h2></div>
+      <button class="icon-btn" value="cancel" formnovalidate type="button" id="recon-cancel">×</button>
+    </div>
+    <div class="modal-body">
+      <label>Stock number<input id="recon-stock" required placeholder="R-1042"></label>
+      <div class="form-row">
+        <label>VIN<input id="recon-vin" placeholder="17-character VIN"></label>
+        <button type="button" class="btn btn-ghost" id="recon-decode-vin">Decode VIN</button>
+      </div>
+      <div class="form-row">
+        <label>Plate<input id="recon-plate" maxlength="12" placeholder="Optional"></label>
+        <label>State<input id="recon-plate-state" maxlength="2" placeholder="IL"></label>
+        <button type="button" class="btn btn-ghost" id="recon-decode-plate">Decode Plate</button>
+      </div>
+      <div class="form-row">
+        <label>Year<input id="recon-year" type="number" value="2020" required></label>
+        <label>Make<input id="recon-make" required placeholder="Honda"></label>
+        <label>Model<input id="recon-model" required placeholder="Civic"></label>
+      </div>
+      <div class="form-row">
+        <label>Trim<input id="recon-trim" placeholder="Optional"></label>
+        <label>Engine<input id="recon-engine" placeholder="Optional"></label>
+        <label>Color<input id="recon-color" placeholder="Optional"></label>
+      </div>
+      <div class="form-row">
+        <label>Mileage<input id="recon-mileage" type="number" value="0"></label>
+        <label>Purchase price<input id="recon-price" type="number" min="0" step="0.01" value="0"></label>
+      </div>
+      <div class="form-row">
+        <label>Source<input id="recon-source" placeholder="Auction / trade-in"></label>
+        <label>Acquired<input id="recon-date" type="date"></label>
+      </div>
+      <label>Notes<input id="recon-notes" placeholder="Optional"></label>
+    </div>
+    <div class="modal-actions">
+      <button value="cancel" class="btn btn-ghost" formnovalidate type="button" id="recon-cancel-2">Cancel</button>
+      <button class="btn btn-primary" type="submit">Save Recon Vehicle</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- New We-Owe Dialog -->
+<dialog id="we-owe-dialog">
+  <form class="modal" id="we-owe-form">
+    <div class="modal-head">
+      <div><p class="eyebrow">NEW PROMISE</p><h2>Add We-Owe Item</h2></div>
+      <button class="icon-btn" formnovalidate type="button" id="we-owe-cancel">×</button>
+    </div>
+    <div class="modal-body">
+      <label>Customer<select id="we-owe-customer"><option value="__new__">＋ New customer…</option></select></label>
+      <div id="we-owe-new-customer" style="display:none">
+        <div class="form-row">
+          <label>Name<input id="we-owe-new-customer-name" placeholder="Jordan Whitfield"></label>
+          <label>Phone<input id="we-owe-new-customer-phone" placeholder="Optional"></label>
+        </div>
+      </div>
+      <label>Vehicle<select id="we-owe-vehicle"><option value="__new__">＋ New vehicle…</option></select></label>
+      <div id="we-owe-new-vehicle" style="display:none">
+        <div class="form-row">
+          <label>Year<input id="we-owe-new-year" type="number" value="2020"></label>
+          <label>Make<input id="we-owe-new-make" placeholder="Kia"></label>
+          <label>Model<input id="we-owe-new-model" placeholder="Soul"></label>
+        </div>
+        <label>VIN<input id="we-owe-new-vin" placeholder="Optional"></label>
+      </div>
+      <label>Description<input id="we-owe-description" required placeholder="e.g. Replace missing passenger mirror"></label>
+      <div class="form-row">
+        <label>Category<input id="we-owe-category" placeholder="emissions / mirror / seat belt / other"></label>
+        <label>Target date<input id="we-owe-target" type="date"></label>
+      </div>
+      <div class="form-row">
+        <label>Sale reference<input id="we-owe-sale-ref" placeholder="Deal # (optional)"></label>
+        <label>Lot stock number<input id="we-owe-lot-stock" placeholder="Optional"></label>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" formnovalidate type="button" id="we-owe-cancel-2">Cancel</button>
+      <button class="btn btn-primary" type="submit">Save We-Owe Item</button>
+    </div>
+  </form>
+</dialog>
+
+<div id="toast"></div>
+<script src="/assets/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,23 @@
+[project]
+name = "discount-auto-ops"
+version = "0.1.0"
+description = "Discount Auto Ops -- vehicle-centric shop, recon, and we-owe management"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi>=0.116,<1",
+  "uvicorn>=0.35,<1",
+  "httpx>=0.28,<1",
+  "pystray>=0.19,<1",
+  "pillow>=10.0,<12",
+]
+
+[project.scripts]
+discount-auto-ops = "app.tray_app:main"
+
+[dependency-groups]
+dev = ["pytest>=8.4,<9"]
+build = ["pyinstaller>=6.10,<7"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

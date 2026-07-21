@@ -1,0 +1,110 @@
+from __future__ import annotations
+
+import logging
+import threading
+import webbrowser
+
+import pystray
+import uvicorn
+from PIL import Image, ImageDraw
+
+from app.backup import backup_database
+from app.main import DATA_ROOT, DEFAULT_DB, create_app
+
+HOST = "127.0.0.1"
+PORT = 8787
+URL = f"http://{HOST}:{PORT}"
+
+DATA_ROOT.mkdir(parents=True, exist_ok=True)
+logging.basicConfig(
+    filename=DATA_ROOT / "tray.log",
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(message)s",
+)
+log = logging.getLogger("tray")
+
+
+def make_icon(color: str) -> Image.Image:
+    image = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(image)
+    draw.ellipse((2, 2, 62, 62), fill=color)
+    draw.text((16, 18), "DA", fill="white")
+    return image
+
+
+ICON_OK = make_icon("#234a6b")
+ICON_DOWN = make_icon("#a6392e")
+
+
+class TrayApp:
+    def __init__(self) -> None:
+        self.server: uvicorn.Server | None = None
+        self.thread: threading.Thread | None = None
+        self.icon: pystray.Icon | None = None
+
+    def start_server(self) -> bool:
+        try:
+            # log_config=None: uvicorn's default formatter calls sys.stdout.isatty(),
+            # which crashes under a --windowed PyInstaller build where stdout is None.
+            config = uvicorn.Config(create_app(), host=HOST, port=PORT, log_level="warning", log_config=None, access_log=False)
+            self.server = uvicorn.Server(config)
+            self.thread = threading.Thread(target=self.server.run, daemon=True)
+            self.thread.start()
+            log.info("Server starting on %s", URL)
+            return True
+        except Exception:
+            log.exception("Server failed to start")
+            return False
+
+    def stop_server(self) -> None:
+        if self.server is not None:
+            self.server.should_exit = True
+        if self.thread is not None:
+            self.thread.join(timeout=10)
+        self.server = None
+        self.thread = None
+
+    def restart(self, _icon: pystray.Icon, _item: pystray.MenuItem) -> None:
+        log.info("Restart requested from tray")
+        self.stop_server()
+        ok = self.start_server()
+        if self.icon is not None:
+            self.icon.icon = ICON_OK if ok else ICON_DOWN
+
+    def open_browser(self, _icon: pystray.Icon, _item: pystray.MenuItem) -> None:
+        webbrowser.open(URL)
+
+    def backup_now(self, _icon: pystray.Icon, _item: pystray.MenuItem) -> None:
+        try:
+            destination = backup_database(DEFAULT_DB, DATA_ROOT / "backups")
+            log.info("Backup written to %s", destination)
+            if self.icon is not None:
+                self.icon.notify(f"Backup saved: {destination.name}", "Discount Auto Ops")
+        except Exception as exc:
+            log.exception("Backup failed")
+            if self.icon is not None:
+                self.icon.notify(f"Backup failed: {exc}", "Discount Auto Ops")
+
+    def quit_app(self, icon: pystray.Icon, _item: pystray.MenuItem) -> None:
+        log.info("Exit requested from tray")
+        self.stop_server()
+        icon.stop()
+
+    def run(self) -> None:
+        ok = self.start_server()
+        menu = pystray.Menu(
+            pystray.MenuItem("Open Discount Auto Ops", self.open_browser, default=True),
+            pystray.MenuItem("Backup Now", self.backup_now),
+            pystray.MenuItem("Restart Server", self.restart),
+            pystray.MenuItem("Exit", self.quit_app),
+        )
+        self.icon = pystray.Icon("discount-auto-ops", ICON_OK if ok else ICON_DOWN, "Discount Auto Ops", menu)
+        self.icon.run()
+
+
+def main() -> None:
+    TrayApp().run()
+
+
+if __name__ == "__main__":
+    main()

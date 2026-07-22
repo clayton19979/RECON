@@ -26,6 +26,27 @@ def test_customers_and_vehicles_crud(client):
     assert all(c["name"] != "Discount Auto — Shop-Owned Recon Inventory" for c in customers)
 
 
+def test_customer_patch_updates_fields(client):
+    customer = client.post("/api/customers", json={"name": "Jamie Lee", "phone": "219-555-0100"}).json()
+    res = client.patch(f"/api/customers/{customer['id']}", json={"phone": "219-555-9999", "email": "jamie@example.com"})
+    assert res.status_code == 200
+    body = res.json()
+    assert body["name"] == "Jamie Lee"
+    assert body["phone"] == "219-555-9999"
+    assert body["email"] == "jamie@example.com"
+
+
+def test_customer_patch_rejects_shop_owned_sentinel(client):
+    make_recon_vehicle(client)
+    res = client.patch("/api/customers/-1", json={"name": "Hijacked"})
+    assert res.status_code == 409
+
+
+def test_customer_patch_404_for_missing_customer(client):
+    res = client.patch("/api/customers/999999", json={"name": "Nobody"})
+    assert res.status_code == 404
+
+
 def test_order_lifecycle_and_estimate_editing(client):
     vehicle = make_recon_vehicle(client)
     order = make_recon_order(client, vehicle["id"])
@@ -144,30 +165,6 @@ def test_dashboard_aggregates_open_work(client):
     dashboard = client.get("/api/dashboard").json()
     assert dashboard["recon_open"] == 1
     assert dashboard["recon_actual_open"] == 60
-
-
-def test_integrations_partstech(client):
-    res = client.get("/api/integrations/partstech").json()
-    assert res["stores_password"] is False
-    assert "login_url" in res
-    assert res["credentials_configured"] is False
-    assert res["live_search_available"] is False  # no public API contract to build against yet
-
-
-def test_partstech_credentials_stored_and_never_echo_key(client):
-    res = client.get("/api/integrations/partstech/credentials").json()
-    assert res["configured"] is False
-
-    res = client.put("/api/integrations/partstech/credentials", json={"username": "shop@example.com", "api_key": "secret-key-value"})
-    assert res.status_code == 200
-
-    res = client.get("/api/integrations/partstech/credentials").json()
-    assert res["configured"] is True
-    assert res["username"] == "shop@example.com"
-    assert "api_key" not in res  # the key itself is stored but never sent back to the browser
-
-    res = client.get("/api/integrations/partstech").json()
-    assert res["credentials_configured"] is True
 
 
 def test_decode_vin_success(client):

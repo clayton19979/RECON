@@ -51,7 +51,8 @@ CREATE TABLE IF NOT EXISTS recon_vehicles (
   notes TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
-  edit_version INTEGER NOT NULL DEFAULT 1
+  edit_version INTEGER NOT NULL DEFAULT 1,
+  archived_at TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS we_owe_items (
@@ -68,7 +69,8 @@ CREATE TABLE IF NOT EXISTS we_owe_items (
   lot_stock_number TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
-  edit_version INTEGER NOT NULL DEFAULT 1
+  edit_version INTEGER NOT NULL DEFAULT 1,
+  archived_at TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS we_owe_payments (
@@ -90,7 +92,8 @@ CREATE TABLE IF NOT EXISTS orders (
   recon_vehicle_id INTEGER REFERENCES recon_vehicles(id),
   we_owe_id INTEGER REFERENCES we_owe_items(id),
   concern TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'draft',
+  status TEXT NOT NULL DEFAULT 'estimate',
+  voided INTEGER NOT NULL DEFAULT 0,
   ai_summary TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL
 );
@@ -124,7 +127,17 @@ CREATE TABLE IF NOT EXISTS estimate_items (
   source TEXT NOT NULL DEFAULT 'manual',
   review_required INTEGER NOT NULL DEFAULT 0,
   reviewed_by TEXT NOT NULL DEFAULT '',
-  reviewed_at TEXT NOT NULL DEFAULT ''
+  reviewed_at TEXT NOT NULL DEFAULT '',
+  sort_order INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS estimate_jobs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  estimate_id INTEGER NOT NULL REFERENCES estimates(id) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  technician_id INTEGER REFERENCES staff(id),
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS staff (
@@ -301,6 +314,29 @@ CREATE TABLE IF NOT EXISTS sent_reports (
   error TEXT NOT NULL DEFAULT '',
   sent_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS tasks (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  title TEXT NOT NULL,
+  notes TEXT NOT NULL DEFAULT '',
+  assigned_to TEXT NOT NULL DEFAULT '',
+  due_date TEXT NOT NULL DEFAULT '',
+  urgent INTEGER NOT NULL DEFAULT 0,
+  done INTEGER NOT NULL DEFAULT 0,
+  created_by TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  completed_at TEXT NOT NULL DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS suggestions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  text TEXT NOT NULL,
+  author TEXT NOT NULL DEFAULT '',
+  resolved INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
 """
 
 
@@ -331,6 +367,37 @@ def _migrate(db: sqlite3.Connection) -> None:
         cols = {row[1] for row in db.execute(f"PRAGMA table_info({table})")}
         if "edit_version" not in cols:
             db.execute(f"ALTER TABLE {table} ADD COLUMN edit_version INTEGER NOT NULL DEFAULT 1")
+
+    order_columns = {row[1] for row in db.execute("PRAGMA table_info(orders)")}
+    if "voided" not in order_columns:
+        db.execute("ALTER TABLE orders ADD COLUMN voided INTEGER NOT NULL DEFAULT 0")
+
+    estimate_item_columns = {row[1] for row in db.execute("PRAGMA table_info(estimate_items)")}
+    if "sort_order" not in estimate_item_columns:
+        db.execute("ALTER TABLE estimate_items ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0")
+        db.execute("UPDATE estimate_items SET sort_order = id")
+
+    for table in ("recon_vehicles", "we_owe_items"):
+        cols = {row[1] for row in db.execute(f"PRAGMA table_info({table})")}
+        if "archived_at" not in cols:
+            db.execute(f"ALTER TABLE {table} ADD COLUMN archived_at TEXT NOT NULL DEFAULT ''")
+
+    if "job_id" not in estimate_item_columns:
+        db.execute("ALTER TABLE estimate_items ADD COLUMN job_id INTEGER REFERENCES estimate_jobs(id)")
+
+    # Status vocabulary simplified from 8 workflow states with gated
+    # transitions down to 4 plain values (estimate/pending_approval/
+    # in_progress/complete) with no gating -- old rows are migrated forward,
+    # never dropped. Cancelled ROs become complete+voided so their cost still
+    # never counts toward vehicle profit (see cost_rollup's `voided` filter),
+    # matching the old cancelled-excludes-cost behavior exactly. These UPDATEs
+    # are naturally idempotent: once no row matches the old values, each is a
+    # no-op on every subsequent app start.
+    db.execute("UPDATE orders SET status='estimate' WHERE status IN ('draft','inspection')")
+    db.execute("UPDATE orders SET status='pending_approval' WHERE status='awaiting_approval'")
+    db.execute("UPDATE orders SET status='in_progress' WHERE status='approved'")
+    db.execute("UPDATE orders SET status='complete' WHERE status IN ('completed','closed')")
+    db.execute("UPDATE orders SET status='complete', voided=1 WHERE status='cancelled'")
 
 
 def init_db(path: Path) -> None:

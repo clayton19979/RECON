@@ -43,20 +43,44 @@ def test_assignment_requires_active_matching_role(client):
 
 
 def test_status_transitions(client):
+    """Statuses are a plain, ungated picker now -- any of the 4 values is
+    settable from any other, with no transition graph or approval/invoice
+    gating (matches the shop's real workflow: estimate / pending approval /
+    in progress / complete, nothing more)."""
     vehicle = make_recon_vehicle(client)
     order = make_recon_order(client, vehicle["id"])
 
-    # invalid transition
-    res = client.patch(f"/api/orders/{order['id']}/status", json={"status": "closed"})
-    assert res.status_code == 409
-
-    res = client.patch(f"/api/orders/{order['id']}/status", json={"status": "inspection"})
-    assert res.status_code == 200
-    res = client.patch(f"/api/orders/{order['id']}/status", json={"status": "awaiting_approval"})
+    res = client.patch(f"/api/orders/{order['id']}/status", json={"status": "complete"})
     assert res.status_code == 200
 
-    # cannot jump straight to approved via status endpoint -- must use authorization
-    res = client.patch(f"/api/orders/{order['id']}/status", json={"status": "approved"})
+    res = client.patch(f"/api/orders/{order['id']}/status", json={"status": "estimate"})
+    assert res.status_code == 200
+
+    res = client.patch(f"/api/orders/{order['id']}/status", json={"status": "pending_approval"})
+    assert res.status_code == 200
+
+    # invalid value still rejected
+    res = client.patch(f"/api/orders/{order['id']}/status", json={"status": "bogus"})
+    assert res.status_code == 422
+
+
+def test_void_order(client):
+    vehicle = make_recon_vehicle(client, stock_number="R-4501")
+    live_order = make_recon_order(client, vehicle["id"], concern="Real work")
+    save_estimate(client, live_order["id"], [{"kind": "labor", "description": "Diag", "quantity": 1, "unit_price": 100, "unit_cost": 100}])
+
+    mistake_order = make_recon_order(client, vehicle["id"], concern="Started by mistake")
+    save_estimate(client, mistake_order["id"], [{"kind": "part", "description": "Wrong part", "part_number": "X-1", "quantity": 1, "unit_price": 300, "unit_cost": 300}])
+    res = client.post(f"/api/orders/{mistake_order['id']}/void", json={"actor": "Clay"})
+    assert res.status_code == 200
+    assert res.json() == {"id": mistake_order["id"], "status": "complete", "voided": True}
+
+    order_after = client.get(f"/api/orders/{mistake_order['id']}").json()
+    assert order_after["status"] == "complete"
+    assert order_after["voided"] == 1
+
+    # voiding twice is rejected
+    res = client.post(f"/api/orders/{mistake_order['id']}/void", json={"actor": "Clay"})
     assert res.status_code == 409
 
 
@@ -64,17 +88,9 @@ def test_authorization_flow(client):
     vehicle = make_recon_vehicle(client)
     order = make_recon_order(client, vehicle["id"])
     save_estimate(client, order["id"], [{"kind": "labor", "description": "Diag", "quantity": 1, "unit_price": 50, "unit_cost": 50}])
-    client.patch(f"/api/orders/{order['id']}/status", json={"status": "inspection"})
 
-    # must be awaiting_approval first
-    res = client.post(f"/api/orders/{order['id']}/authorization", json={"status": "approved", "approved_by": "Clay", "method": "in_person"})
-    assert res.status_code == 409
-
-    client.patch(f"/api/orders/{order['id']}/status", json={"status": "awaiting_approval"})
     res = client.post(f"/api/orders/{order['id']}/authorization", json={"status": "approved", "approved_by": "Clay", "method": "in_person"})
     assert res.status_code == 201
-    order_after = client.get(f"/api/orders/{order['id']}").json()
-    assert order_after["status"] == "approved"
 
 
 def test_estimate_stays_editable_after_approval_for_recon(client):
@@ -84,8 +100,6 @@ def test_estimate_stays_editable_after_approval_for_recon(client):
     vehicle = make_recon_vehicle(client)
     order = make_recon_order(client, vehicle["id"])
     save_estimate(client, order["id"], [{"kind": "labor", "description": "Diag", "quantity": 1, "unit_price": 50, "unit_cost": 50}])
-    client.patch(f"/api/orders/{order['id']}/status", json={"status": "inspection"})
-    client.patch(f"/api/orders/{order['id']}/status", json={"status": "awaiting_approval"})
     client.post(f"/api/orders/{order['id']}/authorization", json={"status": "approved", "approved_by": "Clay", "method": "in_person"})
 
     res = client.post(
@@ -107,18 +121,17 @@ def test_findings_require_part_number(client):
     assert res.status_code == 422
 
 
-def test_retail_invoice_and_payment_gate_close(client):
+def test_retail_invoice_and_payment(client):
+    """Invoicing/payment gating on order status was removed along with the
+    old approved/closed status values -- an order can be marked complete
+    freely, independent of whether its customer invoice is paid."""
     order = make_retail_order(client)
     save_estimate(client, order["id"], [{"kind": "labor", "description": "Diag", "quantity": 1, "unit_price": 100, "unit_cost": 100}])
-    client.patch(f"/api/orders/{order['id']}/status", json={"status": "inspection"})
-    client.patch(f"/api/orders/{order['id']}/status", json={"status": "awaiting_approval"})
     client.post(f"/api/orders/{order['id']}/authorization", json={"status": "approved", "approved_by": "Clay", "method": "in_person"})
     client.patch(f"/api/orders/{order['id']}/status", json={"status": "in_progress"})
-    client.patch(f"/api/orders/{order['id']}/status", json={"status": "completed"})
 
-    # cannot close a retail RO until its invoice is paid
-    res = client.patch(f"/api/orders/{order['id']}/status", json={"status": "closed"})
-    assert res.status_code == 409
+    res = client.patch(f"/api/orders/{order['id']}/status", json={"status": "complete"})
+    assert res.status_code == 200
 
     invoice = client.post(f"/api/orders/{order['id']}/invoice", json={"actor": "Clay"}).json()
     assert invoice["total"] == 100
@@ -131,6 +144,3 @@ def test_retail_invoice_and_payment_gate_close(client):
     res = client.post(f"/api/invoices/{invoice['id']}/payments", json={"amount": 100, "method": "cash"})
     assert res.status_code == 201
     assert res.json()["invoice"]["status"] == "paid"
-
-    res = client.patch(f"/api/orders/{order['id']}/status", json={"status": "closed"})
-    assert res.status_code == 200

@@ -121,6 +121,27 @@ def test_process_invoice_over_receipt_blocked(client):
     assert any("exceeds" in issue for issue in body["issues"])
 
 
+def test_ap_invoices_filterable_by_date(client):
+    client.post("/api/vendors", json={"name": "WorldPac"})
+    vehicle = make_recon_vehicle(client, stock_number="R-8101")
+    order = make_recon_order(client, vehicle["id"])
+    save_estimate(
+        client,
+        order["id"],
+        [{"kind": "part", "description": "Brake pads", "part_number": "BP-1", "quantity": 1, "unit_price": 45, "unit_cost": 45}],
+    )
+    post_invoice(client, po_number=order["number"], items=[{"part_number": "BP-1", "description": "Brake pads", "quantity": 1, "unit_cost": 45, "kind": "part"}])
+
+    all_invoices = client.get("/api/ap/invoices").json()
+    assert any(i["invoice_number"] == "INV-100" for i in all_invoices)
+
+    future_only = client.get("/api/ap/invoices", params={"start": "2099-01-01"}).json()
+    assert future_only == []
+
+    past_to_now = client.get("/api/ap/invoices", params={"start": "2000-01-01", "end": "2099-12-31"}).json()
+    assert any(i["invoice_number"] == "INV-100" for i in past_to_now)
+
+
 def test_process_invoice_totals_mismatch(client):
     client.post("/api/vendors", json={"name": "WorldPac"})
     vehicle = make_recon_vehicle(client, stock_number="R-8001")

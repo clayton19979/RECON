@@ -8,6 +8,8 @@ from typing import Callable, Literal
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
+from .recon import assert_vehicle_editable
+
 
 class StaffIn(BaseModel):
     name: str = Field(min_length=1)
@@ -83,19 +85,15 @@ class PaymentIn(BaseModel):
 
 
 class StatusIn(BaseModel):
-    status: str
+    status: Literal["estimate", "pending_approval", "in_progress", "complete"]
     actor: str = "ui"
 
 
-TRANSITIONS = {
-    "draft": {"inspection", "cancelled"},
-    "inspection": {"awaiting_approval", "cancelled"},
-    "awaiting_approval": {"cancelled"},
-    "approved": {"in_progress", "cancelled"},
-    "in_progress": {"completed"},
-    "completed": {"in_progress", "closed"},
-    "closed": set(),
-    "cancelled": {"draft"},
+STATUS_LABEL = {
+    "estimate": "Estimate",
+    "pending_approval": "Pending Approval",
+    "in_progress": "In Progress",
+    "complete": "Complete",
 }
 
 
@@ -127,6 +125,19 @@ def assert_estimate_editable(db: sqlite3.Connection, order_id: int) -> None:
     out (retail only): once that exists, line items are frozen."""
     if db.execute("SELECT 1 FROM customer_invoices WHERE order_id=?", (order_id,)).fetchone():
         raise HTTPException(409, "Invoiced estimates are locked")
+
+
+def get_or_create_estimate(db: sqlite3.Connection, order_id: int, now_fn: Callable[[], str]) -> sqlite3.Row:
+    """Estimates are created lazily on first write (a line item or now a
+    job) -- a ticket with no parts/labor yet has no estimates row at all."""
+    row = db.execute("SELECT * FROM estimates WHERE order_id=?", (order_id,)).fetchone()
+    if row:
+        return row
+    db.execute(
+        "INSERT INTO estimates(order_id,labor_rate,tax_rate,subtotal,tax,total,created_at) VALUES(?,0,0,0,0,0,?)",
+        (order_id, now_fn()),
+    )
+    return db.execute("SELECT * FROM estimates WHERE order_id=?", (order_id,)).fetchone()
 
 
 def invoice_dict(db: sqlite3.Connection, row: sqlite3.Row | None) -> dict | None:
@@ -224,7 +235,7 @@ def build_workflow_router(connect: Callable[[], sqlite3.Connection], now_fn: Cal
     @router.put("/orders/{order_id}/assignment")
     def save_assignment(order_id: int, item: AssignmentIn):
         with connect() as db:
-            order(db, order_id)
+            assert_vehicle_editable(db, order(db, order_id))
             for staff_id, roles, label in ((item.advisor_id, {"advisor", "manager"}, "Advisor"), (item.technician_id, {"technician"}, "Technician")):
                 if staff_id is None:
                     continue
@@ -242,7 +253,7 @@ def build_workflow_router(connect: Callable[[], sqlite3.Connection], now_fn: Cal
     @router.post("/orders/{order_id}/notes", status_code=201)
     def add_note(order_id: int, item: NoteIn):
         with connect() as db:
-            order(db, order_id)
+            assert_vehicle_editable(db, order(db, order_id))
             cur = db.execute(
                 "INSERT INTO order_notes(order_id,visibility,text,actor,created_at) VALUES(?,?,?,?,?)",
                 (order_id, item.visibility, item.text.strip(), item.actor, now_fn()),
@@ -253,7 +264,7 @@ def build_workflow_router(connect: Callable[[], sqlite3.Connection], now_fn: Cal
     @router.put("/orders/{order_id}/inspection")
     def save_inspection(order_id: int, item: InspectionIn):
         with connect() as db:
-            order(db, order_id)
+            assert_vehicle_editable(db, order(db, order_id))
             existing = db.execute("SELECT id FROM inspections WHERE order_id=?", (order_id,)).fetchone()
             if existing:
                 inspection_id = existing["id"]
@@ -276,7 +287,7 @@ def build_workflow_router(connect: Callable[[], sqlite3.Connection], now_fn: Cal
             if line.kind == "part" and not line.part_number.strip():
                 raise HTTPException(422, "Every proposed part requires a traceable part number")
         with connect() as db:
-            order(db, order_id)
+            assert_vehicle_editable(db, order(db, order_id))
             assert_estimate_editable(db, order_id)
             estimate = db.execute("SELECT * FROM estimates WHERE order_id=?", (order_id,)).fetchone()
             if not estimate:
@@ -301,31 +312,31 @@ def build_workflow_router(connect: Callable[[], sqlite3.Connection], now_fn: Cal
 
     @router.patch("/orders/{order_id}/status")
     def update_status(order_id: int, item: StatusIn):
-        if item.status not in TRANSITIONS:
-            raise HTTPException(400, "Invalid status")
         with connect() as db:
             current_row = order(db, order_id)
+            assert_vehicle_editable(db, current_row)
             current = current_row["status"]
             if current == item.status:
                 return {"id": order_id, "status": current}
-            if current == "awaiting_approval" and item.status == "approved":
-                raise HTTPException(409, "Customer authorization must be recorded before approval")
-            if item.status not in TRANSITIONS.get(current, set()):
-                raise HTTPException(409, f"Cannot move repair order from {current} to {item.status}")
-            if item.status == "closed" and current_row["segment"] == "retail":
-                invoice = db.execute("SELECT status FROM customer_invoices WHERE order_id=?", (order_id,)).fetchone()
-                if not invoice or invoice["status"] != "paid":
-                    raise HTTPException(409, "Repair order cannot close until its customer invoice is paid")
             db.execute("UPDATE orders SET status=? WHERE id=?", (item.status, order_id))
             record_activity(db, order_id, "status_changed", item.actor, {"from": current, "to": item.status}, now_fn)
             return {"id": order_id, "status": item.status}
 
+    @router.post("/orders/{order_id}/void")
+    def void_order(order_id: int, item: ActorIn):
+        with connect() as db:
+            current_row = order(db, order_id)
+            assert_vehicle_editable(db, current_row)
+            if current_row["voided"]:
+                raise HTTPException(409, "Repair order is already voided")
+            db.execute("UPDATE orders SET status='complete', voided=1 WHERE id=?", (order_id,))
+            record_activity(db, order_id, "order_voided", item.actor, {"from": current_row["status"]}, now_fn)
+            return {"id": order_id, "status": "complete", "voided": True}
+
     @router.post("/orders/{order_id}/authorization", status_code=201)
     def authorize(order_id: int, item: AuthorizationIn):
         with connect() as db:
-            current = order(db, order_id)
-            if current["status"] != "awaiting_approval":
-                raise HTTPException(409, "Repair order must be awaiting approval")
+            assert_vehicle_editable(db, order(db, order_id))
             estimate = db.execute("SELECT * FROM estimates WHERE order_id=?", (order_id,)).fetchone()
             if not estimate:
                 raise HTTPException(409, "Repair order has no estimate to authorize")
@@ -338,8 +349,6 @@ def build_workflow_router(connect: Callable[[], sqlite3.Connection], now_fn: Cal
                 (order_id, estimate["id"], item.status, item.approved_by.strip(), item.method, item.note.strip(), item.actor, now_fn()),
             )
             db.execute("UPDATE estimates SET status=? WHERE id=?", (item.status, estimate["id"]))
-            if item.status == "approved":
-                db.execute("UPDATE orders SET status='approved' WHERE id=?", (order_id,))
             record_activity(db, order_id, f"estimate_{item.status}", item.actor, {"authorization_id": cur.lastrowid, "approved_by": item.approved_by, "method": item.method}, now_fn)
             return dict(db.execute("SELECT * FROM estimate_authorizations WHERE id=?", (cur.lastrowid,)).fetchone())
 
@@ -347,10 +356,11 @@ def build_workflow_router(connect: Callable[[], sqlite3.Connection], now_fn: Cal
     def create_invoice(order_id: int, item: ActorIn):
         with connect() as db:
             current = order(db, order_id)
+            assert_vehicle_editable(db, current)
             if db.execute("SELECT 1 FROM customer_invoices WHERE order_id=?", (order_id,)).fetchone():
                 raise HTTPException(409, "Customer invoice already exists")
             estimate = db.execute("SELECT * FROM estimates WHERE order_id=?", (order_id,)).fetchone()
-            if not estimate or estimate["status"] != "approved" or current["status"] not in {"approved", "in_progress", "completed"}:
+            if not estimate or estimate["status"] != "approved":
                 raise HTTPException(409, "An approved estimate is required before invoicing")
             subtotal_value, tax_value, total_value = cents(estimate["subtotal"]), cents(estimate["tax"]), cents(estimate["total"])
             cur = db.execute(
@@ -358,7 +368,7 @@ def build_workflow_router(connect: Callable[[], sqlite3.Connection], now_fn: Cal
                 (order_id, f"INV-{current['number']}", subtotal_value, tax_value, total_value, total_value, "open", now_fn()),
             )
             invoice_id = cur.lastrowid
-            for line in db.execute("SELECT * FROM estimate_items WHERE estimate_id=? ORDER BY id", (estimate["id"],)):
+            for line in db.execute("SELECT * FROM estimate_items WHERE estimate_id=? ORDER BY sort_order, id", (estimate["id"],)):
                 db.execute(
                     "INSERT INTO customer_invoice_items(invoice_id,kind,description,part_number,quantity,unit_price_cents,line_total_cents) VALUES(?,?,?,?,?,?,?)",
                     (invoice_id, line["kind"], line["description"], line["part_number"], line["quantity"], cents(line["unit_price"]), cents(line["line_total"])),

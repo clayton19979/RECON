@@ -91,7 +91,7 @@ def technician_productivity_rows(db: sqlite3.Connection, start: str | None, end:
         result.append({
             "technician": tech["name"],
             "ro_count": len(orders),
-            "completed_count": sum(1 for row in orders if row["status"] in ("completed", "closed")),
+            "completed_count": sum(1 for row in orders if row["status"] == "complete"),
             "labor_hours": round(labor_hours, 2),
             "labor_cost": round(labor_cost, 2),
         })
@@ -113,7 +113,7 @@ def _section(rows: list[dict], title: str) -> str:
         if row.get("customer_paid"):
             total_paid += row["customer_paid"]
             deposit_note = f", customer paid ${row['customer_paid']:.2f} (net to shop: ${row['net_cost']:.2f})"
-        lines.append(f"  {label} - {row['vehicle']} [{row['status']}] what we have in it: ${row['actual_cost']:.2f}{deposit_note}")
+        lines.append(f"  {label} - {row['vehicle']} [{row['status']}] cost: ${row['actual_cost']:.2f}{deposit_note}")
     lines.append("")
     if total_paid:
         lines.append(f"  Total: ${total_cost:.2f}  |  Customer deposits: ${total_paid:.2f}  |  Net to shop: ${total_cost - total_paid:.2f}")
@@ -129,8 +129,8 @@ def build_report_body(db: sqlite3.Connection, report_type: str) -> tuple[str, st
         sections.append(_section(vehicle_board_rows(db, segment="recon"), "RECON VEHICLES"))
     if report_type in ("we_owe", "combined"):
         sections.append(_section(vehicle_board_rows(db, segment="we_owe"), "WE-OWE PROMISES"))
-    subject = f"Discount Auto Ops — {report_type.replace('_', ' ').title()} Report — {date_str}"
-    body = f"Discount Auto Ops report — {date_str}\n\n" + "\n\n".join(sections)
+    subject = f"RECON — {report_type.replace('_', ' ').title()} Report — {date_str}"
+    body = f"RECON report — {date_str}\n\n" + "\n\n".join(sections)
     return subject, body
 
 

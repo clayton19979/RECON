@@ -52,6 +52,46 @@ def normalize(value: str) -> str:
     return re.sub(r"[^a-z0-9]", "", value.lower())
 
 
+def create_ap_invoice_record(
+    db: sqlite3.Connection,
+    now_fn: Callable[[], str],
+    *,
+    vendor_id: int,
+    order_id: int,
+    invoice_number: str,
+    po_number: str,
+    items: list[InvoiceItemIn],
+    subtotal: float,
+    tax: float,
+    total: float,
+    source: str,
+) -> dict:
+    """Writes one ap_invoices row + its ap_invoice_items -- the one piece of
+    invoice posting that's genuinely identical whether the invoice came from
+    the agent's fuzzy vendor/PO matching or a human directly receiving
+    specific estimate lines on a ticket. Returns {"status": "duplicate"} or
+    {"status": "posted", "ap_invoice_id": ...}."""
+    normalized = normalize(invoice_number)
+    if db.execute(
+        "SELECT id FROM ap_invoices WHERE vendor_id=? AND normalized_invoice_number=?", (vendor_id, normalized)
+    ).fetchone():
+        return {"status": "duplicate"}
+    try:
+        cur = db.execute(
+            "INSERT INTO ap_invoices(vendor_id,order_id,invoice_number,normalized_invoice_number,po_number,subtotal,tax,total,status,source,posted_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            (vendor_id, order_id, invoice_number.strip(), normalized, po_number.strip(), subtotal, tax, total, "posted", source, now_fn()),
+        )
+    except sqlite3.IntegrityError:
+        db.rollback()
+        return {"status": "duplicate"}
+    ap_id = cur.lastrowid
+    db.executemany(
+        "INSERT INTO ap_invoice_items(ap_invoice_id,part_number,description,quantity,unit_cost,line_total) VALUES(?,?,?,?,?,?)",
+        [(ap_id, item.part_number.strip().upper(), item.description.strip(), item.quantity, item.unit_cost, round(item.quantity * item.unit_cost, 2)) for item in items],
+    )
+    return {"status": "posted", "ap_invoice_id": ap_id}
+
+
 def build_accounting_router(connect: Callable[[], sqlite3.Connection], now: Callable[[], str]) -> APIRouter:
     router = APIRouter(prefix="/api")
 
@@ -76,7 +116,8 @@ def build_accounting_router(connect: Callable[[], sqlite3.Connection], now: Call
             raise HTTPException(409, "Vendor already exists") from exc
 
     @router.get("/ap/invoices")
-    def list_ap_invoices():
+    def list_ap_invoices(start: str | None = None, end: str | None = None):
+        end_bound = f"{end}T23:59:59" if end else None
         with connect() as db:
             rows = db.execute(
                 """SELECT a.*, v.name vendor_name, o.number ro_number, o.segment,
@@ -87,7 +128,9 @@ def build_accounting_router(connect: Callable[[], sqlite3.Connection], now: Call
                    LEFT JOIN recon_vehicles rv ON rv.id=o.recon_vehicle_id
                    LEFT JOIN we_owe_items wi ON wi.id=o.we_owe_id
                    LEFT JOIN customers wc ON wc.id=wi.customer_id
-                   ORDER BY a.id DESC"""
+                   WHERE (:start IS NULL OR a.posted_at>=:start) AND (:end IS NULL OR a.posted_at<=:end)
+                   ORDER BY a.id DESC""",
+                {"start": start, "end": end_bound},
             )
             result = []
             for row in rows:
@@ -130,7 +173,7 @@ def build_accounting_router(connect: Callable[[], sqlite3.Connection], now: Call
                 orders = db.execute(
                     "SELECT * FROM orders WHERE recon_vehicle_id=? ORDER BY id DESC", (recon_vehicle["id"],)
                 ).fetchall()
-                active = next((o for o in orders if o["status"] not in ("closed", "cancelled")), None)
+                active = next((o for o in orders if o["status"] != "complete"), None)
                 if active is not None:
                     return active
                 if orders:
@@ -143,7 +186,7 @@ def build_accounting_router(connect: Callable[[], sqlite3.Connection], now: Call
             (invoice.invoice_number.strip(), invoice.vendor_name.strip(), invoice.po_number.strip(), status, json.dumps(issues), invoice.source, order_id, vendor_id, now()),
         )
 
-    RECEIVABLE_ORDER_STATUSES = {"draft", "inspection", "awaiting_approval", "approved"}
+    RECEIVABLE_ORDER_STATUSES = {"estimate", "pending_approval", "in_progress"}
     LARGE_INVOICE_THRESHOLD = 500.0
 
     @router.post("/agent/invoices/process")
@@ -254,21 +297,18 @@ def build_accounting_router(connect: Callable[[], sqlite3.Connection], now: Call
             estimate_subtotal = round(totals[0], 2)
             estimate_tax = round(totals[1] * float(estimate["tax_rate"]), 2)
             db.execute("UPDATE estimates SET subtotal=?,tax=?,total=? WHERE id=?", (estimate_subtotal, estimate_tax, round(estimate_subtotal + estimate_tax, 2), estimate_id))
-            try:
-                cur = db.execute(
-                    "INSERT INTO ap_invoices(vendor_id,order_id,invoice_number,normalized_invoice_number,po_number,subtotal,tax,total,status,source,posted_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-                    (vendor_id, order_id, invoice.invoice_number.strip(), normalize(invoice.invoice_number), invoice.po_number.strip(), invoice.subtotal, invoice.tax, invoice.total, "posted", invoice.source, now()),
-                )
-            except sqlite3.IntegrityError:
-                db.rollback()
+            result = create_ap_invoice_record(
+                db, now,
+                vendor_id=vendor_id, order_id=order_id,
+                invoice_number=invoice.invoice_number, po_number=invoice.po_number,
+                items=invoice.items, subtotal=invoice.subtotal, tax=invoice.tax, total=invoice.total,
+                source=invoice.source,
+            )
+            if result["status"] == "duplicate":
                 duplicate_issues = ["Vendor invoice number was already posted"]
                 audit(db, invoice, "duplicate", duplicate_issues, order_id, vendor_id)
                 return {"status": "duplicate", "issues": duplicate_issues, "vendor_id": vendor_id, "order_id": order_id}
-            ap_id = cur.lastrowid
-            db.executemany(
-                "INSERT INTO ap_invoice_items(ap_invoice_id,part_number,description,quantity,unit_cost,line_total) VALUES(?,?,?,?,?,?)",
-                [(ap_id, item.part_number.strip().upper(), item.description.strip(), item.quantity, item.unit_cost, round(item.quantity * item.unit_cost, 2)) for item in invoice.items],
-            )
+            ap_id = result["ap_invoice_id"]
             audit(db, invoice, "posted", [], order_id, vendor_id)
             return {
                 "status": "posted",

@@ -16,12 +16,16 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from .accounting import build_accounting_router
 from .db import RECON_SHOP_CUSTOMER_ID, connect as db_connect, init_db, now
+from .export import build_export_router
+from .jobs import build_jobs_router
 from .parts import build_parts_router
-from .recon import build_recon_router, vehicle_board_rows
+from .recon import assert_vehicle_editable, build_recon_router, vehicle_board_rows
 from .reports import build_reports_router
+from .tasks import build_tasks_router
 from .workflow import (
     assert_estimate_editable,
     build_workflow_router,
+    get_or_create_estimate,
     initialize_order_workflow,
     workflow_detail,
 )
@@ -49,13 +53,18 @@ def _data_root() -> Path:
 ROOT = _bundle_root()
 DATA_ROOT = _data_root()
 DEFAULT_DB = Path(os.getenv("DISCOUNT_AUTO_OPS_DB", DATA_ROOT / "data" / "shop.db"))
-PARTSTECH_LOGIN_URL = os.getenv("PARTSTECH_LOGIN_URL", "https://app.partstech.com/login")
 
 
 class CustomerIn(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     phone: str = ""
     email: str = ""
+
+
+class CustomerPatch(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    phone: str | None = None
+    email: str | None = None
 
 
 class VehicleIn(BaseModel):
@@ -81,11 +90,6 @@ class VinDecodeIn(BaseModel):
     vin: str = Field(min_length=5, max_length=17)
 
 
-class PartsTechCredentialsIn(BaseModel):
-    username: str = ""
-    api_key: str = ""
-
-
 class OrderIn(BaseModel):
     customer_id: int | None = None
     vehicle_id: int | None = None
@@ -104,6 +108,7 @@ class EstimateItem(BaseModel):
     part_number: str = ""
     unit_cost: float = Field(default=0, ge=0)
     source: Literal["manual", "partstech", "technician_finding"] = "manual"
+    job_id: int | None = None
 
 
 class EstimateIn(BaseModel):
@@ -118,12 +123,21 @@ def rowdict(row: sqlite3.Row | None) -> dict[str, Any] | None:
     return dict(row) if row else None
 
 
+def estimate_jobs_list(db: sqlite3.Connection, estimate_id: int) -> list[dict]:
+    return [dict(row) for row in db.execute(
+        """SELECT ej.*, s.name technician_name FROM estimate_jobs ej
+           LEFT JOIN staff s ON s.id=ej.technician_id
+           WHERE ej.estimate_id=? ORDER BY ej.sort_order, ej.id""",
+        (estimate_id,),
+    )]
+
+
 NETWORK_FLAG = DATA_ROOT / "network_mode.flag"
 
 
 def create_app(db_path: Path = DEFAULT_DB) -> FastAPI:
     init_db(db_path)
-    app = FastAPI(title="Discount Auto Ops", version="0.1.0")
+    app = FastAPI(title="RECON", version="0.1.0")
     # Single-PC mode only trusts localhost. Network mode (toggled from the
     # tray icon so other PCs can reach this one) needs to accept requests
     # addressed to this machine's LAN IP/hostname instead -- there's no way
@@ -152,6 +166,9 @@ def create_app(db_path: Path = DEFAULT_DB) -> FastAPI:
     app.include_router(build_recon_router(connect, now))
     app.include_router(build_parts_router(connect, now))
     app.include_router(build_reports_router(connect, now))
+    app.include_router(build_export_router(connect, now))
+    app.include_router(build_tasks_router(connect, now))
+    app.include_router(build_jobs_router(connect, now))
 
     @app.get("/api/health")
     def health():
@@ -162,7 +179,7 @@ def create_app(db_path: Path = DEFAULT_DB) -> FastAPI:
         with connect() as db:
             customers_count = db.execute("SELECT count(*) FROM customers WHERE is_shop_owned=0").fetchone()[0]
             vehicles_count = db.execute("SELECT count(*) FROM vehicles v JOIN customers c ON c.id=v.customer_id WHERE c.is_shop_owned=0").fetchone()[0]
-            open_orders = db.execute("SELECT count(*) FROM orders WHERE status NOT IN ('completed','cancelled')").fetchone()[0]
+            open_orders = db.execute("SELECT count(*) FROM orders WHERE status != 'complete'").fetchone()[0]
             board = vehicle_board_rows(db)
             recon_open = [r for r in board if r["segment"] == "recon" and r["status_bucket"] == "in_progress"]
             we_owe_open = [r for r in board if r["segment"] == "we_owe" and r["status_bucket"] == "in_progress"]
@@ -188,6 +205,30 @@ def create_app(db_path: Path = DEFAULT_DB) -> FastAPI:
         with connect() as db:
             cur = db.execute("INSERT INTO customers(name,phone,email,created_at) VALUES(?,?,?,?)", (item.name.strip(), item.phone.strip(), item.email.strip(), now()))
             return rowdict(db.execute("SELECT * FROM customers WHERE id=?", (cur.lastrowid,)).fetchone())
+
+    @app.patch("/api/customers/{customer_id}")
+    def update_customer(customer_id: int, item: CustomerPatch):
+        with connect() as db:
+            row = db.execute("SELECT * FROM customers WHERE id=?", (customer_id,)).fetchone()
+            if not row:
+                raise HTTPException(404, "Customer not found")
+            if row["is_shop_owned"]:
+                raise HTTPException(409, "Shop-owned recon inventory customer can't be edited")
+            fields: list[str] = []
+            params: list[object] = []
+            if item.name is not None:
+                fields.append("name=?")
+                params.append(item.name.strip())
+            if item.phone is not None:
+                fields.append("phone=?")
+                params.append(item.phone.strip())
+            if item.email is not None:
+                fields.append("email=?")
+                params.append(item.email.strip())
+            if fields:
+                params.append(customer_id)
+                db.execute(f"UPDATE customers SET {','.join(fields)} WHERE id=?", params)
+            return rowdict(db.execute("SELECT * FROM customers WHERE id=?", (customer_id,)).fetchone())
 
     @app.get("/api/vehicles")
     def list_vehicles():
@@ -290,7 +331,8 @@ def create_app(db_path: Path = DEFAULT_DB) -> FastAPI:
             detail["estimate"] = None
             if estimate:
                 detail["estimate"] = dict(estimate)
-                detail["estimate"]["items"] = [dict(row) for row in db.execute("SELECT * FROM estimate_items WHERE estimate_id=? ORDER BY id", (estimate["id"],))]
+                detail["estimate"]["items"] = [dict(row) for row in db.execute("SELECT * FROM estimate_items WHERE estimate_id=? ORDER BY sort_order, id", (estimate["id"],))]
+                detail["estimate"]["jobs"] = estimate_jobs_list(db, estimate["id"])
             detail.update(workflow_detail(db, order_id))
             recon_vehicle = db.execute("SELECT * FROM recon_vehicles WHERE id=?", (order["recon_vehicle_id"],)).fetchone() if order["recon_vehicle_id"] else None
             detail["recon_vehicle"] = dict(recon_vehicle) if recon_vehicle else None
@@ -302,14 +344,18 @@ def create_app(db_path: Path = DEFAULT_DB) -> FastAPI:
     def create_order(item: OrderIn):
         with connect() as db:
             if item.segment == "recon":
-                recon_vehicle = db.execute("SELECT vehicle_id FROM recon_vehicles WHERE id=?", (item.recon_vehicle_id,)).fetchone() if item.recon_vehicle_id else None
+                recon_vehicle = db.execute("SELECT vehicle_id, archived_at FROM recon_vehicles WHERE id=?", (item.recon_vehicle_id,)).fetchone() if item.recon_vehicle_id else None
                 if not recon_vehicle:
                     raise HTTPException(404, "Recon vehicle not found")
+                if recon_vehicle["archived_at"]:
+                    raise HTTPException(409, "This vehicle is archived to History -- reopen it to start a new repair order")
                 customer_id, vehicle_id = RECON_SHOP_CUSTOMER_ID, recon_vehicle["vehicle_id"]
             elif item.segment == "we_owe":
-                we_owe_item = db.execute("SELECT customer_id, vehicle_id FROM we_owe_items WHERE id=?", (item.we_owe_id,)).fetchone() if item.we_owe_id else None
+                we_owe_item = db.execute("SELECT customer_id, vehicle_id, archived_at FROM we_owe_items WHERE id=?", (item.we_owe_id,)).fetchone() if item.we_owe_id else None
                 if not we_owe_item:
                     raise HTTPException(404, "We-owe item not found")
+                if we_owe_item["archived_at"]:
+                    raise HTTPException(409, "This vehicle is archived to History -- reopen it to start a new repair order")
                 customer_id, vehicle_id = we_owe_item["customer_id"], we_owe_item["vehicle_id"]
             else:
                 if item.customer_id is None or item.vehicle_id is None:
@@ -321,8 +367,8 @@ def create_app(db_path: Path = DEFAULT_DB) -> FastAPI:
             sequence = db.execute("SELECT coalesce(max(id),0)+1 FROM orders").fetchone()[0]
             number = f"RO-{datetime.now():%y%m}-{sequence:04d}"
             cur = db.execute(
-                "INSERT INTO orders(number,customer_id,vehicle_id,concern,segment,recon_vehicle_id,we_owe_id,created_at) VALUES(?,?,?,?,?,?,?,?)",
-                (number, customer_id, vehicle_id, item.concern.strip(), item.segment, item.recon_vehicle_id if item.segment == "recon" else None, item.we_owe_id if item.segment == "we_owe" else None, now()),
+                "INSERT INTO orders(number,customer_id,vehicle_id,concern,segment,recon_vehicle_id,we_owe_id,status,voided,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                (number, customer_id, vehicle_id, item.concern.strip(), item.segment, item.recon_vehicle_id if item.segment == "recon" else None, item.we_owe_id if item.segment == "we_owe" else None, "estimate", 0, now()),
             )
             order_id = cur.lastrowid
             assert order_id is not None
@@ -336,34 +382,44 @@ def create_app(db_path: Path = DEFAULT_DB) -> FastAPI:
         tax = round(taxable * estimate.tax_rate, 2)
         total = round(subtotal + tax, 2)
         with connect() as db:
-            if not db.execute("SELECT 1 FROM orders WHERE id=?", (order_id,)).fetchone():
+            current_order = db.execute("SELECT * FROM orders WHERE id=?", (order_id,)).fetchone()
+            if not current_order:
                 raise HTTPException(404, "Repair order not found")
+            assert_vehicle_editable(db, current_order)
             assert_estimate_editable(db, order_id)
             old = db.execute("SELECT id, edit_version FROM estimates WHERE order_id=?", (order_id,)).fetchone()
             if old and estimate.expected_version is not None and old["edit_version"] != estimate.expected_version:
                 raise HTTPException(409, "Someone else changed this estimate since you loaded it -- reload to see their update")
+            estimate_id = get_or_create_estimate(db, order_id, now)["id"]
             if old:
-                estimate_id = old["id"]
                 db.execute(
                     "UPDATE estimates SET labor_rate=?,tax_rate=?,subtotal=?,tax=?,total=?,status='draft',edit_version=edit_version+1 WHERE id=?",
                     (estimate.labor_rate, estimate.tax_rate, subtotal, tax, total, estimate_id),
                 )
             else:
-                cur = db.execute("INSERT INTO estimates(order_id,labor_rate,tax_rate,subtotal,tax,total,created_at) VALUES(?,?,?,?,?,?,?)", (order_id, estimate.labor_rate, estimate.tax_rate, subtotal, tax, total, now()))
-                estimate_id = cur.lastrowid
+                # A job may have already lazily created this estimate row with
+                # placeholder zeros -- fill in the real requested values now,
+                # without bumping edit_version (this is still the first save).
+                db.execute(
+                    "UPDATE estimates SET labor_rate=?,tax_rate=?,subtotal=?,tax=?,total=? WHERE id=?",
+                    (estimate.labor_rate, estimate.tax_rate, subtotal, tax, total, estimate_id),
+                )
+            valid_job_ids = {row[0] for row in db.execute("SELECT id FROM estimate_jobs WHERE estimate_id=?", (estimate_id,))}
             retained_ids: set[int] = set()
-            for item in estimate.items:
+            for position, item in enumerate(estimate.items):
+                if item.job_id is not None and item.job_id not in valid_job_ids:
+                    raise HTTPException(422, "Job does not belong to this repair order's estimate")
                 existing = db.execute("SELECT id FROM estimate_items WHERE id=? AND estimate_id=?", (item.id, estimate_id)).fetchone() if item.id else None
                 if existing:
                     retained_ids.add(int(existing["id"]))
                     db.execute(
-                        "UPDATE estimate_items SET kind=?,description=?,part_number=?,quantity=?,unit_price=?,unit_cost=?,line_total=?,review_required=0,reviewed_by=?,reviewed_at=? WHERE id=?",
-                        (item.kind, item.description.strip(), item.part_number.strip().upper(), item.quantity, item.unit_price, item.unit_cost, round(item.quantity * item.unit_price, 2), estimate.actor, now(), item.id),
+                        "UPDATE estimate_items SET kind=?,description=?,part_number=?,quantity=?,unit_price=?,unit_cost=?,line_total=?,review_required=0,reviewed_by=?,reviewed_at=?,sort_order=?,job_id=? WHERE id=?",
+                        (item.kind, item.description.strip(), item.part_number.strip().upper(), item.quantity, item.unit_price, item.unit_cost, round(item.quantity * item.unit_price, 2), estimate.actor, now(), position, item.job_id, item.id),
                     )
                 else:
                     cur = db.execute(
-                        "INSERT INTO estimate_items(estimate_id,kind,description,part_number,quantity,unit_price,unit_cost,line_total,source,review_required,reviewed_by,reviewed_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
-                        (estimate_id, item.kind, item.description.strip(), item.part_number.strip().upper(), item.quantity, item.unit_price, item.unit_cost, round(item.quantity * item.unit_price, 2), item.source, 0, estimate.actor, now()),
+                        "INSERT INTO estimate_items(estimate_id,kind,description,part_number,quantity,unit_price,unit_cost,line_total,source,review_required,reviewed_by,reviewed_at,sort_order,job_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        (estimate_id, item.kind, item.description.strip(), item.part_number.strip().upper(), item.quantity, item.unit_price, item.unit_cost, round(item.quantity * item.unit_price, 2), item.source, 0, estimate.actor, now(), position, item.job_id),
                     )
                     if cur.lastrowid is not None:
                         retained_ids.add(int(cur.lastrowid))
@@ -374,47 +430,9 @@ def create_app(db_path: Path = DEFAULT_DB) -> FastAPI:
                 else:
                     db.execute("DELETE FROM estimate_items WHERE estimate_id=?", (estimate_id,))
             result = dict(db.execute("SELECT * FROM estimates WHERE id=?", (estimate_id,)).fetchone())
-            result["items"] = [dict(row) for row in db.execute("SELECT * FROM estimate_items WHERE estimate_id=? ORDER BY id", (estimate_id,))]
+            result["items"] = [dict(row) for row in db.execute("SELECT * FROM estimate_items WHERE estimate_id=? ORDER BY sort_order, id", (estimate_id,))]
+            result["jobs"] = estimate_jobs_list(db, estimate_id)
             return result
-
-    @app.get("/api/integrations/partstech")
-    def partstech():
-        with connect() as db:
-            settings = db.execute("SELECT partstech_username, partstech_api_key FROM app_settings WHERE id=1").fetchone()
-        return {
-            "name": "PartsTech",
-            "login_url": PARTSTECH_LOGIN_URL,
-            "stores_password": False,
-            "mode": "secure_external_login",
-            "api_key_url": "https://app.partstech.com/profile/shop/api-options",
-            "note": "Discount Auto Ops opens PartsTech directly for cost lookup; add the part here at your cost, no markup.",
-            "credentials_configured": bool(settings["partstech_username"] and settings["partstech_api_key"]),
-            "live_search_available": False,
-            "live_search_note": (
-                "PartsTech's parts-search API isn't publicly documented -- it's issued to approved "
-                "partners directly (PartsTech-Partner-API@oeconnection.com). Your API key is stored and "
-                "ready to use the moment real endpoint docs are available; until then, search PartsTech "
-                "in its own tab and add what you find here at cost."
-            ),
-        }
-
-    @app.get("/api/integrations/partstech/credentials")
-    def get_partstech_credentials():
-        with connect() as db:
-            settings = db.execute("SELECT partstech_username, partstech_api_key FROM app_settings WHERE id=1").fetchone()
-        return {
-            "username": settings["partstech_username"],
-            "configured": bool(settings["partstech_username"] and settings["partstech_api_key"]),
-        }
-
-    @app.put("/api/integrations/partstech/credentials")
-    def save_partstech_credentials(item: PartsTechCredentialsIn):
-        with connect() as db:
-            db.execute(
-                "UPDATE app_settings SET partstech_username=?,partstech_api_key=?,updated_at=? WHERE id=1",
-                (item.username.strip(), item.api_key.strip(), now()),
-            )
-        return {"ok": True}
 
     static = ROOT / "static"
     app.mount("/assets", StaticFiles(directory=static), name="assets")

@@ -10,7 +10,7 @@ def test_email_report_section_shows_one_number_not_two(client):
     """The old format showed 'actual $X (quoted $Y)' side by side, which
     reads as if the total were their sum -- exactly the confusion that led
     to a real support question. The email report must match the simplified
-    single-number 'what we have in it' language used everywhere else now."""
+    single-number 'cost' language used everywhere else now."""
     vehicle = make_recon_vehicle(client, stock_number="R-9101")
     order = make_recon_order(client, vehicle["id"])
     save_estimate(client, order["id"], [{"kind": "labor", "description": "Diag", "quantity": 1, "unit_price": 60, "unit_cost": 60}])
@@ -19,7 +19,7 @@ def test_email_report_section_shows_one_number_not_two(client):
     body = _section(rows, "RECON VEHICLES")
 
     assert "R-9101" in body
-    assert "what we have in it: $60.00" in body
+    assert "cost: $60.00" in body
     assert "quoted" not in body.lower()
     assert "Total: $60.00" in body
 

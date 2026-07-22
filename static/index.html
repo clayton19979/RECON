@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Discount Auto Ops</title>
+<title>RECON — Discount Auto Repair</title>
 <link rel="stylesheet" href="/assets/styles.css">
 </head>
 <body>
@@ -26,9 +26,13 @@
       <svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.4"/><path d="M4.5 20c1-3.6 4-5.6 7.5-5.6s6.5 2 7.5 5.6"/></svg>
       <span>Staff</span>
     </button>
-    <button class="rail-item" data-view="integrations">
-      <svg viewBox="0 0 24 24"><path d="M10 13a5 5 0 007.5.5l2-2a5 5 0 00-7-7l-1 1"/><path d="M14 11a5 5 0 00-7.5-.5l-2 2a5 5 0 007 7l1-1"/></svg>
-      <span>Connect</span>
+    <button class="rail-item" data-view="tasks">
+      <svg viewBox="0 0 24 24"><path d="M9 11l2.5 2.5L16 9"/><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 16l2.5 2.5L16 14"/></svg>
+      <span>Tasks</span>
+    </button>
+    <button class="rail-item" data-view="suggestions">
+      <svg viewBox="0 0 24 24"><path d="M9 18h6M10 22h4M12 2a7 7 0 00-4 12.7c.6.5 1 1.3 1 2.3h6c0-1 .4-1.8 1-2.3A7 7 0 0012 2z"/></svg>
+      <span>Ideas</span>
     </button>
     <div class="rail-spacer"></div>
     <div class="theme-picker">
@@ -47,8 +51,8 @@
   <div class="main">
     <header class="topbar">
       <div>
-        <div class="shop-name">Discount Auto Ops</div>
-        <div class="shop-sub">Merrillville, IN</div>
+        <div class="shop-name">RECON</div>
+        <div class="shop-sub">Discount Auto Repair · Merrillville, IN</div>
       </div>
       <label class="search">
         <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
@@ -70,6 +74,10 @@
             <p class="page-desc">Every recon car and we-owe promise, one list. Click a row for the full picture — cost, parts, technician, linked repair order.</p>
           </div>
           <div style="display:flex;gap:10px">
+            <a class="btn btn-ghost" href="/api/export/vehicles.csv" download>
+              <svg viewBox="0 0 24 24"><path d="M12 4v12m0 0l-4-4m4 4l4-4M4 20h16"/></svg>
+              Export CSV
+            </a>
             <button class="btn btn-ghost" id="add-we-owe-btn">
               <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
               We-Owe Promise
@@ -93,9 +101,14 @@
             <div class="stat-sub" id="stat-we-owe-actual">$0 in it</div>
           </div>
           <div class="stat">
-            <div class="stat-label">What's In It (Open)</div>
+            <div class="stat-label">Cost (Open)</div>
             <div class="stat-value num" id="stat-actual-total">$0</div>
             <div class="stat-sub">received parts + labor</div>
+          </div>
+          <div class="stat">
+            <div class="stat-label">Quoted (Open)</div>
+            <div class="stat-value num" id="stat-quoted-total">$0</div>
+            <div class="stat-sub">full estimate, not just received</div>
           </div>
         </div>
 
@@ -103,6 +116,7 @@
           <button class="chip active" data-filter="">All</button>
           <button class="chip" data-filter="recon">Recon</button>
           <button class="chip" data-filter="we_owe">We-Owe</button>
+          <button class="chip" data-filter="history">History</button>
           <div class="filters-gap"></div>
           <span class="filters-note" id="vehicles-count">0 vehicles</span>
         </div>
@@ -117,7 +131,7 @@
                 <th>Status</th>
                 <th>Technician</th>
                 <th class="num-col sortable" id="th-age" title="Click to sort by age">Age <span class="sort-arrow"></span></th>
-                <th class="num-col">What's In It</th>
+                <th class="num-col">Cost</th>
               </tr>
             </thead>
             <tbody id="vehicles-table"></tbody>
@@ -132,6 +146,10 @@
           Back to Vehicles
         </a>
 
+        <div id="vd-archived-banner" class="archived-banner" style="display:none">
+          This vehicle is archived to History — read-only until reopened.
+        </div>
+
         <div class="detail-head">
           <div>
             <div class="detail-title" id="vd-title"></div>
@@ -139,6 +157,10 @@
             <div class="detail-updated" id="vd-updated"></div>
           </div>
           <div style="display:flex;gap:10px" id="vd-actions">
+            <button class="btn btn-ghost btn-sm" id="vd-print-ticket" style="display:none">Print Ticket</button>
+            <button class="btn btn-ghost btn-sm" id="vd-archive-vehicle" style="display:none">Send to History</button>
+            <button class="btn btn-primary btn-sm" id="vd-reopen-vehicle" style="display:none">Reopen</button>
+            <button class="btn btn-ghost btn-sm" id="vd-void-order" style="display:none;color:var(--crit)">Void Ticket</button>
             <button class="btn btn-ghost btn-sm" id="vd-delete" style="display:none;color:var(--crit)">Delete</button>
           </div>
         </div>
@@ -161,12 +183,12 @@
                     <p class="section-eyebrow" id="vd-ro-number">Repair Order</p>
                     <h3 class="section-title">Status</h3>
                   </div>
-                  <div style="display:flex;gap:8px;align-items:center">
-                    <select id="vd-status-select" class="inline-select"></select>
-                    <button class="btn btn-ghost btn-sm" id="vd-advance-status">Advance</button>
-                  </div>
+                  <span class="pill" id="vd-status-pill"></span>
                 </div>
-                <div class="status-flow" id="vd-status-flow"></div>
+                <div style="display:flex;gap:8px;align-items:center;padding:14px 16px">
+                  <select id="vd-status-select" class="inline-select"></select>
+                  <button class="btn btn-ghost btn-sm" id="vd-status-save">Save</button>
+                </div>
               </div>
 
               <div class="card">
@@ -175,16 +197,18 @@
                     <p class="section-eyebrow">At Cost · No Markup</p>
                     <h3 class="section-title">Parts &amp; Labor</h3>
                   </div>
-                  <div style="display:flex;gap:8px">
+                  <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end">
+                    <button class="btn btn-ghost btn-sm" id="vd-add-job">＋ Add Job</button>
                     <button class="btn btn-ghost btn-sm" id="vd-add-partstech" title="Opens PartsTech in a new tab and adds a line here for what you find">＋ PartsTech</button>
                     <button class="btn btn-ghost btn-sm" id="vd-add-part">＋ Part</button>
                     <button class="btn btn-ghost btn-sm" id="vd-add-labor">＋ Labor</button>
                     <button class="btn btn-ghost btn-sm" id="vd-order-parts">Order Parts</button>
+                    <button class="btn btn-primary btn-sm" id="vd-receive-parts" disabled>Receive Selected</button>
                   </div>
                 </div>
                 <div id="vd-estimate-items"></div>
                 <div class="cost-summary" style="border-top:1px solid var(--line)">
-                  <div class="cost-line total"><span>What we have in it</span><span id="vd-actual-cost">$0.00</span></div>
+                  <div class="cost-line total"><span>Cost</span><span id="vd-actual-cost">$0.00</span></div>
                 </div>
               </div>
 
@@ -229,34 +253,19 @@
               <div class="cost-summary" id="vd-cost-summary"></div>
             </div>
 
-            <div class="card" id="vd-traceability-card">
-              <div class="card-head"><p class="section-eyebrow" style="margin:0">Traceability</p></div>
-              <div class="kv-list" id="vd-traceability"></div>
-            </div>
-
-            <div class="card" id="vd-recon-info-card" style="display:none">
-              <div class="card-head"><p class="section-eyebrow" style="margin:0">Vehicle Info</p></div>
-              <div class="form-row" style="padding:14px 16px">
-                <label>VIN<input id="vd-recon-vin"></label>
-                <label>Mileage<input id="vd-recon-mileage" type="number" min="0"></label>
+            <div class="card" id="vd-vehicle-info-card">
+              <div class="card-head">
+                <p class="section-eyebrow" style="margin:0">Vehicle Info</p>
+                <button class="btn btn-ghost btn-sm" id="vd-edit-vehicle">Edit Vehicle</button>
               </div>
-              <div class="form-row" style="padding:0 16px 14px">
-                <label>Year<input id="vd-recon-year" type="number"></label>
-                <label>Make<input id="vd-recon-make"></label>
-                <label>Model<input id="vd-recon-model"></label>
-              </div>
-              <div class="form-row" style="padding:0 16px 14px">
-                <label>Trim<input id="vd-recon-trim"></label>
-                <label>Color<input id="vd-recon-color"></label>
-              </div>
-              <div class="form-row" style="padding:0 16px 14px">
-                <label>Purchase price<input id="vd-recon-purchase-price" type="number" min="0" step="0.01"></label>
-              </div>
-              <div style="padding:0 16px 14px"><button class="btn btn-ghost btn-sm" id="vd-recon-info-save">Save</button></div>
+              <div class="kv-list" id="vd-vehicle-info-summary"></div>
             </div>
 
             <div class="card" id="vd-we-owe-status-card" style="display:none">
-              <div class="card-head"><p class="section-eyebrow" style="margin:0">We-Owe</p></div>
+              <div class="card-head">
+                <p class="section-eyebrow" style="margin:0">We-Owe</p>
+                <button class="btn btn-ghost btn-sm" id="vd-edit-customer">Edit Customer</button>
+              </div>
               <div style="padding:14px 16px">
                 <label>Description<input id="vd-we-owe-description"></label>
               </div>
@@ -275,21 +284,11 @@
             </div>
 
             <div class="card" id="vd-deposits-card" style="display:none">
-              <div class="card-head"><p class="section-eyebrow" style="margin:0">Customer Deposits</p></div>
-              <div class="cost-summary" id="vd-deposits-summary"></div>
-              <div class="form-row" style="padding:0 16px 14px">
-                <label>Amount<input id="vd-deposit-amount" type="number" min="0.01" step="0.01"></label>
-                <label>Method<select id="vd-deposit-method">
-                  <option value="cash">Cash</option>
-                  <option value="card">Card</option>
-                  <option value="check">Check</option>
-                  <option value="bank">Bank</option>
-                  <option value="other">Other</option>
-                </select></label>
+              <div class="card-head">
+                <p class="section-eyebrow" style="margin:0">Customer Deposits</p>
+                <button class="btn btn-primary btn-sm" id="vd-take-payment">Take Payment</button>
               </div>
-              <div style="padding:0 16px 14px"><input id="vd-deposit-note" placeholder="Note (optional)"></div>
-              <div style="padding:0 16px 14px"><button class="btn btn-ghost btn-sm" id="vd-deposit-add">Record Deposit</button></div>
-              <div id="vd-deposits-list" class="mini-list"></div>
+              <div class="cost-summary" id="vd-deposits-summary"></div>
             </div>
           </div>
         </div>
@@ -421,7 +420,21 @@
           </div>
         </div>
 
-        <div class="panel" style="margin-top:16px">
+        <div class="filters" style="margin-top:16px">
+          <button class="chip" data-ap-range="today">Today</button>
+          <button class="chip" data-ap-range="yesterday">Yesterday</button>
+          <button class="chip" data-ap-range="week">This Week</button>
+          <button class="chip" data-ap-range="month">This Month</button>
+          <button class="chip" data-ap-range="ytd">YTD</button>
+          <button class="chip active" data-ap-range="all">All Time</button>
+          <input type="date" id="ap-filter-start" style="width:auto">
+          <span style="color:var(--ink-faint);font-size:12.5px">to</span>
+          <input type="date" id="ap-filter-end" style="width:auto">
+          <div class="filters-gap"></div>
+          <span class="filters-note" id="ap-count">0 invoices</span>
+        </div>
+
+        <div class="panel">
           <table>
             <thead><tr><th>Invoice</th><th>Vendor</th><th>RO / PO</th><th>Vehicle</th><th class="num-col">Total</th><th>Status</th></tr></thead>
             <tbody id="ap-table"></tbody>
@@ -457,35 +470,51 @@
         </div>
       </section>
 
-      <!-- INTEGRATIONS -->
-      <section class="view" id="view-integrations">
+      <!-- TASKS -->
+      <section class="view" id="view-tasks">
         <div class="page-head">
           <div>
-            <h1>Connect</h1>
-            <p class="page-desc">PartsTech for looking up parts and cost — add what you find at cost, no markup, from a vehicle's Parts &amp; Labor card.</p>
+            <h1>Tasks</h1>
+            <p class="page-desc">Shared to-dos for the shop — leave one for Antonio (or yourself), it syncs the moment they open RECON.</p>
           </div>
-        </div>
-        <div class="card" style="padding:20px;display:flex;align-items:center;gap:16px">
-          <div class="who-badge" style="width:44px;height:44px;font-size:14px">PT</div>
-          <div style="flex:1">
-            <h3 class="section-title">PartsTech</h3>
-            <p class="page-desc">Opens the official PartsTech login directly. Discount Auto Ops never asks for or stores your PartsTech password.</p>
-          </div>
-          <a class="btn btn-primary" id="partstech-login" target="_blank" rel="noopener">Log in ↗</a>
         </div>
 
-        <div class="card">
-          <div class="card-head"><p class="section-eyebrow" style="margin:0">API Key</p><h3 class="section-title">Live Search (Not Yet Available)</h3></div>
-          <div style="padding:0 16px 12px"><p class="page-desc" id="partstech-api-status">Checking…</p></div>
-          <form id="partstech-form" style="padding:0 16px 16px">
-            <div class="form-row">
-              <label>Username (PartsTech email)<input name="username" id="partstech-username" placeholder="you@example.com"></label>
-              <label>API Key<input name="api_key" id="partstech-api-key" type="password" placeholder="From PartsTech → Profile → Shop → API Options" autocomplete="off"></label>
-            </div>
-            <button class="btn btn-primary" type="submit" style="align-self:flex-start">Save Key</button>
-          </form>
-          <p class="hint" style="padding:0 16px 16px">Stored and ready to go, but PartsTech doesn't publish its search/quote API publicly -- it's issued to approved partners directly. Search PartsTech in its own tab above and add what you find to the RO at cost until that's sorted out.</p>
+        <form id="task-quick-add" class="task-quick-add">
+          <input id="task-title-input" placeholder="Add a task… e.g. Call John back about his Civic" required>
+          <select id="task-assignee-input"><option value="">Unassigned</option></select>
+          <input type="date" id="task-due-input" title="Due date (optional)">
+          <label class="task-urgent-toggle"><input type="checkbox" id="task-urgent-input"> Urgent</label>
+          <button class="btn btn-primary" type="submit">Add Task</button>
+        </form>
+
+        <div class="filters">
+          <button class="chip active" data-task-filter="">All</button>
+          <button class="chip" data-task-filter="mine">Assigned to Me</button>
+          <div class="filters-gap"></div>
+          <span class="filters-note" id="tasks-count">0 open</span>
         </div>
+
+        <div id="tasks-list" class="task-list"></div>
+
+        <button type="button" class="btn btn-ghost btn-sm" id="tasks-toggle-completed" style="margin-top:14px">Show completed (0)</button>
+        <div id="tasks-completed-list" class="task-list" style="display:none;margin-top:10px"></div>
+      </section>
+
+      <!-- SUGGESTIONS / IDEAS -->
+      <section class="view" id="view-suggestions">
+        <div class="page-head">
+          <div>
+            <h1>Suggestions</h1>
+            <p class="page-desc">Ideas and improvements for the system — write it down when you think of it, mark it done once it's handled.</p>
+          </div>
+        </div>
+
+        <form id="suggestion-add" class="suggestion-add">
+          <textarea id="suggestion-text-input" placeholder="What should we add or fix?" required></textarea>
+          <button class="btn btn-primary" type="submit">Post Suggestion</button>
+        </form>
+
+        <div id="suggestions-list" class="suggestion-list"></div>
       </section>
 
     </div>
@@ -559,7 +588,10 @@
           <label>Make<input id="we-owe-new-make" placeholder="Kia"></label>
           <label>Model<input id="we-owe-new-model" placeholder="Soul"></label>
         </div>
-        <label>VIN<input id="we-owe-new-vin" placeholder="Optional"></label>
+        <div class="form-row">
+          <label style="flex:2">VIN<input id="we-owe-new-vin" placeholder="Optional"></label>
+          <button type="button" class="btn btn-ghost" id="we-owe-decode-vin" style="align-self:flex-end;margin-bottom:12px">Decode VIN</button>
+        </div>
       </div>
       <label>Description<input id="we-owe-description" required placeholder="e.g. Replace missing passenger mirror"></label>
       <div class="form-row">
@@ -574,6 +606,130 @@
     <div class="modal-actions">
       <button class="btn btn-ghost" formnovalidate type="button" id="we-owe-cancel-2">Cancel</button>
       <button class="btn btn-primary" type="submit">Save We-Owe Item</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- Receive Parts Dialog -->
+<dialog id="receive-dialog">
+  <form class="modal" id="receive-form">
+    <div class="modal-head">
+      <div><p class="eyebrow">RECEIVE PARTS</p><h2>Post to A/P</h2></div>
+      <button class="icon-btn" formnovalidate type="button" id="receive-cancel">×</button>
+    </div>
+    <div class="modal-body">
+      <div id="receive-lines" class="kv-list" style="padding:0 0 12px"></div>
+      <label>Vendor<select id="receive-vendor"><option value="__new__">＋ New vendor…</option></select></label>
+      <div id="receive-new-vendor" style="display:none">
+        <label>New vendor name<input id="receive-new-vendor-name" placeholder="WorldPac"></label>
+      </div>
+      <label>Invoice #<input id="receive-invoice-number" required placeholder="INV-1234"></label>
+      <label>Tax<input id="receive-tax" type="number" min="0" step="0.01" value="0"></label>
+      <div class="cost-summary" id="receive-total-summary"></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" formnovalidate type="button" id="receive-cancel-2">Cancel</button>
+      <button class="btn btn-primary" type="submit">Post &amp; Receive</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- Add/Rename Job Dialog -->
+<dialog id="job-dialog">
+  <form class="modal" id="job-form">
+    <div class="modal-head">
+      <div><p class="eyebrow">JOB</p><h2 id="job-dialog-title">Add Job</h2></div>
+      <button class="icon-btn" formnovalidate type="button" id="job-cancel">×</button>
+    </div>
+    <div class="modal-body">
+      <label>Job name<input id="job-title-input" required placeholder="e.g. Front Brakes"></label>
+      <label>Technician<select id="job-technician-input"><option value="">Use ticket default</option></select></label>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" formnovalidate type="button" id="job-cancel-2">Cancel</button>
+      <button class="btn btn-primary" type="submit">Save Job</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- Edit Vehicle Dialog -->
+<dialog id="vehicle-edit-dialog">
+  <form class="modal" id="vehicle-edit-form">
+    <div class="modal-head">
+      <div><p class="eyebrow">VEHICLE</p><h2>Edit Vehicle</h2></div>
+      <button class="icon-btn" formnovalidate type="button" id="vehicle-edit-cancel">×</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-row" style="align-items:flex-end">
+        <label style="flex:2">VIN<input id="vd-recon-vin"></label>
+        <button type="button" class="btn btn-ghost btn-sm" id="vd-decode-vin" style="margin-bottom:12px">Decode VIN</button>
+      </div>
+      <div class="form-row">
+        <label>Mileage<input id="vd-recon-mileage" type="number" min="0"></label>
+        <label>Year<input id="vd-recon-year" type="number"></label>
+      </div>
+      <div class="form-row">
+        <label>Make<input id="vd-recon-make"></label>
+        <label>Model<input id="vd-recon-model"></label>
+      </div>
+      <div class="form-row">
+        <label>Trim<input id="vd-recon-trim"></label>
+        <label>Color<input id="vd-recon-color"></label>
+      </div>
+      <div class="form-row" id="vd-recon-purchase-price-row">
+        <label>Purchase price<input id="vd-recon-purchase-price" type="number" min="0" step="0.01"></label>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" formnovalidate type="button" id="vehicle-edit-cancel-2">Cancel</button>
+      <button class="btn btn-primary" type="button" id="vd-recon-info-save">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- Edit Customer Dialog (We-Owe only) -->
+<dialog id="customer-edit-dialog">
+  <form class="modal" id="customer-edit-form">
+    <div class="modal-head">
+      <div><p class="eyebrow">CUSTOMER</p><h2>Edit Customer</h2></div>
+      <button class="icon-btn" formnovalidate type="button" id="customer-edit-cancel">×</button>
+    </div>
+    <div class="modal-body">
+      <label>Name<input id="customer-edit-name" required></label>
+      <label>Phone<input id="customer-edit-phone"></label>
+      <label>Email<input id="customer-edit-email" type="email"></label>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" formnovalidate type="button" id="customer-edit-cancel-2">Cancel</button>
+      <button class="btn btn-primary" type="submit">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- Take Payment Dialog (We-Owe only) -->
+<dialog id="payment-dialog">
+  <form class="modal" id="payment-form">
+    <div class="modal-head">
+      <div><p class="eyebrow">DEPOSIT</p><h2>Take Payment</h2></div>
+      <button class="icon-btn" formnovalidate type="button" id="payment-cancel">×</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-row">
+        <label>Amount<input id="vd-deposit-amount" type="number" min="0.01" step="0.01"></label>
+        <label>Method<select id="vd-deposit-method">
+          <option value="cash">Cash</option>
+          <option value="card">Card</option>
+          <option value="check">Check</option>
+          <option value="bank">Bank</option>
+          <option value="other">Other</option>
+        </select></label>
+      </div>
+      <label>Note<input id="vd-deposit-note" placeholder="Optional"></label>
+      <div style="padding:6px 0"><button type="button" class="btn btn-primary btn-sm" id="vd-deposit-add">Record Deposit</button></div>
+      <div id="vd-deposits-list" class="mini-list" style="padding:0"></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" formnovalidate type="button" id="payment-cancel-2">Close</button>
     </div>
   </form>
 </dialog>

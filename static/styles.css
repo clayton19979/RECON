@@ -58,7 +58,7 @@
 }
 
 * { box-sizing: border-box; }
-html, body { margin: 0; padding: 0; }
+html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
 body {
   background: var(--paper);
   color: var(--ink);
@@ -80,12 +80,23 @@ a { color: var(--accent); }
 button { font-family: inherit; }
 
 /* ---------- shell ---------- */
-.app { display: grid; grid-template-columns: var(--rail-w) 1fr; min-height: 100vh; }
+/* Fixed-height shell (not min-height) so the rail and topbar never scroll --
+   only .content scrolls internally via its own overflow-y. height:100vh alone
+   isn't enough: with no grid-template-rows, the single implicit row still
+   sizes to `auto` (fits its content), so it grew past the viewport and, with
+   overflow:hidden on body, clipped everything instead of scrolling.
+   grid-template-rows: 1fr caps the row at exactly 100vh; min-height: 0 on
+   .main lets it actually shrink to that instead of stopping at its content's
+   natural (taller) size. */
+.app { display: grid; grid-template-columns: var(--rail-w) 1fr; grid-template-rows: 1fr; height: 100vh; }
 
 .rail {
   background: var(--accent-strong);
   display: flex; flex-direction: column; align-items: center;
   padding: 16px 0; gap: 4px;
+  /* No overflow-y here: the rail's nav items always fit, and setting only
+     overflow-y forces overflow-x to clip too (per spec), which hid the
+     theme-menu popout since it pops out to the right, past the rail's edge. */
 }
 .rail-mark {
   font-family: Bahnschrift, sans-serif;
@@ -134,7 +145,7 @@ button { font-family: inherit; }
   border: 1px solid rgba(0,0,0,.15); box-shadow: inset 0 0 0 2px var(--surface);
 }
 
-.main { display: flex; flex-direction: column; min-width: 0; }
+.main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 
 .topbar {
   height: 60px; flex-shrink: 0;
@@ -193,7 +204,7 @@ button { font-family: inherit; }
 .btn[disabled] { opacity: .5; cursor: not-allowed; }
 
 /* ---------- stats ---------- */
-.stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-bottom: 20px; }
+.stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 20px; }
 .stat {
   background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
   padding: 16px 18px;
@@ -265,6 +276,10 @@ td.age-crit { color: var(--crit); font-weight: 700; }
 .back-link svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2.2; }
 .back-link:hover { color: var(--accent); }
 
+.archived-banner {
+  background: var(--line-soft); color: var(--ink-soft); border: 1px solid var(--line);
+  border-radius: var(--radius); padding: 10px 16px; font-size: 12.5px; font-weight: 600; margin-bottom: 16px;
+}
 .detail-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 20px; margin-bottom: 20px; }
 .detail-title { font-family: Bahnschrift, sans-serif; font-size: 22px; font-weight: 600; }
 .detail-sub { font-size: 12.5px; color: var(--ink-faint); margin-top: 4px; }
@@ -301,23 +316,20 @@ textarea { min-height: 70px; resize: vertical; font-family: inherit; }
 .inline-select { padding: 6px 9px; font-size: 12.5px; width: auto; }
 .hint { font-size: 11.5px; color: var(--ink-faint); margin: -6px 0 10px; }
 
-/* ---------- status flow ---------- */
-.status-flow { display: flex; align-items: center; padding: 16px; gap: 0; overflow-x: auto; }
-.status-step {
-  display: flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: 999px;
-  font-size: 11.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .02em;
-  background: var(--line-soft); color: var(--ink-faint); white-space: nowrap;
-}
-.status-step.done { background: var(--good-tint); color: var(--good); }
-.status-step.current { background: var(--accent); color: #fff; }
-.status-connector { width: 20px; height: 2px; background: var(--line); flex-shrink: 0; }
-.status-connector.done { background: var(--good); }
+/* ---------- ticket status pills (color-coded, one per status) ---------- */
+.pill-status-estimate { background: var(--line-soft); color: var(--ink-faint); }
+.pill-status-pending { background: var(--warn-tint); color: var(--warn); }
+.pill-status-progress { background: var(--accent-tint); color: var(--accent); }
+.pill-status-complete { background: var(--good-tint); color: var(--good); }
 
 /* ---------- estimate / parts rows ---------- */
 .part-row {
-  display: grid; grid-template-columns: .8fr 2.1fr 1fr .6fr .9fr 1fr 26px;
+  display: grid; grid-template-columns: 16px 20px .8fr 2.1fr 1fr .6fr .9fr 1fr 26px;
   gap: 8px; align-items: center; padding: 9px 16px; border-bottom: 1px solid var(--line-soft); font-size: 12.5px;
 }
+.part-row .ei-receive-check { width: auto; margin: 0; cursor: pointer; }
+.row-drag-handle { cursor: grab; color: var(--ink-faint); font-size: 12px; letter-spacing: -2px; user-select: none; }
+.part-row.dragging { opacity: .4; }
 .part-row.head {
   font-size: 10.5px; text-transform: uppercase; letter-spacing: .04em; color: var(--ink-faint); font-weight: 700;
   background: var(--paper-raise);
@@ -325,6 +337,33 @@ textarea { min-height: 70px; resize: vertical; font-family: inherit; }
 .part-row input, .part-row select { padding: 5px 7px; font-size: 12.5px; }
 .part-row .rm-btn { background: none; border: none; color: var(--crit); cursor: pointer; font-size: 15px; padding: 2px 6px; }
 .part-row.source-partstech { background: var(--accent-tint); border-left: 3px solid var(--accent); }
+
+/* One extra column (Job) only appears once a ticket actually has jobs --
+   the plain flat list (the common case) keeps its original column count. */
+#vd-estimate-items.has-jobs .part-row {
+  grid-template-columns: 16px 20px .8fr 2.1fr 1fr .6fr .9fr .9fr 1fr 26px;
+}
+
+/* ---------- job groups ---------- */
+.job-group { border-bottom: 1px solid var(--line); }
+.job-group:last-child { border-bottom: none; }
+.job-group-head {
+  display: flex; align-items: center; gap: 8px; padding: 9px 16px;
+  background: var(--paper-raise); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line-soft);
+  font-size: 12px; font-weight: 700;
+}
+.job-group-title { flex: 1; }
+.job-group-head select.job-control { width: auto; padding: 4px 8px; font-size: 11.5px; font-weight: 600; }
+.job-icon-btn {
+  background: none; border: none; color: var(--ink-faint); cursor: pointer; font-size: 14px; padding: 2px 5px; line-height: 1;
+}
+.job-icon-btn:hover { color: var(--accent); }
+.job-icon-btn.job-delete:hover { color: var(--crit); }
+.job-mini-add {
+  background: none; border: none; color: var(--accent); cursor: pointer; font-size: 11px; font-weight: 700;
+  padding: 2px 6px; white-space: nowrap;
+}
+.job-mini-add:hover { text-decoration: underline; }
 
 /* ---------- cost summary ---------- */
 .cost-summary { padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; }
@@ -346,6 +385,75 @@ textarea { min-height: 70px; resize: vertical; font-family: inherit; }
 /* ---------- vendor chips ---------- */
 .vendor-chips { padding: 0 16px 16px; display: flex; flex-wrap: wrap; gap: 8px; }
 .vendor-chip { background: var(--paper-raise); border: 1px solid var(--line); border-radius: 999px; padding: 5px 12px; font-size: 12px; font-weight: 600; }
+
+/* ---------- tasks ---------- */
+.task-quick-add {
+  display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 14px; margin-bottom: 16px; box-shadow: var(--shadow);
+}
+.task-quick-add #task-title-input { flex: 1; min-width: 240px; }
+.task-quick-add select, .task-quick-add input[type="date"] { width: auto; }
+.task-urgent-toggle {
+  display: flex; flex-direction: row; align-items: center; gap: 6px;
+  font-size: 12.5px; font-weight: 600; color: var(--ink-soft); margin: 0; white-space: nowrap;
+}
+.task-urgent-toggle input { width: auto; }
+
+.task-list { display: flex; flex-direction: column; gap: 9px; }
+.task-row {
+  display: flex; align-items: flex-start; gap: 13px;
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 13px 15px; transition: border-color .12s, transform .1s, box-shadow .12s;
+}
+.task-row:hover { border-color: var(--accent); transform: translateY(-1px); box-shadow: var(--shadow); }
+.task-row.urgent { border-left: 3px solid var(--crit); }
+.task-row.done { opacity: .5; }
+.task-check {
+  width: 23px; height: 23px; border-radius: 50%; border: 2px solid var(--ink-faint);
+  background: none; cursor: pointer; flex-shrink: 0; margin-top: 1px; padding: 0;
+  display: flex; align-items: center; justify-content: center;
+  transition: background .12s, border-color .12s, transform .08s;
+}
+.task-check:hover { border-color: var(--good); transform: scale(1.08); }
+.task-check svg { width: 12px; height: 12px; stroke: #fff; fill: none; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; opacity: 0; }
+.task-row.done .task-check { background: var(--good); border-color: var(--good); }
+.task-row.done .task-check svg { opacity: 1; }
+.task-body { flex: 1; min-width: 0; }
+.task-title { font-size: 14px; font-weight: 600; }
+.task-row.done .task-title { text-decoration: line-through; color: var(--ink-faint); }
+.task-meta { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 6px; font-size: 11.5px; color: var(--ink-faint); }
+.task-assignee { display: inline-flex; align-items: center; gap: 5px; font-weight: 600; }
+.task-avatar {
+  width: 18px; height: 18px; border-radius: 50%; background: var(--accent); color: #fff;
+  display: flex; align-items: center; justify-content: center; font-size: 9.5px; font-weight: 700; flex-shrink: 0;
+}
+.task-due { padding: 2px 9px; border-radius: 999px; background: var(--line-soft); font-weight: 700; }
+.task-due.overdue { background: var(--crit-tint); color: var(--crit); }
+.task-due.soon { background: var(--warn-tint); color: var(--warn); }
+.task-urgent-badge {
+  padding: 2px 9px; border-radius: 999px; background: var(--crit-tint); color: var(--crit);
+  font-weight: 700; text-transform: uppercase; letter-spacing: .03em; font-size: 10px;
+}
+.task-notes { font-size: 12.5px; color: var(--ink-soft); margin-top: 7px; white-space: pre-wrap; line-height: 1.5; }
+.task-delete { background: none; border: none; color: var(--ink-faint); cursor: pointer; font-size: 17px; padding: 2px 6px; flex-shrink: 0; }
+.task-delete:hover { color: var(--crit); }
+
+/* ---------- suggestions ---------- */
+.suggestion-add { display: flex; flex-direction: column; gap: 10px; margin-bottom: 18px; }
+.suggestion-add button { align-self: flex-start; }
+.suggestion-list { display: flex; flex-direction: column; gap: 10px; }
+.suggestion-card {
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 14px 16px; transition: border-color .12s;
+}
+.suggestion-card:hover { border-color: var(--accent); }
+.suggestion-card.resolved { opacity: .5; }
+.suggestion-card.resolved .suggestion-text { text-decoration: line-through; }
+.suggestion-text { font-size: 13.5px; white-space: pre-wrap; line-height: 1.5; }
+.suggestion-meta { display: flex; align-items: center; gap: 12px; margin-top: 10px; font-size: 11.5px; color: var(--ink-faint); }
+.suggestion-meta .rm-btn { background: none; border: none; color: var(--ink-faint); cursor: pointer; font-size: 15px; }
+.suggestion-meta .rm-btn:hover { color: var(--crit); }
 
 /* ---------- dialogs ---------- */
 dialog { border: none; border-radius: 12px; padding: 0; box-shadow: var(--shadow); background: var(--surface); color: var(--ink); max-width: 560px; width: calc(100vw - 40px); }
@@ -404,4 +512,18 @@ dialog::backdrop { background: rgba(20, 18, 14, .45); }
   .print-table .num-col {
     text-align: right; font-family: "Cascadia Mono", Consolas, monospace; font-variant-numeric: tabular-nums;
   }
+  .print-subhead { font-family: Bahnschrift, "Segoe UI Semibold", sans-serif; font-size: 15px; font-weight: 700; color: #000; margin: 20px 0 8px; }
+  .print-notes { font-size: 13px; color: #000; line-height: 1.6; }
+  .print-concern {
+    border: 1.5px solid #000; border-radius: 4px; padding: 10px 14px; margin: 4px 0 18px;
+  }
+  .print-concern .label { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; color: #444; font-weight: 700; }
+  .print-concern .text { font-size: 15px; font-weight: 600; color: #000; margin-top: 3px; }
+  .print-meta-line { font-size: 12px; color: #333; margin-top: 2px; }
+  /* Ticket printouts get more breathing room than the dense multi-row
+     report tables -- a technician reading one printed RO on the shop
+     floor needs it legible at a glance, not packed tight. */
+  .print-table.ticket thead th { font-size: 11px; padding: 8px 10px; }
+  .print-table.ticket tbody td { font-size: 13px; padding: 9px 10px; }
+  .print-table.ticket tfoot td { font-size: 13px; }
 }

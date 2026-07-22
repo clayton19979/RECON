@@ -89,6 +89,37 @@ def test_we_owe_fulfilled_sets_timestamp(client):
     assert body["fulfilled_at"]
 
 
+def test_we_owe_patch_edits_vehicle_info(client):
+    """A we-owe vehicle is sometimes entered quickly with the VIN added
+    later -- same "edit vehicle info after the fact" capability recon
+    vehicles already have, mirrored onto the shared vehicles row."""
+    item = make_we_owe(client, description="Fix mirror")
+    assert item["vin"] == ""
+    res = client.patch(
+        f"/api/we-owe/{item['id']}",
+        json={"vin": "1hgcm82633a004352", "year": 2021, "make": "Honda", "model": "Accord", "trim": "EX", "mileage": 42000},
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert body["vin"] == "1HGCM82633A004352"
+    assert body["year"] == 2021
+    assert body["make"] == "Honda"
+    assert body["model"] == "Accord"
+    assert body["trim"] == "EX"
+    assert body["mileage"] == 42000
+
+    reloaded = client.get(f"/api/we-owe/{item['id']}").json()
+    assert reloaded["vin"] == "1HGCM82633A004352"
+
+
+def test_we_owe_detail_includes_customer_contact_fields(client):
+    item = make_we_owe(client, customer_name="Jordan Whitfield")
+    detail = client.get(f"/api/we-owe/{item['id']}").json()
+    assert detail["customer_name"] == "Jordan Whitfield"
+    assert "customer_phone" in detail
+    assert "customer_email" in detail
+
+
 def test_we_owe_patch_edits_description_and_category(client):
     item = make_we_owe(client, description="Fix mirror")
     res = client.patch(
@@ -183,23 +214,23 @@ def test_we_owe_patch_conflict_when_stale_version(client):
     assert res.status_code == 409
 
 
-def test_cancelled_order_does_not_count_toward_vehicle_cost(client):
-    """A cancelled RO is kept in the vehicle's order history for traceability
-    but its cost must never count toward the vehicle's actual/quoted totals --
-    that work was never actually done."""
+def test_voided_order_does_not_count_toward_vehicle_cost(client):
+    """A voided RO (started by mistake) is kept in the vehicle's order
+    history for traceability but its cost must never count toward the
+    vehicle's actual/quoted totals -- that work was never actually done."""
     vehicle = make_recon_vehicle(client, stock_number="R-4501")
     live_order = make_recon_order(client, vehicle["id"], concern="Real work")
     save_estimate(client, live_order["id"], [{"kind": "labor", "description": "Diag", "quantity": 1, "unit_price": 100, "unit_cost": 100}])
 
-    cancelled_order = make_recon_order(client, vehicle["id"], concern="Started by mistake")
-    save_estimate(client, cancelled_order["id"], [{"kind": "part", "description": "Wrong part", "part_number": "X-1", "quantity": 1, "unit_price": 300, "unit_cost": 300}])
-    client.patch(f"/api/orders/{cancelled_order['id']}/status", json={"status": "cancelled"})
+    mistake_order = make_recon_order(client, vehicle["id"], concern="Started by mistake")
+    save_estimate(client, mistake_order["id"], [{"kind": "part", "description": "Wrong part", "part_number": "X-1", "quantity": 1, "unit_price": 300, "unit_cost": 300}])
+    client.post(f"/api/orders/{mistake_order['id']}/void", json={"actor": "Clay"})
 
     detail = client.get(f"/api/recon/vehicles/{vehicle['id']}").json()
     assert detail["total_cost"] == 100
     assert detail["quoted_cost"] == 100
     assert len(detail["orders"]) == 2  # still visible in history
-    assert any(o["status"] == "cancelled" for o in detail["orders"])
+    assert any(o["voided"] for o in detail["orders"])
 
 
 def test_vehicles_board_merges_segments(client):

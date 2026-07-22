@@ -135,15 +135,15 @@ class TrayApp:
         if self.icon is not None:
             self.icon.icon = ICON_OK if ok else ICON_DOWN
             if network_mode_enabled() and ok:
-                self.icon.notify(f"Network access on. Other PCs go to: {local_url()}", "Discount Auto Ops")
+                self.icon.notify(f"Network access on. Other PCs go to: {local_url()}", "RECON")
             elif ok:
-                self.icon.notify("Network access off -- only this PC can reach it now.", "Discount Auto Ops")
+                self.icon.notify("Network access off -- only this PC can reach it now.", "RECON")
 
     def show_server_address(self, _icon: pystray.Icon, _item: pystray.MenuItem) -> None:
         if network_mode_enabled():
-            self.icon.notify(f"Other PCs go to: {local_url()}", "Discount Auto Ops")
+            self.icon.notify(f"Other PCs go to: {local_url()}", "RECON")
         else:
-            self.icon.notify("Network access is off -- enable it first to share with other PCs.", "Discount Auto Ops")
+            self.icon.notify("Network access is off -- enable it first to share with other PCs.", "RECON")
 
     def _run_backup(self, notify: bool) -> None:
         backups_dir = DATA_ROOT / "backups"
@@ -152,11 +152,11 @@ class TrayApp:
             removed = prune_backups(backups_dir, keep=BACKUP_RETENTION_COUNT)
             log.info("Backup written to %s (pruned %d old backups)", destination, len(removed))
             if notify and self.icon is not None:
-                self.icon.notify(f"Backup saved: {destination.name}", "Discount Auto Ops")
+                self.icon.notify(f"Backup saved: {destination.name}", "RECON")
         except Exception as exc:
             log.exception("Backup failed")
             if notify and self.icon is not None:
-                self.icon.notify(f"Backup failed: {exc}", "Discount Auto Ops")
+                self.icon.notify(f"Backup failed: {exc}", "RECON")
 
     def backup_now(self, _icon: pystray.Icon, _item: pystray.MenuItem) -> None:
         self._run_backup(notify=True)
@@ -184,7 +184,7 @@ class TrayApp:
         ok = self.start_server()
         threading.Thread(target=self._auto_backup_loop, daemon=True).start()
         menu = pystray.Menu(
-            pystray.MenuItem("Open Discount Auto Ops", self.open_browser, default=True),
+            pystray.MenuItem("Open RECON", self.open_browser, default=True),
             pystray.MenuItem(
                 "Allow other PCs on this network",
                 self.toggle_network_mode,
@@ -195,7 +195,7 @@ class TrayApp:
             pystray.MenuItem("Restart Server", self.restart),
             pystray.MenuItem("Exit", self.quit_app),
         )
-        self.icon = pystray.Icon("discount-auto-ops", ICON_OK if ok else ICON_DOWN, "Discount Auto Ops", menu)
+        self.icon = pystray.Icon("discount-auto-ops", ICON_OK if ok else ICON_DOWN, "RECON", menu)
         self.icon.run()
 
 

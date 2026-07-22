@@ -74,6 +74,16 @@ class WeOwePatch(BaseModel):
     category: str | None = None
     target_date: str | None = None
     lot_stock_number: str | None = None
+    # Core vehicle info -- a car is sometimes entered quickly with the VIN
+    # added later, same as recon vehicles below.
+    vin: str | None = None
+    year: int | None = Field(default=None, ge=1900, le=2100)
+    make: str | None = Field(default=None, min_length=1)
+    model: str | None = Field(default=None, min_length=1)
+    trim: str | None = None
+    engine: str | None = None
+    color: str | None = None
+    mileage: int | None = Field(default=None, ge=0)
     expected_version: int | None = None
 
 
@@ -92,7 +102,7 @@ def cost_rollup(db: sqlite3.Connection, column: str, ref_id: int) -> dict:
     they're logged, but parts only count once received. quoted_cost (full
     quantity regardless of receipt) is returned alongside for comparison."""
     rows = db.execute(
-        f"""SELECT o.id, o.number, o.status,
+        f"""SELECT o.id, o.number, o.status, o.voided,
                coalesce(sum(CASE WHEN ei.kind='part'  THEN ei.received_quantity*ei.unit_cost ELSE 0 END),0) parts_cost,
                coalesce(sum(CASE WHEN ei.kind='labor' THEN ei.quantity*ei.unit_cost ELSE 0 END),0) labor_cost,
                coalesce(sum(CASE WHEN ei.kind='fee'   THEN ei.quantity*ei.unit_cost ELSE 0 END),0) fee_cost,
@@ -110,14 +120,35 @@ def cost_rollup(db: sqlite3.Connection, column: str, ref_id: int) -> dict:
         value = dict(row)
         value["total_cost"] = round(value["parts_cost"] + value["labor_cost"] + value["fee_cost"], 2)
         orders.append(value)
-    # Cancelled ROs are kept in the order history (traceability) but never
-    # count toward the vehicle's cost -- that work was never actually done.
-    countable = [o for o in orders if o["status"] != "cancelled"]
+    # Voided ROs (started by mistake) are kept in the order history
+    # (traceability) but never count toward the vehicle's cost -- that work
+    # was never actually done.
+    countable = [o for o in orders if not o["voided"]]
     return {
         "orders": orders,
         "total_cost": round(sum(o["total_cost"] for o in countable), 2),
         "quoted_cost": round(sum(o["quoted_cost"] for o in countable), 2),
     }
+
+
+def _assert_not_archived(row: sqlite3.Row) -> None:
+    if row["archived_at"]:
+        raise HTTPException(409, "This vehicle is archived to History -- reopen it to make changes")
+
+
+def assert_vehicle_editable(db: sqlite3.Connection, order_row: sqlite3.Row) -> None:
+    """Once a vehicle's ticket is archived to History it's fully frozen --
+    reopening it is the only way back to an editable state. Retail orders
+    have neither a recon_vehicle_id nor a we_owe_id, so this is always a
+    no-op for them; archiving only applies to recon/we-owe vehicles."""
+    if order_row["recon_vehicle_id"]:
+        row = db.execute("SELECT archived_at FROM recon_vehicles WHERE id=?", (order_row["recon_vehicle_id"],)).fetchone()
+        if row:
+            _assert_not_archived(row)
+    if order_row["we_owe_id"]:
+        row = db.execute("SELECT archived_at FROM we_owe_items WHERE id=?", (order_row["we_owe_id"],)).fetchone()
+        if row:
+            _assert_not_archived(row)
 
 
 def technician_names(db: sqlite3.Connection, order_ids: list[int]) -> list[str]:
@@ -132,19 +163,23 @@ def technician_names(db: sqlite3.Connection, order_ids: list[int]) -> list[str]:
     return [row["name"] for row in rows]
 
 
-def vehicle_board_rows(db: sqlite3.Connection, start: str | None = None, end: str | None = None, segment: str | None = None) -> list[dict]:
+def vehicle_board_rows(db: sqlite3.Connection, start: str | None = None, end: str | None = None, segment: str | None = None, archived: bool = False) -> list[dict]:
     """The unified Vehicles list: recon + we-owe merged, one row per vehicle,
     with rolled-up cost and assigned technicians. This is the primary view
-    of the app and also backs the date-range vehicle-spend report."""
+    of the app and also backs the date-range vehicle-spend report.
+    `archived` selects the History view instead of the live job board --
+    reports/export always use the default (live board only)."""
     end_bound = f"{end}T23:59:59" if end else None
+    archived_flag = 1 if archived else 0
     result = []
     if segment in (None, "recon"):
         rows = db.execute(
             """SELECT rv.*, v.year, v.make, v.model, v.vin, v.mileage FROM recon_vehicles rv
                JOIN vehicles v ON v.id=rv.vehicle_id
                WHERE (:start IS NULL OR rv.created_at>=:start) AND (:end IS NULL OR rv.created_at<=:end)
+                 AND (rv.archived_at != '') = :archived
                ORDER BY rv.created_at DESC""",
-            {"start": start, "end": end_bound},
+            {"start": start, "end": end_bound, "archived": archived_flag},
         ).fetchall()
         for row in rows:
             rollup = cost_rollup(db, "recon_vehicle_id", row["id"])
@@ -152,9 +187,9 @@ def vehicle_board_rows(db: sqlite3.Connection, start: str | None = None, end: st
             # Recon status/sale tracking isn't used here -- the repair order's
             # own status is what the advisor actually maintains, so that's
             # what drives the displayed status and in-progress/finished bucket.
-            active_order = next((o for o in reversed(rollup["orders"]) if o["status"] not in ("closed", "cancelled")), None)
+            active_order = next((o for o in reversed(rollup["orders"]) if o["status"] != "complete"), None)
             latest_order = rollup["orders"][-1] if rollup["orders"] else None
-            has_closed_order = any(o["status"] == "closed" for o in rollup["orders"])
+            has_closed_order = any(o["status"] == "complete" for o in rollup["orders"])
             display_status = (active_order or latest_order)["status"] if (active_order or latest_order) else "acquired"
             result.append({
                 "segment": "recon",
@@ -177,8 +212,9 @@ def vehicle_board_rows(db: sqlite3.Connection, start: str | None = None, end: st
             """SELECT w.*, c.name customer_name, v.year, v.make, v.model, v.vin FROM we_owe_items w
                JOIN customers c ON c.id=w.customer_id JOIN vehicles v ON v.id=w.vehicle_id
                WHERE (:start IS NULL OR w.created_at>=:start) AND (:end IS NULL OR w.created_at<=:end)
+                 AND (w.archived_at != '') = :archived
                ORDER BY w.created_at DESC""",
-            {"start": start, "end": end_bound},
+            {"start": start, "end": end_bound, "archived": archived_flag},
         ).fetchall()
         for row in rows:
             rollup = cost_rollup(db, "we_owe_id", row["id"])
@@ -236,7 +272,8 @@ def build_recon_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
 
     def we_owe_row(db: sqlite3.Connection, we_owe_id: int) -> sqlite3.Row:
         row = db.execute(
-            """SELECT w.*, c.name customer_name, v.year, v.make, v.model, v.vin
+            """SELECT w.*, c.name customer_name, c.phone customer_phone, c.email customer_email,
+                      v.year, v.make, v.model, v.vin, v.mileage, v.trim, v.engine, v.color
                FROM we_owe_items w JOIN customers c ON c.id=w.customer_id JOIN vehicles v ON v.id=w.vehicle_id
                WHERE w.id=?""",
             (we_owe_id,),
@@ -260,9 +297,9 @@ def build_recon_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
         return detail
 
     @router.get("/vehicles-board")
-    def vehicles_board(segment: Literal["recon", "we_owe"] | None = None):
+    def vehicles_board(segment: Literal["recon", "we_owe"] | None = None, archived: bool = False):
         with connect() as db:
-            return vehicle_board_rows(db, segment=segment)
+            return vehicle_board_rows(db, segment=segment, archived=archived)
 
     # --- Recon vehicles ---
 
@@ -311,10 +348,25 @@ def build_recon_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
         with connect() as db:
             return recon_detail(db, recon_id)
 
+    @router.post("/recon/vehicles/{recon_id}/archive")
+    def archive_recon_vehicle(recon_id: int):
+        with connect() as db:
+            recon_row(db, recon_id)
+            db.execute("UPDATE recon_vehicles SET archived_at=?,edit_version=edit_version+1 WHERE id=?", (now_fn(), recon_id))
+            return recon_detail(db, recon_id)
+
+    @router.post("/recon/vehicles/{recon_id}/reopen")
+    def reopen_recon_vehicle(recon_id: int):
+        with connect() as db:
+            recon_row(db, recon_id)
+            db.execute("UPDATE recon_vehicles SET archived_at='',edit_version=edit_version+1 WHERE id=?", (recon_id,))
+            return recon_detail(db, recon_id)
+
     @router.patch("/recon/vehicles/{recon_id}")
     def update_recon_vehicle(recon_id: int, item: RecondVehiclePatch):
         with connect() as db:
             row = recon_row(db, recon_id)
+            _assert_not_archived(row)
             if item.expected_version is not None and item.expected_version != row["edit_version"]:
                 raise HTTPException(409, "Someone else changed this vehicle since you loaded it -- reload to see their update")
             fields: list[str] = []
@@ -412,10 +464,25 @@ def build_recon_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
         with connect() as db:
             return we_owe_detail(db, we_owe_id)
 
+    @router.post("/we-owe/{we_owe_id}/archive")
+    def archive_we_owe_item(we_owe_id: int):
+        with connect() as db:
+            we_owe_row(db, we_owe_id)
+            db.execute("UPDATE we_owe_items SET archived_at=?,edit_version=edit_version+1 WHERE id=?", (now_fn(), we_owe_id))
+            return we_owe_detail(db, we_owe_id)
+
+    @router.post("/we-owe/{we_owe_id}/reopen")
+    def reopen_we_owe_item(we_owe_id: int):
+        with connect() as db:
+            we_owe_row(db, we_owe_id)
+            db.execute("UPDATE we_owe_items SET archived_at='',edit_version=edit_version+1 WHERE id=?", (we_owe_id,))
+            return we_owe_detail(db, we_owe_id)
+
     @router.patch("/we-owe/{we_owe_id}")
     def update_we_owe_item(we_owe_id: int, item: WeOwePatch):
         with connect() as db:
             row = we_owe_row(db, we_owe_id)
+            _assert_not_archived(row)
             if item.expected_version is not None and item.expected_version != row["edit_version"]:
                 raise HTTPException(409, "Someone else changed this item since you loaded it -- reload to see their update")
             fields: list[str] = []
@@ -437,7 +504,29 @@ def build_recon_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
             if item.lot_stock_number is not None:
                 fields.append("lot_stock_number=?")
                 params.append(item.lot_stock_number.strip().upper())
-            if fields:
+
+            # Core vehicle info (VIN, make/model, etc.) lives on the shared
+            # vehicles table, not we_owe_items -- same pattern as recon.
+            vehicle_fields: list[str] = []
+            vehicle_params: list[object] = []
+            for name, value in (
+                ("vin", item.vin.strip().upper() if item.vin is not None else None),
+                ("year", item.year),
+                ("make", item.make.strip() if item.make is not None else None),
+                ("model", item.model.strip() if item.model is not None else None),
+                ("trim", item.trim.strip() if item.trim is not None else None),
+                ("engine", item.engine.strip() if item.engine is not None else None),
+                ("color", item.color.strip() if item.color is not None else None),
+                ("mileage", item.mileage),
+            ):
+                if value is not None:
+                    vehicle_fields.append(f"{name}=?")
+                    vehicle_params.append(value)
+            if vehicle_fields:
+                vehicle_params.append(row["vehicle_id"])
+                db.execute(f"UPDATE vehicles SET {','.join(vehicle_fields)} WHERE id=?", vehicle_params)
+
+            if fields or vehicle_fields:
                 fields.append("updated_at=?")
                 params.append(now_fn())
                 fields.append("edit_version=edit_version+1")
@@ -457,7 +546,7 @@ def build_recon_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
     @router.post("/we-owe/{we_owe_id}/payments", status_code=201)
     def add_we_owe_payment(we_owe_id: int, item: WeOwePaymentIn):
         with connect() as db:
-            we_owe_row(db, we_owe_id)
+            _assert_not_archived(we_owe_row(db, we_owe_id))
             db.execute(
                 "INSERT INTO we_owe_payments(we_owe_id,amount,method,note,actor,created_at) VALUES(?,?,?,?,?,?)",
                 (we_owe_id, item.amount, item.method, item.note.strip(), item.actor.strip(), now_fn()),
@@ -467,7 +556,7 @@ def build_recon_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
     @router.delete("/we-owe/{we_owe_id}/payments/{payment_id}", status_code=204)
     def delete_we_owe_payment(we_owe_id: int, payment_id: int):
         with connect() as db:
-            we_owe_row(db, we_owe_id)
+            _assert_not_archived(we_owe_row(db, we_owe_id))
             if not db.execute("SELECT 1 FROM we_owe_payments WHERE id=? AND we_owe_id=?", (payment_id, we_owe_id)).fetchone():
                 raise HTTPException(404, "Payment not found")
             db.execute("DELETE FROM we_owe_payments WHERE id=?", (payment_id,))

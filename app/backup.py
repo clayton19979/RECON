@@ -55,7 +55,7 @@ def most_recent_backup_age_hours(destination_dir: Path) -> float | None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Create a verified Discount Auto Ops SQLite backup")
+    parser = argparse.ArgumentParser(description="Create a verified RECON SQLite backup")
     parser.add_argument("source", type=Path)
     parser.add_argument("destination", type=Path)
     args = parser.parse_args()

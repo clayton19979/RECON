@@ -92,6 +92,11 @@ const state = {
   orders: [],
   currentUser: localStorage.getItem("dao-current-user") || "",
   detail: { segment: null, id: null, item: null, order: null },
+  apFilter: { start: "", end: "" },
+  tasks: [],
+  taskFilter: "",
+  showCompletedTasks: false,
+  suggestions: [],
 };
 
 // Who's actually using the app right now -- every save used to hardcode
@@ -113,20 +118,13 @@ function initCurrentUser() {
   });
 }
 
-const TRANSITIONS = {
-  draft: ["inspection", "cancelled"],
-  inspection: ["awaiting_approval", "cancelled"],
-  awaiting_approval: ["cancelled"],
-  approved: ["in_progress", "cancelled"],
-  in_progress: ["completed"],
-  completed: ["in_progress", "closed"],
-  closed: [],
-  cancelled: ["draft"],
-};
-const STATUS_FLOW = ["draft", "inspection", "awaiting_approval", "approved", "in_progress", "completed", "closed"];
+const STATUS_OPTIONS = ["estimate", "pending_approval", "in_progress", "complete"];
 const STATUS_LABEL = {
-  draft: "Draft", inspection: "Inspection", awaiting_approval: "Awaiting Approval", approved: "Approved",
-  in_progress: "In Progress", completed: "Completed", closed: "Closed", cancelled: "Cancelled",
+  estimate: "Estimate", pending_approval: "Pending Approval", in_progress: "In Progress", complete: "Complete",
+};
+const STATUS_PILL_CLASS = {
+  estimate: "pill-status-estimate", pending_approval: "pill-status-pending",
+  in_progress: "pill-status-progress", complete: "pill-status-complete",
 };
 
 /* ---------- nav / shell ---------- */
@@ -137,7 +135,8 @@ function showView(name) {
   if (name === "reports") loadReportsView();
   if (name === "accounting") loadAccountingView();
   if (name === "staff") loadStaffView();
-  if (name === "integrations") loadIntegrationsView();
+  if (name === "tasks") loadTasksView();
+  if (name === "suggestions") loadSuggestionsView();
 }
 
 const THEMES = ["midnight", "carbon", "slate", "paper"];
@@ -172,7 +171,7 @@ function initTheme() {
    ================================================================== */
 async function loadVehiclesView() {
   try {
-    state.vehicles = await get("/api/vehicles-board");
+    state.vehicles = await get(state.filter === "history" ? "/api/vehicles-board?archived=true" : "/api/vehicles-board");
   } catch (err) {
     toast(`Could not load vehicles: ${err.message}`, true);
     return;
@@ -190,6 +189,7 @@ function renderStats() {
   $("#stat-we-owe-open").textContent = weOwe.length;
   $("#stat-we-owe-actual").textContent = `${money(weOwe.reduce((s, v) => s + v.actual_cost, 0))} in it`;
   $("#stat-actual-total").textContent = money(open.reduce((s, v) => s + v.actual_cost, 0));
+  $("#stat-quoted-total").textContent = money(open.reduce((s, v) => s + v.quoted_cost, 0));
 }
 
 // Age severity: how long a car has actually been sitting is the natural
@@ -201,9 +201,17 @@ function ageClass(days) {
   return "age-ok";
 }
 
+// Recon rows carry the linked repair order's status (one of the 4 ticket
+// statuses, color-coded); we-owe rows carry their own open/fulfilled/waived
+// status, which isn't part of that vocabulary, so it keeps the simpler
+// finished/in-progress coloring it already had.
+function vehicleStatusPillClass(v) {
+  return v.segment === "recon" ? (STATUS_PILL_CLASS[v.status] || "pill-progress") : (v.status_bucket === "finished" ? "pill-done" : "pill-progress");
+}
+
 function renderVehiclesTable() {
   let rows = state.vehicles;
-  if (state.filter) rows = rows.filter((v) => v.segment === state.filter);
+  if (state.filter && state.filter !== "history") rows = rows.filter((v) => v.segment === state.filter);
   if (state.search) {
     const q = state.search.toLowerCase();
     rows = rows.filter((v) =>
@@ -230,7 +238,7 @@ function renderVehiclesTable() {
         <div style="font-size:11.5px;color:var(--ink-faint)">${v.segment === "we_owe" ? esc(v.customer_name || "") : esc(v.vin || "")}</div>
       </td>
       <td><span class="pill ${v.segment === "recon" ? "pill-recon" : "pill-weowe"}">${v.segment === "recon" ? "Recon" : "We-Owe"}</span></td>
-      <td><span class="pill ${v.status_bucket === "finished" ? "pill-done" : "pill-progress"}">${esc(STATUS_LABEL[v.status] || v.status)}</span></td>
+      <td><span class="pill ${vehicleStatusPillClass(v)}">${esc(STATUS_LABEL[v.status] || v.status)}</span></td>
       <td>${v.technicians.length ? `<span class="tech"><span class="tech-dot"></span>${esc(v.technicians.join(", "))}</span>` : `<span style="color:var(--ink-faint)">—</span>`}</td>
       <td class="num-col ${ageClass(v.age_days)}">${v.age_days}d</td>
       <td class="num-col">${money(v.actual_cost)}</td>
@@ -246,8 +254,10 @@ function wireVehiclesView() {
     chip.addEventListener("click", () => {
       $$(".filters .chip").forEach((c) => c.classList.remove("active"));
       chip.classList.add("active");
+      const wasHistory = state.filter === "history";
       state.filter = chip.dataset.filter;
-      renderVehiclesTable();
+      if (wasHistory !== (state.filter === "history")) loadVehiclesView();
+      else renderVehiclesTable();
     });
   });
   $("#global-search").addEventListener("input", (e) => {
@@ -292,15 +302,22 @@ async function loadVehicleDetail() {
   }
   state.detail.item = item;
   state.detail.ordersHistory = orders;
-  const active = orders.find((o) => !["closed", "cancelled"].includes(o.status)) || null;
+  // Prefer a still-open order, but fall back to the most recent one (orders
+  // is sorted newest-first) rather than pretending there's no order at all
+  // once it reaches Complete -- otherwise a finished/archived ticket could
+  // never be looked back at, which defeats the point of History.
+  const active = orders.find((o) => o.status !== "complete") || orders[0] || null;
   enterVehicleDetailView();
   renderDetailHead();
   // Deleting a vehicle with real order history would silently orphan its
   // cost data -- only offer it while there's nothing to lose yet.
   $("#vd-delete").style.display = orders.length === 0 ? "" : "none";
   if (!active) {
+    $("#vd-void-order").style.display = "none";
+    $("#vd-print-ticket").style.display = "none";
     $("#vd-no-order").style.display = "";
     $("#vd-order-content").style.display = "none";
+    applyArchivedLockUI(!!item.archived_at);
     return;
   }
   $("#vd-no-order").style.display = "none";
@@ -315,6 +332,7 @@ async function loadVehicleDetail() {
   state.detail.order = order;
   if (!state.staff.length) state.staff = await get("/api/staff");
   renderOrderPanel();
+  applyArchivedLockUI(!!item.archived_at);
 }
 
 function renderDetailHead() {
@@ -327,57 +345,75 @@ function renderDetailHead() {
   } else {
     updatedEl.textContent = "";
   }
+  // Vehicle Info (VIN/year/make/model/etc.) is shared by both segments --
+  // a car is sometimes entered quickly with the VIN added later, whether
+  // it's a recon vehicle or a we-owe promise.
+  $("#vd-recon-vin").value = item.vin || "";
+  $("#vd-recon-mileage").value = item.mileage || 0;
+  $("#vd-recon-year").value = item.year;
+  $("#vd-recon-make").value = item.make;
+  $("#vd-recon-model").value = item.model;
+  $("#vd-recon-trim").value = item.trim || "";
+  $("#vd-recon-color").value = item.color || "";
+  $("#vd-recon-purchase-price-row").style.display = segment === "recon" ? "" : "none";
   if (segment === "recon") {
     $("#vd-title").textContent = `${item.stock_number} — ${item.year} ${item.make} ${item.model}`;
     $("#vd-sub").textContent = [item.vin, item.mileage ? `${item.mileage.toLocaleString()} mi` : "", item.trim].filter(Boolean).join(" · ");
     $("#vd-we-owe-status-card").style.display = "none";
     $("#vd-deposits-card").style.display = "none";
-    $("#vd-recon-info-card").style.display = "";
-    $("#vd-recon-vin").value = item.vin || "";
-    $("#vd-recon-mileage").value = item.mileage || 0;
-    $("#vd-recon-year").value = item.year;
-    $("#vd-recon-make").value = item.make;
-    $("#vd-recon-model").value = item.model;
-    $("#vd-recon-trim").value = item.trim || "";
-    $("#vd-recon-color").value = item.color || "";
     $("#vd-recon-purchase-price").value = item.purchase_price || 0;
   } else {
     $("#vd-title").textContent = `${item.year} ${item.make} ${item.model}`;
     $("#vd-sub").textContent = [item.customer_name, item.description].filter(Boolean).join(" · ");
-    $("#vd-recon-info-card").style.display = "none";
     $("#vd-we-owe-status-card").style.display = "";
     $("#vd-we-owe-status").value = item.status;
     $("#vd-we-owe-description").value = item.description || "";
     $("#vd-we-owe-category").value = item.category || "";
     $("#vd-we-owe-target").value = item.target_date || "";
     $("#vd-deposits-card").style.display = "";
-    renderDeposits();
+    renderDepositsSummary();
   }
   renderCostSummary();
-  renderTraceability();
+  renderVehicleInfoSummary();
 }
 
 function renderCostSummary() {
   const { item } = state.detail;
   const box = $("#vd-cost-summary");
-  let lines = `<div class="cost-line"><span>What we have in it</span><span class="num">${money(item.total_cost)}</span></div>`;
-  if (state.detail.segment === "recon") {
-    lines += `<div class="cost-line"><span>Purchase price</span><span class="num">${money(item.purchase_price)}</span></div>`;
-    lines += `<div class="cost-line total"><span>Total invested</span><span class="num">${money(item.purchase_price + item.total_cost)}</span></div>`;
-  } else if (item.customer_paid) {
+  let lines = `<div class="cost-line"><span>Cost</span><span class="num">${money(item.total_cost)}</span></div>`;
+  if (state.detail.segment !== "recon" && item.customer_paid) {
     lines += `<div class="cost-line"><span>Customer paid</span><span class="num">${money(item.customer_paid)}</span></div>`;
     lines += `<div class="cost-line total"><span>Net to shop</span><span class="num">${money(item.net_cost)}</span></div>`;
   }
   box.innerHTML = lines;
 }
 
-function renderDeposits() {
+// Compact read-only summary replacing the old always-open inline edit form --
+// the full form still exists verbatim, just relocated into #vehicle-edit-dialog.
+function renderVehicleInfoSummary() {
+  const { segment, item } = state.detail;
+  const rows = [
+    ["VIN", esc(item.vin || "—")],
+    ["Mileage", item.mileage ? item.mileage.toLocaleString() : "—"],
+    ["Year/Make/Model", esc([item.year, item.make, item.model].filter(Boolean).join(" "))],
+    ["Trim", esc(item.trim || "—")],
+    ["Color", esc(item.color || "—")],
+  ];
+  if (segment === "recon") rows.push(["Purchase price", money(item.purchase_price || 0)]);
+  $("#vd-vehicle-info-summary").innerHTML = rows.map(([label, value]) => `<div class="kv-row"><span class="kv-label">${label}</span><span class="kv-value">${value}</span></div>`).join("");
+}
+
+function renderDepositsSummary() {
   const { item } = state.detail;
-  const payments = item.payments || [];
   $("#vd-deposits-summary").innerHTML = `
     <div class="cost-line"><span>Customer paid</span><span class="num">${money(item.customer_paid || 0)}</span></div>
     <div class="cost-line total"><span>Net to shop</span><span class="num">${money(item.net_cost ?? item.total_cost)}</span></div>
   `;
+}
+
+function renderPaymentDialogList() {
+  const { item } = state.detail;
+  const payments = item.payments || [];
   $("#vd-deposits-list").innerHTML = payments.length ? payments.map((p) => `
     <div class="mini-item">
       <div>${money(p.amount)} · ${esc(p.method)} ${p.note ? `— ${esc(p.note)}` : ""}
@@ -385,7 +421,7 @@ function renderDeposits() {
       </div>
       <div class="mi-meta">${esc(p.actor || "Unspecified")} · ${fmtDate(p.created_at)}</div>
     </div>
-  `).join("") : `<div style="color:var(--ink-faint);font-size:12px;padding:0 16px 14px">No deposits recorded yet.</div>`;
+  `).join("") : `<div style="color:var(--ink-faint);font-size:12px;padding:8px 0">No deposits recorded yet.</div>`;
   $$(".deposit-rm", $("#vd-deposits-list")).forEach((btn) => {
     btn.addEventListener("click", async () => {
       if (!confirm("Remove this deposit?")) return;
@@ -393,6 +429,7 @@ function renderDeposits() {
         await api(`/api/we-owe/${item.id}/payments/${btn.dataset.id}`, { method: "DELETE" });
         toast("Deposit removed");
         await loadVehicleDetail();
+        renderPaymentDialogList();
       } catch (err) {
         toast(err.message, true);
       }
@@ -400,55 +437,76 @@ function renderDeposits() {
   });
 }
 
-async function renderTraceability() {
-  const { segment, item, ordersHistory } = state.detail;
-  let apInvoices = [];
-  try { apInvoices = await get("/api/ap/invoices"); } catch {}
-  const orderIds = new Set(ordersHistory.map((o) => o.id));
-  const linked = apInvoices.filter((a) => orderIds.has(a.order_id));
-  const box = $("#vd-traceability");
-  const rows = [];
-  if (segment === "recon") rows.push(["Stock #", esc(item.stock_number)]);
-  rows.push(["Repair Orders", ordersHistory.length ? ordersHistory.map((o) => `${esc(o.number)} <span style="color:var(--ink-faint)">(${STATUS_LABEL[o.status] || o.status})</span>`).join("<br>") : "—"]);
-  rows.push(["Vendor Invoices (PO#)", linked.length ? linked.map((a) => `${esc(a.invoice_number)} → ${esc(a.ro_number)} <span style="color:var(--ink-faint)">${esc(a.vendor_name)}, ${money(a.total)}</span>`).join("<br>") : "—"]);
-  box.innerHTML = rows.map(([label, value]) => `<div class="kv-row"><span class="kv-label">${label}</span><span class="kv-value" style="text-align:right">${value}</span></div>`).join("");
+// The backend guard (assert_vehicle_editable) is the real enforcement --
+// this just keeps the UI from offering an action that would 409 anyway
+// once a vehicle is archived to History.
+function applyArchivedLockUI(archived) {
+  $("#vd-archived-banner").style.display = archived ? "" : "none";
+  $("#vd-archive-vehicle").style.display = archived ? "none" : "";
+  $("#vd-reopen-vehicle").style.display = archived ? "" : "none";
+
+  // These are static controls reused across renders (unlike the estimate
+  // rows, which are rebuilt fresh every time) -- reopening must explicitly
+  // re-enable them, not just skip re-disabling, or they'd stay disabled
+  // forever once archived once.
+  const disableIds = [
+    "vd-status-select", "vd-status-save",
+    "vd-add-job", "vd-add-part", "vd-add-labor", "vd-add-partstech", "vd-order-parts",
+    "vd-add-note", "vd-note-text",
+    "vd-save-assignment", "vd-technician", "vd-advisor", "vd-odometer", "vd-promised",
+    "vd-edit-vehicle", "vd-recon-info-save", "vd-decode-vin", "vd-recon-vin", "vd-recon-mileage", "vd-recon-year",
+    "vd-recon-make", "vd-recon-model", "vd-recon-trim", "vd-recon-color", "vd-recon-purchase-price",
+    "vd-edit-customer", "vd-we-owe-save", "vd-we-owe-description", "vd-we-owe-category", "vd-we-owe-target", "vd-we-owe-status",
+    "vd-take-payment", "vd-deposit-add", "vd-deposit-amount", "vd-deposit-method", "vd-deposit-note",
+  ];
+  disableIds.forEach((id) => { const el = $(`#${id}`); if (el) el.disabled = archived; });
+  $$(".job-control", $("#vd-estimate-items")).forEach((el) => { el.disabled = archived; });
+  if (archived) {
+    $("#vd-void-order").style.display = "none";
+    $("#vd-receive-parts").disabled = true;
+  } else {
+    updateReceiveButtonState(); // depends on how many checkboxes are checked, not a flat enable
+  }
+  $$(".part-row:not(.head) input, .part-row:not(.head) select, .part-row:not(.head) .rm-btn", $("#vd-estimate-items")).forEach((el) => { el.disabled = archived; });
+  $$(".part-row:not(.head)", $("#vd-estimate-items")).forEach((row) => row.setAttribute("draggable", String(!archived)));
 }
 
 function renderOrderPanel() {
   const order = state.detail.order;
   $("#vd-ro-number").textContent = `Repair Order ${order.number}`;
-  renderStatusFlow(order);
+  renderStatusCard(order);
   renderEstimate(order);
   renderNotes(order);
   renderActivity(order);
   renderAssignment(order);
+  $("#vd-print-ticket").style.display = "";
+  $("#vd-void-order").style.display = order.voided ? "none" : "";
 }
 
-function renderStatusFlow(order) {
-  const status = order.status;
-  const flow = $("#vd-status-flow");
-  if (status === "cancelled") {
-    flow.innerHTML = `<div class="status-step" style="background:var(--crit-tint);color:var(--crit)">Cancelled</div>`;
-  } else {
-    const idx = STATUS_FLOW.indexOf(status);
-    flow.innerHTML = STATUS_FLOW.map((s, i) => {
-      const cls = i < idx ? "done" : i === idx ? "current" : "";
-      const connector = i > 0 ? `<div class="status-connector ${i <= idx ? "done" : ""}"></div>` : "";
-      return `${connector}<div class="status-step ${cls}">${STATUS_LABEL[s]}</div>`;
-    }).join("");
-  }
+function renderStatusCard(order) {
+  const pill = $("#vd-status-pill");
+  pill.className = `pill ${STATUS_PILL_CLASS[order.status] || ""}`;
+  pill.textContent = order.voided ? "Voided" : (STATUS_LABEL[order.status] || order.status);
   const select = $("#vd-status-select");
-  const options = TRANSITIONS[status] || [];
-  select.innerHTML = options.map((s) => `<option value="${s}">${STATUS_LABEL[s]}</option>`).join("");
-  $("#vd-advance-status").disabled = options.length === 0;
-  select.disabled = options.length === 0;
+  select.innerHTML = STATUS_OPTIONS.map((s) => `<option value="${s}" ${s === order.status ? "selected" : ""}>${STATUS_LABEL[s]}</option>`).join("");
 }
 
 function renderEstimate(order) {
   const items = order.estimate ? order.estimate.items : [];
+  const jobs = order.estimate?.jobs ?? [];
   const box = $("#vd-estimate-items");
-  const rowHtml = (item, i) => `
-    <div class="part-row ${item.source === "partstech" ? "source-partstech" : ""}" data-index="${i}" data-id="${item.id || ""}" data-source="${item.source || "manual"}" ${item.source === "partstech" ? `title="Added from a PartsTech lookup"` : ""}>
+  box.classList.toggle("has-jobs", jobs.length > 0);
+
+  const jobOptionsHtml = (selectedId) => `<option value="" ${!selectedId ? "selected" : ""}>General</option>` +
+    jobs.map((j) => `<option value="${j.id}" ${selectedId === j.id ? "selected" : ""}>${esc(j.title)}</option>`).join("");
+
+  const rowHtml = (item, i) => {
+    const remaining = (item.quantity ?? 0) - (item.received_quantity ?? 0);
+    const receivable = item.kind === "part" && item.id && remaining > 0.001;
+    return `
+    <div class="part-row ${item.source === "partstech" ? "source-partstech" : ""}" draggable="true" data-index="${i}" data-id="${item.id || ""}" data-source="${item.source || "manual"}" data-received-quantity="${item.received_quantity ?? 0}" ${item.source === "partstech" ? `title="Added from a PartsTech lookup"` : ""}>
+      <span class="row-drag-handle" title="Drag to reorder">⋮⋮</span>
+      ${receivable ? `<input type="checkbox" class="ei-receive-check" data-id="${item.id}">` : `<span></span>`}
       <select class="ei-kind">
         <option value="part" ${item.kind === "part" ? "selected" : ""}>Part</option>
         <option value="labor" ${item.kind === "labor" ? "selected" : ""}>Labor</option>
@@ -458,24 +516,56 @@ function renderEstimate(order) {
       <input class="ei-part" value="${esc(item.part_number || "")}" placeholder="Part #">
       <input class="ei-qty" type="number" min="0.01" step="0.01" value="${item.quantity ?? 1}">
       <input class="ei-cost" type="number" min="0" step="0.01" value="${item.unit_cost ?? 0}">
+      ${jobs.length ? `<select class="ei-job">${jobOptionsHtml(item.job_id ?? null)}</select>` : ""}
       ${item.id
-        ? `<select class="ei-status status-pill sp-${item.status || "quoted"}" ${item.received_invoice_number ? `title="Received via invoice ${esc(item.received_invoice_number)}"` : ""}>
-             <option value="quoted" ${item.status === "quoted" ? "selected" : ""}>Quoted</option>
-             <option value="ordered" ${item.status === "ordered" ? "selected" : ""}>Ordered</option>
-             <option value="received" ${item.status === "received" ? "selected" : ""}>${item.status === "received" && item.received_invoice_number ? `Received (${esc(item.received_invoice_number)})` : "Received"}</option>
-           </select>`
+        ? (item.status === "received"
+            ? `<span class="status-pill sp-received" ${item.received_invoice_number ? `title="Received via invoice ${esc(item.received_invoice_number)}"` : ""}>${item.received_invoice_number ? `Received (${esc(item.received_invoice_number)})` : "Received"}</span>`
+            : `<select class="ei-status status-pill sp-${item.status || "quoted"}">
+                 <option value="quoted" ${item.status === "quoted" ? "selected" : ""}>Quoted</option>
+                 <option value="ordered" ${item.status === "ordered" ? "selected" : ""}>Ordered</option>
+               </select>`)
         : `<span class="status-pill sp-quoted">Saving…</span>`}
       <button type="button" class="rm-btn" title="Remove line">×</button>
     </div>
   `;
-  box.innerHTML =
-    `<div class="part-row head"><span>Kind</span><span>Description</span><span>Part #</span><span>Qty</span><span>Cost</span><span>Status</span><span></span></div>` +
-    (items.length ? items.map(rowHtml).join("") : `<div class="ei-empty" style="padding:16px;color:var(--ink-faint);font-size:12.5px">No lines yet — add a part or labor entry.</div>`);
+  };
+
+  const headRow = `<div class="part-row head"><span></span><span></span><span>Kind</span><span>Description</span><span>Part #</span><span>Qty</span><span>Cost</span>${jobs.length ? "<span>Job</span>" : ""}<span>Status</span><span></span></div>`;
+
+  if (!jobs.length) {
+    // Unchanged flat list -- grouping only appears once a job exists, so the
+    // common/simple ticket looks exactly as clean as it always has.
+    box.innerHTML = headRow + (items.length ? items.map(rowHtml).join("") : `<div class="ei-empty" style="padding:16px;color:var(--ink-faint);font-size:12.5px">No lines yet — add a part or labor entry, or ＋ Add Job to organize this ticket.</div>`);
+  } else {
+    const buckets = [...jobs, { id: null, title: "General" }];
+    box.innerHTML = headRow + buckets.map((bucket) => {
+      const bucketItems = items.filter((i) => (i.job_id ?? null) === bucket.id);
+      const isGeneral = bucket.id === null;
+      return `
+        <div class="job-group" data-job-id="${bucket.id ?? ""}">
+          <div class="job-group-head">
+            <span class="job-group-title">${esc(bucket.title)}</span>
+            ${isGeneral ? "" : `
+              <select class="ei-job-tech job-control" data-job-id="${bucket.id}">
+                <option value="">Use ticket default</option>
+                ${state.staff.filter((s) => s.role === "technician").map((t) => `<option value="${t.id}" ${bucket.technician_id === t.id ? "selected" : ""}>${esc(t.name)}</option>`).join("")}
+              </select>
+              <button type="button" class="job-control job-icon-btn job-edit" data-job-id="${bucket.id}" title="Rename job">✎</button>
+              <button type="button" class="job-control job-icon-btn job-delete" data-job-id="${bucket.id}" title="Delete job">×</button>
+            `}
+            <button type="button" class="job-control job-mini-add" data-job-id="${bucket.id ?? ""}" data-kind="part">＋ Part</button>
+            <button type="button" class="job-control job-mini-add" data-job-id="${bucket.id ?? ""}" data-kind="labor">＋ Labor</button>
+          </div>
+          ${bucketItems.length ? bucketItems.map(rowHtml).join("") : `<div class="ei-empty" style="padding:10px 16px;color:var(--ink-faint);font-size:12px">No lines in this job yet.</div>`}
+        </div>
+      `;
+    }).join("");
+  }
 
   // Every field auto-saves on change -- there is no "forgot to click Save and
   // it silently vanished" window, because nothing is ever left DOM-only.
   $$(".part-row:not(.head)", box).forEach((row) => {
-    row.querySelectorAll(".ei-kind, .ei-desc, .ei-part, .ei-qty, .ei-cost").forEach((field) => {
+    row.querySelectorAll(".ei-kind, .ei-desc, .ei-part, .ei-qty, .ei-cost, .ei-job").forEach((field) => {
       field.addEventListener("change", () => persistEstimate());
     });
   });
@@ -494,21 +584,9 @@ function renderEstimate(order) {
       const row = sel.closest(".part-row");
       const itemId = row.dataset.id;
       if (!itemId) return;
-      let invoiceNumber = "";
-      if (sel.value === "received") {
-        invoiceNumber = (prompt("Invoice number for this part (for tracking):") || "").trim();
-        if (!invoiceNumber) {
-          sel.value = previousValue;
-          toast("Marking a part received requires an invoice number", true);
-          return;
-        }
-      }
       try {
-        await patch(`/api/orders/${order.id}/estimate/items/${itemId}/status`, { status: sel.value, invoice_number: invoiceNumber });
+        await patch(`/api/orders/${order.id}/estimate/items/${itemId}/status`, { status: sel.value });
         toast("Status updated");
-        // Received/un-received status changes what's actually been spent --
-        // reload so the cost numbers (Parts & Labor tally, sidebar Cost
-        // Summary, vehicle list) reflect it, not just the status pill.
         await loadVehicleDetail();
       } catch (err) {
         sel.value = previousValue;
@@ -516,14 +594,58 @@ function renderEstimate(order) {
       }
     });
   });
+  $$(".ei-receive-check", box).forEach((cb) => {
+    cb.addEventListener("change", updateReceiveButtonState);
+  });
+  updateReceiveButtonState();
+  wireJobControls(order);
+  if (jobs.length) {
+    $$(".job-group", box).forEach((groupEl) => wireEstimateRowDragging(groupEl));
+  } else {
+    wireEstimateRowDragging(box);
+  }
   const actualParts = items.filter((i) => i.kind === "part").reduce((s, i) => s + i.received_quantity * i.unit_cost, 0);
   const actualOther = items.filter((i) => i.kind !== "part").reduce((s, i) => s + i.quantity * i.unit_cost, 0);
   $("#vd-actual-cost").textContent = money(actualParts + actualOther);
 }
 
+function updateReceiveButtonState() {
+  const checked = $$(".ei-receive-check:checked", $("#vd-estimate-items"));
+  $("#vd-receive-parts").disabled = checked.length === 0;
+}
+
+// Native HTML5 drag-and-drop: grabbing the ⋮⋮ handle (or anywhere on the
+// row) reorders it among its siblings live as you drag; persistEstimate()
+// on drop saves whatever order the DOM ends up in, same as every other
+// estimate edit. Called once per job-group container (never once globally)
+// so a row can only ever be dropped among its own group's siblings -- moving
+// a line to a *different* job is the Job select's job, not drag-and-drop's.
+function wireEstimateRowDragging(box) {
+  let dragRow = null;
+  $$(".part-row:not(.head)", box).forEach((row) => {
+    row.addEventListener("dragstart", () => {
+      dragRow = row;
+      row.classList.add("dragging");
+    });
+    row.addEventListener("dragend", () => {
+      row.classList.remove("dragging");
+      dragRow = null;
+      persistEstimate();
+    });
+    row.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      if (!dragRow || dragRow === row) return;
+      const rect = row.getBoundingClientRect();
+      const before = (e.clientY - rect.top) / rect.height < 0.5;
+      row.parentNode.insertBefore(dragRow, before ? row : row.nextSibling);
+    });
+  });
+}
+
 function collectEstimateItems() {
   return $$(".part-row:not(.head)", $("#vd-estimate-items")).map((row) => {
     const cost = parseFloat(row.querySelector(".ei-cost").value || "0");
+    const jobSelect = row.querySelector(".ei-job");
     return {
       id: row.dataset.id ? Number(row.dataset.id) : null,
       kind: row.querySelector(".ei-kind").value,
@@ -533,6 +655,9 @@ function collectEstimateItems() {
       unit_cost: cost,
       unit_price: cost,
       source: row.dataset.source || "manual",
+      // A freshly-added row (addEstimateRow) has no .ei-job select yet --
+      // just the data-job-id it was created with -- so fall back to that.
+      job_id: jobSelect ? (jobSelect.value ? Number(jobSelect.value) : null) : (row.dataset.jobId ? Number(row.dataset.jobId) : null),
     };
   }).filter((i) => i.description);
 }
@@ -570,15 +695,19 @@ async function persistEstimate() {
   }
 }
 
-function addEstimateRow(kind, defaults = {}) {
+function addEstimateRow(kind, defaults = {}, jobId = null) {
   const box = $("#vd-estimate-items");
-  const empty = $(".ei-empty", box);
+  const targetContainer = box.classList.contains("has-jobs")
+    ? ($(`.job-group[data-job-id="${jobId ?? ""}"]`, box) || box)
+    : box;
+  const empty = $(".ei-empty", targetContainer);
   if (empty) empty.remove();
   const row = document.createElement("div");
   const source = defaults.source || "manual";
   row.className = source === "partstech" ? "part-row source-partstech" : "part-row";
   row.dataset.id = "";
   row.dataset.source = source;
+  row.dataset.jobId = jobId ?? "";
   if (source === "partstech") row.title = "Added from a PartsTech lookup";
   const label = kind === "labor" ? "Labor" : kind === "fee" ? "Fee" : "Part";
   row.innerHTML = `
@@ -598,7 +727,7 @@ function addEstimateRow(kind, defaults = {}) {
     row.remove();
     persistEstimate();
   });
-  box.appendChild(row);
+  targetContainer.appendChild(row);
   // Persist immediately -- this is a real line on the RO from the moment it
   // appears, matching a one-click "add at cost" flow rather than a draft
   // that silently disappears if the advisor clicks anything else first.
@@ -608,6 +737,91 @@ function addEstimateRow(kind, defaults = {}) {
     const rows = $$(".part-row:not(.head) .ei-desc", box);
     rows[rows.length - 1]?.focus();
     rows[rows.length - 1]?.select();
+  });
+}
+
+// Wires the per-job controls rendered by renderEstimate: reassigning a job's
+// technician, renaming/deleting a job, and the mini add-part/add-labor links
+// scoped to that job. Re-wired every render since the job-group markup is
+// rebuilt from scratch each time, same as every other estimate-row listener.
+function wireJobControls(order) {
+  const box = $("#vd-estimate-items");
+  const jobs = order.estimate?.jobs ?? [];
+  $$(".ei-job-tech", box).forEach((sel) => {
+    sel.addEventListener("change", async () => {
+      const job = jobs.find((j) => String(j.id) === sel.dataset.jobId);
+      if (!job) return;
+      try {
+        await put(`/api/orders/${order.id}/jobs/${job.id}`, {
+          title: job.title,
+          technician_id: sel.value ? Number(sel.value) : null,
+          actor: currentActor(),
+        });
+        toast("Job technician updated");
+        await loadVehicleDetail();
+      } catch (err) {
+        toast(err.message, true);
+      }
+    });
+  });
+  $$(".job-edit", box).forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const job = jobs.find((j) => String(j.id) === btn.dataset.jobId);
+      if (job) openJobDialog(job);
+    });
+  });
+  $$(".job-delete", box).forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const job = jobs.find((j) => String(j.id) === btn.dataset.jobId);
+      if (!confirm(`Delete "${job ? job.title : "this job"}"? Its parts/labor move back to General -- nothing is deleted.`)) return;
+      try {
+        await api(`/api/orders/${order.id}/jobs/${btn.dataset.jobId}`, { method: "DELETE" });
+        toast("Job deleted");
+        await loadVehicleDetail();
+      } catch (err) {
+        toast(err.message, true);
+      }
+    });
+  });
+  $$(".job-mini-add", box).forEach((btn) => {
+    btn.addEventListener("click", () => {
+      addEstimateRow(btn.dataset.kind, {}, btn.dataset.jobId ? Number(btn.dataset.jobId) : null);
+    });
+  });
+}
+
+function openJobDialog(job = null) {
+  state.detail.editingJobId = job ? job.id : null;
+  $("#job-dialog-title").textContent = job ? "Rename Job" : "Add Job";
+  $("#job-title-input").value = job ? job.title : "";
+  const techs = state.staff.filter((s) => s.role === "technician");
+  $("#job-technician-input").innerHTML = `<option value="">Use ticket default</option>` +
+    techs.map((t) => `<option value="${t.id}" ${job && job.technician_id === t.id ? "selected" : ""}>${esc(t.name)}</option>`).join("");
+  $("#job-dialog").showModal();
+}
+
+function wireJobDialog() {
+  $("#job-cancel").addEventListener("click", () => $("#job-dialog").close());
+  $("#job-cancel-2").addEventListener("click", () => $("#job-dialog").close());
+  $("#job-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const title = $("#job-title-input").value.trim();
+    if (!title) return;
+    const technicianId = $("#job-technician-input").value ? Number($("#job-technician-input").value) : null;
+    const editingId = state.detail.editingJobId;
+    try {
+      const body = { title, technician_id: technicianId, actor: currentActor() };
+      if (editingId) {
+        await put(`/api/orders/${state.detail.order.id}/jobs/${editingId}`, body);
+      } else {
+        await post(`/api/orders/${state.detail.order.id}/jobs`, body);
+      }
+      $("#job-dialog").close();
+      toast(editingId ? "Job updated" : "Job added");
+      await loadVehicleDetail();
+    } catch (err) {
+      toast(err.message, true);
+    }
   });
 }
 
@@ -636,6 +850,61 @@ function renderAssignment(order) {
   $("#vd-promised").value = (a && a.promised_at) || "";
 }
 
+/* ---------- print a single ticket ---------- */
+// Reuses the same print-only surface and letterhead/table styling the
+// Reports view already prints with -- printing a report and printing a
+// ticket are mutually exclusive user actions, so sharing the one
+// `#print-report` container is simpler than maintaining a second.
+function renderPrintTicket() {
+  const { segment, item, order } = state.detail;
+  const generated = new Date().toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" });
+  const vehicleLabel = segment === "recon"
+    ? `${item.stock_number} — ${item.year} ${item.make} ${item.model}`
+    : `${item.year} ${item.make} ${item.model}`;
+  const customerLabel = segment === "recon" ? "Recon Inventory" : (item.customer_name || "");
+  const items = order.estimate ? order.estimate.items : [];
+  const actualParts = items.filter((i) => i.kind === "part").reduce((s, i) => s + i.received_quantity * i.unit_cost, 0);
+  const actualOther = items.filter((i) => i.kind !== "part").reduce((s, i) => s + i.quantity * i.unit_cost, 0);
+  const a = order.assignment;
+  const techName = (a && a.technician_name) || "Unassigned";
+  const advisorName = (a && a.advisor_name) || "Unassigned";
+
+  const rows = items.length ? items.map((i) => `
+    <tr><td>${esc(i.kind)}</td><td>${esc(i.description)}</td><td>${esc(i.part_number || "")}</td>
+    <td class="num-col">${i.quantity}</td><td class="num-col">${money(i.unit_cost)}</td><td>${esc(STATUS_LABEL[i.status] || i.status || "")}</td></tr>
+  `).join("") : `<tr><td colspan="6">No parts or labor lines.</td></tr>`;
+
+  const notesHtml = (order.notes || []).length
+    ? order.notes.map((n) => `<div>${esc(n.text)} <span style="color:#666">(${esc(n.visibility)})</span></div>`).join("")
+    : "<div>No notes.</div>";
+
+  $("#print-report").innerHTML = `
+    <header class="print-letterhead">
+      <div>
+        <div class="print-shop-name">RECON</div>
+        <div class="print-shop-sub">Discount Auto Repair · Merrillville, IN</div>
+      </div>
+      <div class="print-meta">
+        <div class="print-report-title">Repair Order ${esc(order.number)}</div>
+        <div>${esc(vehicleLabel)}${customerLabel ? " — " + esc(customerLabel) : ""}</div>
+        <div class="print-generated">Generated ${esc(generated)}</div>
+      </div>
+    </header>
+    <table class="print-table">
+      <thead><tr><th>Status</th><th>Technician</th><th>Advisor</th><th>Concern</th></tr></thead>
+      <tbody><tr><td>${esc(STATUS_LABEL[order.status] || order.status)}</td><td>${esc(techName)}</td><td>${esc(advisorName)}</td><td>${esc(order.concern)}</td></tr></tbody>
+    </table>
+    <div class="print-subhead" style="margin:16px 0 6px">Parts &amp; Labor</div>
+    <table class="print-table">
+      <thead><tr><th>Kind</th><th>Description</th><th>Part #</th><th class="num-col">Qty</th><th class="num-col">Cost</th><th>Status</th></tr></thead>
+      <tbody>${rows}</tbody>
+      <tfoot><tr><td colspan="4">Cost</td><td class="num-col">${money(actualParts + actualOther)}</td><td></td></tr></tfoot>
+    </table>
+    <div class="print-subhead" style="margin:16px 0 6px">Notes</div>
+    <div class="print-notes">${notesHtml}</div>
+  `;
+}
+
 /* ---------- vehicle-detail event wiring (wired once) ---------- */
 function wireVehicleDetail() {
   $("#back-to-vehicles").addEventListener("click", () => showView("vehicles"));
@@ -657,9 +926,8 @@ function wireVehicleDetail() {
     }
   });
 
-  $("#vd-advance-status").addEventListener("click", async () => {
+  $("#vd-status-save").addEventListener("click", async () => {
     const status = $("#vd-status-select").value;
-    if (!status) return;
     try {
       await patch(`/api/orders/${state.detail.order.id}/status`, { status, actor: currentActor() });
       toast(`Status set to ${STATUS_LABEL[status]}`);
@@ -669,15 +937,49 @@ function wireVehicleDetail() {
     }
   });
 
-  $("#vd-add-part").addEventListener("click", () => addEstimateRow("part"));
-  $("#vd-add-labor").addEventListener("click", () => addEstimateRow("labor"));
-  $("#vd-add-partstech").addEventListener("click", async () => {
+  $("#vd-print-ticket").addEventListener("click", () => {
+    renderPrintTicket();
+    window.print();
+  });
+
+  $("#vd-archive-vehicle").addEventListener("click", async () => {
+    const { segment, id } = state.detail;
+    if (!confirm("Send this vehicle to History? It becomes read-only until reopened -- nothing is deleted.")) return;
     try {
-      const data = await get("/api/integrations/partstech");
-      window.open(data.login_url, "_blank", "noopener");
+      await post(segment === "recon" ? `/api/recon/vehicles/${id}/archive` : `/api/we-owe/${id}/archive`, {});
+      toast("Sent to History");
+      await loadVehicleDetail();
     } catch (err) {
       toast(err.message, true);
     }
+  });
+
+  $("#vd-reopen-vehicle").addEventListener("click", async () => {
+    const { segment, id } = state.detail;
+    try {
+      await post(segment === "recon" ? `/api/recon/vehicles/${id}/reopen` : `/api/we-owe/${id}/reopen`, {});
+      toast("Reopened -- fully editable again");
+      await loadVehicleDetail();
+    } catch (err) {
+      toast(err.message, true);
+    }
+  });
+
+  $("#vd-void-order").addEventListener("click", async () => {
+    if (!confirm("Void this ticket? Its cost will stop counting toward the vehicle's total. This can't be undone.")) return;
+    try {
+      await post(`/api/orders/${state.detail.order.id}/void`, { actor: currentActor() });
+      toast("Ticket voided");
+      await loadVehicleDetail();
+    } catch (err) {
+      toast(err.message, true);
+    }
+  });
+
+  $("#vd-add-part").addEventListener("click", () => addEstimateRow("part"));
+  $("#vd-add-labor").addEventListener("click", () => addEstimateRow("labor"));
+  $("#vd-add-partstech").addEventListener("click", () => {
+    window.open("https://app.partstech.com/login", "_blank", "noopener");
     addEstimateRow("part", { description: "New part (from PartsTech)", source: "partstech" });
   });
 
@@ -690,6 +992,8 @@ function wireVehicleDetail() {
       toast(err.message, true);
     }
   });
+
+  $("#vd-receive-parts").addEventListener("click", () => openReceiveDialog());
 
   const addNote = async () => {
     const text = $("#vd-note-text").value.trim();
@@ -762,17 +1066,55 @@ function wireVehicleDetail() {
         $("#vd-deposit-note").value = "";
         toast("Deposit recorded");
         await loadVehicleDetail();
+        renderPaymentDialogList();
       } catch (err) {
         toast(err.message, true);
       }
     });
   });
 
+  $("#vd-take-payment").addEventListener("click", () => {
+    renderPaymentDialogList();
+    $("#payment-dialog").showModal();
+  });
+  $("#payment-cancel").addEventListener("click", () => $("#payment-dialog").close());
+  $("#payment-cancel-2").addEventListener("click", () => $("#payment-dialog").close());
+
+  $("#vd-edit-vehicle").addEventListener("click", () => $("#vehicle-edit-dialog").showModal());
+  $("#vehicle-edit-cancel").addEventListener("click", () => $("#vehicle-edit-dialog").close());
+  $("#vehicle-edit-cancel-2").addEventListener("click", () => $("#vehicle-edit-dialog").close());
+
+  $("#vd-edit-customer").addEventListener("click", () => {
+    const { item } = state.detail;
+    $("#customer-edit-name").value = item.customer_name || "";
+    $("#customer-edit-phone").value = item.customer_phone || "";
+    $("#customer-edit-email").value = item.customer_email || "";
+    $("#customer-edit-dialog").showModal();
+  });
+  $("#customer-edit-cancel").addEventListener("click", () => $("#customer-edit-dialog").close());
+  $("#customer-edit-cancel-2").addEventListener("click", () => $("#customer-edit-dialog").close());
+  $("#customer-edit-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const { item } = state.detail;
+    try {
+      await patch(`/api/customers/${item.customer_id}`, {
+        name: $("#customer-edit-name").value.trim(),
+        phone: $("#customer-edit-phone").value.trim(),
+        email: $("#customer-edit-email").value.trim(),
+      });
+      $("#customer-edit-dialog").close();
+      toast("Customer updated");
+      await loadVehicleDetail();
+    } catch (err) {
+      toast(err.message, true);
+    }
+  });
+
   $("#vd-recon-info-save").addEventListener("click", async (e) => {
-    const { id, item } = state.detail;
+    const { segment, id, item } = state.detail;
     await withLoading(e.target, "Saving…", async () => {
       try {
-        await patch(`/api/recon/vehicles/${id}`, {
+        const payload = {
           vin: $("#vd-recon-vin").value.trim(),
           mileage: Number($("#vd-recon-mileage").value || 0),
           year: Number($("#vd-recon-year").value),
@@ -780,16 +1122,39 @@ function wireVehicleDetail() {
           model: $("#vd-recon-model").value.trim(),
           trim: $("#vd-recon-trim").value.trim(),
           color: $("#vd-recon-color").value.trim(),
-          purchase_price: Number($("#vd-recon-purchase-price").value || 0),
           expected_version: item.edit_version,
-        });
+        };
+        if (segment === "recon") {
+          payload.purchase_price = Number($("#vd-recon-purchase-price").value || 0);
+          await patch(`/api/recon/vehicles/${id}`, payload);
+        } else {
+          await patch(`/api/we-owe/${id}`, payload);
+        }
         toast("Vehicle info updated");
+        $("#vehicle-edit-dialog").close();
         await loadVehicleDetail();
       } catch (err) {
         if (String(err.message).includes("Someone else changed")) await loadVehicleDetail();
         toast(err.message, true);
       }
     });
+  });
+
+  $("#vd-add-job").addEventListener("click", () => openJobDialog());
+
+  $("#vd-decode-vin").addEventListener("click", async () => {
+    const vin = $("#vd-recon-vin").value.trim();
+    if (vin.length < 5) return toast("Enter a VIN first", true);
+    try {
+      const data = await post("/api/vehicles/decode-vin", { vin });
+      $("#vd-recon-year").value = data.year;
+      $("#vd-recon-make").value = data.make;
+      $("#vd-recon-model").value = data.model;
+      $("#vd-recon-trim").value = data.trim;
+      toast("VIN decoded — click Save to keep it");
+    } catch (err) {
+      toast(err.message, true);
+    }
   });
 
   $("#vd-delete").addEventListener("click", async () => {
@@ -919,6 +1284,19 @@ function wireWeOweDialog() {
   $("#we-owe-vehicle").addEventListener("change", () => {
     $("#we-owe-new-vehicle").style.display = $("#we-owe-vehicle").value === "__new__" ? "" : "none";
   });
+  $("#we-owe-decode-vin").addEventListener("click", async () => {
+    const vin = $("#we-owe-new-vin").value.trim();
+    if (vin.length < 5) return toast("Enter a VIN first", true);
+    try {
+      const data = await post("/api/vehicles/decode-vin", { vin });
+      $("#we-owe-new-year").value = data.year;
+      $("#we-owe-new-make").value = data.make;
+      $("#we-owe-new-model").value = data.model;
+      toast("VIN decoded");
+    } catch (err) {
+      toast(err.message, true);
+    }
+  });
   $("#we-owe-form").addEventListener("submit", async (e) => {
     e.preventDefault();
     await withLoading(e.submitter, "Saving…", async () => {
@@ -967,17 +1345,108 @@ function wireWeOweDialog() {
 }
 
 /* ==================================================================
+   RECEIVE PARTS DIALOG
+   ================================================================== */
+async function openReceiveDialog() {
+  const box = $("#vd-estimate-items");
+  const checked = $$(".ei-receive-check:checked", box);
+  if (!checked.length) return;
+  const lines = checked.map((cb) => {
+    const row = cb.closest(".part-row");
+    const desc = row.querySelector(".ei-desc").value.trim() || "(no description)";
+    const qty = parseFloat(row.querySelector(".ei-qty").value || "0");
+    const receivedQty = Number(row.dataset.receivedQuantity || 0);
+    const remaining = qty - receivedQty;
+    const cost = parseFloat(row.querySelector(".ei-cost").value || "0");
+    return { id: Number(cb.dataset.id), desc, remaining, cost };
+  });
+  state.receiveLines = lines;
+
+  $("#receive-lines").innerHTML = lines.map((l) => `
+    <div class="kv-row"><span class="kv-label">${esc(l.desc)}</span><span class="kv-value">${l.remaining} × ${money(l.cost)}</span></div>
+  `).join("");
+  updateReceiveTotalSummary();
+
+  const vendors = await get("/api/vendors").catch(() => []);
+  state.vendors = vendors;
+  $("#receive-vendor").innerHTML = `<option value="__new__">＋ New vendor…</option>` + vendors.map((v) => `<option value="${v.id}">${esc(v.name)}</option>`).join("");
+  $("#receive-new-vendor").style.display = vendors.length ? "none" : "";
+  $("#receive-invoice-number").value = "";
+  $("#receive-new-vendor-name").value = "";
+  $("#receive-tax").value = "0";
+  $("#receive-dialog").showModal();
+}
+
+function updateReceiveTotalSummary() {
+  const lines = state.receiveLines || [];
+  const tax = parseFloat($("#receive-tax")?.value || "0");
+  const subtotal = lines.reduce((s, l) => s + l.remaining * l.cost, 0);
+  $("#receive-total-summary").innerHTML = `
+    <div class="cost-line"><span>Subtotal</span><span class="num">${money(subtotal)}</span></div>
+    <div class="cost-line total"><span>Total</span><span class="num">${money(subtotal + tax)}</span></div>
+  `;
+}
+
+function wireReceiveDialog() {
+  $("#receive-cancel").addEventListener("click", () => $("#receive-dialog").close());
+  $("#receive-cancel-2").addEventListener("click", () => $("#receive-dialog").close());
+  $("#receive-vendor").addEventListener("change", () => {
+    $("#receive-new-vendor").style.display = $("#receive-vendor").value === "__new__" ? "" : "none";
+  });
+  $("#receive-tax").addEventListener("input", updateReceiveTotalSummary);
+  $("#receive-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    await withLoading(e.submitter, "Posting…", async () => {
+      try {
+        let vendorId = $("#receive-vendor").value;
+        if (vendorId === "__new__") {
+          const name = $("#receive-new-vendor-name").value.trim();
+          if (!name) return toast("Enter the vendor's name", true);
+          const vendor = await post("/api/vendors", { name });
+          vendorId = vendor.id;
+        } else {
+          vendorId = Number(vendorId);
+        }
+        const invoiceNumber = $("#receive-invoice-number").value.trim();
+        if (!invoiceNumber) return toast("Enter an invoice number", true);
+        await post(`/api/orders/${state.detail.order.id}/estimate/receive-parts`, {
+          item_ids: (state.receiveLines || []).map((l) => l.id),
+          vendor_id: vendorId,
+          invoice_number: invoiceNumber,
+          tax: parseFloat($("#receive-tax").value || "0"),
+          actor: currentActor(),
+        });
+        $("#receive-dialog").close();
+        toast("Parts received and posted to A/P");
+        await loadVehicleDetail();
+      } catch (err) {
+        toast(err.message, true);
+      }
+    });
+  });
+}
+
+/* ==================================================================
    REPORTS
    ================================================================== */
-function quickRange(kind, chip) {
+// Shared quick-range date math -- used by the Reports date filter and the
+// A/P invoice list filter alike, so "This Week"/"This Month"/etc. mean the
+// same thing everywhere in the app.
+function computeQuickRange(kind) {
   const now = new Date();
   const iso = (d) => d.toISOString().slice(0, 10);
   let start, end = iso(now);
   if (kind === "today") start = iso(now);
+  else if (kind === "yesterday") { const d = new Date(now); d.setDate(d.getDate() - 1); start = iso(d); end = iso(d); }
   else if (kind === "week") { const d = new Date(now); d.setDate(d.getDate() - d.getDay()); start = iso(d); }
   else if (kind === "month") start = iso(new Date(now.getFullYear(), now.getMonth(), 1));
-  else if (kind === "year") start = iso(new Date(now.getFullYear(), 0, 1));
+  else if (kind === "year" || kind === "ytd") start = iso(new Date(now.getFullYear(), 0, 1));
   else { start = ""; end = ""; }
+  return { start, end };
+}
+
+function quickRange(kind, chip) {
+  const { start, end } = computeQuickRange(kind);
   $("#report-start").value = start;
   $("#report-end").value = end;
   $$("#view-reports .chip").forEach((c) => c.classList.remove("active"));
@@ -1016,9 +1485,9 @@ function renderReportTable(rows, type) {
   const totalActual = rows.reduce((s, r) => s + r.actual_cost, 0);
   const totalPaid = rows.reduce((s, r) => s + (r.customer_paid || 0), 0);
   const hasDeposits = totalPaid > 0;
-  return `<div class="panel"><table><thead><tr><th>Stock #</th><th>Vehicle</th><th>Type</th><th>Status</th><th>Technicians</th><th class="num-col">What's In It</th>${hasDeposits ? `<th class="num-col">Customer Paid</th><th class="num-col">Net to Shop</th>` : ""}</tr></thead>
+  return `<div class="panel"><table><thead><tr><th>Stock #</th><th>Vehicle</th><th>Type</th><th>Status</th><th>Technicians</th><th class="num-col">Cost</th>${hasDeposits ? `<th class="num-col">Customer Paid</th><th class="num-col">Net to Shop</th>` : ""}</tr></thead>
     <tbody>${rows.map((r) => `<tr><td class="num">${esc(r.stock_number || "—")}</td><td>${esc(r.vehicle)}${r.customer_name ? ` <span style="color:var(--ink-faint)">(${esc(r.customer_name)})</span>` : ""}</td>
-    <td>${r.segment === "recon" ? "Recon" : "We-Owe"}</td><td><span class="pill ${r.status_bucket === "finished" ? "pill-done" : "pill-progress"}">${esc(STATUS_LABEL[r.status] || r.status)}</span></td>
+    <td>${r.segment === "recon" ? "Recon" : "We-Owe"}</td><td><span class="pill ${vehicleStatusPillClass(r)}">${esc(STATUS_LABEL[r.status] || r.status)}</span></td>
     <td>${esc(r.technicians.join(", "))}</td><td class="num-col">${money(r.actual_cost)}</td>${hasDeposits ? `<td class="num-col">${r.customer_paid ? money(r.customer_paid) : "—"}</td><td class="num-col">${r.customer_paid ? money(r.net_cost) : "—"}</td>` : ""}</tr>`).join("")}
     <tr style="font-weight:700"><td colspan="5">Total</td><td class="num-col">${money(totalActual)}</td>${hasDeposits ? `<td class="num-col">${money(totalPaid)}</td><td class="num-col">${money(totalActual - totalPaid)}</td>` : ""}</tr></tbody></table></div>`;
 }
@@ -1060,7 +1529,7 @@ function renderPrintReport(rows, type, start, end) {
     const hasDeposits = totalPaid > 0;
     body = `
       <table class="print-table">
-        <thead><tr><th>Stock #</th><th>Vehicle</th><th>Type</th><th>Status</th><th>Technician(s)</th><th class="num-col">What's In It</th>${hasDeposits ? `<th class="num-col">Customer Paid</th><th class="num-col">Net to Shop</th>` : ""}</tr></thead>
+        <thead><tr><th>Stock #</th><th>Vehicle</th><th>Type</th><th>Status</th><th>Technician(s)</th><th class="num-col">Cost</th>${hasDeposits ? `<th class="num-col">Customer Paid</th><th class="num-col">Net to Shop</th>` : ""}</tr></thead>
         <tbody>${rows.map((r) => `<tr><td class="num">${esc(r.stock_number || "—")}</td><td>${esc(r.vehicle)}${r.customer_name ? ` (${esc(r.customer_name)})` : ""}</td>
         <td>${r.segment === "recon" ? "Recon" : "We-Owe"}</td><td>${esc(STATUS_LABEL[r.status] || r.status)}</td>
         <td>${esc(r.technicians.join(", ")) || "—"}</td><td class="num-col">${money(r.actual_cost)}</td>${hasDeposits ? `<td class="num-col">${r.customer_paid ? money(r.customer_paid) : "—"}</td><td class="num-col">${r.customer_paid ? money(r.net_cost) : "—"}</td>` : ""}</tr>`).join("")}</tbody>
@@ -1070,8 +1539,8 @@ function renderPrintReport(rows, type, start, end) {
   return `
     <header class="print-letterhead">
       <div>
-        <div class="print-shop-name">Discount Auto Ops</div>
-        <div class="print-shop-sub">Merrillville, IN</div>
+        <div class="print-shop-name">RECON</div>
+        <div class="print-shop-sub">Discount Auto Repair · Merrillville, IN</div>
       </div>
       <div class="print-meta">
         <div class="print-report-title">${esc(REPORT_TITLES[type] || type)}</div>
@@ -1167,19 +1636,31 @@ function wireReportsView() {
    ================================================================== */
 async function loadAccountingView() {
   try {
-    const [vendors, orders, invoices, audits] = await Promise.all([
-      get("/api/vendors"), get("/api/orders"), get("/api/ap/invoices"), get("/api/accounting/audits"),
+    const [vendors, orders, audits] = await Promise.all([
+      get("/api/vendors"), get("/api/orders"), get("/api/accounting/audits"),
     ]);
     state.vendors = vendors;
     state.orders = orders;
     renderVendorSelect();
     renderVendorChips();
     renderPoSelect();
-    renderApTable(invoices);
     renderAuditList(audits);
     if (!$("#ap-invoice-items").children.length) addApLine();
   } catch (err) {
     toast(`Could not load accounting: ${err.message}`, true);
+  }
+  await loadApTable();
+}
+
+async function loadApTable() {
+  const { start, end } = state.apFilter;
+  const params = new URLSearchParams();
+  if (start) params.set("start", start);
+  if (end) params.set("end", end);
+  try {
+    renderApTable(await get(`/api/ap/invoices?${params}`));
+  } catch (err) {
+    toast(`Could not load A/P invoices: ${err.message}`, true);
   }
 }
 function renderVendorSelect() {
@@ -1189,7 +1670,7 @@ function renderVendorChips() {
   $("#vendor-list").innerHTML = state.vendors.map((v) => `<span class="vendor-chip">${esc(v.name)}${v.account_number ? ` · ${esc(v.account_number)}` : ""}</span>`).join("") || `<span style="color:var(--ink-faint);font-size:12px;padding:8px 0">No vendors yet.</span>`;
 }
 function renderPoSelect() {
-  const open = state.orders.filter((o) => !["closed", "cancelled"].includes(o.status));
+  const open = state.orders.filter((o) => o.status !== "complete");
   // The PO# you actually give a vendor is the stock number, not the
   // internal RO-2607-0012 format -- submit that as the value so a vendor
   // invoice referencing "R-1042" matches straight back to this order.
@@ -1200,11 +1681,12 @@ function renderPoSelect() {
   }).join("") || `<option value="">No open repair orders</option>`;
 }
 function renderApTable(invoices) {
+  $("#ap-count").textContent = `${invoices.length} invoice${invoices.length === 1 ? "" : "s"}`;
   $("#ap-table").innerHTML = invoices.length ? invoices.map((a) => `
     <tr><td>${esc(a.invoice_number)}</td><td>${esc(a.vendor_name)}</td><td>${esc(a.po_number)}</td>
     <td>${esc(a.vehicle_label)}</td><td class="num-col">${money(a.total)}</td>
     <td><span class="pill pill-done">${esc(a.status)}</span></td></tr>
-  `).join("") : `<tr><td colspan="6" style="text-align:center;color:var(--ink-faint);padding:20px">No vendor invoices posted yet.</td></tr>`;
+  `).join("") : `<tr><td colspan="6" style="text-align:center;color:var(--ink-faint);padding:20px">No vendor invoices posted for this range.</td></tr>`;
 }
 function renderAuditList(audits) {
   $("#audit-list").innerHTML = audits.length ? audits.slice(0, 20).map((a) => `
@@ -1250,6 +1732,29 @@ function addApLine() {
 function wireAccountingView() {
   $("#ap-add-line").addEventListener("click", addApLine);
   $("#ap-tax").addEventListener("input", recalcApTotals);
+
+  $$('#view-accounting [data-ap-range]').forEach((chip) => {
+    chip.addEventListener("click", () => {
+      const range = computeQuickRange(chip.dataset.apRange);
+      state.apFilter = range;
+      $("#ap-filter-start").value = range.start;
+      $("#ap-filter-end").value = range.end;
+      $$('#view-accounting [data-ap-range]').forEach((c) => c.classList.remove("active"));
+      chip.classList.add("active");
+      loadApTable();
+    });
+  });
+  const clearApChips = () => $$('#view-accounting [data-ap-range]').forEach((c) => c.classList.remove("active"));
+  $("#ap-filter-start").addEventListener("change", () => {
+    clearApChips();
+    state.apFilter.start = $("#ap-filter-start").value;
+    loadApTable();
+  });
+  $("#ap-filter-end").addEventListener("change", () => {
+    clearApChips();
+    state.apFilter.end = $("#ap-filter-end").value;
+    loadApTable();
+  });
   $("#vendor-form").addEventListener("submit", async (e) => {
     e.preventDefault();
     const form = e.target;
@@ -1371,42 +1876,197 @@ function wireStaffView() {
 }
 
 /* ==================================================================
-   INTEGRATIONS
+   TASKS
    ================================================================== */
-async function loadIntegrationsView() {
-  try {
-    const data = await get("/api/integrations/partstech");
-    $("#partstech-login").href = data.login_url;
-  } catch (err) {
-    toast(`Could not load PartsTech connection info: ${err.message}`, true);
-  }
-  try {
-    const creds = await get("/api/integrations/partstech/credentials");
-    $("#partstech-api-status").textContent = creds.configured
-      ? `Key saved for ${creds.username}.`
-      : "No key saved yet.";
-    $("#partstech-username").value = creds.username || "";
-  } catch (err) {
-    $("#partstech-api-status").textContent = "Could not check key status.";
-  }
+// Due-date coloring mirrors the Vehicles board's age-severity pattern --
+// outliers (overdue, due today/tomorrow) jump out without reading every row.
+function taskDueInfo(dueDate) {
+  if (!dueDate) return null;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const due = new Date(`${dueDate}T00:00:00`);
+  const diffDays = Math.round((due - today) / 86400000);
+  const cls = diffDays < 0 ? "overdue" : diffDays <= 1 ? "soon" : "";
+  return { cls, label: due.toLocaleDateString("en-US", { month: "short", day: "numeric" }) };
 }
 
-function wireIntegrationsView() {
-  $("#partstech-form").addEventListener("submit", async (e) => {
-    e.preventDefault();
-    await withLoading(e.submitter, "Saving…", async () => {
+function taskRowHtml(t) {
+  const due = taskDueInfo(t.due_date);
+  return `
+    <div class="task-row ${t.urgent ? "urgent" : ""} ${t.done ? "done" : ""}" data-id="${t.id}">
+      <button type="button" class="task-check" title="${t.done ? "Mark not done" : "Mark done"}">
+        <svg viewBox="0 0 24 24"><path d="M5 13l4 4L19 7"/></svg>
+      </button>
+      <div class="task-body">
+        <div class="task-title">${esc(t.title)}</div>
+        <div class="task-meta">
+          ${t.assigned_to ? `<span class="task-assignee"><span class="task-avatar">${esc(t.assigned_to[0] || "?")}</span>${esc(t.assigned_to)}</span>` : `<span>Unassigned</span>`}
+          ${due ? `<span class="task-due ${due.cls}">Due ${due.label}</span>` : ""}
+          ${t.urgent ? `<span class="task-urgent-badge">Urgent</span>` : ""}
+          <span>by ${esc(t.created_by || "Unspecified")} · ${relativeTime(t.created_at)}</span>
+        </div>
+        ${t.notes ? `<div class="task-notes">${esc(t.notes)}</div>` : ""}
+      </div>
+      <button type="button" class="task-delete" title="Delete">×</button>
+    </div>
+  `;
+}
+
+function wireTaskRowActions(container) {
+  $$(".task-check", container).forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const row = btn.closest(".task-row");
       try {
-        await put("/api/integrations/partstech/credentials", {
-          username: $("#partstech-username").value.trim(),
-          api_key: $("#partstech-api-key").value.trim(),
-        });
-        $("#partstech-api-key").value = "";
-        toast("PartsTech key saved");
-        loadIntegrationsView();
+        await patch(`/api/tasks/${row.dataset.id}`, { done: !row.classList.contains("done") });
+        await loadTasksView();
       } catch (err) {
         toast(err.message, true);
       }
     });
+  });
+  $$(".task-delete", container).forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const row = btn.closest(".task-row");
+      if (!confirm("Delete this task?")) return;
+      try {
+        await api(`/api/tasks/${row.dataset.id}`, { method: "DELETE" });
+        await loadTasksView();
+      } catch (err) {
+        toast(err.message, true);
+      }
+    });
+  });
+}
+
+function renderTasksList() {
+  const actor = currentActor();
+  let open = state.tasks.filter((t) => !t.done);
+  if (state.taskFilter === "mine") open = open.filter((t) => t.assigned_to === actor);
+  const done = state.tasks.filter((t) => t.done);
+
+  $("#tasks-count").textContent = `${open.length} open`;
+  $("#tasks-list").innerHTML = open.length
+    ? open.map(taskRowHtml).join("")
+    : `<div style="color:var(--ink-faint);font-size:12.5px;padding:26px;text-align:center">Nothing here — add a task above.</div>`;
+
+  $("#tasks-toggle-completed").textContent = `${state.showCompletedTasks ? "Hide" : "Show"} completed (${done.length})`;
+  $("#tasks-completed-list").style.display = state.showCompletedTasks ? "" : "none";
+  $("#tasks-completed-list").innerHTML = done.map(taskRowHtml).join("");
+
+  wireTaskRowActions($("#tasks-list"));
+  wireTaskRowActions($("#tasks-completed-list"));
+}
+
+async function loadTasksView() {
+  try {
+    if (!state.staff.length) state.staff = await get("/api/staff");
+    $("#task-assignee-input").innerHTML = `<option value="">Unassigned</option>` + state.staff.map((s) => `<option value="${esc(s.name)}">${esc(s.name)}</option>`).join("");
+    state.tasks = await get("/api/tasks");
+    renderTasksList();
+  } catch (err) {
+    toast(`Could not load tasks: ${err.message}`, true);
+  }
+}
+
+function wireTasksView() {
+  $("#task-quick-add").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const title = $("#task-title-input").value.trim();
+    if (!title) return;
+    try {
+      await post("/api/tasks", {
+        title,
+        assigned_to: $("#task-assignee-input").value,
+        due_date: $("#task-due-input").value,
+        urgent: $("#task-urgent-input").checked,
+        actor: currentActor(),
+      });
+      $("#task-quick-add").reset();
+      toast("Task added");
+      await loadTasksView();
+    } catch (err) {
+      toast(err.message, true);
+    }
+  });
+
+  $$('#view-tasks [data-task-filter]').forEach((chip) => {
+    chip.addEventListener("click", () => {
+      $$('#view-tasks [data-task-filter]').forEach((c) => c.classList.remove("active"));
+      chip.classList.add("active");
+      state.taskFilter = chip.dataset.taskFilter;
+      renderTasksList();
+    });
+  });
+
+  $("#tasks-toggle-completed").addEventListener("click", () => {
+    state.showCompletedTasks = !state.showCompletedTasks;
+    renderTasksList();
+  });
+}
+
+/* ==================================================================
+   SUGGESTIONS / IDEAS
+   ================================================================== */
+function renderSuggestionsList() {
+  const box = $("#suggestions-list");
+  box.innerHTML = state.suggestions.length ? state.suggestions.map((s) => `
+    <div class="suggestion-card ${s.resolved ? "resolved" : ""}" data-id="${s.id}">
+      <div class="suggestion-text">${esc(s.text)}</div>
+      <div class="suggestion-meta">
+        <span>${esc(s.author || "Unspecified")} · ${fmtDate(s.created_at)}</span>
+        <button type="button" class="btn btn-ghost btn-sm suggestion-toggle">${s.resolved ? "Reopen" : "Mark Done"}</button>
+        <button type="button" class="rm-btn suggestion-delete" title="Delete">×</button>
+      </div>
+    </div>
+  `).join("") : `<div style="color:var(--ink-faint);font-size:12.5px;padding:26px;text-align:center">No suggestions yet — be the first to add one.</div>`;
+
+  $$(".suggestion-toggle", box).forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const card = btn.closest(".suggestion-card");
+      try {
+        await patch(`/api/suggestions/${card.dataset.id}`, { resolved: !card.classList.contains("resolved") });
+        await loadSuggestionsView();
+      } catch (err) {
+        toast(err.message, true);
+      }
+    });
+  });
+  $$(".suggestion-delete", box).forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const card = btn.closest(".suggestion-card");
+      if (!confirm("Delete this suggestion?")) return;
+      try {
+        await api(`/api/suggestions/${card.dataset.id}`, { method: "DELETE" });
+        await loadSuggestionsView();
+      } catch (err) {
+        toast(err.message, true);
+      }
+    });
+  });
+}
+
+async function loadSuggestionsView() {
+  try {
+    state.suggestions = await get("/api/suggestions");
+    renderSuggestionsList();
+  } catch (err) {
+    toast(`Could not load suggestions: ${err.message}`, true);
+  }
+}
+
+function wireSuggestionsView() {
+  $("#suggestion-add").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const text = $("#suggestion-text-input").value.trim();
+    if (!text) return;
+    try {
+      await post("/api/suggestions", { text, author: currentActor() });
+      $("#suggestion-add").reset();
+      toast("Suggestion posted");
+      await loadSuggestionsView();
+    } catch (err) {
+      toast(err.message, true);
+    }
   });
 }
 
@@ -1420,10 +2080,13 @@ document.addEventListener("DOMContentLoaded", () => {
   wireVehicleDetail();
   wireReconDialog();
   wireWeOweDialog();
+  wireReceiveDialog();
+  wireJobDialog();
   wireReportsView();
   wireAccountingView();
   wireStaffView();
-  wireIntegrationsView();
+  wireTasksView();
+  wireSuggestionsView();
 
   $$(".rail-item").forEach((btn) => btn.addEventListener("click", () => showView(btn.dataset.view)));
 

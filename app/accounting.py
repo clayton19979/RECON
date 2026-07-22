@@ -121,6 +121,7 @@ def build_accounting_router(connect: Callable[[], sqlite3.Connection], now: Call
         with connect() as db:
             rows = db.execute(
                 """SELECT a.*, v.name vendor_name, o.number ro_number, o.segment,
+                       o.recon_vehicle_id, o.we_owe_id,
                        rv.stock_number, wc.name we_owe_customer_name
                    FROM ap_invoices a
                    JOIN vendors v ON v.id=a.vendor_id

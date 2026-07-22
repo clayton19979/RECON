@@ -13,6 +13,7 @@ class TaskIn(BaseModel):
     assigned_to: str = ""
     due_date: str = ""
     urgent: bool = False
+    order_id: int | None = None
     actor: str = "ui"
 
 
@@ -23,6 +24,7 @@ class TaskPatch(BaseModel):
     due_date: str | None = None
     urgent: bool | None = None
     done: bool | None = None
+    order_id: int | None = Field(default=None, description="Use -1 to clear an existing link")
 
 
 class SuggestionIn(BaseModel):
@@ -40,23 +42,54 @@ def build_tasks_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
 
     # --- Tasks ---
 
+    # A task's linked order shows a "jump to vehicle" chip -- resolved here
+    # rather than making the frontend cross-reference /api/orders itself.
+    task_query = """
+        SELECT t.*, o.number order_number, o.segment order_segment,
+               o.recon_vehicle_id order_recon_vehicle_id, o.we_owe_id order_we_owe_id,
+               rv.stock_number, wc.name we_owe_customer_name
+        FROM tasks t
+        LEFT JOIN orders o ON o.id=t.order_id
+        LEFT JOIN recon_vehicles rv ON rv.id=o.recon_vehicle_id
+        LEFT JOIN we_owe_items wi ON wi.id=o.we_owe_id
+        LEFT JOIN customers wc ON wc.id=wi.customer_id
+    """
+
+    def task_dict(row: sqlite3.Row) -> dict:
+        value = dict(row)
+        if value["order_id"] is None:
+            value["order_label"] = None
+        elif value["stock_number"]:
+            value["order_label"] = value["stock_number"]
+        elif value["we_owe_customer_name"]:
+            value["order_label"] = f"We-Owe: {value['we_owe_customer_name']}"
+        else:
+            value["order_label"] = value["order_number"]
+        return value
+
+    def assert_valid_order(db: sqlite3.Connection, order_id: int | None) -> None:
+        if order_id is None:
+            return
+        if not db.execute("SELECT 1 FROM orders WHERE id=?", (order_id,)).fetchone():
+            raise HTTPException(404, "Repair order not found")
+
     @router.get("/tasks")
     def list_tasks():
         with connect() as db:
-            return [dict(row) for row in db.execute(
-                """SELECT * FROM tasks
-                   ORDER BY done, urgent DESC, coalesce(nullif(due_date,''), '9999-99-99'), id DESC"""
+            return [task_dict(row) for row in db.execute(
+                task_query + " ORDER BY t.done, t.urgent DESC, coalesce(nullif(t.due_date,''), '9999-99-99'), t.id DESC"
             )]
 
     @router.post("/tasks", status_code=201)
     def create_task(item: TaskIn):
         with connect() as db:
+            assert_valid_order(db, item.order_id)
             ts = now_fn()
             cur = db.execute(
-                "INSERT INTO tasks(title,notes,assigned_to,due_date,urgent,created_by,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",
-                (item.title.strip(), item.notes.strip(), item.assigned_to.strip(), item.due_date.strip(), int(item.urgent), item.actor.strip(), ts, ts),
+                "INSERT INTO tasks(title,notes,assigned_to,due_date,urgent,order_id,created_by,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
+                (item.title.strip(), item.notes.strip(), item.assigned_to.strip(), item.due_date.strip(), int(item.urgent), item.order_id, item.actor.strip(), ts, ts),
             )
-            return dict(db.execute("SELECT * FROM tasks WHERE id=?", (cur.lastrowid,)).fetchone())
+            return task_dict(db.execute(task_query + " WHERE t.id=?", (cur.lastrowid,)).fetchone())
 
     @router.patch("/tasks/{task_id}")
     def update_task(task_id: int, item: TaskPatch):
@@ -78,12 +111,18 @@ def build_tasks_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
             if item.done is not None:
                 fields.append("done=?"); params.append(int(item.done))
                 fields.append("completed_at=?"); params.append(now_fn() if item.done else "")
+            if item.order_id is not None:
+                # -1 is the "unlink" sentinel -- None already means "field
+                # not sent" for a PATCH, so a real NULL needs its own value.
+                new_order_id = None if item.order_id == -1 else item.order_id
+                assert_valid_order(db, new_order_id)
+                fields.append("order_id=?"); params.append(new_order_id)
             if fields:
                 fields.append("updated_at=?")
                 params.append(now_fn())
                 params.append(task_id)
                 db.execute(f"UPDATE tasks SET {','.join(fields)} WHERE id=?", params)
-            return dict(db.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone())
+            return task_dict(db.execute(task_query + " WHERE t.id=?", (task_id,)).fetchone())
 
     @router.delete("/tasks/{task_id}", status_code=204)
     def delete_task(task_id: int):

@@ -59,6 +59,28 @@ def test_technician_productivity(client):
     assert row["labor_cost"] == 80
 
 
+def test_technician_productivity_uses_job_technician_over_ticket_default(client):
+    """A job's own technician should own that job's labor even when a
+    different tech is the RO's ticket-level default -- e.g. the ticket
+    default did the diagnosis but a specialist was pulled in for one job."""
+    default_tech = client.post("/api/staff", json={"name": "Default Dana", "role": "technician"}).json()
+    job_tech = client.post("/api/staff", json={"name": "Job Jamie", "role": "technician"}).json()
+    vehicle = make_recon_vehicle(client, stock_number="R-1104")
+    order = make_recon_order(client, vehicle["id"])
+    client.put(f"/api/orders/{order['id']}/assignment", json={"technician_id": default_tech["id"]})
+    job = client.post(f"/api/orders/{order['id']}/jobs", json={"title": "Brakes", "technician_id": job_tech["id"]}).json()
+    save_estimate(client, order["id"], [
+        {"kind": "labor", "description": "Diag", "quantity": 1, "unit_price": 40, "unit_cost": 40},
+        {"kind": "labor", "description": "Brake job", "quantity": 3, "unit_price": 40, "unit_cost": 40, "job_id": job["id"]},
+    ])
+
+    rows = client.get("/api/reports/technicians").json()
+    default_row = next(r for r in rows if r["technician"] == "Default Dana")
+    job_row = next(r for r in rows if r["technician"] == "Job Jamie")
+    assert default_row["labor_hours"] == 1  # only the ungrouped diag line
+    assert job_row["labor_hours"] == 3  # the job's labor, not the ticket default's
+
+
 def test_email_settings_roundtrip(client):
     res = client.get("/api/settings/email").json()
     assert res["configured"] is False

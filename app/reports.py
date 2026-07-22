@@ -77,17 +77,23 @@ def technician_productivity_rows(db: sqlite3.Connection, start: str | None, end:
                WHERE w.technician_id=:tech_id AND (:start IS NULL OR o.created_at>=:start) AND (:end IS NULL OR o.created_at<=:end)""",
             {"tech_id": tech["id"], "start": start, "end": end_bound},
         ).fetchall()
-        order_ids = [row["id"] for row in orders]
-        labor_hours = labor_cost = 0.0
-        if order_ids:
-            placeholders = ",".join("?" for _ in order_ids)
-            totals = db.execute(
-                f"""SELECT coalesce(sum(ei.quantity),0), coalesce(sum(ei.quantity*ei.unit_cost),0)
-                    FROM estimates e JOIN estimate_items ei ON ei.estimate_id=e.id
-                    WHERE e.order_id IN ({placeholders}) AND ei.kind='labor'""",
-                order_ids,
-            ).fetchone()
-            labor_hours, labor_cost = totals[0], totals[1]
+        # Labor is attributed to whichever technician actually owns it: a
+        # job's own technician if the line is grouped under one, else the
+        # ticket's default assignee -- so per-job reassignment (e.g. another
+        # tech picks up just the brake job) shows up here instead of every
+        # labor line on the RO being credited to whoever the ticket default is.
+        totals = db.execute(
+            """SELECT coalesce(sum(ei.quantity),0), coalesce(sum(ei.quantity*ei.unit_cost),0)
+               FROM estimate_items ei
+               JOIN estimates e ON e.id=ei.estimate_id
+               JOIN orders o ON o.id=e.order_id
+               LEFT JOIN estimate_jobs ej ON ej.id=ei.job_id
+               LEFT JOIN order_workflow w ON w.order_id=o.id
+               WHERE ei.kind='labor' AND coalesce(ej.technician_id, w.technician_id)=:tech_id
+                 AND (:start IS NULL OR o.created_at>=:start) AND (:end IS NULL OR o.created_at<=:end)""",
+            {"tech_id": tech["id"], "start": start, "end": end_bound},
+        ).fetchone()
+        labor_hours, labor_cost = totals[0], totals[1]
         result.append({
             "technician": tech["name"],
             "ro_count": len(orders),

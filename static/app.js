@@ -93,8 +93,12 @@ const state = {
   currentUser: localStorage.getItem("dao-current-user") || "",
   detail: { segment: null, id: null, item: null, order: null },
   apFilter: { start: "", end: "" },
+  apSearch: "",
+  apInvoices: [],
+  vehicleSelection: new Set(), // "segment:id" strings, cleared on filter change/reload
   tasks: [],
   taskFilter: "",
+  taskSearch: "",
   showCompletedTasks: false,
   suggestions: [],
 };
@@ -176,6 +180,7 @@ async function loadVehiclesView() {
     toast(`Could not load vehicles: ${err.message}`, true);
     return;
   }
+  state.vehicleSelection.clear();
   renderStats();
   renderVehiclesTable();
 }
@@ -227,11 +232,15 @@ function renderVehiclesTable() {
   $("#vehicles-count").textContent = `${rows.length} vehicle${rows.length === 1 ? "" : "s"}`;
   const body = $("#vehicles-table");
   if (!rows.length) {
-    body.innerHTML = `<tr><td colspan="7" style="text-align:center;color:var(--ink-faint);padding:30px">No vehicles match.</td></tr>`;
+    body.innerHTML = `<tr><td colspan="8" style="text-align:center;color:var(--ink-faint);padding:30px">No vehicles match.</td></tr>`;
+    renderVehicleBulkBar();
     return;
   }
-  body.innerHTML = rows.map((v) => `
-    <tr class="clickable" data-segment="${v.segment}" data-id="${v.segment === "recon" ? v.recon_id : v.we_owe_id}">
+  body.innerHTML = rows.map((v) => {
+    const key = vehicleKey(v);
+    return `
+    <tr class="clickable" data-segment="${v.segment}" data-id="${v.segment === "recon" ? v.recon_id : v.we_owe_id}" data-key="${key}">
+      <td><input type="checkbox" class="veh-select" data-key="${key}" ${state.vehicleSelection.has(key) ? "checked" : ""}></td>
       <td class="num">${esc(v.stock_number || "—")}</td>
       <td>
         <div style="font-weight:600">${esc(v.vehicle)}</div>
@@ -243,10 +252,36 @@ function renderVehiclesTable() {
       <td class="num-col ${ageClass(v.age_days)}">${v.age_days}d</td>
       <td class="num-col">${money(v.actual_cost)}</td>
     </tr>
-  `).join("");
+  `;
+  }).join("");
   $$("tr.clickable", body).forEach((tr) => {
     tr.addEventListener("click", () => openVehicleDetail(tr.dataset.segment, Number(tr.dataset.id)));
   });
+  $$(".veh-select", body).forEach((cb) => {
+    cb.addEventListener("click", (e) => e.stopPropagation());
+    cb.addEventListener("change", () => {
+      if (cb.checked) state.vehicleSelection.add(cb.dataset.key);
+      else state.vehicleSelection.delete(cb.dataset.key);
+      renderVehicleBulkBar();
+    });
+  });
+  $("#vehicles-select-all").checked = rows.length > 0 && rows.every((v) => state.vehicleSelection.has(vehicleKey(v)));
+  renderVehicleBulkBar();
+}
+
+function vehicleKey(v) {
+  return `${v.segment}:${v.segment === "recon" ? v.recon_id : v.we_owe_id}`;
+}
+
+// Bulk archive/reopen reuses the same single-vehicle endpoints the detail
+// view already calls, fired concurrently -- there's no cross-vehicle
+// transaction to preserve since archiving one has zero effect on another.
+function renderVehicleBulkBar() {
+  const n = state.vehicleSelection.size;
+  $("#vehicles-bulk-bar").style.display = n ? "" : "none";
+  if (!n) return;
+  $("#vehicles-bulk-count").textContent = `${n} selected`;
+  $("#vehicles-bulk-archive").textContent = state.filter === "history" ? "Reopen Selected" : "Send Selected to History";
 }
 
 function wireVehiclesView() {
@@ -272,6 +307,35 @@ function wireVehiclesView() {
     state.sortByAge = state.sortByAge === "desc" ? "asc" : "desc";
     $("#th-age .sort-arrow").textContent = state.sortByAge === "desc" ? "▼" : "▲";
     renderVehiclesTable();
+  });
+
+  $("#vehicles-select-all").addEventListener("change", (e) => {
+    $$(".veh-select", $("#vehicles-table")).forEach((cb) => {
+      cb.checked = e.target.checked;
+      if (e.target.checked) state.vehicleSelection.add(cb.dataset.key);
+      else state.vehicleSelection.delete(cb.dataset.key);
+    });
+    renderVehicleBulkBar();
+  });
+
+  $("#vehicles-bulk-clear").addEventListener("click", () => {
+    state.vehicleSelection.clear();
+    renderVehiclesTable();
+  });
+
+  $("#vehicles-bulk-archive").addEventListener("click", async () => {
+    const reopening = state.filter === "history";
+    const targets = [...state.vehicleSelection].map((key) => {
+      const [segment, id] = key.split(":");
+      return { segment, id };
+    });
+    if (!confirm(`${reopening ? "Reopen" : "Send to History"} ${targets.length} vehicle${targets.length === 1 ? "" : "s"}?`)) return;
+    const results = await Promise.allSettled(targets.map(({ segment, id }) =>
+      post(`/api/${segment === "recon" ? "recon/vehicles" : "we-owe"}/${id}/${reopening ? "reopen" : "archive"}`, {})
+    ));
+    const failed = results.filter((r) => r.status === "rejected").length;
+    toast(failed ? `${targets.length - failed} succeeded, ${failed} failed` : `${targets.length} vehicle${targets.length === 1 ? "" : "s"} updated`, !!failed);
+    await loadVehiclesView();
   });
 }
 
@@ -315,6 +379,7 @@ async function loadVehicleDetail() {
   if (!active) {
     $("#vd-void-order").style.display = "none";
     $("#vd-print-ticket").style.display = "none";
+    $("#vd-add-task").style.display = "none";
     $("#vd-no-order").style.display = "";
     $("#vd-order-content").style.display = "none";
     applyArchivedLockUI(!!item.archived_at);
@@ -480,6 +545,7 @@ function renderOrderPanel() {
   renderActivity(order);
   renderAssignment(order);
   $("#vd-print-ticket").style.display = "";
+  $("#vd-add-task").style.display = "";
   $("#vd-void-order").style.display = order.voided ? "none" : "";
 }
 
@@ -863,16 +929,34 @@ function renderPrintTicket() {
     : `${item.year} ${item.make} ${item.model}`;
   const customerLabel = segment === "recon" ? "Recon Inventory" : (item.customer_name || "");
   const items = order.estimate ? order.estimate.items : [];
+  const jobs = order.estimate?.jobs ?? [];
   const actualParts = items.filter((i) => i.kind === "part").reduce((s, i) => s + i.received_quantity * i.unit_cost, 0);
   const actualOther = items.filter((i) => i.kind !== "part").reduce((s, i) => s + i.quantity * i.unit_cost, 0);
   const a = order.assignment;
   const techName = (a && a.technician_name) || "Unassigned";
   const advisorName = (a && a.advisor_name) || "Unassigned";
 
-  const rows = items.length ? items.map((i) => `
+  const itemRow = (i) => `
     <tr><td>${esc(i.kind)}</td><td>${esc(i.description)}</td><td>${esc(i.part_number || "")}</td>
     <td class="num-col">${i.quantity}</td><td class="num-col">${money(i.unit_cost)}</td><td>${esc(STATUS_LABEL[i.status] || i.status || "")}</td></tr>
-  `).join("") : `<tr><td colspan="6">No parts or labor lines.</td></tr>`;
+  `;
+
+  // Same job/General buckets as the on-screen ticket (renderEstimate) --
+  // a printed ticket that's grouped differently than what the advisor was
+  // just looking at on screen would be confusing to hand to a technician.
+  let rows;
+  if (!jobs.length) {
+    rows = items.length ? items.map(itemRow).join("") : `<tr><td colspan="6">No parts or labor lines.</td></tr>`;
+  } else {
+    const buckets = [...jobs, { id: null, title: "General" }];
+    rows = buckets.map((bucket) => {
+      const bucketItems = items.filter((i) => (i.job_id ?? null) === bucket.id);
+      if (!bucketItems.length) return "";
+      const jobTech = bucket.id === null ? "" : (bucket.technician_name || "Use ticket default");
+      return `<tr class="print-job-head"><td colspan="6">${esc(bucket.title)}${jobTech ? ` — ${esc(jobTech)}` : ""}</td></tr>`
+        + bucketItems.map(itemRow).join("");
+    }).join("") || `<tr><td colspan="6">No parts or labor lines.</td></tr>`;
+  }
 
   const notesHtml = (order.notes || []).length
     ? order.notes.map((n) => `<div>${esc(n.text)} <span style="color:#666">(${esc(n.visibility)})</span></div>`).join("")
@@ -940,6 +1024,19 @@ function wireVehicleDetail() {
   $("#vd-print-ticket").addEventListener("click", () => {
     renderPrintTicket();
     window.print();
+  });
+
+  // Jumps to Tasks with this order pre-selected in the link dropdown, rather
+  // than making the advisor reopen the picker and hunt for the RO they were
+  // just looking at.
+  $("#vd-add-task").addEventListener("click", async () => {
+    const order = state.detail.order;
+    showView("tasks");
+    await loadTasksView();
+    if ($$("#task-order-input option").some((o) => o.value === String(order.id))) {
+      $("#task-order-input").value = String(order.id);
+    }
+    $("#task-title-input").focus();
   });
 
   $("#vd-archive-vehicle").addEventListener("click", async () => {
@@ -1658,10 +1755,22 @@ async function loadApTable() {
   if (start) params.set("start", start);
   if (end) params.set("end", end);
   try {
-    renderApTable(await get(`/api/ap/invoices?${params}`));
+    state.apInvoices = await get(`/api/ap/invoices?${params}`);
+    renderApTable(filterApInvoices(state.apInvoices));
   } catch (err) {
     toast(`Could not load A/P invoices: ${err.message}`, true);
   }
+}
+
+function filterApInvoices(invoices) {
+  const query = (state.apSearch || "").toLowerCase();
+  if (!query) return invoices;
+  return invoices.filter((a) =>
+    a.invoice_number.toLowerCase().includes(query) ||
+    a.vendor_name.toLowerCase().includes(query) ||
+    (a.po_number || "").toLowerCase().includes(query) ||
+    a.vehicle_label.toLowerCase().includes(query)
+  );
 }
 function renderVendorSelect() {
   $("#ap-vendor").innerHTML = state.vendors.map((v) => `<option value="${esc(v.name)}">${esc(v.name)}</option>`).join("") || `<option value="">Add a vendor first</option>`;
@@ -1682,11 +1791,21 @@ function renderPoSelect() {
 }
 function renderApTable(invoices) {
   $("#ap-count").textContent = `${invoices.length} invoice${invoices.length === 1 ? "" : "s"}`;
-  $("#ap-table").innerHTML = invoices.length ? invoices.map((a) => `
-    <tr><td>${esc(a.invoice_number)}</td><td>${esc(a.vendor_name)}</td><td>${esc(a.po_number)}</td>
-    <td>${esc(a.vehicle_label)}</td><td class="num-col">${money(a.total)}</td>
-    <td><span class="pill pill-done">${esc(a.status)}</span></td></tr>
-  `).join("") : `<tr><td colspan="6" style="text-align:center;color:var(--ink-faint);padding:20px">No vendor invoices posted for this range.</td></tr>`;
+  // Only recon/we-owe rows can jump anywhere -- retail ROs have no
+  // vehicle-detail view, so they render as a plain (non-clickable) row.
+  $("#ap-table").innerHTML = invoices.length ? invoices.map((a) => {
+    const refId = a.recon_vehicle_id ?? a.we_owe_id;
+    const clickable = refId != null && (a.segment === "recon" || a.segment === "we_owe");
+    return `
+    <tr class="${clickable ? "clickable" : ""}" ${clickable ? `data-segment="${a.segment}" data-ref-id="${refId}" title="Open this vehicle"` : ""}>
+      <td>${esc(a.invoice_number)}</td><td>${esc(a.vendor_name)}</td><td>${esc(a.po_number)}</td>
+      <td>${esc(a.vehicle_label)}</td><td class="num-col">${money(a.total)}</td>
+      <td><span class="pill pill-done">${esc(a.status)}</span></td></tr>
+  `;
+  }).join("") : `<tr><td colspan="6" style="text-align:center;color:var(--ink-faint);padding:20px">No vendor invoices posted for this range.</td></tr>`;
+  $$(".clickable", $("#ap-table")).forEach((row) => {
+    row.addEventListener("click", () => openVehicleDetail(row.dataset.segment, Number(row.dataset.refId)));
+  });
 }
 function renderAuditList(audits) {
   $("#audit-list").innerHTML = audits.length ? audits.slice(0, 20).map((a) => `
@@ -1754,6 +1873,10 @@ function wireAccountingView() {
     clearApChips();
     state.apFilter.end = $("#ap-filter-end").value;
     loadApTable();
+  });
+  $("#ap-search").addEventListener("input", (e) => {
+    state.apSearch = e.target.value.trim();
+    renderApTable(filterApInvoices(state.apInvoices));
   });
   $("#vendor-form").addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -1892,6 +2015,8 @@ function taskDueInfo(dueDate) {
 
 function taskRowHtml(t) {
   const due = taskDueInfo(t.due_date);
+  const refId = t.order_recon_vehicle_id ?? t.order_we_owe_id;
+  const linkable = t.order_id && refId != null && (t.order_segment === "recon" || t.order_segment === "we_owe");
   return `
     <div class="task-row ${t.urgent ? "urgent" : ""} ${t.done ? "done" : ""}" data-id="${t.id}">
       <button type="button" class="task-check" title="${t.done ? "Mark not done" : "Mark done"}">
@@ -1903,6 +2028,7 @@ function taskRowHtml(t) {
           ${t.assigned_to ? `<span class="task-assignee"><span class="task-avatar">${esc(t.assigned_to[0] || "?")}</span>${esc(t.assigned_to)}</span>` : `<span>Unassigned</span>`}
           ${due ? `<span class="task-due ${due.cls}">Due ${due.label}</span>` : ""}
           ${t.urgent ? `<span class="task-urgent-badge">Urgent</span>` : ""}
+          ${linkable ? `<button type="button" class="task-order-link" data-segment="${t.order_segment}" data-ref-id="${refId}">🚗 ${esc(t.order_label || t.order_number)}</button>` : ""}
           <span>by ${esc(t.created_by || "Unspecified")} · ${relativeTime(t.created_at)}</span>
         </div>
         ${t.notes ? `<div class="task-notes">${esc(t.notes)}</div>` : ""}
@@ -1936,13 +2062,20 @@ function wireTaskRowActions(container) {
       }
     });
   });
+  $$(".task-order-link", container).forEach((btn) => {
+    btn.addEventListener("click", () => openVehicleDetail(btn.dataset.segment, Number(btn.dataset.refId)));
+  });
 }
 
 function renderTasksList() {
   const actor = currentActor();
+  const query = (state.taskSearch || "").toLowerCase();
   let open = state.tasks.filter((t) => !t.done);
   if (state.taskFilter === "mine") open = open.filter((t) => t.assigned_to === actor);
-  const done = state.tasks.filter((t) => t.done);
+  const matches = (t) => t.title.toLowerCase().includes(query) || t.notes.toLowerCase().includes(query) || t.assigned_to.toLowerCase().includes(query);
+  if (query) open = open.filter(matches);
+  let done = state.tasks.filter((t) => t.done);
+  if (query) done = done.filter(matches);
 
   $("#tasks-count").textContent = `${open.length} open`;
   $("#tasks-list").innerHTML = open.length
@@ -1957,11 +2090,23 @@ function renderTasksList() {
   wireTaskRowActions($("#tasks-completed-list"));
 }
 
+// Only recon/we-owe orders are offered -- retail ROs have no vehicle-detail
+// view to jump to, so linking a task to one would be a dead-end chip.
+function renderTaskOrderSelect(orders) {
+  const linkable = orders.filter((o) => o.segment === "recon" || o.segment === "we_owe");
+  $("#task-order-input").innerHTML = `<option value="">No vehicle</option>` + linkable.map((o) => {
+    const label = o.stock_number ? `${o.stock_number} — ${o.year} ${o.make} ${o.model}` : `${o.customer_name} — ${o.year} ${o.make} ${o.model}`;
+    return `<option value="${o.id}">${esc(label)}</option>`;
+  }).join("");
+}
+
 async function loadTasksView() {
   try {
     if (!state.staff.length) state.staff = await get("/api/staff");
     $("#task-assignee-input").innerHTML = `<option value="">Unassigned</option>` + state.staff.map((s) => `<option value="${esc(s.name)}">${esc(s.name)}</option>`).join("");
-    state.tasks = await get("/api/tasks");
+    const [tasks, orders] = await Promise.all([get("/api/tasks"), get("/api/orders")]);
+    state.tasks = tasks;
+    renderTaskOrderSelect(orders);
     renderTasksList();
   } catch (err) {
     toast(`Could not load tasks: ${err.message}`, true);
@@ -1979,6 +2124,7 @@ function wireTasksView() {
         assigned_to: $("#task-assignee-input").value,
         due_date: $("#task-due-input").value,
         urgent: $("#task-urgent-input").checked,
+        order_id: $("#task-order-input").value ? Number($("#task-order-input").value) : null,
         actor: currentActor(),
       });
       $("#task-quick-add").reset();
@@ -1996,6 +2142,11 @@ function wireTasksView() {
       state.taskFilter = chip.dataset.taskFilter;
       renderTasksList();
     });
+  });
+
+  $("#task-search").addEventListener("input", (e) => {
+    state.taskSearch = e.target.value.trim();
+    renderTasksList();
   });
 
   $("#tasks-toggle-completed").addEventListener("click", () => {

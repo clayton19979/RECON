@@ -326,7 +326,8 @@ CREATE TABLE IF NOT EXISTS tasks (
   created_by TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
-  completed_at TEXT NOT NULL DEFAULT ''
+  completed_at TEXT NOT NULL DEFAULT '',
+  order_id INTEGER REFERENCES orders(id)
 );
 
 CREATE TABLE IF NOT EXISTS suggestions (
@@ -376,6 +377,10 @@ def _migrate(db: sqlite3.Connection) -> None:
     if "sort_order" not in estimate_item_columns:
         db.execute("ALTER TABLE estimate_items ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0")
         db.execute("UPDATE estimate_items SET sort_order = id")
+
+    task_columns = {row[1] for row in db.execute("PRAGMA table_info(tasks)")}
+    if "order_id" not in task_columns:
+        db.execute("ALTER TABLE tasks ADD COLUMN order_id INTEGER REFERENCES orders(id)")
 
     for table in ("recon_vehicles", "we_owe_items"):
         cols = {row[1] for row in db.execute(f"PRAGMA table_info({table})")}

@@ -121,10 +121,18 @@
           <span class="filters-note" id="vehicles-count">0 vehicles</span>
         </div>
 
+        <div class="bulk-bar" id="vehicles-bulk-bar" style="display:none">
+          <span id="vehicles-bulk-count"></span>
+          <div class="filters-gap"></div>
+          <button type="button" class="btn btn-ghost btn-sm" id="vehicles-bulk-clear">Clear selection</button>
+          <button type="button" class="btn btn-primary btn-sm" id="vehicles-bulk-archive">Send to History</button>
+        </div>
+
         <div class="panel">
           <table>
             <thead>
               <tr>
+                <th style="width:26px"><input type="checkbox" id="vehicles-select-all" title="Select all"></th>
                 <th>Stock #</th>
                 <th>Vehicle</th>
                 <th>Type</th>
@@ -158,6 +166,7 @@
           </div>
           <div style="display:flex;gap:10px" id="vd-actions">
             <button class="btn btn-ghost btn-sm" id="vd-print-ticket" style="display:none">Print Ticket</button>
+            <button class="btn btn-ghost btn-sm" id="vd-add-task" style="display:none">+ Task</button>
             <button class="btn btn-ghost btn-sm" id="vd-archive-vehicle" style="display:none">Send to History</button>
             <button class="btn btn-primary btn-sm" id="vd-reopen-vehicle" style="display:none">Reopen</button>
             <button class="btn btn-ghost btn-sm" id="vd-void-order" style="display:none;color:var(--crit)">Void Ticket</button>
@@ -430,6 +439,7 @@
           <input type="date" id="ap-filter-start" style="width:auto">
           <span style="color:var(--ink-faint);font-size:12.5px">to</span>
           <input type="date" id="ap-filter-end" style="width:auto">
+          <input id="ap-search" class="filters-search" placeholder="Search invoice #, vendor, PO, vehicle…" autocomplete="off">
           <div class="filters-gap"></div>
           <span class="filters-note" id="ap-count">0 invoices</span>
         </div>
@@ -482,6 +492,7 @@
         <form id="task-quick-add" class="task-quick-add">
           <input id="task-title-input" placeholder="Add a task… e.g. Call John back about his Civic" required>
           <select id="task-assignee-input"><option value="">Unassigned</option></select>
+          <select id="task-order-input" title="Link to a vehicle (optional)"><option value="">No vehicle</option></select>
           <input type="date" id="task-due-input" title="Due date (optional)">
           <label class="task-urgent-toggle"><input type="checkbox" id="task-urgent-input"> Urgent</label>
           <button class="btn btn-primary" type="submit">Add Task</button>
@@ -490,6 +501,7 @@
         <div class="filters">
           <button class="chip active" data-task-filter="">All</button>
           <button class="chip" data-task-filter="mine">Assigned to Me</button>
+          <input id="task-search" class="filters-search" placeholder="Search tasks…" autocomplete="off">
           <div class="filters-gap"></div>
           <span class="filters-note" id="tasks-count">0 open</span>
         </div>

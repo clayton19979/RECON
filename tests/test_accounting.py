@@ -60,6 +60,7 @@ def test_process_invoice_posts_and_receives_parts(client):
     posted = next(i for i in invoices if i["invoice_number"] == "INV-100")
     assert posted["po_number"] == order["number"]
     assert posted["vehicle_label"] == "R-5001"  # PO# -> RO# -> stock# traceability
+    assert posted["recon_vehicle_id"] == vehicle["id"]  # lets the UI click through to the vehicle
 
 
 def test_process_invoice_matches_po_by_stock_number(client):

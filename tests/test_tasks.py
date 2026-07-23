@@ -4,16 +4,35 @@ from tests.helpers import make_recon_order, make_recon_vehicle, make_we_owe
 
 
 def test_create_and_list_tasks(client):
-    res = client.post("/api/tasks", json={"title": "Call John back about his Civic", "assigned_to": "Antonio", "actor": "Clay"})
+    res = client.post("/api/tasks", json={"title": "Call John back about his Civic", "assigned_to": ["Antonio"], "actor": "Clay"})
     assert res.status_code == 201
     body = res.json()
     assert body["title"] == "Call John back about his Civic"
-    assert body["assigned_to"] == "Antonio"
+    assert body["assigned_to"] == ["Antonio"]
     assert body["created_by"] == "Clay"
     assert body["done"] == 0
 
     tasks = client.get("/api/tasks").json()
     assert any(t["title"] == "Call John back about his Civic" for t in tasks)
+
+
+def test_task_can_have_multiple_assignees(client):
+    res = client.post("/api/tasks", json={"title": "Deep clean the shop", "assigned_to": ["Antonio", "Jamie", "Antonio"]})
+    assert res.status_code == 201
+    # deduped, order preserved
+    assert res.json()["assigned_to"] == ["Antonio", "Jamie"]
+
+    task_id = res.json()["id"]
+    res = client.patch(f"/api/tasks/{task_id}", json={"assigned_to": ["Jamie", "Pat"]})
+    assert res.json()["assigned_to"] == ["Jamie", "Pat"]
+
+    res = client.patch(f"/api/tasks/{task_id}", json={"assigned_to": []})
+    assert res.json()["assigned_to"] == []
+
+
+def test_task_with_no_assignees_defaults_to_empty_list(client):
+    res = client.post("/api/tasks", json={"title": "Order shop supplies"})
+    assert res.json()["assigned_to"] == []
 
 
 def test_task_done_sets_completed_at_and_clears_on_reopen(client):

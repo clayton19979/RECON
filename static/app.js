@@ -99,6 +99,7 @@ const state = {
   tasks: [],
   taskFilter: "",
   taskSearch: "",
+  newTaskAssignees: [],
   showCompletedTasks: false,
   suggestions: [],
 };
@@ -524,7 +525,7 @@ function applyArchivedLockUI(archived) {
     "vd-status-select", "vd-status-save",
     "vd-add-job", "vd-add-part", "vd-add-labor", "vd-add-partstech", "vd-order-parts",
     "vd-add-note", "vd-note-text",
-    "vd-save-assignment", "vd-technician", "vd-advisor", "vd-odometer", "vd-promised",
+    "vd-save-assignment", "vd-technician", "vd-advisor", "vd-date-in", "vd-odometer", "vd-promised",
     "vd-edit-vehicle", "vd-recon-info-save", "vd-decode-vin", "vd-recon-vin", "vd-recon-mileage", "vd-recon-year",
     "vd-recon-make", "vd-recon-model", "vd-recon-trim", "vd-recon-color", "vd-recon-purchase-price",
     "vd-edit-customer", "vd-we-owe-save", "vd-we-owe-description", "vd-we-owe-category", "vd-we-owe-target", "vd-we-owe-status",
@@ -943,6 +944,7 @@ function renderAssignment(order) {
   const a = order.assignment;
   $("#vd-technician").innerHTML = `<option value="">Unassigned</option>` + techs.map((t) => `<option value="${t.id}" ${a && a.technician_id === t.id ? "selected" : ""}>${esc(t.name)}</option>`).join("");
   $("#vd-advisor").innerHTML = `<option value="">Unassigned</option>` + advisors.map((t) => `<option value="${t.id}" ${a && a.advisor_id === t.id ? "selected" : ""}>${esc(t.name)}</option>`).join("");
+  $("#vd-date-in").value = (a && a.date_in) || "";
   $("#vd-odometer").value = (a && a.odometer_in) || "";
   $("#vd-promised").value = (a && a.promised_at) || "";
 }
@@ -1154,6 +1156,7 @@ function wireVehicleDetail() {
         await put(`/api/orders/${state.detail.order.id}/assignment`, {
           advisor_id: $("#vd-advisor").value ? Number($("#vd-advisor").value) : null,
           technician_id: $("#vd-technician").value ? Number($("#vd-technician").value) : null,
+          date_in: $("#vd-date-in").value,
           odometer_in: Number($("#vd-odometer").value || 0),
           promised_at: $("#vd-promised").value,
           actor: currentActor(),
@@ -2038,6 +2041,57 @@ function wireStaffView() {
 }
 
 /* ==================================================================
+   MULTI-SELECT PICKER (checkbox popover) -- used for task assignees
+   ================================================================== */
+function assigneeSummaryLabel(names) {
+  if (!names || !names.length) return "Unassigned";
+  if (names.length <= 2) return names.join(", ");
+  return `${names[0]} +${names.length - 1}`;
+}
+
+// (Re)populates a picker's checkbox menu and rewires their change handlers --
+// called both once for the quick-add form and once per task row on every
+// render, since the row markup (and thus its menu) is rebuilt from scratch.
+function renderAssigneeMenu(menuEl, toggleEl, selectedNames, onChange) {
+  menuEl.innerHTML = state.staff.length
+    ? state.staff.map((s) => `<label class="ms-option"><input type="checkbox" value="${esc(s.name)}" ${selectedNames.includes(s.name) ? "checked" : ""}> ${esc(s.name)}</label>`).join("")
+    : `<div class="ms-empty">No staff yet</div>`;
+  toggleEl.textContent = assigneeSummaryLabel(selectedNames);
+  $$("input[type=checkbox]", menuEl).forEach((cb) => {
+    cb.addEventListener("change", () => {
+      const names = $$("input[type=checkbox]:checked", menuEl).map((c) => c.value);
+      toggleEl.textContent = assigneeSummaryLabel(names);
+      onChange(names);
+    });
+  });
+}
+
+// Only one picker menu open at a time; clicking anywhere outside the open
+// picker closes it, same as the pattern browsers use for native <select>.
+let openAssigneeMenuEl = null;
+function toggleAssigneeMenu(menuEl) {
+  if (openAssigneeMenuEl && openAssigneeMenuEl !== menuEl) openAssigneeMenuEl.style.display = "none";
+  const opening = menuEl.style.display !== "block";
+  menuEl.style.display = opening ? "block" : "none";
+  openAssigneeMenuEl = opening ? menuEl : null;
+}
+document.addEventListener("click", (e) => {
+  if (openAssigneeMenuEl && !e.target.closest(".ms-picker")) {
+    openAssigneeMenuEl.style.display = "none";
+    openAssigneeMenuEl = null;
+  }
+});
+// Wired once per toggle button (the quick-add one lives for the app's whole
+// life; each row's is rewired on every render since the row itself is new).
+function wireAssigneeToggle(toggleEl, menuEl) {
+  toggleEl.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    toggleAssigneeMenu(menuEl);
+  });
+}
+
+/* ==================================================================
    TASKS
    ================================================================== */
 // Due-date coloring mirrors the Vehicles board's age-severity pattern --
@@ -2064,7 +2118,10 @@ function taskRowHtml(t) {
       <div class="task-body">
         <div class="task-title">${esc(t.title)}</div>
         <div class="task-meta">
-          ${t.assigned_to ? `<span class="task-assignee"><span class="task-avatar">${esc(t.assigned_to[0] || "?")}</span>${esc(t.assigned_to)}</span>` : `<span>Unassigned</span>`}
+          <div class="ms-picker" data-id="${t.id}">
+            <button type="button" class="ms-toggle task-assignee-toggle">${esc(assigneeSummaryLabel(t.assigned_to))}</button>
+            <div class="ms-menu task-assignee-menu"></div>
+          </div>
           ${due ? `<span class="task-due ${due.cls}">Due ${due.label}</span>` : ""}
           ${t.urgent ? `<span class="task-urgent-badge">Urgent</span>` : ""}
           ${linkable ? `<button type="button" class="task-order-link" data-segment="${t.order_segment}" data-ref-id="${refId}">🚗 ${esc(t.order_label || t.order_number)}</button>` : ""}
@@ -2104,14 +2161,34 @@ function wireTaskRowActions(container) {
   $$(".task-order-link", container).forEach((btn) => {
     btn.addEventListener("click", () => openVehicleDetail(btn.dataset.segment, Number(btn.dataset.refId)));
   });
+  // Each row's assignee picker saves immediately on change (like every other
+  // auto-save control in this app) and updates local state directly rather
+  // than reloading the whole list -- reloading would tear down and rebuild
+  // the row, closing the popover mid-pick.
+  $$(".ms-picker[data-id]", container).forEach((picker) => {
+    const taskId = Number(picker.dataset.id);
+    const task = state.tasks.find((t) => t.id === taskId);
+    if (!task) return;
+    const toggleEl = $(".task-assignee-toggle", picker);
+    const menuEl = $(".task-assignee-menu", picker);
+    wireAssigneeToggle(toggleEl, menuEl);
+    renderAssigneeMenu(menuEl, toggleEl, task.assigned_to, async (names) => {
+      task.assigned_to = names;
+      try {
+        await patch(`/api/tasks/${taskId}`, { assigned_to: names });
+      } catch (err) {
+        toast(err.message, true);
+      }
+    });
+  });
 }
 
 function renderTasksList() {
   const actor = currentActor();
   const query = (state.taskSearch || "").toLowerCase();
   let open = state.tasks.filter((t) => !t.done);
-  if (state.taskFilter === "mine") open = open.filter((t) => t.assigned_to === actor);
-  const matches = (t) => t.title.toLowerCase().includes(query) || t.notes.toLowerCase().includes(query) || t.assigned_to.toLowerCase().includes(query);
+  if (state.taskFilter === "mine") open = open.filter((t) => t.assigned_to.includes(actor));
+  const matches = (t) => t.title.toLowerCase().includes(query) || t.notes.toLowerCase().includes(query) || t.assigned_to.some((a) => a.toLowerCase().includes(query));
   if (query) open = open.filter(matches);
   let done = state.tasks.filter((t) => t.done);
   if (query) done = done.filter(matches);
@@ -2142,7 +2219,9 @@ function renderTaskOrderSelect(orders) {
 async function loadTasksView() {
   try {
     if (!state.staff.length) state.staff = await get("/api/staff");
-    $("#task-assignee-input").innerHTML = `<option value="">Unassigned</option>` + state.staff.map((s) => `<option value="${esc(s.name)}">${esc(s.name)}</option>`).join("");
+    renderAssigneeMenu($("#task-assignee-menu"), $("#task-assignee-toggle"), state.newTaskAssignees, (names) => {
+      state.newTaskAssignees = names;
+    });
     const [tasks, orders] = await Promise.all([get("/api/tasks"), get("/api/orders")]);
     state.tasks = tasks;
     renderTaskOrderSelect(orders);
@@ -2153,6 +2232,8 @@ async function loadTasksView() {
 }
 
 function wireTasksView() {
+  wireAssigneeToggle($("#task-assignee-toggle"), $("#task-assignee-menu"));
+
   $("#task-quick-add").addEventListener("submit", async (e) => {
     e.preventDefault();
     const title = $("#task-title-input").value.trim();
@@ -2160,13 +2241,14 @@ function wireTasksView() {
     try {
       await post("/api/tasks", {
         title,
-        assigned_to: $("#task-assignee-input").value,
+        assigned_to: state.newTaskAssignees,
         due_date: $("#task-due-input").value,
         urgent: $("#task-urgent-input").checked,
         order_id: $("#task-order-input").value ? Number($("#task-order-input").value) : null,
         actor: currentActor(),
       });
       $("#task-quick-add").reset();
+      state.newTaskAssignees = [];
       toast("Task added");
       await loadTasksView();
     } catch (err) {

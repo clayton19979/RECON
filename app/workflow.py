@@ -25,6 +25,7 @@ class StaffPatch(BaseModel):
 class AssignmentIn(BaseModel):
     advisor_id: int | None = None
     technician_id: int | None = None
+    date_in: str = ""
     odometer_in: int = Field(default=0, ge=0)
     promised_at: str = ""
     actor: str = "ui"
@@ -113,7 +114,10 @@ def record_activity(db: sqlite3.Connection, order_id: int, action: str, actor: s
 
 
 def initialize_order_workflow(db: sqlite3.Connection, order_id: int, now_fn: Callable[[], str], actor: str = "ui") -> None:
-    db.execute("INSERT OR IGNORE INTO order_workflow(order_id) VALUES(?)", (order_id,))
+    # Date In defaults to the moment the ticket itself was created -- the
+    # advisor can still correct it (e.g. the car actually arrived a day
+    # earlier than the ticket got typed up) via the Assigned card's save.
+    db.execute("INSERT OR IGNORE INTO order_workflow(order_id, date_in) VALUES(?,?)", (order_id, now_fn()[:10]))
     record_activity(db, order_id, "order_created", actor, {}, now_fn)
 
 
@@ -244,8 +248,8 @@ def build_workflow_router(connect: Callable[[], sqlite3.Connection], now_fn: Cal
                     raise HTTPException(400, f"{label} is not an active {label.lower()}")
             db.execute("INSERT OR IGNORE INTO order_workflow(order_id) VALUES(?)", (order_id,))
             db.execute(
-                "UPDATE order_workflow SET advisor_id=?,technician_id=?,odometer_in=?,promised_at=?,version=version+1 WHERE order_id=?",
-                (item.advisor_id, item.technician_id, item.odometer_in, item.promised_at, order_id),
+                "UPDATE order_workflow SET advisor_id=?,technician_id=?,date_in=?,odometer_in=?,promised_at=?,version=version+1 WHERE order_id=?",
+                (item.advisor_id, item.technician_id, item.date_in, item.odometer_in, item.promised_at, order_id),
             )
             record_activity(db, order_id, "assignment_updated", item.actor, item.model_dump(exclude={"actor"}), now_fn)
             return workflow_detail(db, order_id)["assignment"]

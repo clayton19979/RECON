@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from typing import Callable
 
@@ -7,10 +8,15 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 
+def _clean_names(names: list[str]) -> list[str]:
+    """Trims and dedupes while keeping first-seen order."""
+    return list(dict.fromkeys(n.strip() for n in names if n.strip()))
+
+
 class TaskIn(BaseModel):
     title: str = Field(min_length=1, max_length=300)
     notes: str = ""
-    assigned_to: str = ""
+    assigned_to: list[str] = []
     due_date: str = ""
     urgent: bool = False
     order_id: int | None = None
@@ -20,7 +26,7 @@ class TaskIn(BaseModel):
 class TaskPatch(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=300)
     notes: str | None = None
-    assigned_to: str | None = None
+    assigned_to: list[str] | None = None
     due_date: str | None = None
     urgent: bool | None = None
     done: bool | None = None
@@ -57,6 +63,7 @@ def build_tasks_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
 
     def task_dict(row: sqlite3.Row) -> dict:
         value = dict(row)
+        value["assigned_to"] = json.loads(value["assigned_to"]) if value["assigned_to"] else []
         if value["order_id"] is None:
             value["order_label"] = None
         elif value["stock_number"]:
@@ -87,7 +94,7 @@ def build_tasks_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
             ts = now_fn()
             cur = db.execute(
                 "INSERT INTO tasks(title,notes,assigned_to,due_date,urgent,order_id,created_by,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
-                (item.title.strip(), item.notes.strip(), item.assigned_to.strip(), item.due_date.strip(), int(item.urgent), item.order_id, item.actor.strip(), ts, ts),
+                (item.title.strip(), item.notes.strip(), json.dumps(_clean_names(item.assigned_to)), item.due_date.strip(), int(item.urgent), item.order_id, item.actor.strip(), ts, ts),
             )
             return task_dict(db.execute(task_query + " WHERE t.id=?", (cur.lastrowid,)).fetchone())
 
@@ -103,7 +110,7 @@ def build_tasks_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
             if item.notes is not None:
                 fields.append("notes=?"); params.append(item.notes.strip())
             if item.assigned_to is not None:
-                fields.append("assigned_to=?"); params.append(item.assigned_to.strip())
+                fields.append("assigned_to=?"); params.append(json.dumps(_clean_names(item.assigned_to)))
             if item.due_date is not None:
                 fields.append("due_date=?"); params.append(item.due_date.strip())
             if item.urgent is not None:

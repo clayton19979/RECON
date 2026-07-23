@@ -42,6 +42,20 @@ def test_assignment_requires_active_matching_role(client):
     assert res.json()["technician_name"] == "Jordan"
 
 
+def test_date_in_defaults_to_order_creation_and_is_editable(client):
+    vehicle = make_recon_vehicle(client)
+    order = make_recon_order(client, vehicle["id"])
+    detail = client.get(f"/api/orders/{order['id']}").json()
+    assert detail["assignment"]["date_in"] == order["created_at"][:10]
+
+    res = client.put(f"/api/orders/{order['id']}/assignment", json={"date_in": "2026-01-15"})
+    assert res.status_code == 200
+    assert res.json()["date_in"] == "2026-01-15"
+
+    detail = client.get(f"/api/orders/{order['id']}").json()
+    assert detail["assignment"]["date_in"] == "2026-01-15"
+
+
 def test_status_transitions(client):
     """Statuses are a plain, ungated picker now -- any of the 4 values is
     settable from any other, with no transition graph or approval/invoice

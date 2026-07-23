@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -152,6 +153,7 @@ CREATE TABLE IF NOT EXISTS order_workflow (
   order_id INTEGER PRIMARY KEY REFERENCES orders(id) ON DELETE CASCADE,
   advisor_id INTEGER REFERENCES staff(id),
   technician_id INTEGER REFERENCES staff(id),
+  date_in TEXT NOT NULL DEFAULT '',
   odometer_in INTEGER NOT NULL DEFAULT 0,
   promised_at TEXT NOT NULL DEFAULT '',
   version INTEGER NOT NULL DEFAULT 1
@@ -403,6 +405,30 @@ def _migrate(db: sqlite3.Connection) -> None:
     db.execute("UPDATE orders SET status='in_progress' WHERE status='approved'")
     db.execute("UPDATE orders SET status='complete' WHERE status IN ('completed','closed')")
     db.execute("UPDATE orders SET status='complete', voided=1 WHERE status='cancelled'")
+
+    # tasks.assigned_to moved from a single free-text name to a JSON array
+    # so a task can have more than one assignee. Old rows hold a plain
+    # string (or ''), which isn't valid JSON, so json.loads raises and we
+    # wrap it into a one-name list (or an empty list); already-migrated
+    # rows parse as a list and are left alone, making this idempotent.
+    for task_id, assigned_to in db.execute("SELECT id, assigned_to FROM tasks").fetchall():
+        raw = assigned_to or ""
+        try:
+            if isinstance(json.loads(raw), list):
+                continue
+        except (json.JSONDecodeError, TypeError):
+            pass
+        db.execute("UPDATE tasks SET assigned_to=? WHERE id=?", (json.dumps([raw] if raw else []), task_id))
+
+    workflow_columns = {row[1] for row in db.execute("PRAGMA table_info(order_workflow)")}
+    if "date_in" not in workflow_columns:
+        db.execute("ALTER TABLE order_workflow ADD COLUMN date_in TEXT NOT NULL DEFAULT ''")
+        # Backfill existing tickets from their own creation date rather than
+        # leaving Date In blank on every RO that already existed -- it's the
+        # same default a brand-new order gets, just applied retroactively.
+        db.execute("""UPDATE order_workflow
+                      SET date_in = (SELECT substr(o.created_at,1,10) FROM orders o WHERE o.id=order_workflow.order_id)
+                      WHERE date_in = ''""")
 
 
 def init_db(path: Path) -> None:

@@ -231,7 +231,10 @@
                   <label>Advisor<select id="vd-advisor"></select></label>
                 </div>
                 <div class="form-row" style="padding:0 16px 14px">
+                  <label>Date in<input id="vd-date-in" type="date"></label>
                   <label>Odometer in<input id="vd-odometer" type="number" min="0"></label>
+                </div>
+                <div class="form-row" style="padding:0 16px 14px">
                   <label>Promised<input id="vd-promised" type="datetime-local"></label>
                 </div>
                 <div style="padding:0 16px 14px"><button class="btn btn-ghost btn-sm" id="vd-save-assignment">Save</button></div>
@@ -492,7 +495,10 @@
 
         <form id="task-quick-add" class="task-quick-add">
           <input id="task-title-input" placeholder="Add a task… e.g. Call John back about his Civic" required>
-          <select id="task-assignee-input"><option value="">Unassigned</option></select>
+          <div class="ms-picker" id="task-assignee-picker">
+            <button type="button" class="ms-toggle" id="task-assignee-toggle">Unassigned</button>
+            <div class="ms-menu" id="task-assignee-menu"></div>
+          </div>
           <select id="task-order-input" title="Link to a vehicle (optional)"><option value="">No vehicle</option></select>
           <input type="date" id="task-due-input" title="Due date (optional)">
           <label class="task-urgent-toggle"><input type="checkbox" id="task-urgent-input"> Urgent</label>

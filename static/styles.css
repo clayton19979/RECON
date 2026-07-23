@@ -519,8 +519,12 @@ dialog::backdrop { background: rgba(20, 18, 14, .45); }
   .print-table tbody td { padding: 5px 8px; border-bottom: 0.5px solid #999; background: none; color: #000; }
   .print-table tbody tr { break-inside: avoid; }
   .print-table tfoot td {
-    padding: 8px 8px 0; border-top: 1.5px solid #000; font-weight: 700; font-size: 11px; background: none; color: #000;
+    padding: 6px 8px; font-weight: 700; font-size: 11px; background: none; color: #000;
   }
+  .print-table tfoot tr:first-child td { border-top: 1.5px solid #000; padding-top: 8px; }
+  /* Ticket footer's "Quoted" row -- a lighter subtotal sitting directly
+     above the bold "Cost" total, not a second total in its own right. */
+  .print-table tfoot tr.subtotal td { font-weight: 600; font-size: 10.5px; color: #333; padding-bottom: 2px; }
   .print-table .num-col {
     text-align: right; font-family: "Cascadia Mono", Consolas, monospace; font-variant-numeric: tabular-nums;
   }

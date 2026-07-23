@@ -442,10 +442,14 @@ function renderDetailHead() {
   renderVehicleInfoSummary();
 }
 
+// Vehicle-wide (every RO ever opened on this vehicle, not just the active
+// one) -- quoted_cost/total_cost already come from the same cost_rollup
+// the Vehicles-list stats use, just never surfaced here before.
 function renderCostSummary() {
   const { item } = state.detail;
   const box = $("#vd-cost-summary");
-  let lines = `<div class="cost-line"><span>Cost</span><span class="num">${money(item.total_cost)}</span></div>`;
+  let lines = `<div class="cost-line"><span>Quoted</span><span class="num">${money(item.quoted_cost)}</span></div>`;
+  lines += `<div class="cost-line total"><span>Cost</span><span class="num">${money(item.total_cost)}</span></div>`;
   if (state.detail.segment !== "recon" && item.customer_paid) {
     lines += `<div class="cost-line"><span>Customer paid</span><span class="num">${money(item.customer_paid)}</span></div>`;
     lines += `<div class="cost-line total"><span>Net to shop</span><span class="num">${money(item.net_cost)}</span></div>`;
@@ -670,8 +674,15 @@ function renderEstimate(order) {
   } else {
     wireEstimateRowDragging(box);
   }
+  // Quoted = every line at its full quantity, whether or not it's landed yet
+  // (matches cost_rollup's quoted_cost); actual = only what's really in the
+  // car so far -- parts count once received, labor/fees count the moment
+  // they're logged. Same "at cost" basis as everywhere else (unit_cost, not
+  // unit_price) -- this panel has never shown customer-facing markup.
+  const quotedTotal = items.reduce((s, i) => s + i.quantity * i.unit_cost, 0);
   const actualParts = items.filter((i) => i.kind === "part").reduce((s, i) => s + i.received_quantity * i.unit_cost, 0);
   const actualOther = items.filter((i) => i.kind !== "part").reduce((s, i) => s + i.quantity * i.unit_cost, 0);
+  $("#vd-quoted-cost").textContent = money(quotedTotal);
   $("#vd-actual-cost").textContent = money(actualParts + actualOther);
 }
 
@@ -930,6 +941,7 @@ function renderPrintTicket() {
   const customerLabel = segment === "recon" ? "Recon Inventory" : (item.customer_name || "");
   const items = order.estimate ? order.estimate.items : [];
   const jobs = order.estimate?.jobs ?? [];
+  const quotedTotal = items.reduce((s, i) => s + i.quantity * i.unit_cost, 0);
   const actualParts = items.filter((i) => i.kind === "part").reduce((s, i) => s + i.received_quantity * i.unit_cost, 0);
   const actualOther = items.filter((i) => i.kind !== "part").reduce((s, i) => s + i.quantity * i.unit_cost, 0);
   const a = order.assignment;
@@ -982,7 +994,10 @@ function renderPrintTicket() {
     <table class="print-table">
       <thead><tr><th>Kind</th><th>Description</th><th>Part #</th><th class="num-col">Qty</th><th class="num-col">Cost</th><th>Status</th></tr></thead>
       <tbody>${rows}</tbody>
-      <tfoot><tr><td colspan="4">Cost</td><td class="num-col">${money(actualParts + actualOther)}</td><td></td></tr></tfoot>
+      <tfoot>
+        <tr class="subtotal"><td colspan="4">Quoted</td><td class="num-col">${money(quotedTotal)}</td><td></td></tr>
+        <tr><td colspan="4">Cost — actually in it</td><td class="num-col">${money(actualParts + actualOther)}</td><td></td></tr>
+      </tfoot>
     </table>
     <div class="print-subhead" style="margin:16px 0 6px">Notes</div>
     <div class="print-notes">${notesHtml}</div>

@@ -176,6 +176,41 @@ def test_we_owe_customer_deposit_reduces_net_cost(client):
     assert detail["net_cost"] == 200
 
 
+def test_we_owe_board_status_tracks_ticket_while_open(client):
+    """The vehicle board must show the linked ticket's own workflow status
+    (estimate/pending_approval/in_progress/complete) while the we-owe promise
+    is still 'open', the same way recon rows already track their ticket --
+    otherwise progressing the ticket never shows up on the board at all."""
+    item = make_we_owe(client, description="Fix AC")
+    order = client.post("/api/orders", json={"concern": "AC repair", "segment": "we_owe", "we_owe_id": item["id"]}).json()
+
+    board = client.get("/api/vehicles-board", params={"segment": "we_owe"}).json()
+    row = next(r for r in board if r["we_owe_id"] == item["id"])
+    assert row["status"] == "estimate"
+    assert row["status_bucket"] == "in_progress"
+
+    client.patch(f"/api/orders/{order['id']}/status", json={"status": "in_progress"})
+    board = client.get("/api/vehicles-board", params={"segment": "we_owe"}).json()
+    row = next(r for r in board if r["we_owe_id"] == item["id"])
+    assert row["status"] == "in_progress"
+    assert row["status_bucket"] == "in_progress"
+
+    # Explicitly marking the promise fulfilled overrides the ticket status
+    # and moves it to the finished bucket, regardless of the ticket's status.
+    client.patch(f"/api/we-owe/{item['id']}", json={"status": "fulfilled"})
+    board = client.get("/api/vehicles-board", params={"segment": "we_owe"}).json()
+    row = next(r for r in board if r["we_owe_id"] == item["id"])
+    assert row["status"] == "fulfilled"
+    assert row["status_bucket"] == "finished"
+
+
+def test_we_owe_board_status_before_any_ticket_is_open(client):
+    item = make_we_owe(client, description="Fix AC")
+    board = client.get("/api/vehicles-board", params={"segment": "we_owe"}).json()
+    row = next(r for r in board if r["we_owe_id"] == item["id"])
+    assert row["status"] == "open"
+
+
 def test_we_owe_payment_requires_positive_amount(client):
     item = make_we_owe(client)
     res = client.post(f"/api/we-owe/{item['id']}/payments", json={"amount": 0})

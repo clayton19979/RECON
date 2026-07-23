@@ -124,6 +124,20 @@ def test_void_order(client):
     assert res.status_code == 409
 
 
+def test_void_order_blocked_once_customer_invoiced(client):
+    """Voiding an already-invoiced order would zero its cost out of the
+    vehicle's rollup while the customer invoice/payment records still say
+    it was billed -- the two would permanently disagree."""
+    order = make_retail_order(client)
+    save_estimate(client, order["id"], [{"kind": "labor", "description": "Diag", "quantity": 1, "unit_price": 100, "unit_cost": 100}])
+    client.post(f"/api/orders/{order['id']}/authorization", json={"status": "approved", "approved_by": "Jamie", "method": "in_person"})
+    res = client.post(f"/api/orders/{order['id']}/invoice", json={"actor": "Clay"})
+    assert res.status_code == 201, res.text
+
+    res = client.post(f"/api/orders/{order['id']}/void", json={"actor": "Clay"})
+    assert res.status_code == 409
+
+
 def test_authorization_flow(client):
     vehicle = make_recon_vehicle(client)
     order = make_recon_order(client, vehicle["id"])

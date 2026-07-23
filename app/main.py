@@ -292,6 +292,15 @@ def create_app(db_path: Path = DEFAULT_DB) -> FastAPI:
         model = (results.get("Model") or "").strip()
         if not year or not make or not model:
             raise HTTPException(404, "No vehicle matched that VIN")
+        # NHTSA reports the payload/cab designation (1500/2500/3500 etc.)
+        # separately from Model -- e.g. Model="Silverado", Series="1500" --
+        # so a Model on its own doesn't say which Silverado/F-150/Sierra this
+        # is. Folded in here rather than added as its own field so every
+        # place that already displays "year make model" picks it up for free.
+        for series_field in ("Series", "Series2"):
+            series = (results.get(series_field) or "").strip()
+            if series and series.lower() not in model.lower():
+                model = f"{model} {series}".strip()
         displacement = (results.get("DisplacementL") or "").strip()
         try:
             displacement = f"{float(displacement):.1f}"
@@ -424,11 +433,17 @@ def create_app(db_path: Path = DEFAULT_DB) -> FastAPI:
                     if cur.lastrowid is not None:
                         retained_ids.add(int(cur.lastrowid))
             if old:
+                # A line already marked received represents money the shop
+                # actually spent (it's what an AP invoice was posted against) --
+                # it must never disappear just because a save's payload didn't
+                # happen to include it (a stale tab, a slow response landing
+                # late, a future bug in what the browser collects). Only
+                # never-received lines are ever deleted this way.
                 if retained_ids:
                     placeholders = ",".join("?" for _ in retained_ids)
-                    db.execute(f"DELETE FROM estimate_items WHERE estimate_id=? AND id NOT IN ({placeholders})", (estimate_id, *retained_ids))
+                    db.execute(f"DELETE FROM estimate_items WHERE estimate_id=? AND id NOT IN ({placeholders}) AND status!='received'", (estimate_id, *retained_ids))
                 else:
-                    db.execute("DELETE FROM estimate_items WHERE estimate_id=?", (estimate_id,))
+                    db.execute("DELETE FROM estimate_items WHERE estimate_id=? AND status!='received'", (estimate_id,))
             result = dict(db.execute("SELECT * FROM estimates WHERE id=?", (estimate_id,)).fetchone())
             result["items"] = [dict(row) for row in db.execute("SELECT * FROM estimate_items WHERE estimate_id=? ORDER BY sort_order, id", (estimate_id,))]
             result["jobs"] = estimate_jobs_list(db, estimate_id)

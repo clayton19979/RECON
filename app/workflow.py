@@ -348,6 +348,8 @@ def build_workflow_router(connect: Callable[[], sqlite3.Connection], now_fn: Cal
             assert_vehicle_editable(db, current_row)
             if current_row["voided"]:
                 raise HTTPException(409, "Repair order is already voided")
+            if db.execute("SELECT 1 FROM customer_invoices WHERE order_id=?", (order_id,)).fetchone():
+                raise HTTPException(409, "This order has already been invoiced to the customer -- voiding would leave its cost excluded while the invoice still shows it as billed")
             db.execute("UPDATE orders SET status='complete', voided=1 WHERE id=?", (order_id,))
             record_activity(db, order_id, "order_voided", item.actor, {"from": current_row["status"]}, now_fn)
             return {"id": order_id, "status": "complete", "voided": True}

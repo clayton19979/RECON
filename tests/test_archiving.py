@@ -49,6 +49,30 @@ def test_archive_and_reopen_recon_vehicle(client):
     assert detail["total_cost"] == 50  # nothing lost while archived
 
 
+def test_archive_and_reopen_reject_stale_version(client):
+    """Every other vehicle edit (the PATCH endpoints) enforces optimistic
+    concurrency via expected_version -- archive/reopen must too, or two
+    people acting on the same vehicle at once get no conflict warning."""
+    vehicle = make_recon_vehicle(client, stock_number="R-8802")
+    stale_version = vehicle["edit_version"]
+
+    # someone else's action bumps the version first
+    client.patch(f"/api/recon/vehicles/{vehicle['id']}", json={"notes": "someone else edited this"})
+
+    res = client.post(f"/api/recon/vehicles/{vehicle['id']}/archive", json={"expected_version": stale_version})
+    assert res.status_code == 409
+
+    # a correct/omitted version still works
+    res = client.post(f"/api/recon/vehicles/{vehicle['id']}/archive")
+    assert res.status_code == 200
+    current_version = res.json()["edit_version"]
+
+    res = client.post(f"/api/recon/vehicles/{vehicle['id']}/reopen", json={"expected_version": stale_version})
+    assert res.status_code == 409
+    res = client.post(f"/api/recon/vehicles/{vehicle['id']}/reopen", json={"expected_version": current_version})
+    assert res.status_code == 200
+
+
 def test_archive_and_reopen_we_owe_item(client):
     item = make_we_owe(client, description="Fix mirror")
     order = client.post("/api/orders", json={"concern": "Fix it", "segment": "we_owe", "we_owe_id": item["id"]}).json()

@@ -52,6 +52,7 @@
     <header class="topbar">
       <div>
         <div class="shop-name">RECON</div>
+        <div class="shop-acronym">Repair, Estimate, Cost &amp; Obligation Network</div>
         <div class="shop-sub">Discount Auto Repair · Merrillville, IN</div>
       </div>
       <label class="search">
@@ -270,6 +271,11 @@
               <div class="cost-summary" id="vd-cost-summary"></div>
             </div>
 
+            <div class="card" id="vd-order-history-card" style="display:none">
+              <div class="card-head"><p class="section-eyebrow" style="margin:0">Order History</p></div>
+              <div id="vd-order-history" class="mini-list"></div>
+            </div>
+
             <div class="card" id="vd-vehicle-info-card">
               <div class="card-head">
                 <p class="section-eyebrow" style="margin:0">Vehicle Info</p>
@@ -422,11 +428,15 @@
           </div>
           <div>
             <div class="card">
-              <div class="card-head"><p class="section-eyebrow" style="margin:0">Vendors</p></div>
+              <div class="card-head"><p class="section-eyebrow" style="margin:0" id="vendor-form-title">Vendors</p></div>
               <form id="vendor-form" style="padding:14px 16px">
                 <label>Vendor name<input name="name" required placeholder="WorldPac"></label>
                 <label>Aliases<input name="aliases" placeholder="World Pac, WPAC"></label>
-                <button class="btn btn-primary" style="align-self:flex-start">Save Vendor</button>
+                <label>Account #<input name="account_number" placeholder="Optional"></label>
+                <div class="form-row" style="margin-top:2px">
+                  <button type="submit" class="btn btn-primary" style="align-self:flex-start" id="vendor-form-submit">Save Vendor</button>
+                  <button type="button" class="btn btn-ghost btn-sm" id="vendor-form-cancel" style="display:none;align-self:flex-start">Cancel</button>
+                </div>
               </form>
               <div id="vendor-list" class="vendor-chips"></div>
             </div>
@@ -454,7 +464,7 @@
 
         <div class="panel">
           <table>
-            <thead><tr><th>Invoice</th><th>Vendor</th><th>RO / PO</th><th>Vehicle</th><th class="num-col">Total</th><th>Status</th></tr></thead>
+            <thead><tr><th>Invoice</th><th>Vendor</th><th>RO / PO</th><th>Vehicle</th><th class="num-col">Total</th><th>Status</th><th></th></tr></thead>
             <tbody id="ap-table"></tbody>
           </table>
         </div>
@@ -479,6 +489,11 @@
             </select></label>
             <button class="btn btn-primary" style="align-self:flex-end">Add</button>
           </form>
+        </div>
+        <div class="filters">
+          <input id="staff-search" class="filters-search" placeholder="Search staff…" autocomplete="off">
+          <div class="filters-gap"></div>
+          <span class="filters-note" id="staff-count">0 staff</span>
         </div>
         <div class="panel">
           <table>
@@ -537,7 +552,16 @@
           <button class="btn btn-primary" type="submit">Post Suggestion</button>
         </form>
 
+        <div class="filters">
+          <input id="suggestion-search" class="filters-search" placeholder="Search suggestions…" autocomplete="off">
+          <div class="filters-gap"></div>
+          <span class="filters-note" id="suggestions-count">0 open</span>
+        </div>
+
         <div id="suggestions-list" class="suggestion-list"></div>
+
+        <button type="button" class="btn btn-ghost btn-sm" id="suggestions-toggle-resolved" style="margin-top:14px">Show resolved (0)</button>
+        <div id="suggestions-resolved-list" class="suggestion-list" style="display:none;margin-top:10px"></div>
       </section>
 
     </div>

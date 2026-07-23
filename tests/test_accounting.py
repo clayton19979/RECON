@@ -24,6 +24,28 @@ def test_vendor_crud_and_duplicate(client):
     assert res.status_code == 409
 
 
+def test_vendor_can_be_corrected(client):
+    vendor = client.post("/api/vendors", json={"name": "Wrldpac Typo"}).json()
+    res = client.patch(f"/api/vendors/{vendor['id']}", json={"name": "WorldPac", "aliases": ["World Pac"], "account_number": "ACCT-1"})
+    assert res.status_code == 200
+    body = res.json()
+    assert body["name"] == "WorldPac"
+    assert body["aliases"] == ["World Pac"]
+    assert body["account_number"] == "ACCT-1"
+
+
+def test_vendor_update_rejects_name_collision(client):
+    client.post("/api/vendors", json={"name": "WorldPac"})
+    other = client.post("/api/vendors", json={"name": "NAPA"}).json()
+    res = client.patch(f"/api/vendors/{other['id']}", json={"name": "WorldPac"})
+    assert res.status_code == 409
+
+
+def test_vendor_update_unknown_404s(client):
+    res = client.patch("/api/vendors/99999", json={"name": "Anything"})
+    assert res.status_code == 404
+
+
 def test_process_invoice_unknown_vendor_and_po(client):
     res = post_invoice(client)
     body = res.json()
@@ -61,6 +83,59 @@ def test_process_invoice_posts_and_receives_parts(client):
     assert posted["po_number"] == order["number"]
     assert posted["vehicle_label"] == "R-5001"  # PO# -> RO# -> stock# traceability
     assert posted["recon_vehicle_id"] == vehicle["id"]  # lets the UI click through to the vehicle
+
+
+def test_void_ap_invoice_and_repost_under_same_number(client):
+    """Voiding a mis-posted invoice (wrong vendor match, duplicate, etc.)
+    must free up its invoice number -- otherwise a corrected re-post of the
+    same real vendor invoice is permanently blocked as a 'duplicate'. Posted
+    against a second, unrelated order so the retry isn't also tripped up by
+    the (correct, separate) exceeds-ordered-quantity guard from receiving
+    the first order's part twice."""
+    client.post("/api/vendors", json={"name": "WorldPac"})
+    vehicle = make_recon_vehicle(client, stock_number="R-5002")
+    order = make_recon_order(client, vehicle["id"])
+    save_estimate(client, order["id"], [{"kind": "part", "description": "Brake pads", "part_number": "BP-1", "quantity": 1, "unit_price": 45, "unit_cost": 45}])
+    res = post_invoice(client, vendor_name="WorldPac", po_number=order["number"], subtotal=45, total=45,
+                        items=[{"part_number": "BP-1", "description": "Brake pads", "quantity": 1, "unit_cost": 45, "kind": "part"}])
+    invoice_id = client.get("/api/ap/invoices").json()[0]["id"]
+    assert res.json()["status"] == "posted"
+
+    res = client.patch(f"/api/ap/invoices/{invoice_id}/void", json={"actor": "Clay"})
+    assert res.status_code == 200
+    assert res.json()["status"] == "voided"
+
+    invoices = client.get("/api/ap/invoices").json()
+    assert next(i for i in invoices if i["id"] == invoice_id)["status"] == "voided"
+
+    vehicle2 = make_recon_vehicle(client, stock_number="R-5002B")
+    order2 = make_recon_order(client, vehicle2["id"])
+    save_estimate(client, order2["id"], [{"kind": "part", "description": "Rotors", "part_number": "RT-1", "quantity": 1, "unit_price": 45, "unit_cost": 45}])
+
+    # Re-posting the exact same invoice number now succeeds instead of
+    # being rejected as a duplicate of the voided one.
+    res = post_invoice(client, vendor_name="WorldPac", po_number=order2["number"], subtotal=45, total=45,
+                        items=[{"part_number": "RT-1", "description": "Rotors", "quantity": 1, "unit_cost": 45, "kind": "part"}])
+    assert res.json()["status"] == "posted"
+
+
+def test_void_ap_invoice_twice_rejected(client):
+    client.post("/api/vendors", json={"name": "WorldPac"})
+    vehicle = make_recon_vehicle(client, stock_number="R-5003")
+    order = make_recon_order(client, vehicle["id"])
+    save_estimate(client, order["id"], [{"kind": "part", "description": "Brake pads", "part_number": "BP-1", "quantity": 1, "unit_price": 45, "unit_cost": 45}])
+    post_invoice(client, vendor_name="WorldPac", po_number=order["number"], subtotal=45, total=45,
+                 items=[{"part_number": "BP-1", "description": "Brake pads", "quantity": 1, "unit_cost": 45, "kind": "part"}])
+    invoice_id = client.get("/api/ap/invoices").json()[0]["id"]
+
+    client.patch(f"/api/ap/invoices/{invoice_id}/void", json={"actor": "Clay"})
+    res = client.patch(f"/api/ap/invoices/{invoice_id}/void", json={"actor": "Clay"})
+    assert res.status_code == 409
+
+
+def test_void_ap_invoice_unknown_404s(client):
+    res = client.patch("/api/ap/invoices/99999/void", json={"actor": "Clay"})
+    assert res.status_code == 404
 
 
 def test_process_invoice_matches_po_by_stock_number(client):

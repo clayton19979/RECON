@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ctypes
 import logging
 import os
 import socket
@@ -13,8 +14,18 @@ import pystray
 import uvicorn
 from PIL import Image, ImageDraw
 
-from app.backup import backup_database, most_recent_backup_age_hours, prune_backups
+from app.backup import backup_database, list_backups, most_recent_backup_age_hours, prune_backups, restore_database
 from app.main import DATA_ROOT, DEFAULT_DB, NETWORK_FLAG, create_app
+
+
+def confirm(title: str, message: str) -> bool:
+    """A native Windows Yes/No box -- pystray's own notify() is a toast with
+    no buttons, and restoring a backup is destructive enough to need a real
+    confirm step, not just a notification."""
+    MB_YESNO = 0x04
+    MB_ICONWARNING = 0x30
+    IDYES = 6
+    return ctypes.windll.user32.MessageBoxW(0, message, title, MB_YESNO | MB_ICONWARNING) == IDYES
 
 PORT = 8787
 AUTO_BACKUP_INTERVAL_HOURS = 24
@@ -161,6 +172,35 @@ class TrayApp:
     def backup_now(self, _icon: pystray.Icon, _item: pystray.MenuItem) -> None:
         self._run_backup(notify=True)
 
+    def restore_latest_backup(self, _icon: pystray.Icon, _item: pystray.MenuItem) -> None:
+        backups = list_backups(DATA_ROOT / "backups")
+        if not backups:
+            if self.icon is not None:
+                self.icon.notify("No backups found to restore.", "RECON")
+            return
+        latest = backups[0]
+        if not confirm(
+            "Restore Backup?",
+            f"This replaces the current database with the backup from:\n\n{latest.name}\n\n"
+            "The current database is saved aside first, so this can be undone. "
+            "The server restarts once the restore finishes.\n\nContinue?",
+        ):
+            return
+        log.info("Restoring from backup %s", latest)
+        self.stop_server()
+        try:
+            restore_database(latest, DEFAULT_DB)
+        except Exception as exc:
+            log.exception("Restore failed")
+            if self.icon is not None:
+                self.icon.notify(f"Restore failed: {exc}", "RECON")
+            self.start_server()
+            return
+        ok = self.start_server()
+        if self.icon is not None:
+            self.icon.icon = ICON_OK if ok else ICON_DOWN
+            self.icon.notify(f"Restored from {latest.name}. Server restarted.", "RECON")
+
     def _auto_backup_loop(self) -> None:
         """Runs for the life of the process: backs up automatically if the
         last backup is stale, then checks again once an hour. Protects
@@ -192,6 +232,7 @@ class TrayApp:
             ),
             pystray.MenuItem("Show Server Address", self.show_server_address),
             pystray.MenuItem("Backup Now", self.backup_now),
+            pystray.MenuItem("Restore Latest Backup", self.restore_latest_backup),
             pystray.MenuItem("Restart Server", self.restart),
             pystray.MenuItem("Exit", self.quit_app),
         )

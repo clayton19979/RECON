@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
-from typing import Callable, Literal
+from typing import Annotated, Callable, Literal
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
@@ -23,7 +23,7 @@ class ReceivePartsIn(BaseModel):
     invoice_number: str = Field(min_length=1)
     tax: float = Field(default=0, ge=0)
     actor: str = "ui"
-    cost_overrides: dict[int, float] = {}
+    cost_overrides: dict[int, Annotated[float, Field(ge=0)]] = {}
 
 
 def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callable[[], str]) -> APIRouter:

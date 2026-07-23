@@ -10,6 +10,8 @@ from typing import Any, Literal
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from .workflow import record_activity
+
 
 def _check_auth(request: Request) -> None:
     """Require X-API-Key header when API_DISCOUNT_AUTO_OPS_KEY is set."""
@@ -27,6 +29,16 @@ class VendorIn(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     aliases: list[str] = []
     account_number: str = ""
+
+
+class VendorPatch(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    aliases: list[str] | None = None
+    account_number: str | None = None
+
+
+class VoidIn(BaseModel):
+    actor: str = "ui"
 
 
 class InvoiceItemIn(BaseModel):
@@ -115,6 +127,30 @@ def build_accounting_router(connect: Callable[[], sqlite3.Connection], now: Call
         except sqlite3.IntegrityError as exc:
             raise HTTPException(409, "Vendor already exists") from exc
 
+    @router.patch("/vendors/{vendor_id}")
+    def update_vendor(vendor_id: int, item: VendorPatch):
+        with connect() as db:
+            if not db.execute("SELECT 1 FROM vendors WHERE id=?", (vendor_id,)).fetchone():
+                raise HTTPException(404, "Vendor not found")
+            fields: list[str] = []
+            params: list[object] = []
+            if item.name is not None:
+                fields.append("name=?"); params.append(item.name.strip())
+                fields.append("normalized_name=?"); params.append(normalize(item.name))
+            if item.aliases is not None:
+                fields.append("aliases=?"); params.append(json.dumps(item.aliases))
+            if item.account_number is not None:
+                fields.append("account_number=?"); params.append(item.account_number.strip())
+            if fields:
+                params.append(vendor_id)
+                try:
+                    db.execute(f"UPDATE vendors SET {','.join(fields)} WHERE id=?", params)
+                except sqlite3.IntegrityError as exc:
+                    raise HTTPException(409, "Another vendor already has that name") from exc
+            row = dict(db.execute("SELECT * FROM vendors WHERE id=?", (vendor_id,)).fetchone())
+            row["aliases"] = json.loads(row["aliases"])
+            return row
+
     @router.get("/ap/invoices")
     def list_ap_invoices(start: str | None = None, end: str | None = None):
         end_bound = f"{end}T23:59:59" if end else None
@@ -144,6 +180,30 @@ def build_accounting_router(connect: Callable[[], sqlite3.Connection], now: Call
                     value["vehicle_label"] = "Retail"
                 result.append(value)
             return result
+
+    @router.patch("/ap/invoices/{invoice_id}/void")
+    def void_ap_invoice(invoice_id: int, item: VoidIn):
+        """Voids a mistakenly-posted vendor invoice (wrong vendor, wrong PO
+        match, duplicate entry) -- the row is kept for audit trail, just
+        excluded from being picked as a duplicate match going forward. This
+        does NOT reverse the "received" status it may have set on estimate
+        lines; ap_invoice_items has no link back to which specific estimate
+        line it came from, so that side has to be corrected on the ticket
+        itself if needed."""
+        with connect() as db:
+            invoice = db.execute("SELECT * FROM ap_invoices WHERE id=?", (invoice_id,)).fetchone()
+            if not invoice:
+                raise HTTPException(404, "Vendor invoice not found")
+            if invoice["status"] == "voided":
+                raise HTTPException(409, "Invoice is already voided")
+            # Suffixing the normalized number frees it up -- otherwise the
+            # unique constraint on (vendor_id, normalized_invoice_number)
+            # would block ever re-posting a corrected invoice under the
+            # same real invoice number.
+            freed_number = f"{invoice['normalized_invoice_number']}-voided-{invoice_id}"
+            db.execute("UPDATE ap_invoices SET status='voided', normalized_invoice_number=? WHERE id=?", (freed_number, invoice_id))
+            record_activity(db, invoice["order_id"], "ap_invoice_voided", item.actor, {"invoice_id": invoice_id, "invoice_number": invoice["invoice_number"]}, now)
+            return dict(db.execute("SELECT * FROM ap_invoices WHERE id=?", (invoice_id,)).fetchone())
 
     @router.get("/accounting/audits")
     def list_audits():

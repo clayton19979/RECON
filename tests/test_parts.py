@@ -89,6 +89,23 @@ def test_receive_parts_posts_single_ap_invoice_for_multiple_lines(client):
     assert matching[0]["order_id"] == order["id"]
 
 
+def test_receive_parts_rejects_negative_cost_override(client):
+    vendor = client.post("/api/vendors", json={"name": "WorldPac"}).json()
+    vehicle = make_recon_vehicle(client)
+    order = make_recon_order(client, vehicle["id"])
+    estimate = save_estimate(
+        client, order["id"],
+        [{"kind": "part", "description": "Brake pads", "part_number": "BP-1", "quantity": 1, "unit_price": 10, "unit_cost": 10}],
+    )
+    item_id = estimate["items"][0]["id"]
+
+    res = client.post(
+        f"/api/orders/{order['id']}/estimate/receive-parts",
+        json={"item_ids": [item_id], "vendor_id": vendor["id"], "invoice_number": "INV-1", "cost_overrides": {str(item_id): -5}},
+    )
+    assert res.status_code == 422
+
+
 def test_receive_parts_requires_known_vendor(client):
     vehicle = make_recon_vehicle(client)
     order = make_recon_order(client, vehicle["id"])

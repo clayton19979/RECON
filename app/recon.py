@@ -87,6 +87,10 @@ class WeOwePatch(BaseModel):
     expected_version: int | None = None
 
 
+class ArchiveIn(BaseModel):
+    expected_version: int | None = None
+
+
 class WeOwePaymentIn(BaseModel):
     """Customers are sometimes talked into putting money down toward a
     we-owe repair -- tracked separately from shop cost so the net amount
@@ -219,6 +223,16 @@ def vehicle_board_rows(db: sqlite3.Connection, start: str | None = None, end: st
         for row in rows:
             rollup = cost_rollup(db, "we_owe_id", row["id"])
             order_ids = [o["id"] for o in rollup["orders"]]
+            active_order = next((o for o in reversed(rollup["orders"]) if o["status"] != "complete"), None)
+            latest_order = rollup["orders"][-1] if rollup["orders"] else None
+            # fulfilled/waived is the authoritative "is this promise resolved"
+            # signal (set explicitly by the advisor, separate from any
+            # ticket) -- but while it's still open, what's actually changing
+            # day to day is the linked ticket's own workflow status, so that's
+            # what the board shows, same as recon already does.
+            display_status = row["status"] if row["status"] != "open" else (
+                (active_order or latest_order)["status"] if (active_order or latest_order) else "open"
+            )
             customer_paid = round(db.execute(
                 "SELECT coalesce(sum(amount),0) FROM we_owe_payments WHERE we_owe_id=?", (row["id"],)
             ).fetchone()[0], 2)
@@ -231,7 +245,7 @@ def vehicle_board_rows(db: sqlite3.Connection, start: str | None = None, end: st
                 "vin": row["vin"],
                 "customer_name": row["customer_name"],
                 "description": row["description"],
-                "status": row["status"],
+                "status": display_status,
                 "status_bucket": "finished" if row["status"] in ("fulfilled", "waived") else "in_progress",
                 "actual_cost": rollup["total_cost"],
                 "quoted_cost": rollup["quoted_cost"],
@@ -246,6 +260,10 @@ def vehicle_board_rows(db: sqlite3.Connection, start: str | None = None, end: st
 
 def build_recon_router(connect: Callable[[], sqlite3.Connection], now_fn: Callable[[], str]) -> APIRouter:
     router = APIRouter(prefix="/api")
+
+    def assert_current_version(row: sqlite3.Row, expected_version: int | None) -> None:
+        if expected_version is not None and expected_version != row["edit_version"]:
+            raise HTTPException(409, "Someone else changed this since you loaded it -- reload to see their update")
 
     def recon_row(db: sqlite3.Connection, recon_id: int) -> sqlite3.Row:
         row = db.execute(
@@ -349,16 +367,18 @@ def build_recon_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
             return recon_detail(db, recon_id)
 
     @router.post("/recon/vehicles/{recon_id}/archive")
-    def archive_recon_vehicle(recon_id: int):
+    def archive_recon_vehicle(recon_id: int, item: ArchiveIn = ArchiveIn()):
         with connect() as db:
-            recon_row(db, recon_id)
+            row = recon_row(db, recon_id)
+            assert_current_version(row, item.expected_version)
             db.execute("UPDATE recon_vehicles SET archived_at=?,edit_version=edit_version+1 WHERE id=?", (now_fn(), recon_id))
             return recon_detail(db, recon_id)
 
     @router.post("/recon/vehicles/{recon_id}/reopen")
-    def reopen_recon_vehicle(recon_id: int):
+    def reopen_recon_vehicle(recon_id: int, item: ArchiveIn = ArchiveIn()):
         with connect() as db:
-            recon_row(db, recon_id)
+            row = recon_row(db, recon_id)
+            assert_current_version(row, item.expected_version)
             db.execute("UPDATE recon_vehicles SET archived_at='',edit_version=edit_version+1 WHERE id=?", (recon_id,))
             return recon_detail(db, recon_id)
 
@@ -465,16 +485,18 @@ def build_recon_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
             return we_owe_detail(db, we_owe_id)
 
     @router.post("/we-owe/{we_owe_id}/archive")
-    def archive_we_owe_item(we_owe_id: int):
+    def archive_we_owe_item(we_owe_id: int, item: ArchiveIn = ArchiveIn()):
         with connect() as db:
-            we_owe_row(db, we_owe_id)
+            row = we_owe_row(db, we_owe_id)
+            assert_current_version(row, item.expected_version)
             db.execute("UPDATE we_owe_items SET archived_at=?,edit_version=edit_version+1 WHERE id=?", (now_fn(), we_owe_id))
             return we_owe_detail(db, we_owe_id)
 
     @router.post("/we-owe/{we_owe_id}/reopen")
-    def reopen_we_owe_item(we_owe_id: int):
+    def reopen_we_owe_item(we_owe_id: int, item: ArchiveIn = ArchiveIn()):
         with connect() as db:
-            we_owe_row(db, we_owe_id)
+            row = we_owe_row(db, we_owe_id)
+            assert_current_version(row, item.expected_version)
             db.execute("UPDATE we_owe_items SET archived_at='',edit_version=edit_version+1 WHERE id=?", (we_owe_id,))
             return we_owe_detail(db, we_owe_id)
 

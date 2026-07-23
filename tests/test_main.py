@@ -84,6 +84,35 @@ def test_order_lifecycle_and_estimate_editing(client):
     assert estimate2["subtotal"] == 45  # 2*20 + 5, labor line dropped
 
 
+def test_save_estimate_never_deletes_a_received_line(client):
+    """The real risk: save_estimate replaces the whole line-item set on every
+    call, deleting anything not in the payload. A received line already has
+    a real A/P invoice posted against it -- it must survive even if a save
+    (stale tab, slow response, a future frontend bug) omits it."""
+    vendor = client.post("/api/vendors", json={"name": "WorldPac"}).json()
+    vehicle = make_recon_vehicle(client, stock_number="R-3501")
+    order = make_recon_order(client, vehicle["id"])
+    estimate = save_estimate(
+        client, order["id"],
+        [
+            {"kind": "part", "description": "Brake pads", "part_number": "BP-1", "quantity": 1, "unit_price": 10, "unit_cost": 10},
+            {"kind": "labor", "description": "Install", "quantity": 1, "unit_price": 30, "unit_cost": 30},
+        ],
+    )
+    received_id = estimate["items"][0]["id"]
+    labor_id = estimate["items"][1]["id"]
+    client.post(
+        f"/api/orders/{order['id']}/estimate/receive-parts",
+        json={"item_ids": [received_id], "vendor_id": vendor["id"], "invoice_number": "INV-1"},
+    )
+
+    # Resave with a payload that omits the now-received part entirely.
+    estimate2 = save_estimate(client, order["id"], [{"id": labor_id, "kind": "labor", "description": "Install", "quantity": 1, "unit_price": 30, "unit_cost": 30}])
+    ids = {i["id"] for i in estimate2["items"]}
+    assert received_id in ids  # survived despite being left out of the payload
+    assert next(i for i in estimate2["items"] if i["id"] == received_id)["status"] == "received"
+
+
 def test_estimate_item_source_is_recorded(client):
     vehicle = make_recon_vehicle(client, stock_number="R-3401")
     order = make_recon_order(client, vehicle["id"])
@@ -179,6 +208,32 @@ def test_decode_vin_success(client):
     body = res.json()
     assert body["make"] == "Honda"
     assert body["engine"] == "2.0L 4-cyl"
+
+
+def test_decode_vin_folds_series_into_model(client):
+    """NHTSA reports the payload/cab designation separately from Model
+    (Model='Silverado', Series='1500') -- without it, a decoded truck can't
+    be told apart from any other Silverado."""
+    fake_response = MagicMock()
+    fake_response.raise_for_status.return_value = None
+    fake_response.json.return_value = {
+        "Results": [{"ModelYear": "2021", "Make": "Chevrolet", "Model": "Silverado", "Series": "1500", "Trim": "LT"}]
+    }
+    with patch("app.main.httpx.get", return_value=fake_response):
+        res = client.post("/api/vehicles/decode-vin", json={"vin": "3GCPWCED5KG123456"})
+    assert res.status_code == 200
+    assert res.json()["model"] == "Silverado 1500"
+
+
+def test_decode_vin_does_not_duplicate_series_already_in_model(client):
+    fake_response = MagicMock()
+    fake_response.raise_for_status.return_value = None
+    fake_response.json.return_value = {
+        "Results": [{"ModelYear": "2021", "Make": "Ford", "Model": "F-150", "Series": "F-150", "Trim": "XLT"}]
+    }
+    with patch("app.main.httpx.get", return_value=fake_response):
+        res = client.post("/api/vehicles/decode-vin", json={"vin": "1FTEW1EP7KFA00000"})
+    assert res.json()["model"] == "F-150"
 
 
 def test_decode_vin_not_found(client):

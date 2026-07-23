@@ -94,6 +94,9 @@ const state = {
   detail: { segment: null, id: null, item: null, order: null },
   apFilter: { start: "", end: "" },
   apSearch: "",
+  staffSearch: "",
+  suggestionSearch: "",
+  showResolvedSuggestions: false,
   apInvoices: [],
   vehicleSelection: new Set(), // "segment:id" strings, cleared on filter change/reload
   tasks: [],
@@ -126,6 +129,11 @@ function initCurrentUser() {
 const STATUS_OPTIONS = ["estimate", "pending_approval", "in_progress", "complete"];
 const STATUS_LABEL = {
   estimate: "Estimate", pending_approval: "Pending Approval", in_progress: "In Progress", complete: "Complete",
+  // Vehicle-board labels for statuses that aren't ticket statuses: recon's
+  // "acquired" (no RO started yet) and we-owe's own open/fulfilled/waived
+  // (shown only once the promise itself has been marked resolved, or before
+  // any ticket exists -- otherwise the board shows the ticket's own status).
+  acquired: "Acquired", open: "Open", fulfilled: "Fulfilled", waived: "Waived",
 };
 const STATUS_PILL_CLASS = {
   estimate: "pill-status-estimate", pending_approval: "pill-status-pending",
@@ -209,12 +217,14 @@ function ageClass(days) {
   return "age-ok";
 }
 
-// Recon rows carry the linked repair order's status (one of the 4 ticket
-// statuses, color-coded); we-owe rows carry their own open/fulfilled/waived
-// status, which isn't part of that vocabulary, so it keeps the simpler
-// finished/in-progress coloring it already had.
+// Recon rows always carry the linked repair order's status (one of the 4
+// ticket statuses, color-coded). We-owe rows do too while the promise is
+// still open (so progressing the ticket shows up on the board immediately),
+// but switch to showing fulfilled/waived once the advisor explicitly
+// resolves the promise -- that's not part of the ticket-status vocabulary,
+// so it just keeps the simpler finished/in-progress coloring.
 function vehicleStatusPillClass(v) {
-  return v.segment === "recon" ? (STATUS_PILL_CLASS[v.status] || "pill-progress") : (v.status_bucket === "finished" ? "pill-done" : "pill-progress");
+  return v.segment === "recon" ? (STATUS_PILL_CLASS[v.status] || "pill-progress") : (v.status_bucket === "finished" ? "pill-done" : (STATUS_PILL_CLASS[v.status] || "pill-progress"));
 }
 
 function renderVehiclesTable() {
@@ -369,13 +379,21 @@ async function loadVehicleDetail() {
   }
   state.detail.item = item;
   state.detail.ordersHistory = orders;
+  // A vehicle can have more than one RO over its life (recon prep now, a
+  // warranty comeback later); the advisor picking an older one from Order
+  // History must survive every other action on this page re-loading the
+  // detail (adding a note, saving assignment, etc.) until they navigate to
+  // a different vehicle, which is what resets selectedOrderId to null.
+  const preferred = state.detail.selectedOrderId != null ? orders.find((o) => o.id === state.detail.selectedOrderId) : null;
   // Prefer a still-open order, but fall back to the most recent one (orders
   // is sorted newest-first) rather than pretending there's no order at all
   // once it reaches Complete -- otherwise a finished/archived ticket could
   // never be looked back at, which defeats the point of History.
-  const active = orders.find((o) => o.status !== "complete") || orders[0] || null;
+  const active = preferred || orders.find((o) => o.status !== "complete") || orders[0] || null;
+  state.detail.selectedOrderId = active ? active.id : null;
   enterVehicleDetailView();
   renderDetailHead();
+  renderOrderHistory(orders, active ? active.id : null);
   // Deleting a vehicle with real order history would silently orphan its
   // cost data -- only offer it while there's nothing to lose yet.
   $("#vd-delete").style.display = orders.length === 0 ? "" : "none";
@@ -401,6 +419,36 @@ async function loadVehicleDetail() {
   if (!state.staff.length) state.staff = await get("/api/staff");
   renderOrderPanel();
   applyArchivedLockUI(!!item.archived_at);
+}
+
+// Only shown once a vehicle actually has more than one RO -- the common
+// single-ticket case looks exactly as clean as it always did.
+function renderOrderHistory(orders, activeId) {
+  const card = $("#vd-order-history-card");
+  if (orders.length <= 1) {
+    card.style.display = "none";
+    return;
+  }
+  card.style.display = "";
+  $("#vd-order-history").innerHTML = orders.map((o) => `
+    <div class="mini-item clickable ${o.id === activeId ? "active" : ""}" data-id="${o.id}">
+      <div class="mi-title">
+        <span>${esc(o.number)}</span>
+        <span class="pill ${STATUS_PILL_CLASS[o.status] || ""}" style="font-size:9.5px">${o.voided ? "Voided" : (STATUS_LABEL[o.status] || o.status)}</span>
+      </div>
+      <div class="mi-concern">${esc(o.concern)}</div>
+      <div class="mi-meta">${fmtDate(o.created_at)}</div>
+    </div>
+  `).join("");
+  $$(".mini-item.clickable", $("#vd-order-history")).forEach((row) => {
+    row.addEventListener("click", () => selectOrder(Number(row.dataset.id)));
+  });
+}
+
+async function selectOrder(orderId) {
+  if (orderId === state.detail.selectedOrderId) return;
+  state.detail.selectedOrderId = orderId;
+  await loadVehicleDetail();
 }
 
 function renderDetailHead() {
@@ -1094,25 +1142,27 @@ function wireVehicleDetail() {
   });
 
   $("#vd-archive-vehicle").addEventListener("click", async () => {
-    const { segment, id } = state.detail;
+    const { segment, id, item } = state.detail;
     if (!confirm("Send this vehicle to History? It becomes read-only until reopened -- nothing is deleted.")) return;
     try {
-      await post(segment === "recon" ? `/api/recon/vehicles/${id}/archive` : `/api/we-owe/${id}/archive`, {});
+      await post(segment === "recon" ? `/api/recon/vehicles/${id}/archive` : `/api/we-owe/${id}/archive`, { expected_version: item.edit_version });
       toast("Sent to History");
       await loadVehicleDetail();
     } catch (err) {
       toast(err.message, true);
+      if (String(err.message).includes("Someone else changed")) await loadVehicleDetail();
     }
   });
 
   $("#vd-reopen-vehicle").addEventListener("click", async () => {
-    const { segment, id } = state.detail;
+    const { segment, id, item } = state.detail;
     try {
-      await post(segment === "recon" ? `/api/recon/vehicles/${id}/reopen` : `/api/we-owe/${id}/reopen`, {});
+      await post(segment === "recon" ? `/api/recon/vehicles/${id}/reopen` : `/api/we-owe/${id}/reopen`, { expected_version: item.edit_version });
       toast("Reopened -- fully editable again");
       await loadVehicleDetail();
     } catch (err) {
       toast(err.message, true);
+      if (String(err.message).includes("Someone else changed")) await loadVehicleDetail();
     }
   });
 
@@ -1831,7 +1881,32 @@ function renderVendorSelect() {
   $("#ap-vendor").innerHTML = state.vendors.map((v) => `<option value="${esc(v.name)}">${esc(v.name)}</option>`).join("") || `<option value="">Add a vendor first</option>`;
 }
 function renderVendorChips() {
-  $("#vendor-list").innerHTML = state.vendors.map((v) => `<span class="vendor-chip">${esc(v.name)}${v.account_number ? ` · ${esc(v.account_number)}` : ""}</span>`).join("") || `<span style="color:var(--ink-faint);font-size:12px;padding:8px 0">No vendors yet.</span>`;
+  $("#vendor-list").innerHTML = state.vendors.map((v) => `<span class="vendor-chip clickable" data-id="${v.id}" title="Click to edit">${esc(v.name)}${v.account_number ? ` · ${esc(v.account_number)}` : ""}</span>`).join("") || `<span style="color:var(--ink-faint);font-size:12px;padding:8px 0">No vendors yet.</span>`;
+  $$(".vendor-chip.clickable", $("#vendor-list")).forEach((chip) => {
+    chip.addEventListener("click", () => openVendorForEdit(Number(chip.dataset.id)));
+  });
+}
+
+let editingVendorId = null;
+function openVendorForEdit(vendorId) {
+  const vendor = state.vendors.find((v) => v.id === vendorId);
+  if (!vendor) return;
+  editingVendorId = vendorId;
+  const form = $("#vendor-form");
+  form.name.value = vendor.name;
+  form.aliases.value = vendor.aliases.join(", ");
+  form.account_number.value = vendor.account_number || "";
+  $("#vendor-form-title").textContent = `Editing ${vendor.name}`;
+  $("#vendor-form-submit").textContent = "Update Vendor";
+  $("#vendor-form-cancel").style.display = "";
+  form.name.focus();
+}
+function cancelVendorEdit() {
+  editingVendorId = null;
+  $("#vendor-form").reset();
+  $("#vendor-form-title").textContent = "Vendors";
+  $("#vendor-form-submit").textContent = "Save Vendor";
+  $("#vendor-form-cancel").style.display = "none";
 }
 function renderPoSelect() {
   const open = state.orders.filter((o) => o.status !== "complete");
@@ -1851,15 +1926,31 @@ function renderApTable(invoices) {
   $("#ap-table").innerHTML = invoices.length ? invoices.map((a) => {
     const refId = a.recon_vehicle_id ?? a.we_owe_id;
     const clickable = refId != null && (a.segment === "recon" || a.segment === "we_owe");
+    const voided = a.status === "voided";
     return `
-    <tr class="${clickable ? "clickable" : ""}" ${clickable ? `data-segment="${a.segment}" data-ref-id="${refId}" title="Open this vehicle"` : ""}>
+    <tr class="${clickable ? "clickable" : ""} ${voided ? "voided-row" : ""}" ${clickable ? `data-segment="${a.segment}" data-ref-id="${refId}" title="Open this vehicle"` : ""}>
       <td>${esc(a.invoice_number)}</td><td>${esc(a.vendor_name)}</td><td>${esc(a.po_number)}</td>
       <td>${esc(a.vehicle_label)}</td><td class="num-col">${money(a.total)}</td>
-      <td><span class="pill pill-done">${esc(a.status)}</span></td></tr>
+      <td><span class="pill ${voided ? "pill-progress" : "pill-done"}">${esc(a.status)}</span></td>
+      <td>${voided ? "" : `<button type="button" class="btn btn-ghost btn-sm ap-void" data-id="${a.id}" data-number="${esc(a.invoice_number)}">Void</button>`}</td>
+    </tr>
   `;
-  }).join("") : `<tr><td colspan="6" style="text-align:center;color:var(--ink-faint);padding:20px">No vendor invoices posted for this range.</td></tr>`;
+  }).join("") : `<tr><td colspan="7" style="text-align:center;color:var(--ink-faint);padding:20px">No vendor invoices posted for this range.</td></tr>`;
   $$(".clickable", $("#ap-table")).forEach((row) => {
     row.addEventListener("click", () => openVehicleDetail(row.dataset.segment, Number(row.dataset.refId)));
+  });
+  $$(".ap-void", $("#ap-table")).forEach((btn) => {
+    btn.addEventListener("click", async (e) => {
+      e.stopPropagation(); // don't also trigger the row's open-vehicle click
+      if (!confirm(`Void invoice ${btn.dataset.number}? It's kept for the audit trail but won't block re-posting a corrected invoice under the same number. This does not un-mark any parts as received -- fix that on the ticket itself if needed.`)) return;
+      try {
+        await patch(`/api/ap/invoices/${btn.dataset.id}/void`, { actor: currentActor() });
+        toast("Invoice voided");
+        await loadApTable();
+      } catch (err) {
+        toast(err.message, true);
+      }
+    });
   });
 }
 function renderAuditList(audits) {
@@ -1936,18 +2027,26 @@ function wireAccountingView() {
   $("#vendor-form").addEventListener("submit", async (e) => {
     e.preventDefault();
     const form = e.target;
+    const payload = {
+      name: form.name.value.trim(),
+      aliases: form.aliases.value.split(",").map((s) => s.trim()).filter(Boolean),
+      account_number: form.account_number.value.trim(),
+    };
     try {
-      await post("/api/vendors", {
-        name: form.name.value.trim(),
-        aliases: form.aliases.value.split(",").map((s) => s.trim()).filter(Boolean),
-      });
-      form.reset();
-      toast("Vendor saved");
+      if (editingVendorId) {
+        await patch(`/api/vendors/${editingVendorId}`, payload);
+        toast("Vendor updated");
+      } else {
+        await post("/api/vendors", payload);
+        toast("Vendor saved");
+      }
+      cancelVendorEdit();
       loadAccountingView();
     } catch (err) {
       toast(err.message, true);
     }
   });
+  $("#vendor-form-cancel").addEventListener("click", cancelVendorEdit);
 
   $("#ap-invoice-form").addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -1999,8 +2098,14 @@ async function loadStaffView() {
     return toast(`Could not load staff: ${err.message}`, true);
   }
   refreshCurrentUserOptions();
-  const roleLabel = { technician: "Technician", advisor: "Advisor / Service Writer", manager: "Manager" };
-  $("#staff-table").innerHTML = state.staff.length ? state.staff.map((s) => `
+  renderStaffTable();
+}
+
+function renderStaffTable() {
+  const query = (state.staffSearch || "").toLowerCase();
+  const rows = query ? state.staff.filter((s) => s.name.toLowerCase().includes(query)) : state.staff;
+  $("#staff-count").textContent = `${rows.length} staff member${rows.length === 1 ? "" : "s"}`;
+  $("#staff-table").innerHTML = rows.length ? rows.map((s) => `
     <tr data-id="${s.id}">
       <td><input class="stf-name" value="${esc(s.name)}" style="border:none;background:none;padding:2px"></td>
       <td><select class="stf-role" style="border:none;background:none;padding:2px">
@@ -2009,26 +2114,48 @@ async function loadStaffView() {
         <option value="manager" ${s.role === "manager" ? "selected" : ""}>Manager</option>
       </select></td>
       <td><span class="pill ${s.active ? "pill-done" : "pill-progress"}">${s.active ? "Active" : "Inactive"}</span></td>
-      <td style="display:flex;gap:6px">
-        <button type="button" class="btn btn-ghost btn-sm stf-save">Save</button>
-        <button type="button" class="btn btn-ghost btn-sm stf-toggle">${s.active ? "Deactivate" : "Activate"}</button>
-      </td>
+      <td><button type="button" class="btn btn-ghost btn-sm stf-toggle">${s.active ? "Deactivate" : "Activate"}</button></td>
     </tr>
-  `).join("") : `<tr><td colspan="4" style="text-align:center;color:var(--ink-faint);padding:20px">No staff yet.</td></tr>`;
+  `).join("") : `<tr><td colspan="4" style="text-align:center;color:var(--ink-faint);padding:20px">No staff match.</td></tr>`;
 
-  $$(".stf-save", $("#staff-table")).forEach((btn) => btn.addEventListener("click", async () => {
-    const tr = btn.closest("tr");
-    try {
-      await patch(`/api/staff/${tr.dataset.id}`, { name: tr.querySelector(".stf-name").value.trim(), role: tr.querySelector(".stf-role").value });
-      toast("Staff updated");
-      loadStaffView();
-    } catch (err) {
-      toast(err.message, true);
-    }
-  }));
+  // Name/role auto-save like everywhere else in the app -- editing then
+  // navigating away (or clicking Deactivate) used to silently discard an
+  // unsaved edit since this table required an explicit Save click.
+  $$(".stf-name", $("#staff-table")).forEach((input) => {
+    input.addEventListener("blur", async () => {
+      const tr = input.closest("tr");
+      const person = state.staff.find((s) => s.id === Number(tr.dataset.id));
+      const name = input.value.trim();
+      if (!name || name === person.name) return;
+      try {
+        await patch(`/api/staff/${tr.dataset.id}`, { name });
+        toast("Staff updated");
+        await loadStaffView();
+      } catch (err) {
+        toast(err.message, true);
+        input.value = person.name;
+      }
+    });
+  });
+  $$(".stf-role", $("#staff-table")).forEach((select) => {
+    select.addEventListener("change", async () => {
+      const tr = select.closest("tr");
+      try {
+        await patch(`/api/staff/${tr.dataset.id}`, { role: select.value });
+        toast("Staff updated");
+        await loadStaffView();
+      } catch (err) {
+        toast(err.message, true);
+      }
+    });
+  });
   $$(".stf-toggle", $("#staff-table")).forEach((btn) => btn.addEventListener("click", async () => {
     const tr = btn.closest("tr");
     const person = state.staff.find((s) => s.id === Number(tr.dataset.id));
+    // Deactivating pulls this person out of every technician/advisor
+    // dropdown app-wide -- a bigger consequence than most confirm()-guarded
+    // deletes elsewhere, so it gets the same guard.
+    if (person.active && !confirm(`Deactivate ${person.name}? They'll no longer be selectable as a technician/advisor anywhere.`)) return;
     try {
       await patch(`/api/staff/${tr.dataset.id}`, { active: !person.active });
       toast(person.active ? "Deactivated" : "Activated");
@@ -2038,6 +2165,7 @@ async function loadStaffView() {
     }
   }));
 }
+
 function wireStaffView() {
   $("#staff-form").addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -2050,6 +2178,10 @@ function wireStaffView() {
     } catch (err) {
       toast(err.message, true);
     }
+  });
+  $("#staff-search").addEventListener("input", (e) => {
+    state.staffSearch = e.target.value.trim();
+    renderStaffTable();
   });
 }
 
@@ -2292,9 +2424,8 @@ function wireTasksView() {
 /* ==================================================================
    SUGGESTIONS / IDEAS
    ================================================================== */
-function renderSuggestionsList() {
-  const box = $("#suggestions-list");
-  box.innerHTML = state.suggestions.length ? state.suggestions.map((s) => `
+function suggestionCardHtml(s) {
+  return `
     <div class="suggestion-card ${s.resolved ? "resolved" : ""}" data-id="${s.id}">
       <div class="suggestion-text">${esc(s.text)}</div>
       <div class="suggestion-meta">
@@ -2303,9 +2434,11 @@ function renderSuggestionsList() {
         <button type="button" class="rm-btn suggestion-delete" title="Delete">×</button>
       </div>
     </div>
-  `).join("") : `<div style="color:var(--ink-faint);font-size:12.5px;padding:26px;text-align:center">No suggestions yet — be the first to add one.</div>`;
+  `;
+}
 
-  $$(".suggestion-toggle", box).forEach((btn) => {
+function wireSuggestionCardActions(container) {
+  $$(".suggestion-toggle", container).forEach((btn) => {
     btn.addEventListener("click", async () => {
       const card = btn.closest(".suggestion-card");
       try {
@@ -2316,7 +2449,7 @@ function renderSuggestionsList() {
       }
     });
   });
-  $$(".suggestion-delete", box).forEach((btn) => {
+  $$(".suggestion-delete", container).forEach((btn) => {
     btn.addEventListener("click", async () => {
       const card = btn.closest(".suggestion-card");
       if (!confirm("Delete this suggestion?")) return;
@@ -2328,6 +2461,31 @@ function renderSuggestionsList() {
       }
     });
   });
+}
+
+// Open/resolved are separated (matching Tasks' open/completed split) instead
+// of interleaved by array order, with the resolved list collapsed by default.
+function renderSuggestionsList() {
+  const query = (state.suggestionSearch || "").toLowerCase();
+  const matches = (s) => s.text.toLowerCase().includes(query) || (s.author || "").toLowerCase().includes(query);
+  let open = state.suggestions.filter((s) => !s.resolved);
+  let resolved = state.suggestions.filter((s) => s.resolved);
+  if (query) {
+    open = open.filter(matches);
+    resolved = resolved.filter(matches);
+  }
+
+  $("#suggestions-count").textContent = `${open.length} open`;
+  $("#suggestions-list").innerHTML = open.length
+    ? open.map(suggestionCardHtml).join("")
+    : `<div style="color:var(--ink-faint);font-size:12.5px;padding:26px;text-align:center">No suggestions yet — be the first to add one.</div>`;
+
+  $("#suggestions-toggle-resolved").textContent = `${state.showResolvedSuggestions ? "Hide" : "Show"} resolved (${resolved.length})`;
+  $("#suggestions-resolved-list").style.display = state.showResolvedSuggestions ? "" : "none";
+  $("#suggestions-resolved-list").innerHTML = resolved.map(suggestionCardHtml).join("");
+
+  wireSuggestionCardActions($("#suggestions-list"));
+  wireSuggestionCardActions($("#suggestions-resolved-list"));
 }
 
 async function loadSuggestionsView() {
@@ -2352,6 +2510,14 @@ function wireSuggestionsView() {
     } catch (err) {
       toast(err.message, true);
     }
+  });
+  $("#suggestion-search").addEventListener("input", (e) => {
+    state.suggestionSearch = e.target.value.trim();
+    renderSuggestionsList();
+  });
+  $("#suggestions-toggle-resolved").addEventListener("click", () => {
+    state.showResolvedSuggestions = !state.showResolvedSuggestions;
+    renderSuggestionsList();
   });
 }
 

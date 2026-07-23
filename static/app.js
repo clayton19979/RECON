@@ -450,8 +450,8 @@ function renderDetailHead() {
 function renderCostSummary() {
   const { item } = state.detail;
   const box = $("#vd-cost-summary");
-  let lines = `<div class="cost-line"><span>Quoted</span><span class="num">${money(item.quoted_cost)}</span></div>`;
-  lines += `<div class="cost-line total"><span>Cost</span><span class="num">${money(item.total_cost)}</span></div>`;
+  let lines = `<div class="cost-line"><span>Total Quote</span><span class="num">${money(item.quoted_cost)}</span></div>`;
+  lines += `<div class="cost-line total"><span>Actual Cost</span><span class="num">${money(item.total_cost)}</span></div>`;
   if (state.detail.segment !== "recon" && item.customer_paid) {
     lines += `<div class="cost-line"><span>Customer paid</span><span class="num">${money(item.customer_paid)}</span></div>`;
     lines += `<div class="cost-line total"><span>Net to shop</span><span class="num">${money(item.net_cost)}</span></div>`;
@@ -1019,8 +1019,8 @@ function renderPrintTicket() {
       <thead><tr><th>Kind</th><th>Description</th><th>Part #</th><th class="num-col">Qty</th><th class="num-col">Cost</th><th>Status</th></tr></thead>
       <tbody>${rows}</tbody>
       <tfoot>
-        <tr class="subtotal"><td colspan="4">Quoted</td><td class="num-col">${money(quotedTotal)}</td><td></td></tr>
-        <tr><td colspan="4">Cost — actually in it</td><td class="num-col">${money(actualParts + actualOther)}</td><td></td></tr>
+        <tr class="subtotal"><td colspan="4">Total Quote</td><td class="num-col">${money(quotedTotal)}</td><td></td></tr>
+        <tr><td colspan="4">Actual Cost</td><td class="num-col">${money(actualParts + actualOther)}</td><td></td></tr>
       </tfoot>
     </table>
     <div class="print-subhead" style="margin:16px 0 6px">Notes</div>

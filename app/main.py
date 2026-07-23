@@ -115,7 +115,11 @@ class EstimateIn(BaseModel):
     labor_rate: float = Field(default=0, ge=0)
     tax_rate: float = Field(default=0, ge=0, le=1)
     actor: str = Field(default="ui", min_length=1, max_length=120)
-    items: list[EstimateItem]
+    # Capped well under SQLite's ~999-host-parameter limit -- the delete
+    # step below builds one "?" per retained id in a single statement, so an
+    # unbounded list could raise an uncaught sqlite3.OperationalError (a bare
+    # 500) instead of a clean validation error.
+    items: list[EstimateItem] = Field(max_length=300)
     expected_version: int | None = None
 
 
@@ -386,10 +390,6 @@ def create_app(db_path: Path = DEFAULT_DB) -> FastAPI:
 
     @app.post("/api/orders/{order_id}/estimate")
     def save_estimate(order_id: int, estimate: EstimateIn):
-        subtotal = round(sum(i.quantity * i.unit_price for i in estimate.items), 2)
-        taxable = sum(i.quantity * i.unit_price for i in estimate.items if i.kind == "part")
-        tax = round(taxable * estimate.tax_rate, 2)
-        total = round(subtotal + tax, 2)
         with connect() as db:
             current_order = db.execute("SELECT * FROM orders WHERE id=?", (order_id,)).fetchone()
             if not current_order:
@@ -402,16 +402,16 @@ def create_app(db_path: Path = DEFAULT_DB) -> FastAPI:
             estimate_id = get_or_create_estimate(db, order_id, now)["id"]
             if old:
                 db.execute(
-                    "UPDATE estimates SET labor_rate=?,tax_rate=?,subtotal=?,tax=?,total=?,status='draft',edit_version=edit_version+1 WHERE id=?",
-                    (estimate.labor_rate, estimate.tax_rate, subtotal, tax, total, estimate_id),
+                    "UPDATE estimates SET labor_rate=?,tax_rate=?,status='draft',edit_version=edit_version+1 WHERE id=?",
+                    (estimate.labor_rate, estimate.tax_rate, estimate_id),
                 )
             else:
                 # A job may have already lazily created this estimate row with
                 # placeholder zeros -- fill in the real requested values now,
                 # without bumping edit_version (this is still the first save).
                 db.execute(
-                    "UPDATE estimates SET labor_rate=?,tax_rate=?,subtotal=?,tax=?,total=? WHERE id=?",
-                    (estimate.labor_rate, estimate.tax_rate, subtotal, tax, total, estimate_id),
+                    "UPDATE estimates SET labor_rate=?,tax_rate=? WHERE id=?",
+                    (estimate.labor_rate, estimate.tax_rate, estimate_id),
                 )
             valid_job_ids = {row[0] for row in db.execute("SELECT id FROM estimate_jobs WHERE estimate_id=?", (estimate_id,))}
             retained_ids: set[int] = set()
@@ -444,6 +444,16 @@ def create_app(db_path: Path = DEFAULT_DB) -> FastAPI:
                     db.execute(f"DELETE FROM estimate_items WHERE estimate_id=? AND id NOT IN ({placeholders}) AND status!='received'", (estimate_id, *retained_ids))
                 else:
                     db.execute("DELETE FROM estimate_items WHERE estimate_id=? AND status!='received'", (estimate_id,))
+            # Computed from the rows that actually survived, not from the
+            # request payload -- a received line kept alive above despite
+            # being left out of the payload would otherwise never be counted
+            # into subtotal/tax/total, understating the estimate's real total.
+            final_rows = db.execute("SELECT quantity, unit_price, kind FROM estimate_items WHERE estimate_id=?", (estimate_id,)).fetchall()
+            subtotal = round(sum(r["quantity"] * r["unit_price"] for r in final_rows), 2)
+            taxable = sum(r["quantity"] * r["unit_price"] for r in final_rows if r["kind"] == "part")
+            tax = round(taxable * estimate.tax_rate, 2)
+            total = round(subtotal + tax, 2)
+            db.execute("UPDATE estimates SET subtotal=?,tax=?,total=? WHERE id=?", (subtotal, tax, total, estimate_id))
             result = dict(db.execute("SELECT * FROM estimates WHERE id=?", (estimate_id,)).fetchone())
             result["items"] = [dict(row) for row in db.execute("SELECT * FROM estimate_items WHERE estimate_id=? ORDER BY sort_order, id", (estimate_id,))]
             result["jobs"] = estimate_jobs_list(db, estimate_id)

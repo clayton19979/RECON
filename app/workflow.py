@@ -345,9 +345,9 @@ def build_workflow_router(connect: Callable[[], sqlite3.Connection], now_fn: Cal
     def void_order(order_id: int, item: ActorIn):
         with connect() as db:
             current_row = order(db, order_id)
+            # assert_vehicle_editable already blocks a second void (it
+            # rejects any edit to an order that's already voided).
             assert_vehicle_editable(db, current_row)
-            if current_row["voided"]:
-                raise HTTPException(409, "Repair order is already voided")
             if db.execute("SELECT 1 FROM customer_invoices WHERE order_id=?", (order_id,)).fetchone():
                 raise HTTPException(409, "This order has already been invoiced to the customer -- voiding would leave its cost excluded while the invoice still shows it as billed")
             db.execute("UPDATE orders SET status='complete', voided=1 WHERE id=?", (order_id,))
@@ -404,17 +404,28 @@ def build_workflow_router(connect: Callable[[], sqlite3.Connection], now_fn: Cal
             if not invoice:
                 raise HTTPException(404, "Customer invoice not found")
             amount = cents(item.amount)
-            if amount > invoice["balance_cents"]:
-                raise HTTPException(409, "Payment exceeds the invoice balance")
-            balance = invoice["balance_cents"] - amount
-            status = "paid" if balance == 0 else "partial"
+            # Atomic compare-and-set: reading balance_cents, checking it, and
+            # writing it back as three separate steps let two nearly-
+            # simultaneous payments both read the same starting balance and
+            # both pass the "does this exceed it" check, overdrawing the
+            # invoice. The WHERE clause here is evaluated against whatever's
+            # actually committed at UPDATE time, not what was read moments
+            # earlier, so only one of two racing payments can ever succeed.
             cur = db.execute(
+                """UPDATE customer_invoices
+                   SET balance_cents=balance_cents-:amount,
+                       status=(CASE WHEN balance_cents-:amount=0 THEN 'paid' ELSE 'partial' END)
+                   WHERE id=:id AND balance_cents>=:amount""",
+                {"amount": amount, "id": invoice_id},
+            )
+            if cur.rowcount == 0:
+                raise HTTPException(409, "Payment exceeds the invoice balance")
+            payment_cur = db.execute(
                 "INSERT INTO payments(invoice_id,amount_cents,method,reference,actor,created_at) VALUES(?,?,?,?,?,?)",
                 (invoice_id, amount, item.method, item.reference.strip(), item.actor, now_fn()),
             )
-            db.execute("UPDATE customer_invoices SET balance_cents=?,status=? WHERE id=?", (balance, status, invoice_id))
-            record_activity(db, invoice["order_id"], "payment_recorded", item.actor, {"payment_id": cur.lastrowid, "amount": dollars(amount), "method": item.method}, now_fn)
-            payment = dict(db.execute("SELECT * FROM payments WHERE id=?", (cur.lastrowid,)).fetchone())
+            record_activity(db, invoice["order_id"], "payment_recorded", item.actor, {"payment_id": payment_cur.lastrowid, "amount": dollars(amount), "method": item.method}, now_fn)
+            payment = dict(db.execute("SELECT * FROM payments WHERE id=?", (payment_cur.lastrowid,)).fetchone())
             payment["amount"] = dollars(payment.pop("amount_cents"))
             updated = db.execute("SELECT * FROM customer_invoices WHERE id=?", (invoice_id,)).fetchone()
             return {"payment": payment, "invoice": invoice_dict(db, updated)}

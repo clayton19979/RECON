@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from tests.helpers import make_recon_order, make_recon_vehicle, save_estimate
+from tests.helpers import make_recon_order, make_recon_vehicle, make_retail_order, save_estimate
 
 
 def test_order_parts_flips_quoted_to_ordered(client):
@@ -104,6 +104,29 @@ def test_receive_parts_rejects_negative_cost_override(client):
         json={"item_ids": [item_id], "vendor_id": vendor["id"], "invoice_number": "INV-1", "cost_overrides": {str(item_id): -5}},
     )
     assert res.status_code == 422
+
+
+def test_parts_endpoints_respect_invoiced_estimate_lock(client):
+    """save_estimate already refuses to edit an invoiced order's estimate --
+    order-parts, the per-line status toggle, and receive-parts (which posts
+    a real vendor A/P invoice) must refuse too, or the customer's already-
+    fixed invoice total silently drifts from what the shop keeps spending."""
+    vendor = client.post("/api/vendors", json={"name": "WorldPac"}).json()
+    order = make_retail_order(client)
+    estimate = save_estimate(client, order["id"], [{"kind": "part", "description": "Brake pads", "part_number": "BP-1", "quantity": 1, "unit_price": 50, "unit_cost": 40}])
+    item_id = estimate["items"][0]["id"]
+    client.post(f"/api/orders/{order['id']}/authorization", json={"status": "approved", "approved_by": "Jamie", "method": "in_person"})
+    res = client.post(f"/api/orders/{order['id']}/invoice", json={"actor": "t"})
+    assert res.status_code == 201, res.text
+
+    res = client.patch(f"/api/orders/{order['id']}/estimate/order-parts")
+    assert res.status_code == 409
+
+    res = client.patch(f"/api/orders/{order['id']}/estimate/items/{item_id}/status", json={"status": "ordered"})
+    assert res.status_code == 409
+
+    res = client.post(f"/api/orders/{order['id']}/estimate/receive-parts", json={"item_ids": [item_id], "vendor_id": vendor["id"], "invoice_number": "INV-1"})
+    assert res.status_code == 409
 
 
 def test_receive_parts_requires_known_vendor(client):

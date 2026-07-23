@@ -35,7 +35,12 @@ function toast(message, isError = false) {
   toastTimer = setTimeout(() => el.classList.remove("show"), 3200);
 }
 function money(value) {
-  const n = Number(value || 0);
+  // `value || 0` only catches falsy input (0, "", null, undefined) -- a
+  // truthy but non-numeric value (e.g. a corrupted field coming back as a
+  // string) sails through Number() as NaN and used to render literally
+  // "$NaN" in cost summaries and the printed ticket.
+  const raw = Number(value);
+  const n = Number.isFinite(raw) ? raw : 0;
   const formatted = Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   return n < 0 ? `-$${formatted}` : `$${formatted}`;
 }
@@ -384,7 +389,10 @@ async function loadVehicleDetail() {
   // History must survive every other action on this page re-loading the
   // detail (adding a note, saving assignment, etc.) until they navigate to
   // a different vehicle, which is what resets selectedOrderId to null.
-  const preferred = state.detail.selectedOrderId != null ? orders.find((o) => o.id === state.detail.selectedOrderId) : null;
+  // Excludes a just-voided order, though -- voiding the one currently on
+  // screen must fall back to another open/recent order, not keep showing
+  // the dead ticket with everything still editable except the void button.
+  const preferred = state.detail.selectedOrderId != null ? orders.find((o) => o.id === state.detail.selectedOrderId && !o.voided) : null;
   // Prefer a still-open order, but fall back to the most recent one (orders
   // is sorted newest-first) rather than pretending there's no order at all
   // once it reaches Complete -- otherwise a finished/archived ticket could
@@ -1100,27 +1108,31 @@ function wireVehicleDetail() {
     }
   });
 
-  $("#vd-status-save").addEventListener("click", async () => {
+  $("#vd-status-save").addEventListener("click", async (e) => {
     const status = $("#vd-status-select").value;
-    try {
-      await patch(`/api/orders/${state.detail.order.id}/status`, { status, actor: currentActor() });
-      toast(`Status set to ${STATUS_LABEL[status]}`);
-      await loadVehicleDetail();
-    } catch (err) {
-      toast(err.message, true);
-    }
+    await withLoading(e.target, "Saving…", async () => {
+      try {
+        await patch(`/api/orders/${state.detail.order.id}/status`, { status, actor: currentActor() });
+        toast(`Status set to ${STATUS_LABEL[status]}`);
+        await loadVehicleDetail();
+      } catch (err) {
+        toast(err.message, true);
+      }
+    });
   });
 
-  $("#vd-concern-save").addEventListener("click", async () => {
+  $("#vd-concern-save").addEventListener("click", async (e) => {
     const concern = $("#vd-concern").value.trim();
     if (!concern) return toast("Concern can't be empty", true);
-    try {
-      await patch(`/api/orders/${state.detail.order.id}/concern`, { concern, actor: currentActor() });
-      toast("Concern updated");
-      await loadVehicleDetail();
-    } catch (err) {
-      toast(err.message, true);
-    }
+    await withLoading(e.target, "Saving…", async () => {
+      try {
+        await patch(`/api/orders/${state.detail.order.id}/concern`, { concern, actor: currentActor() });
+        toast("Concern updated");
+        await loadVehicleDetail();
+      } catch (err) {
+        toast(err.message, true);
+      }
+    });
   });
 
   $("#vd-print-ticket").addEventListener("click", () => {
@@ -2190,7 +2202,10 @@ function wireStaffView() {
    ================================================================== */
 function assigneeSummaryLabel(names) {
   if (!names || !names.length) return "Unassigned";
-  if (names.length <= 2) return names.join(", ");
+  // " & " rather than ", " for the two-name case -- a staff name containing
+  // its own comma (e.g. "Smith, John") paired with one other assignee would
+  // otherwise render indistinguishably from three or four separate people.
+  if (names.length <= 2) return names.join(" & ");
   return `${names[0]} +${names.length - 1}`;
 }
 
@@ -2215,12 +2230,20 @@ function renderAssigneeMenu(menuEl, toggleEl, selectedNames, onChange) {
 // picker closes it, same as the pattern browsers use for native <select>.
 let openAssigneeMenuEl = null;
 function toggleAssigneeMenu(menuEl) {
+  // A row can be deleted (e.g. a task removed) while its popover is open,
+  // detaching the old menu node from the document -- drop the dangling
+  // reference instead of touching a node nothing can see anymore.
+  if (openAssigneeMenuEl && !document.contains(openAssigneeMenuEl)) openAssigneeMenuEl = null;
   if (openAssigneeMenuEl && openAssigneeMenuEl !== menuEl) openAssigneeMenuEl.style.display = "none";
   const opening = menuEl.style.display !== "block";
   menuEl.style.display = opening ? "block" : "none";
   openAssigneeMenuEl = opening ? menuEl : null;
 }
 document.addEventListener("click", (e) => {
+  if (openAssigneeMenuEl && !document.contains(openAssigneeMenuEl)) {
+    openAssigneeMenuEl = null;
+    return;
+  }
   if (openAssigneeMenuEl && !e.target.closest(".ms-picker")) {
     openAssigneeMenuEl.style.display = "none";
     openAssigneeMenuEl = null;

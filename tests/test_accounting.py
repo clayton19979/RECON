@@ -54,6 +54,32 @@ def test_process_invoice_unknown_vendor_and_po(client):
     assert any("PO" in issue for issue in body["issues"])
 
 
+def test_process_invoice_keeps_part_and_labor_separate_when_codes_collide(client):
+    """merged_items used to collapse repeated line items keyed only by
+    normalized part number -- a part and a labor line sharing the same code
+    (e.g. a generic 'MISC' catch-all) got merged into one row of whichever
+    kind was seen first, with quantities summed across two unrelated things."""
+    client.post("/api/vendors", json={"name": "WorldPac"})
+    vehicle = make_recon_vehicle(client, stock_number="R-5010")
+    order = make_recon_order(client, vehicle["id"])
+    save_estimate(client, order["id"], [{"kind": "part", "description": "Misc part", "part_number": "MISC", "quantity": 1, "unit_price": 20, "unit_cost": 20}])
+
+    res = post_invoice(
+        client, po_number=order["number"], subtotal=65, total=65,
+        items=[
+            {"part_number": "MISC", "description": "Misc part", "quantity": 1, "unit_cost": 20, "kind": "part"},
+            {"part_number": "MISC", "description": "Shop labor", "quantity": 1.5, "unit_cost": 30, "kind": "labor"},
+        ],
+    )
+    assert res.json()["status"] == "posted", res.json()
+
+    items = client.get(f"/api/orders/{order['id']}").json()["estimate"]["items"]
+    by_kind = {i["kind"]: i for i in items}
+    assert set(by_kind) == {"part", "labor"}  # two distinct lines, not merged into one
+    assert by_kind["part"]["received_quantity"] == 1
+    assert by_kind["labor"]["quantity"] == 1.5
+
+
 def test_process_invoice_posts_and_receives_parts(client):
     client.post("/api/vendors", json={"name": "WorldPac", "aliases": ["World Pac"]})
     vehicle = make_recon_vehicle(client, stock_number="R-5001")

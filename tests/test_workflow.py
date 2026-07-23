@@ -124,6 +124,35 @@ def test_void_order(client):
     assert res.status_code == 409
 
 
+def test_voided_order_is_frozen_from_further_edits(client):
+    """Voiding used to only flip status/voided -- every other endpoint that
+    mutates an order (status, concern, estimate, parts ordering/receiving)
+    only checked the vehicle's archived state, never the order's own voided
+    flag, so a voided ticket could still gain new estimate lines, flip
+    back to in_progress, and even post a real vendor A/P invoice."""
+    vendor = client.post("/api/vendors", json={"name": "WorldPac"}).json()
+    vehicle = make_recon_vehicle(client, stock_number="R-4502")
+    order = make_recon_order(client, vehicle["id"])
+    estimate = save_estimate(client, order["id"], [{"kind": "part", "description": "Brake pads", "part_number": "BP-1", "quantity": 1, "unit_price": 40, "unit_cost": 40}])
+    item_id = estimate["items"][0]["id"]
+    client.post(f"/api/orders/{order['id']}/void", json={"actor": "Clay"})
+
+    res = client.patch(f"/api/orders/{order['id']}/status", json={"status": "in_progress"})
+    assert res.status_code == 409
+
+    res = client.patch(f"/api/orders/{order['id']}/concern", json={"concern": "Different work"})
+    assert res.status_code == 409
+
+    res = client.post(f"/api/orders/{order['id']}/estimate", json={"actor": "t", "items": [{"id": item_id, "kind": "part", "description": "Brake pads", "part_number": "BP-1", "quantity": 5, "unit_price": 40, "unit_cost": 40}]})
+    assert res.status_code == 409
+
+    res = client.patch(f"/api/orders/{order['id']}/estimate/order-parts")
+    assert res.status_code == 409
+
+    res = client.post(f"/api/orders/{order['id']}/estimate/receive-parts", json={"item_ids": [item_id], "vendor_id": vendor["id"], "invoice_number": "INV-1"})
+    assert res.status_code == 409
+
+
 def test_void_order_blocked_once_customer_invoiced(client):
     """Voiding an already-invoiced order would zero its cost out of the
     vehicle's rollup while the customer invoice/payment records still say
@@ -198,3 +227,31 @@ def test_retail_invoice_and_payment(client):
     res = client.post(f"/api/invoices/{invoice['id']}/payments", json={"amount": 100, "method": "cash"})
     assert res.status_code == 201
     assert res.json()["invoice"]["status"] == "paid"
+
+
+def test_concurrent_payments_cannot_overdraw_invoice(client):
+    """record_payment used to read balance_cents, check it, then write it
+    back as three separate steps -- two payments landing at nearly the same
+    moment could both read the same starting balance, both pass the "does
+    this exceed it" check, and together overdraw the invoice. The fix makes
+    the check-and-decrement one atomic UPDATE, so of two $80 payments
+    against a $100 balance (each individually fine, together too much),
+    exactly one must be accepted."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    order = make_retail_order(client)
+    save_estimate(client, order["id"], [{"kind": "labor", "description": "Diag", "quantity": 1, "unit_price": 100, "unit_cost": 100}])
+    client.post(f"/api/orders/{order['id']}/authorization", json={"status": "approved", "approved_by": "Clay", "method": "in_person"})
+    invoice = client.post(f"/api/orders/{order['id']}/invoice", json={"actor": "Clay"}).json()
+
+    def pay():
+        return client.post(f"/api/invoices/{invoice['id']}/payments", json={"amount": 80, "method": "cash"})
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda _: pay(), range(2)))
+
+    statuses = sorted(r.status_code for r in results)
+    assert statuses == [201, 409]  # exactly one accepted, one rejected
+
+    final = client.get(f"/api/orders/{order['id']}").json()
+    assert final["invoice"]["balance"] == 20  # 100 - 80, never went negative

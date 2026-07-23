@@ -144,7 +144,16 @@ def assert_vehicle_editable(db: sqlite3.Connection, order_row: sqlite3.Row) -> N
     """Once a vehicle's ticket is archived to History it's fully frozen --
     reopening it is the only way back to an editable state. Retail orders
     have neither a recon_vehicle_id nor a we_owe_id, so this is always a
-    no-op for them; archiving only applies to recon/we-owe vehicles."""
+    no-op for them; archiving only applies to recon/we-owe vehicles.
+
+    Also blocks any further edit to an order that's been voided -- voiding
+    means "this never happened, don't count it," which every single caller
+    of this function (status, concern, notes, assignment, estimate, jobs,
+    ordering/receiving parts, invoicing) would otherwise silently let keep
+    changing, including posting a real vendor A/P invoice against a
+    cancelled job."""
+    if order_row["voided"]:
+        raise HTTPException(409, "This repair order has been voided and can no longer be edited")
     if order_row["recon_vehicle_id"]:
         row = db.execute("SELECT archived_at FROM recon_vehicles WHERE id=?", (order_row["recon_vehicle_id"],)).fetchone()
         if row:

@@ -281,10 +281,14 @@ def build_accounting_router(connect: Callable[[], sqlite3.Connection], now: Call
             if abs(calculated_total - invoice.total) > 0.02:
                 issues.append(f"Subtotal plus tax is {calculated_total:.2f}, but invoice total is {invoice.total:.2f}")
 
-            # Collapse repeated part numbers into one line: quantities accumulate, last unit_cost wins.
-            merged_items: dict[str, InvoiceItemIn] = {}
+            # Collapse repeated part numbers into one line: quantities accumulate,
+            # last unit_cost wins. Keyed by (kind, part number) -- a labor line
+            # and a part line that happen to share the same code (e.g. a
+            # generic "MISC" part number) must never be merged into one row of
+            # whichever kind was seen first.
+            merged_items: dict[tuple[str, str], InvoiceItemIn] = {}
             for item in invoice.items:
-                key = normalize(item.part_number)
+                key = (item.kind, normalize(item.part_number))
                 prior = merged_items.get(key)
                 if prior:
                     merged_items[key] = prior.model_copy(update={"quantity": prior.quantity + item.quantity, "unit_cost": item.unit_cost})
@@ -298,8 +302,14 @@ def build_accounting_router(connect: Callable[[], sqlite3.Connection], now: Call
                     normalize(row["part_number"]): row
                     for row in db.execute("SELECT * FROM estimate_items WHERE estimate_id=? AND kind='part' AND part_number!=''", (estimate["id"],))
                 }
-                for key, item in merged_items.items():
-                    existing = existing_by_part.get(key)
+                # Only a "part" line's quantity is ever tracked against the
+                # repair order's received_quantity -- labor/credit lines have
+                # no such concept and must not be checked against a
+                # same-numbered part's existing row.
+                for (kind, part_key), item in merged_items.items():
+                    if kind != "part":
+                        continue
+                    existing = existing_by_part.get(part_key)
                     if existing and float(existing["received_quantity"]) + item.quantity > float(existing["quantity"]) + 0.001:
                         issues.append(f"Receipt quantity for {item.part_number} exceeds the quantity on the repair order")
 
@@ -318,7 +328,7 @@ def build_accounting_router(connect: Callable[[], sqlite3.Connection], now: Call
             received_parts: list[dict[str, Any]] = []
             added_parts: list[dict[str, Any]] = []
             added_labor: list[dict[str, Any]] = []
-            for key, item in merged_items.items():
+            for (_kind, part_key), item in merged_items.items():
                 if item.kind == "labor":
                     # At-cost shop: no markup, unit_price is just unit_cost.
                     hours = item.quantity  # quantity = hours for labor items
@@ -337,7 +347,7 @@ def build_accounting_router(connect: Callable[[], sqlite3.Connection], now: Call
                     received_parts.append({"part_number": item.part_number.strip().upper(), "quantity": -item.quantity, "unit_cost": item.unit_cost, "type": "credit"})
                     continue
 
-                existing = existing_by_part.get(key)
+                existing = existing_by_part.get(part_key)
                 if existing:
                     db.execute(
                         "UPDATE estimate_items SET received_quantity=received_quantity+?,unit_cost=?,status='received',received_invoice_number=? WHERE id=?",

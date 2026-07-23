@@ -84,6 +84,17 @@ def test_order_lifecycle_and_estimate_editing(client):
     assert estimate2["subtotal"] == 45  # 2*20 + 5, labor line dropped
 
 
+def test_save_estimate_rejects_oversized_item_list(client):
+    """Capped well under SQLite's ~999-host-parameter limit -- the delete
+    step builds one placeholder per retained id in a single statement, so an
+    unbounded list could otherwise raise an uncaught OperationalError."""
+    vehicle = make_recon_vehicle(client, stock_number="R-3502")
+    order = make_recon_order(client, vehicle["id"])
+    items = [{"kind": "part", "description": "x", "part_number": f"P-{i}", "quantity": 1, "unit_price": 1, "unit_cost": 1} for i in range(301)]
+    res = client.post(f"/api/orders/{order['id']}/estimate", json={"actor": "t", "items": items})
+    assert res.status_code == 422
+
+
 def test_save_estimate_never_deletes_a_received_line(client):
     """The real risk: save_estimate replaces the whole line-item set on every
     call, deleting anything not in the payload. A received line already has
@@ -111,6 +122,10 @@ def test_save_estimate_never_deletes_a_received_line(client):
     ids = {i["id"] for i in estimate2["items"]}
     assert received_id in ids  # survived despite being left out of the payload
     assert next(i for i in estimate2["items"] if i["id"] == received_id)["status"] == "received"
+    # The surviving received line must still count toward the total -- it's
+    # computed from what's actually in estimate_items, not from the payload
+    # that omitted it.
+    assert estimate2["subtotal"] == 40  # 10 (surviving received part) + 30 (labor)
 
 
 def test_estimate_item_source_is_recorded(client):

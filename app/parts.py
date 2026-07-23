@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 
 from .accounting import InvoiceItemIn, create_ap_invoice_record
 from .recon import assert_vehicle_editable
-from .workflow import record_activity
+from .workflow import assert_estimate_editable, record_activity
 
 PART_STATUSES = {"quoted", "ordered", "received"}
 
@@ -18,7 +18,7 @@ class ItemStatusIn(BaseModel):
 
 
 class ReceivePartsIn(BaseModel):
-    item_ids: list[int] = Field(min_length=1)
+    item_ids: list[int] = Field(min_length=1, max_length=300)
     vendor_id: int
     invoice_number: str = Field(min_length=1)
     tax: float = Field(default=0, ge=0)
@@ -45,6 +45,7 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
     def order_parts(order_id: int):
         with connect() as db:
             assert_vehicle_editable(db, order_row(db, order_id))
+            assert_estimate_editable(db, order_id)
             estimate = estimate_for_order(db, order_id)
             cur = db.execute(
                 "UPDATE estimate_items SET status='ordered' WHERE estimate_id=? AND kind='part' AND status='quoted'",
@@ -56,6 +57,7 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
     def set_item_status(order_id: int, item_id: int, item: ItemStatusIn):
         with connect() as db:
             assert_vehicle_editable(db, order_row(db, order_id))
+            assert_estimate_editable(db, order_id)
             estimate = estimate_for_order(db, order_id)
             row = db.execute(
                 "SELECT id, kind FROM estimate_items WHERE id=? AND estimate_id=?", (item_id, estimate["id"])
@@ -73,6 +75,7 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
         with connect() as db:
             current_order = order_row(db, order_id)
             assert_vehicle_editable(db, current_order)
+            assert_estimate_editable(db, order_id)
             if not db.execute("SELECT 1 FROM vendors WHERE id=?", (item.vendor_id,)).fetchone():
                 raise HTTPException(404, "Vendor not found")
             estimate = estimate_for_order(db, order_id)

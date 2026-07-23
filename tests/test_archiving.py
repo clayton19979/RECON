@@ -36,6 +36,8 @@ def test_archive_and_reopen_recon_vehicle(client):
     assert res.status_code == 409
     res = client.post("/api/orders", json={"concern": "New work", "segment": "recon", "recon_vehicle_id": vehicle["id"]})
     assert res.status_code == 409
+    res = client.patch(f"/api/orders/{order['id']}/concern", json={"concern": "Different work"})
+    assert res.status_code == 409
 
     # reopen restores full editing, data untouched
     res = client.post(f"/api/recon/vehicles/{vehicle['id']}/reopen")

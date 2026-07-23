@@ -56,6 +56,32 @@ def test_date_in_defaults_to_order_creation_and_is_editable(client):
     assert detail["assignment"]["date_in"] == "2026-01-15"
 
 
+def test_concern_is_returned_and_editable(client):
+    vehicle = make_recon_vehicle(client)
+    order = make_recon_order(client, vehicle["id"], concern="Front end recon prep")
+    detail = client.get(f"/api/orders/{order['id']}").json()
+    assert detail["concern"] == "Front end recon prep"
+
+    res = client.patch(f"/api/orders/{order['id']}/concern", json={"concern": "Replace missing passenger mirror"})
+    assert res.status_code == 200
+    assert res.json()["concern"] == "Replace missing passenger mirror"
+
+    detail = client.get(f"/api/orders/{order['id']}").json()
+    assert detail["concern"] == "Replace missing passenger mirror"
+
+
+def test_concern_rejects_too_short_value(client):
+    vehicle = make_recon_vehicle(client)
+    order = make_recon_order(client, vehicle["id"])
+    res = client.patch(f"/api/orders/{order['id']}/concern", json={"concern": "hi"})
+    assert res.status_code == 422
+
+
+def test_concern_update_unknown_order_404s(client):
+    res = client.patch("/api/orders/99999/concern", json={"concern": "Whatever"})
+    assert res.status_code == 404
+
+
 def test_status_transitions(client):
     """Statuses are a plain, ungated picker now -- any of the 4 values is
     settable from any other, with no transition graph or approval/invoice

@@ -522,7 +522,7 @@ function applyArchivedLockUI(archived) {
   // re-enable them, not just skip re-disabling, or they'd stay disabled
   // forever once archived once.
   const disableIds = [
-    "vd-status-select", "vd-status-save",
+    "vd-status-select", "vd-status-save", "vd-concern", "vd-concern-save",
     "vd-add-job", "vd-add-part", "vd-add-labor", "vd-add-partstech", "vd-order-parts",
     "vd-add-note", "vd-note-text",
     "vd-save-assignment", "vd-technician", "vd-advisor", "vd-date-in", "vd-odometer", "vd-promised",
@@ -562,6 +562,7 @@ function renderStatusCard(order) {
   pill.textContent = order.voided ? "Voided" : (STATUS_LABEL[order.status] || order.status);
   const select = $("#vd-status-select");
   select.innerHTML = STATUS_OPTIONS.map((s) => `<option value="${s}" ${s === order.status ? "selected" : ""}>${STATUS_LABEL[s]}</option>`).join("");
+  $("#vd-concern").value = order.concern || "";
 }
 
 function renderEstimate(order) {
@@ -1056,6 +1057,18 @@ function wireVehicleDetail() {
     try {
       await patch(`/api/orders/${state.detail.order.id}/status`, { status, actor: currentActor() });
       toast(`Status set to ${STATUS_LABEL[status]}`);
+      await loadVehicleDetail();
+    } catch (err) {
+      toast(err.message, true);
+    }
+  });
+
+  $("#vd-concern-save").addEventListener("click", async () => {
+    const concern = $("#vd-concern").value.trim();
+    if (!concern) return toast("Concern can't be empty", true);
+    try {
+      await patch(`/api/orders/${state.detail.order.id}/concern`, { concern, actor: currentActor() });
+      toast("Concern updated");
       await loadVehicleDetail();
     } catch (err) {
       toast(err.message, true);

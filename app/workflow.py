@@ -90,6 +90,11 @@ class StatusIn(BaseModel):
     actor: str = "ui"
 
 
+class ConcernIn(BaseModel):
+    concern: str = Field(min_length=3, max_length=2000)
+    actor: str = "ui"
+
+
 STATUS_LABEL = {
     "estimate": "Estimate",
     "pending_approval": "Pending Approval",
@@ -325,6 +330,16 @@ def build_workflow_router(connect: Callable[[], sqlite3.Connection], now_fn: Cal
             db.execute("UPDATE orders SET status=? WHERE id=?", (item.status, order_id))
             record_activity(db, order_id, "status_changed", item.actor, {"from": current, "to": item.status}, now_fn)
             return {"id": order_id, "status": item.status}
+
+    @router.patch("/orders/{order_id}/concern")
+    def update_concern(order_id: int, item: ConcernIn):
+        with connect() as db:
+            current_row = order(db, order_id)
+            assert_vehicle_editable(db, current_row)
+            concern = item.concern.strip()
+            db.execute("UPDATE orders SET concern=? WHERE id=?", (concern, order_id))
+            record_activity(db, order_id, "concern_updated", item.actor, {"from": current_row["concern"], "to": concern}, now_fn)
+            return {"id": order_id, "concern": concern}
 
     @router.post("/orders/{order_id}/void")
     def void_order(order_id: int, item: ActorIn):

@@ -130,6 +130,8 @@ const STATUS_PILL_CLASS = {
   estimate: "pill-status-estimate", pending_approval: "pill-status-pending",
   in_progress: "pill-status-progress", complete: "pill-status-complete",
 };
+const KIND_GROUP_ORDER = ["part", "labor", "fee"];
+const KIND_GROUP_LABEL = { part: "Parts", labor: "Labor", fee: "Fees" };
 
 /* ---------- nav / shell ---------- */
 function showView(name) {
@@ -611,10 +613,19 @@ function renderEstimate(order) {
     box.innerHTML = headRow + buckets.map((bucket) => {
       const bucketItems = items.filter((i) => (i.job_id ?? null) === bucket.id);
       const isGeneral = bucket.id === null;
+      const jobSubtotal = bucketItems.reduce((s, i) => s + i.quantity * i.unit_cost, 0);
+      // Parts and labor render as their own mini-sections within the job
+      // (Tekmetric-style) rather than one interleaved list, so it's obvious
+      // at a glance which lines are parts vs labor for this job -- not just
+      // which job a line belongs to.
+      const kindGroups = KIND_GROUP_ORDER
+        .map((kind) => ({ kind, kindItems: bucketItems.filter((i) => i.kind === kind) }))
+        .filter((g) => g.kindItems.length);
       return `
         <div class="job-group" data-job-id="${bucket.id ?? ""}">
           <div class="job-group-head">
             <span class="job-group-title">${esc(bucket.title)}</span>
+            ${bucketItems.length ? `<span class="job-group-subtotal">${money(jobSubtotal)}</span>` : ""}
             ${isGeneral ? "" : `
               <select class="ei-job-tech job-control" data-job-id="${bucket.id}">
                 <option value="">Use ticket default</option>
@@ -626,7 +637,12 @@ function renderEstimate(order) {
             <button type="button" class="job-control job-mini-add" data-job-id="${bucket.id ?? ""}" data-kind="part">＋ Part</button>
             <button type="button" class="job-control job-mini-add" data-job-id="${bucket.id ?? ""}" data-kind="labor">＋ Labor</button>
           </div>
-          ${bucketItems.length ? bucketItems.map(rowHtml).join("") : `<div class="ei-empty" style="padding:10px 16px;color:var(--ink-faint);font-size:12px">No lines in this job yet.</div>`}
+          ${kindGroups.length ? kindGroups.map((g) => `
+            <div class="kind-subgroup" data-kind="${g.kind}">
+              <div class="kind-subgroup-label">${KIND_GROUP_LABEL[g.kind]}</div>
+              ${g.kindItems.map(rowHtml).join("")}
+            </div>
+          `).join("") : `<div class="ei-empty" style="padding:10px 16px;color:var(--ink-faint);font-size:12px">No lines in this job yet.</div>`}
         </div>
       `;
     }).join("");
@@ -670,7 +686,10 @@ function renderEstimate(order) {
   updateReceiveButtonState();
   wireJobControls(order);
   if (jobs.length) {
-    $$(".job-group", box).forEach((groupEl) => wireEstimateRowDragging(groupEl));
+    // Scoped to each kind-subgroup (not the whole job) -- a part can only
+    // reorder among other parts in the same job, since dragging it into the
+    // Labor section wouldn't change its kind and would just look wrong.
+    $$(".kind-subgroup", box).forEach((groupEl) => wireEstimateRowDragging(groupEl));
   } else {
     wireEstimateRowDragging(box);
   }
@@ -694,9 +713,10 @@ function updateReceiveButtonState() {
 // Native HTML5 drag-and-drop: grabbing the ⋮⋮ handle (or anywhere on the
 // row) reorders it among its siblings live as you drag; persistEstimate()
 // on drop saves whatever order the DOM ends up in, same as every other
-// estimate edit. Called once per job-group container (never once globally)
-// so a row can only ever be dropped among its own group's siblings -- moving
-// a line to a *different* job is the Job select's job, not drag-and-drop's.
+// estimate edit. Called once per kind-subgroup (or once per job-group when
+// there are no jobs at all) rather than once globally, so a row can only
+// ever be dropped among its own group's siblings -- moving a line to a
+// *different* job or kind is the Job/Kind selects' job, not drag-and-drop's.
 function wireEstimateRowDragging(box) {
   let dragRow = null;
   $$(".part-row:not(.head)", box).forEach((row) => {
@@ -965,8 +985,12 @@ function renderPrintTicket() {
       const bucketItems = items.filter((i) => (i.job_id ?? null) === bucket.id);
       if (!bucketItems.length) return "";
       const jobTech = bucket.id === null ? "" : (bucket.technician_name || "Use ticket default");
-      return `<tr class="print-job-head"><td colspan="6">${esc(bucket.title)}${jobTech ? ` — ${esc(jobTech)}` : ""}</td></tr>`
-        + bucketItems.map(itemRow).join("");
+      const jobSubtotal = bucketItems.reduce((s, i) => s + i.quantity * i.unit_cost, 0);
+      const kindGroups = KIND_GROUP_ORDER
+        .map((kind) => ({ kind, kindItems: bucketItems.filter((i) => i.kind === kind) }))
+        .filter((g) => g.kindItems.length);
+      return `<tr class="print-job-head"><td colspan="5">${esc(bucket.title)}${jobTech ? ` — ${esc(jobTech)}` : ""}</td><td class="num-col">${money(jobSubtotal)}</td></tr>`
+        + kindGroups.map((g) => `<tr class="print-kind-head"><td colspan="6">${KIND_GROUP_LABEL[g.kind]}</td></tr>` + g.kindItems.map(itemRow).join("")).join("");
     }).join("") || `<tr><td colspan="6">No parts or labor lines.</td></tr>`;
   }
 

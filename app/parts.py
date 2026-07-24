@@ -33,6 +33,7 @@ class CoreReturnIn(BaseModel):
 
 class MoveItemIn(BaseModel):
     target_order_id: int
+    reassign_invoice: bool = False
     actor: str = "ui"
 
 
@@ -98,18 +99,55 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
             db.execute("UPDATE estimate_items SET status=? WHERE id=?", (item.status, item_id))
         return {"id": item_id, "status": item.status}
 
+    def find_received_invoice(db: sqlite3.Connection, order_id: int, invoice_number: str) -> sqlite3.Row | None:
+        """A part's received_invoice_number is just the string it was posted
+        under -- this is the one place that's resolved back to the actual
+        ap_invoices row, needed both to show the reassign-invoice warning and
+        to do the reassignment itself."""
+        return db.execute(
+            "SELECT * FROM ap_invoices WHERE order_id=? AND invoice_number=? AND status!='voided' ORDER BY id DESC LIMIT 1",
+            (order_id, invoice_number),
+        ).fetchone()
+
+    @router.get("/orders/{order_id}/estimate/items/{item_id}/received-invoice")
+    def get_received_invoice(order_id: int, item_id: int):
+        """Feeds the Move dialog's reassign-invoice checkbox: which invoice
+        (if any) this line was received under, who else it still covers on
+        this same ticket, so the advisor can see the blast radius before
+        deciding to drag the whole invoice along with this one line."""
+        with connect() as db:
+            estimate = estimate_for_order(db, order_id)
+            row = db.execute(
+                "SELECT * FROM estimate_items WHERE id=? AND estimate_id=?", (item_id, estimate["id"])
+            ).fetchone()
+            if not row:
+                raise HTTPException(404, "Estimate item not found on this repair order")
+            if not row["received_invoice_number"]:
+                return None
+            invoice = find_received_invoice(db, order_id, row["received_invoice_number"])
+            if not invoice:
+                return None
+            other_items = db.execute(
+                "SELECT count(*) FROM estimate_items WHERE estimate_id=? AND received_invoice_number=? AND id!=?",
+                (estimate["id"], row["received_invoice_number"], item_id),
+            ).fetchone()[0]
+            vendor = db.execute("SELECT name FROM vendors WHERE id=?", (invoice["vendor_id"],)).fetchone()
+            return {
+                "invoice_id": invoice["id"], "invoice_number": invoice["invoice_number"],
+                "vendor_name": vendor["name"] if vendor else "", "posted_at": invoice["posted_at"],
+                "other_item_count": other_items,
+            }
+
     @router.patch("/orders/{order_id}/estimate/items/{item_id}/move")
     def move_item(order_id: int, item_id: int, item: MoveItemIn):
         """Corrects a part (often already received) logged against the wrong
         repair order -- moves the line itself, quantity/cost/received state
         and all, onto a different ticket's estimate. The vendor A/P invoice
-        that was posted when it was received is left exactly where it is (an
-        A/P invoice can cover several lines at once and has no link back to
-        which specific one this was, same reason void_ap_invoice doesn't
-        reverse receiving) -- it's just the historical record of what was
-        ordered from the vendor and under which PO, whereas this line's
-        estimate_id is what actually drives which vehicle's cost this part
-        counts against, so moving that is what fixes the vehicle's numbers."""
+        that was posted when it was received is left exactly where it is
+        UNLESS reassign_invoice is set, in which case the whole invoice (every
+        line it covers, not just this one) is reassigned to the target order
+        too -- get_received_invoice is what lets the UI warn the advisor
+        before they opt into that."""
         if item.target_order_id == order_id:
             raise HTTPException(400, "That is already this repair order")
         with connect() as db:
@@ -122,7 +160,7 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
 
             source_estimate = estimate_for_order(db, order_id)
             row = db.execute(
-                "SELECT id FROM estimate_items WHERE id=? AND estimate_id=?", (item_id, source_estimate["id"])
+                "SELECT * FROM estimate_items WHERE id=? AND estimate_id=?", (item_id, source_estimate["id"])
             ).fetchone()
             if not row:
                 raise HTTPException(404, "Estimate item not found on this repair order")
@@ -140,9 +178,20 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
             )
             recompute_estimate_totals(db, source_estimate["id"])
             recompute_estimate_totals(db, target_estimate["id"])
-            record_activity(db, order_id, "estimate_item_moved_out", item.actor, {"item_id": item_id, "target_order_id": item.target_order_id}, now_fn)
-            record_activity(db, item.target_order_id, "estimate_item_moved_in", item.actor, {"item_id": item_id, "source_order_id": order_id}, now_fn)
-        return {"id": item_id, "moved_to_order_id": item.target_order_id}
+
+            reassigned_invoice_id = None
+            if item.reassign_invoice and row["received_invoice_number"]:
+                invoice = find_received_invoice(db, order_id, row["received_invoice_number"])
+                if invoice:
+                    db.execute(
+                        "UPDATE ap_invoices SET order_id=?,po_number=? WHERE id=?",
+                        (item.target_order_id, target_order["number"], invoice["id"]),
+                    )
+                    reassigned_invoice_id = invoice["id"]
+
+            record_activity(db, order_id, "estimate_item_moved_out", item.actor, {"item_id": item_id, "target_order_id": item.target_order_id, "reassigned_invoice_id": reassigned_invoice_id}, now_fn)
+            record_activity(db, item.target_order_id, "estimate_item_moved_in", item.actor, {"item_id": item_id, "source_order_id": order_id, "reassigned_invoice_id": reassigned_invoice_id}, now_fn)
+        return {"id": item_id, "moved_to_order_id": item.target_order_id, "reassigned_invoice_id": reassigned_invoice_id}
 
     @router.patch("/orders/{order_id}/estimate/items/{item_id}/core-return")
     def set_core_return(order_id: int, item_id: int, item: CoreReturnIn):

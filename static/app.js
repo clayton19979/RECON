@@ -994,17 +994,38 @@ function wireJobDialog() {
 async function openMoveItemDialog(orderId, itemId, desc) {
   state.detail.movingItemId = itemId;
   state.detail.movingFromOrderId = orderId;
+  state.detail.movingInvoiceId = null;
   $("#move-item-desc").textContent = `Moving "${desc}" off this ticket.`;
   const select = $("#move-item-target");
   select.innerHTML = `<option value="">Loading…</option>`;
+  $("#move-item-invoice-box").style.display = "none";
+  $("#move-item-no-invoice-note").style.display = "";
+  $("#move-item-reassign-invoice").checked = false;
   $("#move-item-dialog").showModal();
   try {
-    const orders = await get("/api/orders");
+    const [orders, invoice] = await Promise.all([
+      get("/api/orders"),
+      get(`/api/orders/${orderId}/estimate/items/${itemId}/received-invoice`),
+    ]);
     const options = orders.filter((o) => o.id !== orderId && !o.voided).map((o) => {
       const vehicleLabel = o.stock_number ? `${o.stock_number} · ${o.year} ${o.make} ${o.model}` : `${o.year} ${o.make} ${o.model} · ${o.customer_name}`;
       return `<option value="${o.id}">${esc(o.number)} — ${esc(vehicleLabel)}</option>`;
     }).join("");
     select.innerHTML = options || `<option value="">No other repair orders</option>`;
+
+    if (invoice) {
+      state.detail.movingInvoiceId = invoice.invoice_id;
+      $("#move-item-invoice-label").textContent = `Also reassign vendor invoice ${invoice.invoice_number} (${invoice.vendor_name}, posted ${fmtDate(invoice.posted_at)}) to this ticket`;
+      $("#move-item-invoice-box").style.display = "";
+      $("#move-item-no-invoice-note").style.display = "none";
+      const warning = $("#move-item-invoice-warning");
+      if (invoice.other_item_count > 0) {
+        warning.textContent = `⚠ This invoice also covers ${invoice.other_item_count} other part${invoice.other_item_count === 1 ? "" : "s"} still on this ticket — checking this moves ALL of them, not just this one.`;
+        warning.style.display = "";
+      } else {
+        warning.style.display = "none";
+      }
+    }
   } catch (err) {
     select.innerHTML = `<option value="">Could not load repair orders</option>`;
     toast(err.message, true);
@@ -1019,8 +1040,9 @@ function wireMoveItemDialog() {
     const targetOrderId = Number($("#move-item-target").value);
     if (!targetOrderId) return;
     const { movingItemId, movingFromOrderId } = state.detail;
+    const reassignInvoice = $("#move-item-reassign-invoice").checked;
     try {
-      await patch(`/api/orders/${movingFromOrderId}/estimate/items/${movingItemId}/move`, { target_order_id: targetOrderId, actor: currentActor() });
+      await patch(`/api/orders/${movingFromOrderId}/estimate/items/${movingItemId}/move`, { target_order_id: targetOrderId, reassign_invoice: reassignInvoice, actor: currentActor() });
       $("#move-item-dialog").close();
       toast("Line moved to the other ticket");
       await loadVehicleDetail();

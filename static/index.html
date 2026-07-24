@@ -703,7 +703,12 @@
     <div class="modal-body">
       <p class="hint" id="move-item-desc"></p>
       <label>Move to repair order<select id="move-item-target" required></select></label>
-      <p class="hint">The line (and its received status/cost) moves onto that ticket's estimate and starts counting toward that vehicle's cost instead. Any vendor invoice already posted for it stays where it is, as the record of what was ordered.</p>
+      <p class="hint">The line (and its received status/cost) moves onto that ticket's estimate and starts counting toward that vehicle's cost instead.</p>
+      <div id="move-item-invoice-box" style="display:none">
+        <label class="check-row"><input type="checkbox" id="move-item-reassign-invoice"> <span id="move-item-invoice-label"></span></label>
+        <p class="hint warn" id="move-item-invoice-warning" style="display:none"></p>
+      </div>
+      <p class="hint" id="move-item-no-invoice-note">Any vendor invoice already posted for it stays where it is, as the record of what was ordered.</p>
     </div>
     <div class="modal-actions">
       <button class="btn btn-ghost" formnovalidate type="button" id="move-item-cancel-2">Cancel</button>

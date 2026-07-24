@@ -267,6 +267,95 @@ def test_move_item_blocked_once_either_side_is_invoiced(client):
     assert res.status_code == 409
 
 
+def test_move_item_can_reassign_its_vendor_invoice(client):
+    """The whole point of the checkbox: a part received on the wrong ticket
+    should be able to take its vendor invoice/PO with it, not just the
+    estimate line, or the A/P books still show it against the wrong RO."""
+    vendor = client.post("/api/vendors", json={"name": "WorldPac"}).json()
+    vehicle_a = make_recon_vehicle(client, stock_number="R-3001")
+    order_a = make_recon_order(client, vehicle_a["id"])
+    vehicle_b = make_recon_vehicle(client, stock_number="R-3002")
+    order_b = make_recon_order(client, vehicle_b["id"])
+
+    estimate = save_estimate(
+        client, order_a["id"],
+        [{"kind": "part", "description": "Alternator", "part_number": "ALT-1", "quantity": 1, "unit_price": 150, "unit_cost": 150}],
+    )
+    item_id = estimate["items"][0]["id"]
+    res = client.post(
+        f"/api/orders/{order_a['id']}/estimate/receive-parts",
+        json={"item_ids": [item_id], "vendor_id": vendor["id"], "invoice_number": "INV-500"},
+    )
+    assert res.status_code == 200, res.text
+    invoice_id = res.json()["ap_invoice_id"]
+
+    related = client.get(f"/api/orders/{order_a['id']}/estimate/items/{item_id}/received-invoice").json()
+    assert related["invoice_number"] == "INV-500"
+    assert related["vendor_name"] == "WorldPac"
+    assert related["other_item_count"] == 0
+
+    res = client.patch(
+        f"/api/orders/{order_a['id']}/estimate/items/{item_id}/move",
+        json={"target_order_id": order_b["id"], "reassign_invoice": True, "actor": "tester"},
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["reassigned_invoice_id"] == invoice_id
+
+    invoice = client.get("/api/ap/invoices").json()[0]
+    assert invoice["id"] == invoice_id
+    assert invoice["order_id"] == order_b["id"]
+    assert invoice["po_number"] == order_b["number"]
+
+
+def test_move_item_without_reassign_leaves_invoice_on_original_order(client):
+    vendor = client.post("/api/vendors", json={"name": "WorldPac"}).json()
+    vehicle_a = make_recon_vehicle(client, stock_number="R-3101")
+    order_a = make_recon_order(client, vehicle_a["id"])
+    vehicle_b = make_recon_vehicle(client, stock_number="R-3102")
+    order_b = make_recon_order(client, vehicle_b["id"])
+
+    estimate = save_estimate(
+        client, order_a["id"],
+        [{"kind": "part", "description": "Alternator", "part_number": "ALT-1", "quantity": 1, "unit_price": 150, "unit_cost": 150}],
+    )
+    item_id = estimate["items"][0]["id"]
+    client.post(
+        f"/api/orders/{order_a['id']}/estimate/receive-parts",
+        json={"item_ids": [item_id], "vendor_id": vendor["id"], "invoice_number": "INV-501"},
+    )
+
+    res = client.patch(
+        f"/api/orders/{order_a['id']}/estimate/items/{item_id}/move",
+        json={"target_order_id": order_b["id"]},
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["reassigned_invoice_id"] is None
+
+    invoice = client.get("/api/ap/invoices").json()[0]
+    assert invoice["order_id"] == order_a["id"]
+
+
+def test_related_invoice_warns_when_it_covers_other_items_still_on_the_ticket(client):
+    vendor = client.post("/api/vendors", json={"name": "WorldPac"}).json()
+    vehicle = make_recon_vehicle(client)
+    order = make_recon_order(client, vehicle["id"])
+    estimate = save_estimate(
+        client, order["id"],
+        [
+            {"kind": "part", "description": "Alternator", "part_number": "ALT-1", "quantity": 1, "unit_price": 150, "unit_cost": 150},
+            {"kind": "part", "description": "Belt", "part_number": "BLT-1", "quantity": 1, "unit_price": 20, "unit_cost": 20},
+        ],
+    )
+    item_ids = [i["id"] for i in estimate["items"]]
+    client.post(
+        f"/api/orders/{order['id']}/estimate/receive-parts",
+        json={"item_ids": item_ids, "vendor_id": vendor["id"], "invoice_number": "INV-502"},
+    )
+
+    related = client.get(f"/api/orders/{order['id']}/estimate/items/{item_ids[0]}/received-invoice").json()
+    assert related["other_item_count"] == 1
+
+
 def test_receive_parts_wrong_order_404(client):
     vendor = client.post("/api/vendors", json={"name": "WorldPac"}).json()
     vehicle = make_recon_vehicle(client)

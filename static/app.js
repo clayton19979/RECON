@@ -115,7 +115,6 @@ const state = {
   newTaskAssignees: [],
   showCompletedTasks: false,
   suggestions: [],
-  backups: [],
 };
 
 // Who's actually using the app right now -- every save used to hardcode
@@ -163,7 +162,6 @@ function showView(name) {
   if (name === "staff") loadStaffView();
   if (name === "tasks") loadTasksView();
   if (name === "suggestions") loadSuggestionsView();
-  if (name === "backup") loadBackupView();
 }
 
 const THEMES = ["midnight", "carbon", "slate", "paper"];
@@ -2781,129 +2779,6 @@ function wireSuggestionsView() {
 }
 
 /* ==================================================================
-   BACKUP / RESTORE
-   ================================================================== */
-function fmtBytes(bytes) {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-function backupRowHtml(b) {
-  const created = new Date(b.modified_at * 1000).toLocaleString();
-  return `
-    <tr data-name="${esc(b.name)}">
-      <td>${esc(b.name)}</td>
-      <td class="num-col">${fmtBytes(b.size_bytes)}</td>
-      <td>${esc(created)}</td>
-      <td style="display:flex;gap:8px;justify-content:flex-end">
-        <a class="btn btn-ghost btn-sm" href="/api/backup/download/${encodeURIComponent(b.name)}" download>Download</a>
-        <button type="button" class="btn btn-ghost btn-sm backup-restore-btn">Restore</button>
-        <button type="button" class="btn btn-ghost btn-sm backup-delete-btn">Delete</button>
-      </td>
-    </tr>
-  `;
-}
-
-function renderBackupList() {
-  const sorted = [...state.backups].sort((a, b) => b.modified_at - a.modified_at);
-  $("#backup-count").textContent = `${sorted.length} backup${sorted.length === 1 ? "" : "s"}`;
-  $("#backup-list").innerHTML = sorted.map(backupRowHtml).join("");
-
-  $$(".backup-restore-btn", $("#backup-list")).forEach((btn) => {
-    btn.addEventListener("click", async () => {
-      const name = btn.closest("tr").dataset.name;
-      if (!confirm(`Restore "${name}"? This replaces every vehicle, estimate, invoice, task, and history entry currently in the app with what's in this backup. The current database is saved aside first, so this can be undone.`)) return;
-      await withLoading(btn, "Restoring…", async () => {
-        try {
-          await post(`/api/backup/restore/${encodeURIComponent(name)}`);
-          toast(`Restored from ${name}. Reloading…`);
-          setTimeout(() => location.reload(), 1200);
-        } catch (err) {
-          toast(err.message, true);
-        }
-      });
-    });
-  });
-
-  $$(".backup-delete-btn", $("#backup-list")).forEach((btn) => {
-    btn.addEventListener("click", async () => {
-      const name = btn.closest("tr").dataset.name;
-      if (!confirm(`Delete "${name}"? This only removes this backup file -- it does not touch the app's live data.`)) return;
-      await withLoading(btn, "Deleting…", async () => {
-        try {
-          await api(`/api/backup/${encodeURIComponent(name)}`, { method: "DELETE" });
-          toast(`Deleted ${name}`);
-          await loadBackupView();
-        } catch (err) {
-          toast(err.message, true);
-        }
-      });
-    });
-  });
-}
-
-async function loadBackupView() {
-  try {
-    state.backups = await get("/api/backup");
-    renderBackupList();
-  } catch (err) {
-    toast(`Could not load backups: ${err.message}`, true);
-  }
-}
-
-async function uploadAndRestore(file) {
-  const res = await fetch("/api/backup/restore-upload", {
-    method: "POST",
-    headers: { "X-Backup-Filename": file.name },
-    body: file,
-  });
-  if (!res.ok) {
-    let message = res.statusText;
-    try {
-      const body = await res.json();
-      message = body.detail || message;
-    } catch {}
-    throw new Error(message);
-  }
-  return res.json();
-}
-
-function wireBackupView() {
-  $("#backup-run-btn").addEventListener("click", async () => {
-    await withLoading($("#backup-run-btn"), "Backing up…", async () => {
-      try {
-        await post("/api/backup/run");
-        toast("Backup saved");
-        await loadBackupView();
-      } catch (err) {
-        toast(err.message, true);
-      }
-    });
-  });
-
-  const uploadInput = $("#backup-upload-input");
-  const uploadBtn = $("#backup-upload-btn");
-  uploadInput.addEventListener("change", () => {
-    uploadBtn.disabled = !uploadInput.files.length;
-  });
-  uploadBtn.addEventListener("click", async () => {
-    const file = uploadInput.files[0];
-    if (!file) return;
-    if (!confirm(`Restore from "${file.name}"? This replaces every vehicle, estimate, invoice, task, and history entry currently in the app with what's in this file. The current database is saved aside first, so this can be undone.`)) return;
-    await withLoading(uploadBtn, "Restoring…", async () => {
-      try {
-        await uploadAndRestore(file);
-        toast(`Restored from ${file.name}. Reloading…`);
-        setTimeout(() => location.reload(), 1200);
-      } catch (err) {
-        toast(err.message, true);
-      }
-    });
-  });
-}
-
-/* ==================================================================
    INIT
    ================================================================== */
 document.addEventListener("DOMContentLoaded", () => {
@@ -2924,9 +2799,96 @@ document.addEventListener("DOMContentLoaded", () => {
   wireStaffView();
   wireTasksView();
   wireSuggestionsView();
-  wireBackupView();
 
   $$(".rail-item").forEach((btn) => btn.addEventListener("click", () => showView(btn.dataset.view)));
 
   showView("vehicles");
+});
+
+
+/* ==================================================================
+   REDESIGN ADDITIONS -- details drawer, status picker, concern preview,
+   backup/restore modal. Purely additive: wraps/observes the existing
+   render functions above rather than changing them, so none of the real
+   data flow above this line needs to change.
+   ================================================================== */
+const _origRenderStatusCard = renderStatusCard;
+renderStatusCard = function (order) {
+  _origRenderStatusCard(order);
+  const pillEl = $("#vd-status-pill");
+  const picker = $("#vd-status-picker");
+  const label = $("#vd-status-picker-label");
+  const dot = $(".status-picker-dot", picker || document);
+  if (pillEl && picker && label) {
+    const text = pillEl.textContent.trim();
+    picker.style.display = text ? "" : "none";
+    if (text) label.textContent = text;
+    if (dot) dot.style.background = getComputedStyle(pillEl).backgroundColor;
+  }
+  const concernBox = $("#vd-concern");
+  const previewWrap = $("#vd-concern-preview");
+  const previewText = $("#vd-concern-preview-text");
+  if (concernBox && previewWrap && previewText) {
+    const val = concernBox.value.trim();
+    previewWrap.style.display = val ? "" : "none";
+    previewText.textContent = val;
+  }
+};
+
+document.addEventListener("DOMContentLoaded", () => {
+  // Details drawer: collapsible, remembers open/closed like the theme does.
+  const drawer = $("#vd-details-drawer");
+  const tab = $("#vd-details-tab");
+  const closeBtn = $("#vd-details-close");
+  function setDrawerOpen(open) {
+    if (!drawer || !tab) return;
+    drawer.classList.toggle("closed", !open);
+    tab.classList.toggle("visible", !open);
+    localStorage.setItem("dao-details-open", open ? "1" : "0");
+  }
+  if (drawer && tab) {
+    const saved = localStorage.getItem("dao-details-open");
+    setDrawerOpen(saved === null ? true : saved === "1");
+    tab.addEventListener("click", () => setDrawerOpen(true));
+    if (closeBtn) closeBtn.addEventListener("click", () => setDrawerOpen(false));
+  }
+
+  // Status picker popover -- reveals the real select+save controls without
+  // keeping them inline in their own card all the time.
+  const statusToggle = $("#vd-status-picker-toggle");
+  const statusMenu = $("#vd-status-picker-menu");
+  if (statusToggle && statusMenu) {
+    statusToggle.addEventListener("click", (e) => {
+      e.stopPropagation();
+      statusMenu.classList.toggle("open");
+    });
+    document.addEventListener("click", (e) => {
+      if (!e.target.closest(".status-picker")) statusMenu.classList.remove("open");
+    });
+  }
+
+  // Backup / Restore modal on the Vehicles page.
+  const backupDialog = $("#backup-dialog");
+  const openBackupBtn = $("#open-backup-btn");
+  if (backupDialog && openBackupBtn) {
+    openBackupBtn.addEventListener("click", () => backupDialog.showModal());
+    $("#backup-cancel")?.addEventListener("click", () => backupDialog.close());
+    const tabBackupBtn = $("#backup-tab-backup");
+    const tabRestoreBtn = $("#backup-tab-restore");
+    const backupPanel = $("#backup-tab-backup-panel");
+    const restorePanel = $("#backup-tab-restore-panel");
+    function showBackupTab(which) {
+      tabBackupBtn.classList.toggle("active", which === "backup");
+      tabRestoreBtn.classList.toggle("active", which === "restore");
+      backupPanel.style.display = which === "backup" ? "" : "none";
+      restorePanel.style.display = which === "restore" ? "" : "none";
+    }
+    tabBackupBtn.addEventListener("click", () => showBackupTab("backup"));
+    tabRestoreBtn.addEventListener("click", () => showBackupTab("restore"));
+    $("#backup-restore-submit")?.addEventListener("click", () => {
+      const file = $("#backup-restore-file").files[0];
+      if (!file) return toast("Choose a file first", true);
+      toast("Full restore isn't wired up over the web yet -- use the tray icon's \"Restore Latest Backup\" on this PC.", true);
+    });
+  }
 });

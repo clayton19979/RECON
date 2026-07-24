@@ -1,6 +1,6 @@
 :root {
-  --rail-w: 76px;
-  --radius: 8px;
+  --rail-w: 236px;
+  --radius: 10px;
 }
 
 /* ---------- theme tokens ---------- */
@@ -62,18 +62,18 @@ html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
 body {
   background: var(--paper);
   color: var(--ink);
-  font-family: "Segoe UI", system-ui, sans-serif;
+  font-family: "Manrope", "Segoe UI", system-ui, sans-serif;
   font-size: 14px;
   line-height: 1.45;
 }
 h1, h2, h3, .head-font {
-  font-family: Bahnschrift, "SF Compact Condensed", "Segoe UI Semibold", system-ui, sans-serif;
-  font-weight: 600;
-  letter-spacing: .01em;
+  font-family: "Space Grotesk", "SF Compact Condensed", "Segoe UI Semibold", system-ui, sans-serif;
+  font-weight: 700;
+  letter-spacing: -.01em;
   margin: 0;
 }
 .num {
-  font-family: "Cascadia Mono", "Consolas", "SFMono-Regular", ui-monospace, monospace;
+  font-family: "IBM Plex Mono", "Cascadia Mono", "Consolas", ui-monospace, monospace;
   font-variant-numeric: tabular-nums;
 }
 a { color: var(--accent); }
@@ -91,39 +91,46 @@ button { font-family: inherit; }
 .app { display: grid; grid-template-columns: var(--rail-w) 1fr; grid-template-rows: 1fr; height: 100vh; }
 
 .rail {
-  background: var(--accent-strong);
-  display: flex; flex-direction: column; align-items: center;
-  padding: 16px 0; gap: 4px;
-  /* No overflow-y here: the rail's nav items always fit, and setting only
-     overflow-y forces overflow-x to clip too (per spec), which hid the
-     theme-menu popout since it pops out to the right, past the rail's edge. */
+  background: var(--surface); border-right: 1px solid var(--line);
+  display: flex; flex-direction: column;
+  padding: 20px 14px; gap: 2px;
 }
 .rail-mark {
-  font-family: Bahnschrift, sans-serif;
-  color: #fff; background: rgba(255,255,255,.14);
-  width: 40px; height: 40px; border-radius: 10px;
+  font-family: "Space Grotesk", sans-serif;
+  color: #fff; background: var(--accent);
+  width: 34px; height: 34px; border-radius: 8px;
   display: flex; align-items: center; justify-content: center;
-  font-weight: 700; font-size: 14px; margin-bottom: 18px;
+  font-weight: 700; font-size: 13px; margin-bottom: 22px; flex-shrink: 0;
+  position: relative;
 }
+.rail-mark-label {
+  position: absolute; left: 44px; top: 50%; transform: translateY(-50%);
+  font-size: 15px; font-weight: 700; color: var(--ink); white-space: nowrap; letter-spacing: .01em;
+}
+.rail-group-label {
+  font-size: 9.5px; text-transform: uppercase; letter-spacing: .08em; font-weight: 700;
+  color: var(--ink-faint); padding: 14px 10px 7px;
+}
+.rail-group-label:first-of-type { padding-top: 0; }
 .rail-item {
-  width: 60px; padding: 10px 4px 8px;
-  display: flex; flex-direction: column; align-items: center; gap: 5px;
-  background: none; border: none; color: rgba(255,255,255,.62);
-  cursor: pointer; border-radius: 10px; font-size: 10.5px;
-  letter-spacing: .02em; transition: background .12s, color .12s;
+  width: 100%; padding: 9px 10px;
+  display: flex; align-items: center; gap: 11px;
+  background: none; border: none; border-left: 3px solid transparent; color: var(--ink-soft);
+  cursor: pointer; border-radius: 0 8px 8px 0; font-size: 13px; font-weight: 600;
+  text-align: left; letter-spacing: 0; transition: background .12s, color .12s, border-color .12s;
 }
-.rail-item svg { width: 21px; height: 21px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
-.rail-item:hover { background: rgba(255,255,255,.08); color: #fff; }
-.rail-item.active { background: rgba(255,255,255,.16); color: #fff; }
+.rail-item svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; flex-shrink: 0; }
+.rail-item:hover { background: var(--paper-raise); color: var(--ink); }
+.rail-item.active { background: var(--accent-tint); color: var(--accent); border-left-color: var(--accent); }
 .rail-spacer { flex: 1; }
-.theme-picker { position: relative; }
+.theme-picker { position: relative; margin-top: 10px; padding: 10px 6px 4px; border-top: 1px solid var(--line); }
 .rail-theme {
-  width: 36px; height: 36px; border-radius: 50%; border: none;
-  background: rgba(255,255,255,.1); color: rgba(255,255,255,.8);
+  width: 36px; height: 36px; border-radius: 8px; border: 1px solid var(--line);
+  background: var(--paper-raise); color: var(--ink-faint);
   display: flex; align-items: center; justify-content: center; cursor: pointer;
 }
-.rail-theme svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.8; }
-.rail-theme:hover { background: rgba(255,255,255,.18); color: #fff; }
+.rail-theme svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; }
+.rail-theme:hover { border-color: var(--accent); color: var(--accent); }
 
 .theme-menu {
   position: absolute; bottom: 0; left: calc(100% + 10px);
@@ -156,12 +163,12 @@ button { font-family: inherit; }
 .shop-acronym { font-size: 10px; color: var(--ink-faint); font-style: italic; letter-spacing: .01em; }
 .shop-sub { font-size: 11.5px; color: var(--ink-faint); }
 .search {
-  flex: 1; max-width: 420px; display: flex; align-items: center; gap: 8px;
+  flex: 1; max-width: 420px; height: 32px; display: flex; align-items: center; gap: 8px;
   background: var(--surface); border: 1px solid var(--line); border-radius: 999px;
-  padding: 7px 14px; color: var(--ink-faint);
+  padding: 0 14px; color: var(--ink-faint);
 }
-.search svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2; flex-shrink: 0; }
-.search input { border: none; background: none; outline: none; flex: 1; color: var(--ink); font-size: 13px; }
+.search svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; flex-shrink: 0; }
+.search input { border: none; background: none; outline: none; flex: 1; color: var(--ink); font-size: 13px; line-height: 1; height: 100%; }
 .search input::placeholder { color: var(--ink-faint); }
 .topbar-right { margin-left: auto; }
 .who-badge {
@@ -184,9 +191,13 @@ button { font-family: inherit; }
 .view { display: none; }
 .view.active { display: block; }
 
-.page-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 20px; margin-bottom: 20px; }
+.page-head {
+  display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-start; gap: 20px;
+  background: var(--paper-raise); border-left: 4px solid var(--accent); border-radius: 0 10px 10px 0;
+  padding: 20px 24px; margin-bottom: 24px;
+}
 .page-head h1 { font-size: 24px; }
-.page-desc { color: var(--ink-soft); font-size: 13px; max-width: 640px; margin: 6px 0 0; }
+.page-desc { color: var(--ink-soft); font-size: 13.5px; max-width: 640px; margin: 7px 0 0; line-height: 1.5; }
 
 /* ---------- buttons ---------- */
 .btn {
@@ -208,11 +219,15 @@ button { font-family: inherit; }
 /* ---------- stats ---------- */
 .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 20px; }
 .stat {
-  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+  background: var(--surface); border: 1px solid var(--line); border-top: 3px solid var(--accent);
+  border-radius: 0 0 var(--radius) var(--radius);
   padding: 16px 18px;
 }
+.stats .stat:nth-child(2) { border-top-color: var(--weowe); }
+.stats .stat:nth-child(3) { border-top-color: var(--ink-faint); }
+.stats .stat:nth-child(4) { border-top-color: var(--accent-strong); }
 .stat-label { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--ink-faint); font-weight: 600; }
-.stat-value { font-family: "Cascadia Mono", Consolas, monospace; font-size: 26px; font-weight: 600; margin-top: 6px; }
+.stat-value { font-family: "IBM Plex Mono", "Cascadia Mono", Consolas, monospace; font-size: 26px; font-weight: 600; margin-top: 6px; }
 .stat-value.warn { color: var(--warn); }
 .stat-sub { font-size: 11.5px; color: var(--ink-faint); margin-top: 3px; }
 
@@ -252,7 +267,7 @@ tbody tr.clickable { cursor: pointer; }
 tbody tr.clickable:hover { background: var(--paper-raise); }
 tbody tr.voided-row { opacity: .55; text-decoration: line-through; }
 tbody tr.voided-row .pill { text-decoration: none; }
-.num-col { text-align: right; font-family: "Cascadia Mono", Consolas, monospace; }
+.num-col { text-align: right; font-family: "IBM Plex Mono", "Cascadia Mono", Consolas, monospace; }
 td.num-col { font-variant-numeric: tabular-nums; }
 th.sortable { cursor: pointer; user-select: none; }
 th.sortable:hover { color: var(--ink); }
@@ -263,19 +278,20 @@ td.age-crit { color: var(--crit); font-weight: 700; }
 
 /* ---------- pills / status badges ---------- */
 .pill {
-  display: inline-flex; align-items: center; gap: 5px; padding: 3px 10px;
-  border-radius: 999px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em;
+  display: inline-flex; align-items: center; gap: 5px; padding: 4px 11px;
+  border-radius: 6px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
+  color: #fff;
 }
-.pill-recon { background: var(--recon-tint); color: var(--recon); }
-.pill-weowe { background: var(--weowe-tint); color: var(--weowe); }
-.pill-progress { background: var(--warn-tint); color: var(--warn); }
-.pill-done { background: var(--good-tint); color: var(--good); }
+.pill-recon { background: var(--recon); }
+.pill-weowe { background: var(--weowe); }
+.pill-progress { background: var(--warn); }
+.pill-done { background: var(--good); }
 
-.status-pill { display: inline-flex; padding: 2px 9px; border-radius: 999px; font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; }
-.sp-quoted { background: var(--line-soft); color: var(--ink-faint); }
-.sp-ordered { background: var(--warn-tint); color: var(--warn); }
-.sp-received { background: var(--good-tint); color: var(--good); }
-.sp-returned { background: var(--crit-tint); color: var(--crit); }
+.status-pill { display: inline-flex; padding: 3px 10px; border-radius: 6px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: #fff; }
+.sp-quoted { background: var(--ink-faint); }
+.sp-ordered { background: var(--warn); }
+.sp-received { background: var(--good); }
+.sp-returned { background: var(--crit); }
 .status-cell { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; }
 .part-return-btn[data-returned="0"] { border-color: var(--crit); color: var(--crit); }
 .part-return-btn[data-returned="0"]:hover { background: var(--crit-tint); }
@@ -336,10 +352,10 @@ textarea { min-height: 70px; resize: vertical; font-family: inherit; }
 .check-row input[type="checkbox"] { width: auto; margin: 0; }
 
 /* ---------- ticket status pills (color-coded, one per status) ---------- */
-.pill-status-estimate { background: var(--line-soft); color: var(--ink-faint); }
-.pill-status-pending { background: var(--warn-tint); color: var(--warn); }
-.pill-status-progress { background: var(--accent-tint); color: var(--accent); }
-.pill-status-complete { background: var(--good-tint); color: var(--good); }
+.pill-status-estimate { background: var(--ink-faint); color: #fff; }
+.pill-status-pending { background: var(--warn); color: #fff; }
+.pill-status-progress { background: var(--accent); color: #fff; }
+.pill-status-complete { background: var(--good); color: #fff; }
 
 /* ---------- estimate / parts rows ---------- */
 .part-row {
@@ -376,7 +392,7 @@ textarea { min-height: 70px; resize: vertical; font-family: inherit; }
 }
 .job-group-title { flex: 1; }
 .job-group-subtotal {
-  font-family: "Cascadia Mono", Consolas, monospace; font-weight: 700; font-size: 12px; color: var(--ink-soft); white-space: nowrap;
+  font-family: "IBM Plex Mono", "Cascadia Mono", Consolas, monospace; font-weight: 700; font-size: 12px; color: var(--ink-soft); white-space: nowrap;
 }
 .job-group-head select.job-control { width: auto; padding: 4px 8px; font-size: 11.5px; font-weight: 600; }
 
@@ -401,7 +417,7 @@ textarea { min-height: 70px; resize: vertical; font-family: inherit; }
 /* ---------- cost summary ---------- */
 .cost-summary { padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; }
 .cost-line { display: flex; justify-content: space-between; font-size: 13px; }
-.cost-line span:last-child { font-family: "Cascadia Mono", Consolas, monospace; font-weight: 600; }
+.cost-line span:last-child { font-family: "IBM Plex Mono", "Cascadia Mono", Consolas, monospace; font-weight: 600; }
 .cost-line.total { border-top: 1px solid var(--line); padding-top: 8px; font-weight: 700; font-size: 14.5px; }
 
 /* ---------- kv list ---------- */
@@ -572,7 +588,7 @@ dialog::backdrop { background: rgba(20, 18, 14, .45); }
      above the bold "Cost" total, not a second total in its own right. */
   .print-table tfoot tr.subtotal td { font-weight: 600; font-size: 10.5px; color: #333; padding-bottom: 2px; }
   .print-table .num-col {
-    text-align: right; font-family: "Cascadia Mono", Consolas, monospace; font-variant-numeric: tabular-nums;
+    text-align: right; font-family: "IBM Plex Mono", "Cascadia Mono", Consolas, monospace; font-variant-numeric: tabular-nums;
   }
   .print-subhead { font-family: Bahnschrift, "Segoe UI Semibold", sans-serif; font-size: 15px; font-weight: 700; color: #000; margin: 20px 0 8px; }
   .print-notes { font-size: 13px; color: #000; line-height: 1.6; }
@@ -599,3 +615,71 @@ dialog::backdrop { background: rgba(20, 18, 14, .45); }
     color: #555; padding: 4px 8px 2px; border-bottom: none;
   }
 }
+
+
+/* ---------- redesign additions ---------- */
+.detail-shell { display: flex; gap: 18px; align-items: flex-start; }
+.detail-shell > .detail-main { flex: 1; min-width: 0; }
+
+.detail-concern { font-size: 13px; color: var(--ink-soft); margin-top: 10px; }
+.detail-concern-label { color: var(--ink-faint); font-weight: 700; text-transform: uppercase; font-size: 10px; letter-spacing: .05em; margin-right: 7px; }
+
+/* Parts & Labor: the shell itself goes transparent so each job (or the flat
+   list, when there are no jobs yet) reads as its own separate card. */
+.parts-labor-shell { background: transparent; border: none; box-shadow: none; margin-bottom: 16px; }
+.parts-labor-shell > .card-head {
+  background: var(--paper-raise); border: 1px solid var(--line); border-radius: var(--radius);
+  margin-bottom: 14px;
+}
+.parts-labor-shell #vd-estimate-items { display: flex; flex-direction: column; gap: 14px; }
+.parts-labor-shell #vd-estimate-items:not(.has-jobs) {
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden;
+}
+.parts-labor-shell #vd-estimate-items .part-row.head { display: none; }
+.job-group {
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+  overflow: hidden; border-bottom: 1px solid var(--line) !important;
+}
+
+/* Status picker: compact pill in the RO header that reveals the real
+   select+save controls in a small popover, instead of always showing them
+   inline on their own card. */
+.status-picker { position: relative; }
+.status-picker-toggle {
+  display: inline-flex; align-items: center; gap: 7px;
+  background: var(--accent-tint); border: 1px solid var(--accent); color: var(--accent);
+  border-radius: 8px; padding: 9px 13px; font-size: 12.5px; font-weight: 700; cursor: pointer; font-family: inherit;
+}
+.status-picker-toggle svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 2.4; }
+.status-picker-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); flex-shrink: 0; }
+.status-picker-menu {
+  display: none; position: absolute; top: calc(100% + 6px); right: 0; z-index: 30;
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+  box-shadow: var(--shadow); padding: 10px; gap: 8px; align-items: center; min-width: 220px;
+}
+.status-picker-menu.open { display: flex; }
+.status-picker-menu select { width: auto; flex: 1; }
+
+/* Details drawer: collapsible right-hand panel for cost/vehicle-info/notes/
+   activity, plus the persistent pull-tab that toggles it (mirrors the
+   always-visible left rail rather than living only inside the panel). */
+.details-drawer { width: 300px; flex-shrink: 0; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+.details-drawer.closed { display: none; }
+.details-drawer-head { display: flex; justify-content: space-between; align-items: center; padding: 14px 16px; border-bottom: 1px solid var(--line); }
+.details-drawer-title { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; font-weight: 700; color: var(--ink-faint); }
+.details-drawer-body { padding: 4px 16px 16px; display: flex; flex-direction: column; gap: 4px; }
+.details-drawer-body .card { box-shadow: none; }
+.panel-icon-btn { background: none; border: none; color: var(--ink-faint); cursor: pointer; padding: 2px; display: flex; align-items: center; justify-content: center; }
+.panel-icon-btn:hover { color: var(--accent); }
+.panel-icon-btn svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2.2; }
+
+.details-tab {
+  width: 38px; align-self: stretch; flex-shrink: 0; display: none;
+  flex-direction: column; align-items: center; justify-content: flex-start; gap: 10px; padding: 16px 0;
+  background: var(--surface); border: 1px solid var(--accent); border-radius: var(--radius);
+  color: var(--ink-soft); cursor: pointer; font-family: inherit;
+}
+.details-tab.visible { display: flex; }
+.details-tab:hover { color: var(--accent); }
+.details-tab svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2; flex-shrink: 0; }
+.details-tab span { writing-mode: vertical-rl; transform: rotate(180deg); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; }

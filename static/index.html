@@ -4,12 +4,14 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>RECON — Discount Auto Repair</title>
+<link rel="stylesheet" href="/assets/fonts.css">
 <link rel="stylesheet" href="/assets/styles.css">
 </head>
 <body>
 <div class="app">
   <nav class="rail">
-    <div class="rail-mark">DA</div>
+    <div class="rail-mark">DA<span class="rail-mark-label">RECON</span></div>
+    <div class="rail-group-label">Workflow</div>
     <button class="rail-item active" data-view="vehicles">
       <svg viewBox="0 0 24 24"><path d="M3 12l2-8h14l2 8M3 12v7a1 1 0 001 1h2a1 1 0 001-1v-2h10v2a1 1 0 001 1h2a1 1 0 001-1v-7M3 12h18M7 16h.01M17 16h.01"/></svg>
       <span>Vehicles</span>
@@ -18,14 +20,16 @@
       <svg viewBox="0 0 24 24"><path d="M9 17H5a2 2 0 01-2-2V5a2 2 0 012-2h14a2 2 0 012 2v10a2 2 0 01-2 2h-4M9 17l3 4 3-4M9 17h6"/></svg>
       <span>Reports</span>
     </button>
+    <div class="rail-group-label">Money</div>
     <button class="rail-item" data-view="accounting">
       <svg viewBox="0 0 24 24"><path d="M4 19V5a2 2 0 012-2h9l5 5v11a2 2 0 01-2 2H6a2 2 0 01-2-2z"/><path d="M14 3v5h5M9 13h6M9 17h6"/></svg>
-      <span>A/P</span>
+      <span>Accounts Payable</span>
     </button>
     <button class="rail-item" data-view="cores">
       <svg viewBox="0 0 24 24"><path d="M17 2l4 4-4 4M3 11V9a4 4 0 014-4h14M7 22l-4-4 4-4M21 13v2a4 4 0 01-4 4H3"/></svg>
       <span>Cores &amp; Returns</span>
     </button>
+    <div class="rail-group-label">Team</div>
     <button class="rail-item" data-view="staff">
       <svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.4"/><path d="M4.5 20c1-3.6 4-5.6 7.5-5.6s6.5 2 7.5 5.6"/></svg>
       <span>Staff</span>
@@ -38,8 +42,8 @@
       <svg viewBox="0 0 24 24"><path d="M9 18h6M10 22h4M12 2a7 7 0 00-4 12.7c.6.5 1 1.3 1 2.3h6c0-1 .4-1.8 1-2.3A7 7 0 0012 2z"/></svg>
       <span>Ideas</span>
     </button>
-    <button class="rail-item" data-view="backup">
-      <svg viewBox="0 0 24 24"><path d="M12 3a4 4 0 00-4 4v2H6a2 2 0 00-2 2v8a2 2 0 002 2h12a2 2 0 002-2v-8a2 2 0 00-2-2h-2V7a4 4 0 00-4-4z"/><path d="M12 12v5m0 0l-2-2m2 2l2-2"/></svg>
+    <button class="rail-item" type="button" id="open-backup-btn">
+      <svg viewBox="0 0 24 24"><path d="M12 4v12m0 0l-4-4m4 4l4-4M4 20h16"/></svg>
       <span>Backup</span>
     </button>
     <div class="rail-spacer"></div>
@@ -58,9 +62,7 @@
 
   <div class="main">
     <header class="topbar">
-      <div>
-        <div class="shop-name">RECON</div>
-        <div class="shop-acronym">Repair, Estimate, Cost &amp; Obligation Network</div>
+      <div class="topbar-shop">
         <div class="shop-sub">Discount Auto Repair · Merrillville, IN</div>
       </div>
       <label class="search">
@@ -83,10 +85,6 @@
             <p class="page-desc">Every recon car and we-owe promise, one list. Click a row for the full picture — cost, parts, technician, linked repair order.</p>
           </div>
           <div style="display:flex;gap:10px">
-            <a class="btn btn-ghost" href="/api/export/vehicles.csv" download title="A spreadsheet of this list only -- not a full backup. Use the tray icon's Backup Now for that.">
-              <svg viewBox="0 0 24 24"><path d="M12 4v12m0 0l-4-4m4 4l4-4M4 20h16"/></svg>
-              Export Vehicle Report (CSV)
-            </a>
             <button class="btn btn-ghost" id="add-we-owe-btn">
               <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
               We-Owe Promise
@@ -137,7 +135,7 @@
           <button type="button" class="btn btn-primary btn-sm" id="vehicles-bulk-archive">Send to History</button>
         </div>
 
-        <div class="panel">
+        <div class="panel" style="margin-bottom:0">
           <table>
             <thead>
               <tr>
@@ -172,8 +170,19 @@
             <div class="detail-title" id="vd-title"></div>
             <div class="detail-sub" id="vd-sub"></div>
             <div class="detail-updated" id="vd-updated"></div>
+            <div class="detail-concern" id="vd-concern-preview" style="display:none"><span class="detail-concern-label">Concern</span><span id="vd-concern-preview-text"></span></div>
           </div>
-          <div style="display:flex;gap:10px" id="vd-actions">
+          <div style="display:flex;gap:10px;flex-wrap:wrap;justify-content:flex-end" id="vd-actions">
+            <div class="status-picker" id="vd-status-picker" style="display:none">
+              <button type="button" class="status-picker-toggle" id="vd-status-picker-toggle">
+                <span class="status-picker-dot"></span><span id="vd-status-picker-label">Status</span>
+                <svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
+              </button>
+              <div class="status-picker-menu" id="vd-status-picker-menu">
+                <select id="vd-status-select" class="inline-select"></select>
+                <button class="btn btn-primary btn-sm" id="vd-status-save">Save</button>
+              </div>
+            </div>
             <button class="btn btn-ghost btn-sm" id="vd-print-ticket" style="display:none">Print Ticket</button>
             <button class="btn btn-ghost btn-sm" id="vd-add-task" style="display:none">+ Task</button>
             <button class="btn btn-ghost btn-sm" id="vd-archive-vehicle" style="display:none">Send to History</button>
@@ -183,8 +192,8 @@
           </div>
         </div>
 
-        <div class="grid-2">
-          <div>
+        <div class="detail-shell">
+          <div class="detail-main">
             <div id="vd-no-order" class="card" style="display:none">
               <div class="card-head"><p class="section-eyebrow" style="margin:0">No repair order yet</p></div>
               <div style="padding:16px">
@@ -213,7 +222,7 @@
                 </div>
               </div>
 
-              <div class="card">
+              <div class="card parts-labor-shell">
                 <div class="card-head">
                   <div>
                     <p class="section-eyebrow">At Cost · No Markup</p>
@@ -228,7 +237,9 @@
                   </div>
                 </div>
                 <div id="vd-estimate-items"></div>
-                <div class="cost-summary" style="border-top:1px solid var(--line)">
+              </div>
+              <div class="card">
+                <div class="cost-summary">
                   <div class="cost-line"><span>Total Quote</span><span id="vd-quoted-cost">$0.00</span></div>
                   <div class="cost-line total"><span>Actual Cost</span><span id="vd-actual-cost">$0.00</span></div>
                 </div>
@@ -252,27 +263,21 @@
                 <div style="padding:0 16px 14px"><button class="btn btn-ghost btn-sm" id="vd-save-assignment">Save</button></div>
               </div>
 
-              <div class="card">
-                <div class="card-head"><p class="section-eyebrow" style="margin:0">Notes</p></div>
-                <div style="padding:14px 16px" class="form-row">
-                  <label>Visibility<select id="vd-note-visibility"><option value="internal">Internal</option><option value="customer">Customer</option></select></label>
-                  <label>Note<input id="vd-note-text" placeholder="Add a note…"></label>
-                </div>
-                <div style="padding:0 16px 14px"><button class="btn btn-ghost btn-sm" id="vd-add-note">Add Note</button></div>
-                <div id="vd-note-list" class="mini-list"></div>
-              </div>
-
-              <div class="card">
-                <div class="card-head"><p class="section-eyebrow" style="margin:0">Activity</p></div>
-                <div id="vd-activity-list" class="mini-list"></div>
-              </div>
             </div>
           </div>
 
-          <!-- Sidebar: always visible, regardless of whether a repair order
-               has been started yet -- cost, vehicle info, and traceability
-               apply to the vehicle itself, not just its active RO. -->
-          <div>
+          <!-- Details drawer: collapsible, persists open/closed via localStorage.
+               Cost, vehicle info, notes, and activity apply to the vehicle
+               itself, not just its active RO, so this stays available
+               regardless of whether a repair order has been started yet. -->
+          <div class="details-drawer" id="vd-details-drawer">
+            <div class="details-drawer-head">
+              <span class="details-drawer-title">Details</span>
+              <button type="button" class="panel-icon-btn" id="vd-details-close">
+                <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
+              </button>
+            </div>
+            <div class="details-drawer-body">
             <div class="card" id="vd-cost-card">
               <div class="card-head"><p class="section-eyebrow" style="margin:0">Cost Summary</p></div>
               <div class="cost-summary" id="vd-cost-summary"></div>
@@ -320,7 +325,28 @@
               </div>
               <div class="cost-summary" id="vd-deposits-summary"></div>
             </div>
+
+            <div class="card">
+              <div class="card-head"><p class="section-eyebrow" style="margin:0">Notes</p></div>
+                <div style="padding:14px 16px" class="form-row">
+                  <label>Visibility<select id="vd-note-visibility"><option value="internal">Internal</option><option value="customer">Customer</option></select></label>
+                  <label>Note<input id="vd-note-text" placeholder="Add a note…"></label>
+                </div>
+                <div style="padding:0 16px 14px"><button class="btn btn-ghost btn-sm" id="vd-add-note">Add Note</button></div>
+                <div id="vd-note-list" class="mini-list"></div>
+            </div>
+
+            <div class="card">
+              <div class="card-head"><p class="section-eyebrow" style="margin:0">Activity</p></div>
+              <div id="vd-activity-list" class="mini-list"></div>
+            </div>
+            </div>
           </div>
+
+          <button type="button" class="details-tab" id="vd-details-tab">
+            <svg viewBox="0 0 24 24"><path d="M11 17l-5-5 5-5M18 17l-5-5 5-5"/></svg>
+            <span>Details</span>
+          </button>
         </div>
       </section>
 
@@ -585,40 +611,6 @@
         <div id="suggestions-resolved-list" class="suggestion-list" style="display:none;margin-top:10px"></div>
       </section>
 
-      <!-- BACKUP / RESTORE -->
-      <section class="view" id="view-backup">
-        <div class="page-head">
-          <div>
-            <h1>Backup &amp; Restore</h1>
-            <p class="page-desc">A backup here is the entire database -- every vehicle, estimate, invoice, task, and history entry -- not just a report. Restoring one replaces everything currently in the app.</p>
-          </div>
-          <div style="display:flex;gap:10px">
-            <button class="btn btn-primary" id="backup-run-btn">Back Up Now</button>
-          </div>
-        </div>
-
-        <div class="card" style="padding:16px;margin-bottom:18px">
-          <h3 style="margin-top:0">Restore onto this install</h3>
-          <p class="page-desc">Moving to a fresh install or a new PC: bring the backup file over (a USB stick, a synced folder) and upload it here. This replaces everything currently in this app with what's in that file.</p>
-          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-            <input type="file" id="backup-upload-input" accept=".db">
-            <button class="btn btn-ghost" id="backup-upload-btn" disabled>Restore From Uploaded File</button>
-          </div>
-        </div>
-
-        <div class="filters">
-          <h3 style="margin:0">Backups on this PC</h3>
-          <div class="filters-gap"></div>
-          <span class="filters-note" id="backup-count">0 backups</span>
-        </div>
-        <div class="panel">
-          <table>
-            <thead><tr><th>File</th><th class="num-col">Size</th><th>Created</th><th></th></tr></thead>
-            <tbody id="backup-list"></tbody>
-          </table>
-        </div>
-      </section>
-
     </div>
   </div>
 </div>
@@ -878,6 +870,30 @@
       <button class="btn btn-ghost" formnovalidate type="button" id="payment-cancel-2">Close</button>
     </div>
   </form>
+</dialog>
+
+<!-- Backup / Restore -->
+<dialog id="backup-dialog">
+  <div class="modal">
+    <div class="modal-head">
+      <div><p class="eyebrow">DATA</p><h2>Backup &amp; Restore</h2></div>
+      <button class="icon-btn" type="button" id="backup-cancel">×</button>
+    </div>
+    <div style="display:flex;gap:8px;padding:16px 20px 0">
+      <button type="button" class="chip active" id="backup-tab-backup">Backup</button>
+      <button type="button" class="chip" id="backup-tab-restore">Restore</button>
+    </div>
+    <div class="modal-body" id="backup-tab-backup-panel">
+      <p class="hint" style="margin:0 0 16px">Download a CSV export of vehicles, repair orders, and cost data for your records or an outside backup.</p>
+      <a class="btn btn-primary" href="/api/export/vehicles.csv" download>Download Backup (.csv)</a>
+    </div>
+    <div class="modal-body" id="backup-tab-restore-panel" style="display:none">
+      <p class="hint warn" style="margin:0 0 14px">Restoring overwrites current data with the contents of the file. This can't be undone from here — use Backup first if unsure.</p>
+      <label>Backup file<input type="file" id="backup-restore-file" accept=".csv,.db"></label>
+      <button type="button" class="btn btn-ghost" id="backup-restore-submit">Choose File &amp; Restore</button>
+      <p class="hint" style="margin-top:10px">Full database restore is also available from the RECON tray icon on this PC (Restore Latest Backup).</p>
+    </div>
+  </div>
 </dialog>
 
 <div id="toast"></div>

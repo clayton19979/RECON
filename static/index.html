@@ -677,11 +677,11 @@
       </div>
       <div class="form-row">
         <label>Mileage<input id="vd-recon-mileage" type="number" min="0"></label>
-        <label>Year<input id="vd-recon-year" type="number"></label>
+        <label>Year<input id="vd-recon-year" type="number" required></label>
       </div>
       <div class="form-row">
-        <label>Make<input id="vd-recon-make"></label>
-        <label>Model<input id="vd-recon-model"></label>
+        <label>Make<input id="vd-recon-make" required></label>
+        <label>Model<input id="vd-recon-model" required></label>
       </div>
       <div class="form-row">
         <label>Trim<input id="vd-recon-trim"></label>
@@ -693,7 +693,7 @@
     </div>
     <div class="modal-actions">
       <button class="btn btn-ghost" formnovalidate type="button" id="vehicle-edit-cancel-2">Cancel</button>
-      <button class="btn btn-primary" type="button" id="vd-recon-info-save">Save</button>
+      <button class="btn btn-primary" type="submit" id="vd-recon-info-save">Save</button>
     </div>
   </form>
 </dialog>

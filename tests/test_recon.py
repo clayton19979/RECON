@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from app.recon import age_days
 from tests.helpers import make_recon_order, make_recon_vehicle, make_we_owe, save_estimate
 
 
@@ -221,6 +222,15 @@ def test_vehicle_board_rows_include_age_days(client):
     make_recon_vehicle(client, stock_number="R-6701")
     board = client.get("/api/vehicles-board", params={"segment": "recon"}).json()
     assert board[0]["age_days"] == 0  # created moments ago
+
+
+def test_age_days_does_not_raise_on_malformed_timestamp(client):
+    """age_days runs in a loop over every vehicle on the board -- one bad
+    created_at (a hand-edited row, an old backup with a different format)
+    must degrade to that one row looking wrong, never 500 the whole board."""
+    assert age_days("not-a-timestamp") == 0
+    assert age_days("") == 0
+    assert age_days(None) == 0
 
 
 def test_recon_patch_conflict_when_stale_version(client):

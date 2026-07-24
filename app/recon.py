@@ -12,8 +12,15 @@ from .db import RECON_SHOP_CUSTOMER_ID
 
 def age_days(created_at: str) -> int:
     """Whole days since created_at (an ISO timestamp) -- how long a car has
-    actually been sitting, the natural companion to "what we have in it"."""
-    created = datetime.fromisoformat(created_at)
+    actually been sitting, the natural companion to "what we have in it".
+    One malformed value (a hand-edited row, an old backup with a different
+    format) must never 500 the entire vehicle board -- every other row's
+    age is computed in the same loop, so a single bad timestamp would take
+    the whole list down with it rather than just looking wrong on one row."""
+    try:
+        created = datetime.fromisoformat(created_at)
+    except (TypeError, ValueError):
+        return 0
     if created.tzinfo is None:
         created = created.replace(tzinfo=timezone.utc)
     return (datetime.now(timezone.utc) - created).days

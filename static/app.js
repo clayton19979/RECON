@@ -1318,9 +1318,10 @@ function wireVehicleDetail() {
     }
   });
 
-  $("#vd-recon-info-save").addEventListener("click", async (e) => {
+  $("#vehicle-edit-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
     const { segment, id, item } = state.detail;
-    await withLoading(e.target, "Saving…", async () => {
+    await withLoading(e.submitter, "Saving…", async () => {
       try {
         const payload = {
           vin: $("#vd-recon-vin").value.trim(),
@@ -1459,23 +1460,34 @@ function wireReconDialog() {
 async function openWeOweDialog() {
   $("#we-owe-form").reset();
   $("#we-owe-new-year").value = new Date().getFullYear();
-  const customers = await get("/api/customers");
-  $("#we-owe-customer").innerHTML = `<option value="__new__">＋ New customer…</option>` + customers.map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join("");
-  // The select always defaults to its first option ("__new__") on open --
-  // show the matching fields instead of hardcoding them hidden.
-  $("#we-owe-new-customer").style.display = $("#we-owe-customer").value === "__new__" ? "" : "none";
-  await refreshWeOweVehicleOptions();
-  $("#we-owe-dialog").showModal();
+  try {
+    const customers = await get("/api/customers");
+    $("#we-owe-customer").innerHTML = `<option value="__new__">＋ New customer…</option>` + customers.map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join("");
+    // The select always defaults to its first option ("__new__") on open --
+    // show the matching fields instead of hardcoding them hidden.
+    $("#we-owe-new-customer").style.display = $("#we-owe-customer").value === "__new__" ? "" : "none";
+    await refreshWeOweVehicleOptions();
+    $("#we-owe-dialog").showModal();
+  } catch (err) {
+    // Without this, a failed customer-list fetch left the button looking
+    // like it silently did nothing -- no dialog, no toast, no clue why.
+    toast(`Could not open the We-Owe dialog: ${err.message}`, true);
+  }
 }
 async function refreshWeOweVehicleOptions() {
   const customerId = $("#we-owe-customer").value;
   const select = $("#we-owe-vehicle");
-  if (customerId === "__new__" || !customerId) {
+  try {
+    if (customerId === "__new__" || !customerId) {
+      select.innerHTML = `<option value="__new__">＋ New vehicle…</option>`;
+    } else {
+      const vehicles = await get("/api/vehicles");
+      const owned = vehicles.filter((v) => v.customer_id === Number(customerId));
+      select.innerHTML = `<option value="__new__">＋ New vehicle…</option>` + owned.map((v) => `<option value="${v.id}">${v.year} ${esc(v.make)} ${esc(v.model)}</option>`).join("");
+    }
+  } catch (err) {
+    toast(`Could not load this customer's vehicles: ${err.message}`, true);
     select.innerHTML = `<option value="__new__">＋ New vehicle…</option>`;
-  } else {
-    const vehicles = await get("/api/vehicles");
-    const owned = vehicles.filter((v) => v.customer_id === Number(customerId));
-    select.innerHTML = `<option value="__new__">＋ New vehicle…</option>` + owned.map((v) => `<option value="${v.id}">${v.year} ${esc(v.make)} ${esc(v.model)}</option>`).join("");
   }
   // Rebuilding the options resets the select's value to "__new__" (its
   // first option) without firing a change event -- without this, the
@@ -1662,6 +1674,9 @@ function quickRange(kind, chip) {
 }
 
 function renderReportTable(rows, type) {
+  if (!rows.length) {
+    return `<div class="panel" style="padding:24px;text-align:center;color:var(--ink-faint);font-size:12.5px">No ${type === "technicians" ? "technicians" : "vehicles"} match this range.</div>`;
+  }
   if (type === "technicians") {
     return `<div class="panel"><table><thead><tr><th>Technician</th><th class="num-col">ROs</th><th class="num-col">Completed</th><th class="num-col">Labor Hours</th><th class="num-col">Labor Cost</th></tr></thead>
       <tbody>${rows.map((r) => `<tr><td>${esc(r.technician)}</td><td class="num-col">${r.ro_count}</td><td class="num-col">${r.completed_count}</td><td class="num-col">${r.labor_hours}</td><td class="num-col">${money(r.labor_cost)}</td></tr>`).join("")}</tbody></table></div>`;

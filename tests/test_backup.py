@@ -16,7 +16,7 @@ def test_backup_database_creates_verified_copy(tmp_path):
     assert backup_path.is_file()
     db = sqlite3.connect(backup_path)
     assert db.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
-    assert db.execute("SELECT count(*) FROM app_settings").fetchone()[0] == 1
+    assert db.execute("SELECT count(*) FROM customers").fetchone()[0] == 1  # the shop-owned recon customer
     db.close()
 
 

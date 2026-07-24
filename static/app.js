@@ -152,7 +152,6 @@ function showView(name) {
   $$(".view").forEach((v) => v.classList.toggle("active", v.id === `view-${name}`));
   $$(".rail-item").forEach((b) => b.classList.toggle("active", b.dataset.view === name));
   if (name === "vehicles") loadVehiclesView();
-  if (name === "reports") loadReportsView();
   if (name === "accounting") loadAccountingView();
   if (name === "staff") loadStaffView();
   if (name === "tasks") loadTasksView();
@@ -579,7 +578,7 @@ function applyArchivedLockUI(archived) {
   // forever once archived once.
   const disableIds = [
     "vd-status-select", "vd-status-save", "vd-concern", "vd-concern-save",
-    "vd-add-job", "vd-add-part", "vd-add-labor", "vd-add-partstech", "vd-order-parts",
+    "vd-add-job", "vd-add-part", "vd-add-labor", "vd-order-parts",
     "vd-add-note", "vd-note-text",
     "vd-save-assignment", "vd-technician", "vd-advisor", "vd-date-in", "vd-odometer", "vd-promised",
     "vd-edit-vehicle", "vd-recon-info-save", "vd-decode-vin", "vd-recon-vin", "vd-recon-mileage", "vd-recon-year",
@@ -634,7 +633,7 @@ function renderEstimate(order) {
     const remaining = (item.quantity ?? 0) - (item.received_quantity ?? 0);
     const receivable = item.kind === "part" && item.id && remaining > 0.001;
     return `
-    <div class="part-row ${item.source === "partstech" ? "source-partstech" : ""}" draggable="true" data-index="${i}" data-id="${item.id || ""}" data-source="${item.source || "manual"}" data-received-quantity="${item.received_quantity ?? 0}" ${item.source === "partstech" ? `title="Added from a PartsTech lookup"` : ""}>
+    <div class="part-row" draggable="true" data-index="${i}" data-id="${item.id || ""}" data-source="${item.source || "manual"}" data-received-quantity="${item.received_quantity ?? 0}">
       <span class="row-drag-handle" title="Drag to reorder">⋮⋮</span>
       ${receivable ? `<input type="checkbox" class="ei-receive-check" data-id="${item.id}">` : `<span></span>`}
       <select class="ei-kind">
@@ -859,11 +858,10 @@ function addEstimateRow(kind, defaults = {}, jobId = null) {
   if (empty) empty.remove();
   const row = document.createElement("div");
   const source = defaults.source || "manual";
-  row.className = source === "partstech" ? "part-row source-partstech" : "part-row";
+  row.className = "part-row";
   row.dataset.id = "";
   row.dataset.source = source;
   row.dataset.jobId = jobId ?? "";
-  if (source === "partstech") row.title = "Added from a PartsTech lookup";
   const label = kind === "labor" ? "Labor" : kind === "fee" ? "Fee" : "Part";
   row.innerHTML = `
     <select class="ei-kind">
@@ -1191,10 +1189,6 @@ function wireVehicleDetail() {
 
   $("#vd-add-part").addEventListener("click", () => addEstimateRow("part"));
   $("#vd-add-labor").addEventListener("click", () => addEstimateRow("labor"));
-  $("#vd-add-partstech").addEventListener("click", () => {
-    window.open("https://app.partstech.com/login", "_blank", "noopener");
-    addEstimateRow("part", { description: "New part (from PartsTech)", source: "partstech" });
-  });
 
   $("#vd-order-parts").addEventListener("click", async () => {
     try {
@@ -1667,30 +1661,6 @@ function quickRange(kind, chip) {
   chip.classList.add("active");
 }
 
-async function loadReportsView() {
-  try {
-    const settings = await get("/api/settings/email");
-    $("#email-status").textContent = settings.configured
-      ? `Connected as ${settings.gmail_address}`
-      : "Not connected yet — add your Gmail app password below.";
-    $("#email-gmail-address").value = settings.gmail_address || "";
-    $("#email-recipient").value = settings.report_recipient || "";
-  } catch (err) {
-    $("#email-status").textContent = "Could not check connection.";
-  }
-  loadSentReports();
-}
-
-async function loadSentReports() {
-  try {
-    const rows = await get("/api/reports/sent");
-    $("#sent-reports-table").innerHTML = rows.length ? rows.map((r) => `
-      <tr><td>${fmtDate(r.sent_at)}</td><td>${esc(r.report_type)}</td>
-      <td><span class="pill ${r.status === "sent" ? "pill-done" : "pill-progress"}">${esc(r.status)}</span></td></tr>
-    `).join("") : `<tr><td colspan="3" style="text-align:center;color:var(--ink-faint);padding:16px">Nothing sent yet.</td></tr>`;
-  } catch {}
-}
-
 function renderReportTable(rows, type) {
   if (type === "technicians") {
     return `<div class="panel"><table><thead><tr><th>Technician</th><th class="num-col">ROs</th><th class="num-col">Completed</th><th class="num-col">Labor Hours</th><th class="num-col">Labor Cost</th></tr></thead>
@@ -1803,46 +1773,6 @@ function wireReportsView() {
     window.print();
   });
 
-  $("#email-settings-form").addEventListener("submit", async (e) => {
-    e.preventDefault();
-    try {
-      await put("/api/settings/email", {
-        gmail_address: $("#email-gmail-address").value.trim(),
-        gmail_app_password: $("#email-gmail-password").value.trim(),
-        report_recipient: $("#email-recipient").value.trim(),
-      });
-      $("#email-gmail-password").value = "";
-      toast("Gmail connection saved");
-      loadReportsView();
-    } catch (err) {
-      toast(err.message, true);
-    }
-  });
-
-  const sendReport = async (report_type) => {
-    try {
-      const res = await post("/api/reports/send", { report_type });
-      toast(`Report sent to ${res.recipient}`);
-      loadSentReports();
-    } catch (err) {
-      toast(err.message, true);
-    }
-  };
-  $("#send-recon-report").addEventListener("click", () => sendReport("recon"));
-  $("#send-we-owe-report").addEventListener("click", () => sendReport("we_owe"));
-  $("#send-combined-report").addEventListener("click", () => sendReport("combined"));
-
-  $("#check-replies").addEventListener("click", async () => {
-    $("#replies-list").innerHTML = `<div style="color:var(--ink-faint);font-size:12px">Checking…</div>`;
-    try {
-      const replies = await get("/api/reports/replies");
-      $("#replies-list").innerHTML = replies.length ? replies.map((r) => `
-        <div class="mini-item"><div style="font-weight:600">${esc(r.subject)}</div><div class="mi-meta">${esc(r.from)} · ${esc(r.date)}</div><div style="margin-top:4px">${esc(r.snippet)}</div></div>
-      `).join("") : `<div style="color:var(--ink-faint);font-size:12px">No replies found.</div>`;
-    } catch (err) {
-      $("#replies-list").innerHTML = `<div style="color:var(--crit);font-size:12px">${esc(err.message)}</div>`;
-    }
-  });
 }
 
 /* ==================================================================

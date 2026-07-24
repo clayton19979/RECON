@@ -7,7 +7,6 @@ from pathlib import Path
 
 RECON_SHOP_CUSTOMER_ID = -1
 RECON_SHOP_CUSTOMER_NAME = "Discount Auto — Shop-Owned Recon Inventory"
-DEFAULT_REPORT_RECIPIENT = "walter4resultsnow@gmail.com"
 
 SCHEMA = """
 PRAGMA journal_mode=WAL;
@@ -296,27 +295,6 @@ CREATE TABLE IF NOT EXISTS invoice_audits (
   created_at TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS app_settings (
-  id INTEGER PRIMARY KEY CHECK(id=1),
-  gmail_address TEXT NOT NULL DEFAULT '',
-  gmail_app_password TEXT NOT NULL DEFAULT '',
-  report_recipient TEXT NOT NULL DEFAULT '',
-  partstech_username TEXT NOT NULL DEFAULT '',
-  partstech_api_key TEXT NOT NULL DEFAULT '',
-  updated_at TEXT NOT NULL DEFAULT ''
-);
-
-CREATE TABLE IF NOT EXISTS sent_reports (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  report_type TEXT NOT NULL,
-  recipient TEXT NOT NULL,
-  subject TEXT NOT NULL,
-  body TEXT NOT NULL,
-  status TEXT NOT NULL,
-  error TEXT NOT NULL DEFAULT '',
-  sent_at TEXT NOT NULL
-);
-
 CREATE TABLE IF NOT EXISTS tasks (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   title TEXT NOT NULL,
@@ -355,11 +333,13 @@ def _migrate(db: sqlite3.Connection) -> None:
     if "received_invoice_number" not in columns:
         db.execute("ALTER TABLE estimate_items ADD COLUMN received_invoice_number TEXT NOT NULL DEFAULT ''")
 
-    settings_columns = {row[1] for row in db.execute("PRAGMA table_info(app_settings)")}
-    if "partstech_username" not in settings_columns:
-        db.execute("ALTER TABLE app_settings ADD COLUMN partstech_username TEXT NOT NULL DEFAULT ''")
-    if "partstech_api_key" not in settings_columns:
-        db.execute("ALTER TABLE app_settings ADD COLUMN partstech_api_key TEXT NOT NULL DEFAULT ''")
+    # The Gmail email-report and PartsTech integrations were removed --
+    # neither ever had a working real integration behind it (PartsTech was
+    # just a link-out button; partstech_username/api_key were dead columns
+    # nothing ever read or wrote), and Gmail's app-password flow never
+    # reliably connected. Dropped rather than left behind unused.
+    db.execute("DROP TABLE IF EXISTS app_settings")
+    db.execute("DROP TABLE IF EXISTS sent_reports")
 
     # order_workflow gets a version bump on every assignment save already;
     # recon_vehicles/we_owe_items/estimates need one too, so two people
@@ -430,6 +410,12 @@ def _migrate(db: sqlite3.Connection) -> None:
                       SET date_in = (SELECT substr(o.created_at,1,10) FROM orders o WHERE o.id=order_workflow.order_id)
                       WHERE date_in = ''""")
 
+    # "partstech" is no longer an accepted source (the integration was just
+    # a link-out button, removed) -- any existing lines added through it
+    # are relabeled "manual" so a future re-save of that estimate doesn't
+    # fail validation on a value the API no longer accepts.
+    db.execute("UPDATE estimate_items SET source='manual' WHERE source='partstech'")
+
 
 def init_db(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -439,10 +425,6 @@ def init_db(path: Path) -> None:
         db.execute(
             "INSERT OR IGNORE INTO customers(id,name,phone,email,is_shop_owned,created_at) VALUES(?,?,?,?,1,?)",
             (RECON_SHOP_CUSTOMER_ID, RECON_SHOP_CUSTOMER_NAME, "", "", now()),
-        )
-        db.execute(
-            "INSERT OR IGNORE INTO app_settings(id,gmail_address,gmail_app_password,report_recipient,updated_at) VALUES(1,'','',?,?)",
-            (DEFAULT_REPORT_RECIPIENT, now()),
         )
 
 

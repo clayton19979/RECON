@@ -107,7 +107,7 @@ class EstimateItem(BaseModel):
     unit_price: float = Field(ge=0)
     part_number: str = ""
     unit_cost: float = Field(default=0, ge=0)
-    source: Literal["manual", "partstech", "technician_finding"] = "manual"
+    source: Literal["manual", "technician_finding"] = "manual"
     job_id: int | None = None
 
 
@@ -169,7 +169,7 @@ def create_app(db_path: Path = DEFAULT_DB) -> FastAPI:
     app.include_router(build_workflow_router(connect, now))
     app.include_router(build_recon_router(connect, now))
     app.include_router(build_parts_router(connect, now))
-    app.include_router(build_reports_router(connect, now))
+    app.include_router(build_reports_router(connect))
     app.include_router(build_export_router(connect, now))
     app.include_router(build_tasks_router(connect, now))
     app.include_router(build_jobs_router(connect, now))

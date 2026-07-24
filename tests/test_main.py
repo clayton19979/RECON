@@ -135,26 +135,26 @@ def test_estimate_item_source_is_recorded(client):
         client,
         order["id"],
         [
-            {"kind": "part", "description": "OEM sensor", "part_number": "PT-1", "quantity": 1, "unit_price": 80, "unit_cost": 80, "source": "partstech"},
+            {"kind": "part", "description": "OEM sensor", "part_number": "PT-1", "quantity": 1, "unit_price": 80, "unit_cost": 80, "source": "technician_finding"},
             {"kind": "part", "description": "Filter", "part_number": "F-1", "quantity": 1, "unit_price": 10, "unit_cost": 10},
         ],
     )
     by_desc = {i["description"]: i for i in estimate["items"]}
-    assert by_desc["OEM sensor"]["source"] == "partstech"
+    assert by_desc["OEM sensor"]["source"] == "technician_finding"
     assert by_desc["Filter"]["source"] == "manual"
 
     # editing an existing line doesn't reset its source
-    partstech_id = by_desc["OEM sensor"]["id"]
+    finding_id = by_desc["OEM sensor"]["id"]
     estimate2 = save_estimate(
         client,
         order["id"],
         [
-            {"id": partstech_id, "kind": "part", "description": "OEM sensor", "part_number": "PT-1", "quantity": 2, "unit_price": 80, "unit_cost": 80},
+            {"id": finding_id, "kind": "part", "description": "OEM sensor", "part_number": "PT-1", "quantity": 2, "unit_price": 80, "unit_cost": 80},
             {"kind": "part", "description": "Filter", "part_number": "F-1", "quantity": 1, "unit_price": 10, "unit_cost": 10, "id": by_desc["Filter"]["id"]},
         ],
     )
-    updated = next(i for i in estimate2["items"] if i["id"] == partstech_id)
-    assert updated["source"] == "partstech"
+    updated = next(i for i in estimate2["items"] if i["id"] == finding_id)
+    assert updated["source"] == "technician_finding"
     assert updated["quantity"] == 2
 
 

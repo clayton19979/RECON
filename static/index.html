@@ -213,7 +213,6 @@
                   </div>
                   <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end">
                     <button class="btn btn-ghost btn-sm" id="vd-add-job">＋ Add Job</button>
-                    <button class="btn btn-ghost btn-sm" id="vd-add-partstech" title="Opens PartsTech in a new tab and adds a line here for what you find">＋ PartsTech</button>
                     <button class="btn btn-ghost btn-sm" id="vd-add-part">＋ Part</button>
                     <button class="btn btn-ghost btn-sm" id="vd-add-labor">＋ Labor</button>
                     <button class="btn btn-ghost btn-sm" id="vd-order-parts">Order Parts</button>
@@ -322,7 +321,7 @@
         <div class="page-head">
           <div>
             <h1>Reports</h1>
-            <p class="page-desc">Printable vehicle and technician reports, plus one-click email to Walt.</p>
+            <p class="page-desc">Printable vehicle and technician reports.</p>
           </div>
         </div>
 
@@ -350,41 +349,6 @@
             <button type="button" class="btn btn-ghost" id="report-print">Print</button>
           </div>
           <div id="report-output" style="padding:0 16px 20px"></div>
-        </div>
-
-        <div class="grid-2">
-          <div class="card">
-            <div class="card-head"><p class="section-eyebrow" style="margin:0">Gmail</p><h3 class="section-title">Send Reports By Email</h3></div>
-            <div style="padding:0 16px 12px"><p class="page-desc" id="email-status">Checking connection…</p></div>
-            <form id="email-settings-form" style="padding:0 16px 16px">
-              <label>Your Gmail address<input name="gmail_address" id="email-gmail-address" type="email" placeholder="you@gmail.com"></label>
-              <label>Gmail app password<input name="gmail_app_password" id="email-gmail-password" type="password" placeholder="16-character app password" autocomplete="off"></label>
-              <p class="hint">Generate one at myaccount.google.com → Security → 2-Step Verification → App passwords.</p>
-              <label>Send reports to<input name="report_recipient" id="email-recipient" placeholder="walter4resultsnow@gmail.com"></label>
-              <button class="btn btn-primary" type="submit" style="align-self:flex-start">Save Connection</button>
-            </form>
-            <div class="form-row" style="padding:0 16px 16px">
-              <button class="btn btn-ghost btn-sm" id="send-recon-report">Email Recon</button>
-              <button class="btn btn-ghost btn-sm" id="send-we-owe-report">Email We-Owe</button>
-              <button class="btn btn-primary btn-sm" id="send-combined-report">Email Combined</button>
-            </div>
-          </div>
-
-          <div>
-            <div class="card">
-              <div class="card-head"><p class="section-eyebrow" style="margin:0">Replies</p><button class="btn btn-ghost btn-sm" id="check-replies">Check</button></div>
-              <div id="replies-list" class="mini-list">Click Check to look for recent email from Walt.</div>
-            </div>
-            <div class="card">
-              <div class="card-head"><p class="section-eyebrow" style="margin:0">Sent History</p></div>
-              <div class="table-wrap">
-                <table>
-                  <thead><tr><th>Sent</th><th>Type</th><th>Status</th></tr></thead>
-                  <tbody id="sent-reports-table"></tbody>
-                </table>
-              </div>
-            </div>
-          </div>
         </div>
       </section>
 

@@ -15,7 +15,7 @@ import uvicorn
 from PIL import Image, ImageDraw
 
 from app.backup import backup_database, list_backups, most_recent_backup_age_hours, prune_backups, restore_database
-from app.main import DATA_ROOT, DEFAULT_DB, NETWORK_FLAG, create_app
+from app.main import DATA_ROOT, DEFAULT_BACKUPS_DIR, DEFAULT_DB, NETWORK_FLAG, create_app
 
 
 def confirm(title: str, message: str) -> bool:
@@ -26,6 +26,29 @@ def confirm(title: str, message: str) -> bool:
     MB_ICONWARNING = 0x30
     IDYES = 6
     return ctypes.windll.user32.MessageBoxW(0, message, title, MB_YESNO | MB_ICONWARNING) == IDYES
+
+
+def pick_backup_file(initial_dir: Path) -> Path | None:
+    """Native "Open" file dialog for choosing a backup .db file from
+    anywhere -- a USB stick, a synced folder, wherever it was stashed --
+    not just the newest one already sitting in the default backups folder.
+    This is what makes "restore onto a fresh install" possible."""
+    import tkinter
+    from tkinter import filedialog
+
+    root = tkinter.Tk()
+    root.withdraw()
+    root.attributes("-topmost", True)
+    try:
+        chosen = filedialog.askopenfilename(
+            parent=root,
+            title="Select a RECON backup to restore",
+            initialdir=str(initial_dir),
+            filetypes=[("RECON backups", "*.db"), ("All files", "*.*")],
+        )
+    finally:
+        root.destroy()
+    return Path(chosen) if chosen else None
 
 PORT = 8787
 AUTO_BACKUP_INTERVAL_HOURS = 24
@@ -157,10 +180,9 @@ class TrayApp:
             self.icon.notify("Network access is off -- enable it first to share with other PCs.", "RECON")
 
     def _run_backup(self, notify: bool) -> None:
-        backups_dir = DATA_ROOT / "backups"
         try:
-            destination = backup_database(DEFAULT_DB, backups_dir)
-            removed = prune_backups(backups_dir, keep=BACKUP_RETENTION_COUNT)
+            destination = backup_database(DEFAULT_DB, DEFAULT_BACKUPS_DIR)
+            removed = prune_backups(DEFAULT_BACKUPS_DIR, keep=BACKUP_RETENTION_COUNT)
             log.info("Backup written to %s (pruned %d old backups)", destination, len(removed))
             if notify and self.icon is not None:
                 self.icon.notify(f"Backup saved: {destination.name}", "RECON")
@@ -172,24 +194,18 @@ class TrayApp:
     def backup_now(self, _icon: pystray.Icon, _item: pystray.MenuItem) -> None:
         self._run_backup(notify=True)
 
-    def restore_latest_backup(self, _icon: pystray.Icon, _item: pystray.MenuItem) -> None:
-        backups = list_backups(DATA_ROOT / "backups")
-        if not backups:
-            if self.icon is not None:
-                self.icon.notify("No backups found to restore.", "RECON")
-            return
-        latest = backups[0]
+    def _restore_from_path(self, backup_path: Path) -> None:
         if not confirm(
             "Restore Backup?",
-            f"This replaces the current database with the backup from:\n\n{latest.name}\n\n"
+            f"This replaces the current database with:\n\n{backup_path}\n\n"
             "The current database is saved aside first, so this can be undone. "
             "The server restarts once the restore finishes.\n\nContinue?",
         ):
             return
-        log.info("Restoring from backup %s", latest)
+        log.info("Restoring from backup %s", backup_path)
         self.stop_server()
         try:
-            restore_database(latest, DEFAULT_DB)
+            restore_database(backup_path, DEFAULT_DB)
         except Exception as exc:
             log.exception("Restore failed")
             if self.icon is not None:
@@ -199,7 +215,30 @@ class TrayApp:
         ok = self.start_server()
         if self.icon is not None:
             self.icon.icon = ICON_OK if ok else ICON_DOWN
-            self.icon.notify(f"Restored from {latest.name}. Server restarted.", "RECON")
+            self.icon.notify(f"Restored from {backup_path.name}. Server restarted.", "RECON")
+
+    def restore_latest_backup(self, _icon: pystray.Icon, _item: pystray.MenuItem) -> None:
+        backups = list_backups(DEFAULT_BACKUPS_DIR)
+        if not backups:
+            if self.icon is not None:
+                self.icon.notify("No backups found to restore.", "RECON")
+            return
+        self._restore_from_path(backups[0])
+
+    def restore_from_file(self, _icon: pystray.Icon, _item: pystray.MenuItem) -> None:
+        """For moving to a fresh install/new PC: the backup being restored
+        won't be sitting in the default backups folder under a name
+        "Restore Latest Backup" would recognize, so this lets you point at
+        any .db file directly."""
+        DEFAULT_BACKUPS_DIR.mkdir(parents=True, exist_ok=True)
+        chosen = pick_backup_file(DEFAULT_BACKUPS_DIR)
+        if chosen is None:
+            return
+        self._restore_from_path(chosen)
+
+    def show_backups_folder(self, _icon: pystray.Icon, _item: pystray.MenuItem) -> None:
+        DEFAULT_BACKUPS_DIR.mkdir(parents=True, exist_ok=True)
+        os.startfile(DEFAULT_BACKUPS_DIR)
 
     def _auto_backup_loop(self) -> None:
         """Runs for the life of the process: backs up automatically if the
@@ -208,7 +247,7 @@ class TrayApp:
         Backup Now."""
         while True:
             try:
-                age = most_recent_backup_age_hours(DATA_ROOT / "backups")
+                age = most_recent_backup_age_hours(DEFAULT_BACKUPS_DIR)
                 if age is None or age >= AUTO_BACKUP_INTERVAL_HOURS:
                     self._run_backup(notify=False)
             except Exception:
@@ -231,8 +270,10 @@ class TrayApp:
                 checked=lambda _item: network_mode_enabled(),
             ),
             pystray.MenuItem("Show Server Address", self.show_server_address),
-            pystray.MenuItem("Backup Now", self.backup_now),
+            pystray.MenuItem("Backup Now (entire database)", self.backup_now),
             pystray.MenuItem("Restore Latest Backup", self.restore_latest_backup),
+            pystray.MenuItem("Restore From File...", self.restore_from_file),
+            pystray.MenuItem("Show Backups Folder", self.show_backups_folder),
             pystray.MenuItem("Restart Server", self.restart),
             pystray.MenuItem("Exit", self.quit_app),
         )

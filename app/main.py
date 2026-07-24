@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from .accounting import build_accounting_router
+from .backup_routes import build_backup_router
 from .db import RECON_SHOP_CUSTOMER_ID, connect as db_connect, init_db, now
 from .export import build_export_router
 from .jobs import build_jobs_router
@@ -53,6 +54,7 @@ def _data_root() -> Path:
 ROOT = _bundle_root()
 DATA_ROOT = _data_root()
 DEFAULT_DB = Path(os.getenv("DISCOUNT_AUTO_OPS_DB", DATA_ROOT / "data" / "shop.db"))
+DEFAULT_BACKUPS_DIR = Path(os.getenv("DISCOUNT_AUTO_OPS_BACKUPS_DIR", DATA_ROOT / "backups"))
 
 
 class CustomerIn(BaseModel):
@@ -143,7 +145,7 @@ def estimate_jobs_list(db: sqlite3.Connection, estimate_id: int) -> list[dict]:
 NETWORK_FLAG = DATA_ROOT / "network_mode.flag"
 
 
-def create_app(db_path: Path = DEFAULT_DB) -> FastAPI:
+def create_app(db_path: Path = DEFAULT_DB, backups_dir: Path = DEFAULT_BACKUPS_DIR) -> FastAPI:
     init_db(db_path)
     app = FastAPI(title="RECON", version="0.1.0")
     # Single-PC mode only trusts localhost. Network mode (toggled from the
@@ -177,6 +179,7 @@ def create_app(db_path: Path = DEFAULT_DB) -> FastAPI:
     app.include_router(build_export_router(connect, now))
     app.include_router(build_tasks_router(connect, now))
     app.include_router(build_jobs_router(connect, now))
+    app.include_router(build_backup_router(db_path, backups_dir))
 
     @app.get("/api/health")
     def health():

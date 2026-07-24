@@ -202,6 +202,7 @@ button { font-family: inherit; }
 .btn-ghost { background: var(--surface); border-color: var(--line); color: var(--ink); }
 .btn-ghost:hover { border-color: var(--accent); color: var(--accent); }
 .btn-sm { padding: 6px 12px; font-size: 12px; }
+.btn-xs { padding: 3px 8px; font-size: 10.5px; gap: 4px; }
 .btn[disabled] { opacity: .5; cursor: not-allowed; }
 
 /* ---------- stats ---------- */
@@ -274,6 +275,11 @@ td.age-crit { color: var(--crit); font-weight: 700; }
 .sp-quoted { background: var(--line-soft); color: var(--ink-faint); }
 .sp-ordered { background: var(--warn-tint); color: var(--warn); }
 .sp-received { background: var(--good-tint); color: var(--good); }
+.sp-returned { background: var(--crit-tint); color: var(--crit); }
+.status-cell { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; }
+.part-return-btn[data-returned="0"] { border-color: var(--crit); color: var(--crit); }
+.part-return-btn[data-returned="0"]:hover { background: var(--crit-tint); }
+.part-return-btn[data-returned="1"]:hover { border-color: var(--accent); color: var(--accent); }
 
 .tech { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; }
 .tech-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); flex-shrink: 0; }
@@ -337,7 +343,7 @@ textarea { min-height: 70px; resize: vertical; font-family: inherit; }
 
 /* ---------- estimate / parts rows ---------- */
 .part-row {
-  display: grid; grid-template-columns: 16px 20px .8fr 2.1fr 1fr .6fr .9fr .7fr 1fr 22px 26px;
+  display: grid; grid-template-columns: 16px 20px .8fr 2.1fr 1fr .6fr .9fr .7fr 1.6fr 22px 26px;
   gap: 8px; align-items: center; padding: 9px 16px; border-bottom: 1px solid var(--line-soft); font-size: 12.5px;
 }
 .row-move-btn {
@@ -357,7 +363,7 @@ textarea { min-height: 70px; resize: vertical; font-family: inherit; }
 /* One extra column (Job) only appears once a ticket actually has jobs --
    the plain flat list (the common case) keeps its original column count. */
 #vd-estimate-items.has-jobs .part-row {
-  grid-template-columns: 16px 20px .8fr 2.1fr 1fr .6fr .9fr .7fr .9fr 1fr 22px 26px;
+  grid-template-columns: 16px 20px .8fr 2.1fr 1fr .6fr .9fr .7fr .9fr 1.6fr 22px 26px;
 }
 
 /* ---------- job groups ---------- */

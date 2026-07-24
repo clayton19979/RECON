@@ -105,6 +105,9 @@ const state = {
   apInvoices: [],
   cores: [],
   coresFilter: "pending",
+  returns: [],
+  returnsFilter: "pending",
+  postReturnItem: null,
   vehicleSelection: new Set(), // "segment:id" strings, cleared on filter change/reload
   tasks: [],
   taskFilter: "",
@@ -112,6 +115,7 @@ const state = {
   newTaskAssignees: [],
   showCompletedTasks: false,
   suggestions: [],
+  backups: [],
 };
 
 // Who's actually using the app right now -- every save used to hardcode
@@ -159,6 +163,7 @@ function showView(name) {
   if (name === "staff") loadStaffView();
   if (name === "tasks") loadTasksView();
   if (name === "suggestions") loadSuggestionsView();
+  if (name === "backup") loadBackupView();
 }
 
 const THEMES = ["midnight", "carbon", "slate", "paper"];
@@ -597,7 +602,12 @@ function applyArchivedLockUI(archived) {
   } else {
     updateReceiveButtonState(); // depends on how many checkboxes are checked, not a flat enable
   }
-  $$(".part-row:not(.head) input, .part-row:not(.head) select, .part-row:not(.head) .rm-btn", $("#vd-estimate-items")).forEach((el) => { el.disabled = archived; });
+  $$(".part-row:not(.head) input, .part-row:not(.head) select, .part-row:not(.head) .rm-btn", $("#vd-estimate-items")).forEach((el) => {
+    // A returned part's Cost field is deliberately locked at 0 regardless of
+    // archive state (see rowHtml) -- this loop must not re-enable it.
+    if (el.classList.contains("ei-cost") && el.dataset.realCost !== undefined) return;
+    el.disabled = archived;
+  });
   $$(".part-row:not(.head)", $("#vd-estimate-items")).forEach((row) => row.setAttribute("draggable", String(!archived)));
 }
 
@@ -628,6 +638,9 @@ function renderEstimate(order) {
   const jobs = order.estimate?.jobs ?? [];
   const box = $("#vd-estimate-items");
   box.classList.toggle("has-jobs", jobs.length > 0);
+  // A part sent back to the vendor stops costing the shop anything -- every
+  // cost total on this ticket (job subtotals, Quoted, Actual) excludes it.
+  const notReturned = (i) => !(i.kind === "part" && i.part_returned);
 
   const jobOptionsHtml = (selectedId) => `<option value="" ${!selectedId ? "selected" : ""}>General</option>` +
     jobs.map((j) => `<option value="${j.id}" ${selectedId === j.id ? "selected" : ""}>${esc(j.title)}</option>`).join("");
@@ -647,14 +660,19 @@ function renderEstimate(order) {
       <input class="ei-desc" value="${esc(item.description || "")}" placeholder="Description">
       <input class="ei-part" value="${esc(item.part_number || "")}" placeholder="Part #">
       <input class="ei-qty" type="number" min="0.01" step="0.01" value="${item.quantity ?? 1}">
-      <input class="ei-cost" type="number" min="0" step="0.01" value="${item.unit_cost ?? 0}">
+      ${item.part_returned
+        ? `<input class="ei-cost" type="number" value="0" disabled title="Returned to the vendor -- no longer counted" data-real-cost="${item.unit_cost ?? 0}">`
+        : `<input class="ei-cost" type="number" min="0" step="0.01" value="${item.unit_cost ?? 0}">`}
       ${item.kind === "part"
         ? `<input class="ei-core" type="number" min="0" step="0.01" placeholder="Core" title="Core deposit owed back from the vendor" value="${item.core_charge ?? 0}">`
         : `<span></span>`}
       ${jobs.length ? `<select class="ei-job">${jobOptionsHtml(item.job_id ?? null)}</select>` : ""}
       ${item.id
         ? (item.status === "received"
-            ? `<span class="status-pill sp-received" ${item.received_invoice_number ? `title="Received via invoice ${esc(item.received_invoice_number)}"` : ""}>${item.received_invoice_number ? `Received (${esc(item.received_invoice_number)})` : "Received"}</span>`
+            ? `<span class="status-cell">
+                 <span class="status-pill ${item.part_returned ? "sp-returned" : "sp-received"}" ${item.received_invoice_number ? `title="Received via invoice ${esc(item.received_invoice_number)}"` : ""}>${item.part_returned ? "Returned" : (item.received_invoice_number ? `Received (${esc(item.received_invoice_number)})` : "Received")}</span>
+                 ${item.kind === "part" ? `<button type="button" class="btn btn-ghost btn-xs part-return-btn" data-id="${item.id}" data-returned="${item.part_returned ? 1 : 0}" title="${item.part_returned ? "Undo -- this part was not actually sent back" : "Send this part back to the vendor"}">${item.part_returned ? "Undo" : "Mark Returned"}</button>` : ""}
+               </span>`
             : `<select class="ei-status status-pill sp-${item.status || "quoted"}">
                  <option value="quoted" ${item.status === "quoted" ? "selected" : ""}>Quoted</option>
                  <option value="ordered" ${item.status === "ordered" ? "selected" : ""}>Ordered</option>
@@ -677,7 +695,7 @@ function renderEstimate(order) {
     box.innerHTML = headRow + buckets.map((bucket) => {
       const bucketItems = items.filter((i) => (i.job_id ?? null) === bucket.id);
       const isGeneral = bucket.id === null;
-      const jobSubtotal = bucketItems.reduce((s, i) => s + i.quantity * i.unit_cost, 0);
+      const jobSubtotal = bucketItems.filter(notReturned).reduce((s, i) => s + i.quantity * i.unit_cost, 0);
       // Parts and labor render as their own mini-sections within the job
       // (Tekmetric-style) rather than one interleaved list, so it's obvious
       // at a glance which lines are parts vs labor for this job -- not just
@@ -747,6 +765,20 @@ function renderEstimate(order) {
       }
     });
   });
+  $$(".part-return-btn", box).forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const returned = btn.dataset.returned !== "1";
+      const desc = btn.closest(".part-row").querySelector(".ei-desc").value.trim();
+      if (returned && !confirm(`Mark "${desc}" as returned to the vendor?`)) return;
+      try {
+        await patch(`/api/orders/${order.id}/estimate/items/${btn.dataset.id}/part-return`, { returned, actor: currentActor() });
+        toast(returned ? "Marked returned" : "Return undone");
+        await loadVehicleDetail();
+      } catch (err) {
+        toast(err.message, true);
+      }
+    });
+  });
   $$(".ei-receive-check", box).forEach((cb) => {
     cb.addEventListener("change", updateReceiveButtonState);
   });
@@ -765,8 +797,8 @@ function renderEstimate(order) {
   // car so far -- parts count once received, labor/fees count the moment
   // they're logged. Same "at cost" basis as everywhere else (unit_cost, not
   // unit_price) -- this panel has never shown customer-facing markup.
-  const quotedTotal = items.reduce((s, i) => s + i.quantity * i.unit_cost, 0);
-  const actualParts = items.filter((i) => i.kind === "part").reduce((s, i) => s + i.received_quantity * i.unit_cost, 0);
+  const quotedTotal = items.filter(notReturned).reduce((s, i) => s + i.quantity * i.unit_cost, 0);
+  const actualParts = items.filter((i) => i.kind === "part" && !i.part_returned).reduce((s, i) => s + i.received_quantity * i.unit_cost, 0);
   const actualOther = items.filter((i) => i.kind !== "part").reduce((s, i) => s + i.quantity * i.unit_cost, 0);
   $("#vd-quoted-cost").textContent = money(quotedTotal);
   $("#vd-actual-cost").textContent = money(actualParts + actualOther);
@@ -808,7 +840,15 @@ function wireEstimateRowDragging(box) {
 
 function collectEstimateItems() {
   return $$(".part-row:not(.head)", $("#vd-estimate-items")).map((row) => {
-    const cost = parseFloat(row.querySelector(".ei-cost").value || "0");
+    // A returned part's Cost field is shown as 0 on screen so it reads as
+    // "no longer counted" -- but the real received cost lives in
+    // data-real-cost and must round-trip through every save (persistEstimate
+    // resends every row, this one included) or it'd be lost for good, taking
+    // the vendor credit amount with it.
+    const costInput = row.querySelector(".ei-cost");
+    const cost = costInput.dataset.realCost !== undefined
+      ? parseFloat(costInput.dataset.realCost)
+      : parseFloat(costInput.value || "0");
     const coreInput = row.querySelector(".ei-core");
     const jobSelect = row.querySelector(".ei-job");
     return {
@@ -1092,8 +1132,8 @@ function renderPrintTicket() {
   const customerLabel = segment === "recon" ? "Recon Inventory" : (item.customer_name || "");
   const items = order.estimate ? order.estimate.items : [];
   const jobs = order.estimate?.jobs ?? [];
-  const quotedTotal = items.reduce((s, i) => s + i.quantity * i.unit_cost, 0);
-  const actualParts = items.filter((i) => i.kind === "part").reduce((s, i) => s + i.received_quantity * i.unit_cost, 0);
+  const quotedTotal = items.filter((i) => !(i.kind === "part" && i.part_returned)).reduce((s, i) => s + i.quantity * i.unit_cost, 0);
+  const actualParts = items.filter((i) => i.kind === "part" && !i.part_returned).reduce((s, i) => s + i.received_quantity * i.unit_cost, 0);
   const actualOther = items.filter((i) => i.kind !== "part").reduce((s, i) => s + i.quantity * i.unit_cost, 0);
   const a = order.assignment;
   const techName = (a && a.technician_name) || "Unassigned";
@@ -1101,7 +1141,7 @@ function renderPrintTicket() {
 
   const itemRow = (i) => `
     <tr><td>${esc(i.kind)}</td><td>${esc(i.description)}</td><td>${esc(i.part_number || "")}</td>
-    <td class="num-col">${i.quantity}</td><td class="num-col">${money(i.unit_cost)}</td><td>${esc(STATUS_LABEL[i.status] || i.status || "")}</td></tr>
+    <td class="num-col">${i.quantity}</td><td class="num-col">${money(i.part_returned ? 0 : i.unit_cost)}</td><td>${esc(i.part_returned ? "Returned" : (STATUS_LABEL[i.status] || i.status || ""))}</td></tr>
   `;
 
   // Same job/General buckets as the on-screen ticket (renderEstimate) --
@@ -2130,6 +2170,13 @@ async function loadCoresView() {
     return;
   }
   renderCoresTable();
+  try {
+    state.returns = await get("/api/returns");
+  } catch (err) {
+    toast(`Could not load returned parts: ${err.message}`, true);
+    return;
+  }
+  renderReturnsTable();
 }
 
 function renderCoresTable() {
@@ -2188,6 +2235,103 @@ function wireCoresView() {
       $$('#view-cores [data-cores-filter]').forEach((c) => c.classList.remove("active"));
       chip.classList.add("active");
       renderCoresTable();
+    });
+  });
+}
+
+function renderReturnsTable() {
+  const filter = state.returnsFilter;
+  const rows = state.returns.filter((r) => {
+    if (filter === "pending") return !r.return_invoice_number;
+    if (filter === "credited") return !!r.return_invoice_number;
+    return true;
+  });
+  $("#returns-count").textContent = `${rows.length} return${rows.length === 1 ? "" : "s"}`;
+  const pendingTotal = state.returns.filter((r) => !r.return_invoice_number).reduce((s, r) => s + Math.abs(r.credit_total), 0);
+  $("#returns-total").textContent = pendingTotal > 0 ? `${money(pendingTotal)} pending` : "";
+
+  $("#returns-table").innerHTML = rows.length ? rows.map((r) => {
+    const clickable = r.stock_number || r.we_owe_customer_name;
+    const voided = !!r.voided;
+    const credited = !!r.return_invoice_number;
+    return `
+    <tr class="${clickable ? "clickable" : ""} ${voided ? "voided-row" : ""}" ${clickable ? `data-order-id="${r.order_id}" title="Open this vehicle"` : ""}>
+      <td>${esc(r.description)}</td><td>${esc(r.part_number || "")}</td>
+      <td>${esc(r.ro_number)} · ${esc(r.vehicle_label)}</td>
+      <td>${esc(r.vendor_name || "—")}</td>
+      <td class="num-col">${money(Math.abs(r.credit_total))}</td>
+      <td><span class="pill ${credited ? "pill-done" : "pill-progress"}">${credited ? `Credited (${esc(r.return_invoice_number)})` : "Pending Credit"}</span></td>
+      <td>${credited ? "" : `<button type="button" class="btn btn-ghost btn-sm returns-post" data-id="${r.id}">Post Credit</button>`}</td>
+    </tr>
+  `;
+  }).join("") : `<tr><td colspan="7" style="text-align:center;color:var(--ink-faint);padding:20px">No returned parts in this view.</td></tr>`;
+
+  $$(".clickable", $("#returns-table")).forEach((row) => {
+    row.addEventListener("click", (e) => {
+      if (e.target.closest(".returns-post")) return;
+      const order = state.orders.find((o) => o.id === Number(row.dataset.orderId));
+      const refId = order ? (order.recon_vehicle_id ?? order.we_owe_id) : null;
+      const segment = order ? order.segment : null;
+      if (refId != null && (segment === "recon" || segment === "we_owe")) openVehicleDetail(segment, refId);
+    });
+  });
+  $$(".returns-post", $("#returns-table")).forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const item = state.returns.find((r) => r.id === Number(btn.dataset.id));
+      if (item) openPostReturnDialog(item);
+    });
+  });
+}
+
+function wireReturnsView() {
+  $$('#view-cores [data-returns-filter]').forEach((chip) => {
+    chip.addEventListener("click", () => {
+      state.returnsFilter = chip.dataset.returnsFilter;
+      $$('#view-cores [data-returns-filter]').forEach((c) => c.classList.remove("active"));
+      chip.classList.add("active");
+      renderReturnsTable();
+    });
+  });
+}
+
+async function openPostReturnDialog(item) {
+  state.postReturnItem = item;
+  $("#post-return-desc").textContent = `${item.description}${item.part_number ? ` (${item.part_number})` : ""} — ${item.ro_number} · ${item.vehicle_label}`;
+  const vendors = await get("/api/vendors").catch(() => []);
+  state.vendors = vendors;
+  $("#post-return-vendor").innerHTML = vendors.map((v) => `<option value="${v.id}" ${v.id === item.vendor_id ? "selected" : ""}>${esc(v.name)}</option>`).join("");
+  $("#post-return-credit-number").value = "";
+  $("#post-return-total-summary").innerHTML = `
+    <div class="cost-line total"><span>Credit Due</span><span class="num">${money(Math.abs(item.credit_total))}</span></div>
+  `;
+  $("#post-return-dialog").showModal();
+}
+
+function wirePostReturnDialog() {
+  $("#post-return-cancel").addEventListener("click", () => $("#post-return-dialog").close());
+  $("#post-return-cancel-2").addEventListener("click", () => $("#post-return-dialog").close());
+  $("#post-return-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    await withLoading(e.submitter, "Posting…", async () => {
+      const item = state.postReturnItem;
+      if (!item) return;
+      const vendorId = Number($("#post-return-vendor").value);
+      const creditNumber = $("#post-return-credit-number").value.trim();
+      if (!vendorId) return toast("Select the vendor", true);
+      if (!creditNumber) return toast("Enter the credit/RMA number", true);
+      try {
+        await post(`/api/orders/${item.order_id}/estimate/items/${item.id}/post-return-credit`, {
+          vendor_id: vendorId,
+          credit_number: creditNumber,
+          actor: currentActor(),
+        });
+        $("#post-return-dialog").close();
+        toast("Credit posted to A/P");
+        await loadCoresView();
+      } catch (err) {
+        toast(err.message, true);
+      }
     });
   });
 }
@@ -2637,6 +2781,129 @@ function wireSuggestionsView() {
 }
 
 /* ==================================================================
+   BACKUP / RESTORE
+   ================================================================== */
+function fmtBytes(bytes) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function backupRowHtml(b) {
+  const created = new Date(b.modified_at * 1000).toLocaleString();
+  return `
+    <tr data-name="${esc(b.name)}">
+      <td>${esc(b.name)}</td>
+      <td class="num-col">${fmtBytes(b.size_bytes)}</td>
+      <td>${esc(created)}</td>
+      <td style="display:flex;gap:8px;justify-content:flex-end">
+        <a class="btn btn-ghost btn-sm" href="/api/backup/download/${encodeURIComponent(b.name)}" download>Download</a>
+        <button type="button" class="btn btn-ghost btn-sm backup-restore-btn">Restore</button>
+        <button type="button" class="btn btn-ghost btn-sm backup-delete-btn">Delete</button>
+      </td>
+    </tr>
+  `;
+}
+
+function renderBackupList() {
+  const sorted = [...state.backups].sort((a, b) => b.modified_at - a.modified_at);
+  $("#backup-count").textContent = `${sorted.length} backup${sorted.length === 1 ? "" : "s"}`;
+  $("#backup-list").innerHTML = sorted.map(backupRowHtml).join("");
+
+  $$(".backup-restore-btn", $("#backup-list")).forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const name = btn.closest("tr").dataset.name;
+      if (!confirm(`Restore "${name}"? This replaces every vehicle, estimate, invoice, task, and history entry currently in the app with what's in this backup. The current database is saved aside first, so this can be undone.`)) return;
+      await withLoading(btn, "Restoring…", async () => {
+        try {
+          await post(`/api/backup/restore/${encodeURIComponent(name)}`);
+          toast(`Restored from ${name}. Reloading…`);
+          setTimeout(() => location.reload(), 1200);
+        } catch (err) {
+          toast(err.message, true);
+        }
+      });
+    });
+  });
+
+  $$(".backup-delete-btn", $("#backup-list")).forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const name = btn.closest("tr").dataset.name;
+      if (!confirm(`Delete "${name}"? This only removes this backup file -- it does not touch the app's live data.`)) return;
+      await withLoading(btn, "Deleting…", async () => {
+        try {
+          await api(`/api/backup/${encodeURIComponent(name)}`, { method: "DELETE" });
+          toast(`Deleted ${name}`);
+          await loadBackupView();
+        } catch (err) {
+          toast(err.message, true);
+        }
+      });
+    });
+  });
+}
+
+async function loadBackupView() {
+  try {
+    state.backups = await get("/api/backup");
+    renderBackupList();
+  } catch (err) {
+    toast(`Could not load backups: ${err.message}`, true);
+  }
+}
+
+async function uploadAndRestore(file) {
+  const res = await fetch("/api/backup/restore-upload", {
+    method: "POST",
+    headers: { "X-Backup-Filename": file.name },
+    body: file,
+  });
+  if (!res.ok) {
+    let message = res.statusText;
+    try {
+      const body = await res.json();
+      message = body.detail || message;
+    } catch {}
+    throw new Error(message);
+  }
+  return res.json();
+}
+
+function wireBackupView() {
+  $("#backup-run-btn").addEventListener("click", async () => {
+    await withLoading($("#backup-run-btn"), "Backing up…", async () => {
+      try {
+        await post("/api/backup/run");
+        toast("Backup saved");
+        await loadBackupView();
+      } catch (err) {
+        toast(err.message, true);
+      }
+    });
+  });
+
+  const uploadInput = $("#backup-upload-input");
+  const uploadBtn = $("#backup-upload-btn");
+  uploadInput.addEventListener("change", () => {
+    uploadBtn.disabled = !uploadInput.files.length;
+  });
+  uploadBtn.addEventListener("click", async () => {
+    const file = uploadInput.files[0];
+    if (!file) return;
+    if (!confirm(`Restore from "${file.name}"? This replaces every vehicle, estimate, invoice, task, and history entry currently in the app with what's in this file. The current database is saved aside first, so this can be undone.`)) return;
+    await withLoading(uploadBtn, "Restoring…", async () => {
+      try {
+        await uploadAndRestore(file);
+        toast(`Restored from ${file.name}. Reloading…`);
+        setTimeout(() => location.reload(), 1200);
+      } catch (err) {
+        toast(err.message, true);
+      }
+    });
+  });
+}
+
+/* ==================================================================
    INIT
    ================================================================== */
 document.addEventListener("DOMContentLoaded", () => {
@@ -2652,9 +2919,12 @@ document.addEventListener("DOMContentLoaded", () => {
   wireReportsView();
   wireAccountingView();
   wireCoresView();
+  wireReturnsView();
+  wirePostReturnDialog();
   wireStaffView();
   wireTasksView();
   wireSuggestionsView();
+  wireBackupView();
 
   $$(".rail-item").forEach((btn) => btn.addEventListener("click", () => showView(btn.dataset.view)));
 

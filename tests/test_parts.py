@@ -207,6 +207,153 @@ def test_core_return_rejects_line_with_no_core_charge(client):
     assert res.status_code == 400
 
 
+def test_part_return_toggles_flag_and_drops_from_actual_cost(client):
+    vendor = client.post("/api/vendors", json={"name": "WorldPac"}).json()
+    vehicle = make_recon_vehicle(client)
+    order = make_recon_order(client, vehicle["id"])
+    estimate = save_estimate(
+        client, order["id"],
+        [{"kind": "part", "description": "Brake pads", "part_number": "BP-1", "quantity": 1, "unit_price": 10, "unit_cost": 10}],
+    )
+    item_id = estimate["items"][0]["id"]
+    client.post(
+        f"/api/orders/{order['id']}/estimate/receive-parts",
+        json={"item_ids": [item_id], "vendor_id": vendor["id"], "invoice_number": "INV-1"},
+    )
+
+    detail = client.get(f"/api/recon/vehicles/{vehicle['id']}").json()
+    assert detail["total_cost"] == 10
+
+    res = client.patch(f"/api/orders/{order['id']}/estimate/items/{item_id}/part-return", json={"actor": "tester"})
+    assert res.status_code == 200
+    assert res.json() == {"id": item_id, "part_returned": True}
+
+    updated = client.get(f"/api/orders/{order['id']}").json()["estimate"]["items"][0]
+    assert updated["part_returned"]
+    assert updated["part_returned_at"]
+    # still marked received (audit trail of what actually came in), but no
+    # longer counted toward the vehicle's actual cost
+    assert updated["status"] == "received"
+
+    detail = client.get(f"/api/recon/vehicles/{vehicle['id']}").json()
+    assert detail["total_cost"] == 0
+
+    # undo
+    res = client.patch(f"/api/orders/{order['id']}/estimate/items/{item_id}/part-return", json={"returned": False})
+    assert res.status_code == 200
+    assert res.json()["part_returned"] is False
+    updated = client.get(f"/api/orders/{order['id']}").json()["estimate"]["items"][0]
+    assert not updated["part_returned"]
+    assert not updated["part_returned_at"]
+    detail = client.get(f"/api/recon/vehicles/{vehicle['id']}").json()
+    assert detail["total_cost"] == 10
+
+
+def test_part_return_rejects_line_that_was_never_received(client):
+    vehicle = make_recon_vehicle(client)
+    order = make_recon_order(client, vehicle["id"])
+    estimate = save_estimate(
+        client, order["id"],
+        [{"kind": "part", "description": "Brake pads", "part_number": "BP-1", "quantity": 1, "unit_price": 10, "unit_cost": 10}],
+    )
+    item_id = estimate["items"][0]["id"]
+    res = client.patch(f"/api/orders/{order['id']}/estimate/items/{item_id}/part-return", json={})
+    assert res.status_code == 400
+
+
+def test_part_return_allowed_after_estimate_is_invoiced(client):
+    """Same reasoning as core-return: a part can go back to the vendor well
+    after the ticket's estimate is locked, so this must not be blocked by
+    assert_estimate_editable the way order-parts/receive-parts are."""
+    vendor = client.post("/api/vendors", json={"name": "WorldPac"}).json()
+    order = make_retail_order(client)
+    estimate = save_estimate(client, order["id"], [{"kind": "part", "description": "Brake pads", "part_number": "BP-1", "quantity": 1, "unit_price": 50, "unit_cost": 40}])
+    item_id = estimate["items"][0]["id"]
+    client.post(
+        f"/api/orders/{order['id']}/estimate/receive-parts",
+        json={"item_ids": [item_id], "vendor_id": vendor["id"], "invoice_number": "INV-1"},
+    )
+    client.post(f"/api/orders/{order['id']}/authorization", json={"status": "approved", "approved_by": "Jamie", "method": "in_person"})
+    res = client.post(f"/api/orders/{order['id']}/invoice", json={"actor": "t"})
+    assert res.status_code == 201, res.text
+
+    res = client.patch(f"/api/orders/{order['id']}/estimate/items/{item_id}/part-return", json={"actor": "tester"})
+    assert res.status_code == 200
+    assert res.json()["part_returned"] is True
+
+
+def test_post_return_credit_posts_negative_ap_invoice_and_lists_in_returns(client):
+    vendor = client.post("/api/vendors", json={"name": "WorldPac"}).json()
+    vehicle = make_recon_vehicle(client)
+    order = make_recon_order(client, vehicle["id"])
+    estimate = save_estimate(
+        client, order["id"],
+        [{"kind": "part", "description": "Alternator", "part_number": "ALT-1", "quantity": 1, "unit_price": 150, "unit_cost": 150}],
+    )
+    item_id = estimate["items"][0]["id"]
+    client.post(
+        f"/api/orders/{order['id']}/estimate/receive-parts",
+        json={"item_ids": [item_id], "vendor_id": vendor["id"], "invoice_number": "INV-1"},
+    )
+
+    # not returned yet -- shows up nowhere in /returns
+    assert client.get("/api/returns").json() == []
+
+    client.patch(f"/api/orders/{order['id']}/estimate/items/{item_id}/part-return", json={"actor": "tester"})
+
+    returns = client.get("/api/returns").json()
+    assert len(returns) == 1
+    assert returns[0]["id"] == item_id
+    assert returns[0]["vendor_id"] == vendor["id"]
+    assert returns[0]["vendor_name"] == "WorldPac"
+    assert returns[0]["return_invoice_number"] == ""
+    assert returns[0]["credit_total"] == -150
+
+    res = client.post(
+        f"/api/orders/{order['id']}/estimate/items/{item_id}/post-return-credit",
+        json={"vendor_id": vendor["id"], "credit_number": "RMA-1", "actor": "tester"},
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["credit_total"] == -150
+    credit_invoice_id = res.json()["ap_invoice_id"]
+
+    invoices = client.get("/api/ap/invoices").json()
+    matching = next(i for i in invoices if i["id"] == credit_invoice_id)
+    assert matching["invoice_number"] == "RMA-1"
+    assert matching["total"] == -150
+    assert matching["order_id"] == order["id"]
+
+    returns = client.get("/api/returns").json()
+    assert returns[0]["return_invoice_number"] == "RMA-1"
+
+    # already credited -- can't post it twice
+    res = client.post(
+        f"/api/orders/{order['id']}/estimate/items/{item_id}/post-return-credit",
+        json={"vendor_id": vendor["id"], "credit_number": "RMA-2"},
+    )
+    assert res.status_code == 409
+
+
+def test_post_return_credit_rejects_part_not_marked_returned(client):
+    vendor = client.post("/api/vendors", json={"name": "WorldPac"}).json()
+    vehicle = make_recon_vehicle(client)
+    order = make_recon_order(client, vehicle["id"])
+    estimate = save_estimate(
+        client, order["id"],
+        [{"kind": "part", "description": "Brake pads", "part_number": "BP-1", "quantity": 1, "unit_price": 10, "unit_cost": 10}],
+    )
+    item_id = estimate["items"][0]["id"]
+    client.post(
+        f"/api/orders/{order['id']}/estimate/receive-parts",
+        json={"item_ids": [item_id], "vendor_id": vendor["id"], "invoice_number": "INV-1"},
+    )
+    res = client.post(
+        f"/api/orders/{order['id']}/estimate/items/{item_id}/post-return-credit",
+        json={"vendor_id": vendor["id"], "credit_number": "RMA-1"},
+    )
+    assert res.status_code == 400
+
+
 def test_move_item_to_a_different_ticket_recomputes_both_totals(client):
     vehicle_a = make_recon_vehicle(client, stock_number="R-2001")
     order_a = make_recon_order(client, vehicle_a["id"])

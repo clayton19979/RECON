@@ -110,11 +110,12 @@ class WeOwePaymentIn(BaseModel):
 
 def cost_rollup(db: sqlite3.Connection, column: str, ref_id: int) -> dict:
     """Actual cost = what's really landed: labor/fees count in full the moment
-    they're logged, but parts only count once received. quoted_cost (full
+    they're logged, but parts only count once received, and stop counting
+    again once sent back to the vendor (part_returned). quoted_cost (full
     quantity regardless of receipt) is returned alongside for comparison."""
     rows = db.execute(
         f"""SELECT o.id, o.number, o.status, o.voided,
-               coalesce(sum(CASE WHEN ei.kind='part'  THEN ei.received_quantity*ei.unit_cost ELSE 0 END),0) parts_cost,
+               coalesce(sum(CASE WHEN ei.kind='part' AND ei.part_returned=0 THEN ei.received_quantity*ei.unit_cost ELSE 0 END),0) parts_cost,
                coalesce(sum(CASE WHEN ei.kind='labor' THEN ei.quantity*ei.unit_cost ELSE 0 END),0) labor_cost,
                coalesce(sum(CASE WHEN ei.kind='fee'   THEN ei.quantity*ei.unit_cost ELSE 0 END),0) fee_cost,
                coalesce(sum(ei.quantity*ei.unit_cost),0) quoted_cost

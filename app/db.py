@@ -131,7 +131,10 @@ CREATE TABLE IF NOT EXISTS estimate_items (
   sort_order INTEGER NOT NULL DEFAULT 0,
   core_charge REAL NOT NULL DEFAULT 0,
   core_returned INTEGER NOT NULL DEFAULT 0,
-  core_returned_at TEXT NOT NULL DEFAULT ''
+  core_returned_at TEXT NOT NULL DEFAULT '',
+  part_returned INTEGER NOT NULL DEFAULT 0,
+  part_returned_at TEXT NOT NULL DEFAULT '',
+  return_invoice_number TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS estimate_jobs (
@@ -367,6 +370,11 @@ def _migrate(db: sqlite3.Connection) -> None:
         db.execute("ALTER TABLE estimate_items ADD COLUMN core_charge REAL NOT NULL DEFAULT 0")
         db.execute("ALTER TABLE estimate_items ADD COLUMN core_returned INTEGER NOT NULL DEFAULT 0")
         db.execute("ALTER TABLE estimate_items ADD COLUMN core_returned_at TEXT NOT NULL DEFAULT ''")
+
+    if "part_returned" not in estimate_item_columns:
+        db.execute("ALTER TABLE estimate_items ADD COLUMN part_returned INTEGER NOT NULL DEFAULT 0")
+        db.execute("ALTER TABLE estimate_items ADD COLUMN part_returned_at TEXT NOT NULL DEFAULT ''")
+        db.execute("ALTER TABLE estimate_items ADD COLUMN return_invoice_number TEXT NOT NULL DEFAULT ''")
 
     task_columns = {row[1] for row in db.execute("PRAGMA table_info(tasks)")}
     if "order_id" not in task_columns:

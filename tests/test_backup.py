@@ -121,6 +121,71 @@ def test_restore_database_missing_backup_raises(tmp_path):
         pass
 
 
+def test_restore_database_round_trips_every_kind_of_record(tmp_path):
+    """Proves the "Backup Now"/"Restore" pair is a real full backup, not
+    just the CSV export's narrow vehicle-board columns: seeds one row in
+    each of the areas Clay cares about (a recon vehicle, an estimate with
+    a line item, A/P, a task, and RO history), backs up, restores onto a
+    brand-new init_db() database (standing in for a fresh install), and
+    checks every row is still there."""
+    source = tmp_path / "shop.db"
+    init_db(source)
+    db = sqlite3.connect(source)
+    db.execute("PRAGMA foreign_keys=ON")
+    db.execute(
+        "INSERT INTO customers(id,name,phone,email,is_shop_owned,created_at) VALUES(1,'Jane Doe','555-1234','jane@example.com',0,'2026-01-01')"
+    )
+    db.execute(
+        "INSERT INTO vehicles(id,customer_id,year,make,model,vin,created_at) VALUES(1,1,2019,'Ford','F-150','1FTFW1E5XKFA00001','2026-01-01')"
+    )
+    db.execute(
+        """INSERT INTO recon_vehicles(id,vehicle_id,stock_number,acquisition_source,acquisition_date,
+           purchase_price,status,created_at,updated_at) VALUES(1,1,'R-1001','auction','2026-01-01',4500.0,'acquired','2026-01-01','2026-01-01')"""
+    )
+    db.execute(
+        "INSERT INTO orders(id,number,customer_id,vehicle_id,segment,recon_vehicle_id,concern,status,created_at) VALUES(1,'RO-1',1,1,'recon',1,'Full recon','estimate','2026-01-01')"
+    )
+    db.execute(
+        "INSERT INTO estimates(id,order_id,labor_rate,tax_rate,subtotal,tax,total,status,created_at) VALUES(1,1,120.0,0.07,500.0,35.0,535.0,'draft','2026-01-01')"
+    )
+    db.execute(
+        """INSERT INTO estimate_items(estimate_id,kind,description,quantity,unit_price,line_total)
+           VALUES(1,'part','Brake pads',1,150.0,150.0)"""
+    )
+    db.execute(
+        "INSERT INTO vendors(id,name,normalized_name,created_at) VALUES(1,'ACME Parts','acme parts','2026-01-01')"
+    )
+    db.execute(
+        """INSERT INTO ap_invoices(vendor_id,order_id,invoice_number,normalized_invoice_number,po_number,
+           subtotal,tax,total,status,source,posted_at) VALUES(1,1,'INV-9001','inv-9001','',150.0,10.5,160.5,'posted','manual','2026-01-01')"""
+    )
+    db.execute(
+        "INSERT INTO tasks(title,notes,assigned_to,created_by,created_at,updated_at,order_id) VALUES('Call Jane about pickup','','[]','Clay','2026-01-01','2026-01-01',1)"
+    )
+    db.execute(
+        "INSERT INTO activity_events(order_id,action,actor,created_at) VALUES(1,'status_changed','Clay','2026-01-01')"
+    )
+    db.commit()
+    db.close()
+
+    backup_path = backup_database(source, tmp_path / "backups")
+
+    fresh = tmp_path / "fresh-install" / "shop.db"
+    init_db(fresh)  # stands in for a brand-new install's empty database
+    restore_database(backup_path, fresh)
+
+    restored = sqlite3.connect(fresh)
+    restored.row_factory = sqlite3.Row
+    assert restored.execute("SELECT name, vin FROM vehicles JOIN customers ON customers.id=vehicles.customer_id WHERE vehicles.id=1").fetchone()[:] == ("Jane Doe", "1FTFW1E5XKFA00001")
+    assert restored.execute("SELECT stock_number, status FROM recon_vehicles WHERE id=1").fetchone()[:] == ("R-1001", "acquired")
+    assert restored.execute("SELECT total FROM estimates WHERE id=1").fetchone()[0] == 535.0
+    assert restored.execute("SELECT description FROM estimate_items WHERE estimate_id=1").fetchone()[0] == "Brake pads"
+    assert restored.execute("SELECT invoice_number, total FROM ap_invoices WHERE order_id=1").fetchone()[:] == ("INV-9001", 160.5)
+    assert restored.execute("SELECT title FROM tasks WHERE order_id=1").fetchone()[0] == "Call Jane about pickup"
+    assert restored.execute("SELECT action, actor FROM activity_events WHERE order_id=1").fetchone()[:] == ("status_changed", "Clay")
+    restored.close()
+
+
 def test_restore_database_rejects_corrupt_backup(tmp_path):
     fake_backup = tmp_path / "corrupt.db"
     fake_backup.write_text("not a real sqlite file")

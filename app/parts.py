@@ -31,6 +31,17 @@ class CoreReturnIn(BaseModel):
     actor: str = "ui"
 
 
+class PartReturnIn(BaseModel):
+    returned: bool = True
+    actor: str = "ui"
+
+
+class PostReturnCreditIn(BaseModel):
+    vendor_id: int
+    credit_number: str = Field(min_length=1)
+    actor: str = "ui"
+
+
 class MoveItemIn(BaseModel):
     target_order_id: int
     reassign_invoice: bool = False
@@ -220,6 +231,141 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
                 {"item_id": item_id}, now_fn,
             )
         return {"id": item_id, "core_returned": item.returned}
+
+    @router.patch("/orders/{order_id}/estimate/items/{item_id}/part-return")
+    def set_part_return(order_id: int, item_id: int, item: PartReturnIn):
+        """Marks a received part as returned to the vendor (or undoes that) --
+        wrong part, defective, no longer needed. Deliberately does not call
+        assert_estimate_editable, same reasoning as core-return: parts often
+        go back to the vendor well after the ticket's estimate is invoiced
+        and locked. Voided/archived orders are still blocked via
+        assert_vehicle_editable. received_quantity and received_invoice_number
+        are left alone as the audit trail of what was actually received --
+        cost_rollup is what stops a returned part's cost from still counting
+        toward the vehicle."""
+        with connect() as db:
+            assert_vehicle_editable(db, order_row(db, order_id))
+            estimate = estimate_for_order(db, order_id)
+            row = db.execute(
+                "SELECT id, kind, status FROM estimate_items WHERE id=? AND estimate_id=?", (item_id, estimate["id"])
+            ).fetchone()
+            if not row:
+                raise HTTPException(404, "Estimate item not found on this repair order")
+            if row["kind"] != "part" or row["status"] != "received":
+                raise HTTPException(400, "Only a received part can be marked returned")
+            db.execute(
+                "UPDATE estimate_items SET part_returned=?,part_returned_at=? WHERE id=?",
+                (1 if item.returned else 0, now_fn() if item.returned else "", item_id),
+            )
+            record_activity(
+                db, order_id, "part_returned" if item.returned else "part_return_undone", item.actor,
+                {"item_id": item_id}, now_fn,
+            )
+        return {"id": item_id, "part_returned": item.returned}
+
+    @router.post("/orders/{order_id}/estimate/items/{item_id}/post-return-credit")
+    def post_return_credit(order_id: int, item_id: int, item: PostReturnCreditIn):
+        """Posts the vendor credit for a part that's already been marked
+        returned -- a negative ap_invoices row (the same log receive-parts
+        posts into, just with a negative total) so the A/P books reflect
+        what the vendor owes back. Same no-assert_estimate_editable
+        reasoning as core-return/part-return: this typically happens well
+        after the ticket is locked. return_invoice_number being non-empty
+        is what marks a returned line as already credited, so it can't be
+        double-posted."""
+        with connect() as db:
+            current_order = order_row(db, order_id)
+            assert_vehicle_editable(db, current_order)
+            if not db.execute("SELECT 1 FROM vendors WHERE id=?", (item.vendor_id,)).fetchone():
+                raise HTTPException(404, "Vendor not found")
+            estimate = estimate_for_order(db, order_id)
+            row = db.execute(
+                "SELECT * FROM estimate_items WHERE id=? AND estimate_id=?", (item_id, estimate["id"])
+            ).fetchone()
+            if not row:
+                raise HTTPException(404, "Estimate item not found on this repair order")
+            if row["kind"] != "part" or not row["part_returned"]:
+                raise HTTPException(400, "Only a part marked returned can have a credit posted")
+            if row["return_invoice_number"]:
+                raise HTTPException(409, "A credit has already been posted for this return")
+
+            quantity = float(row["received_quantity"])
+            unit_cost = float(row["unit_cost"])
+            credit_total = -round(quantity * unit_cost, 2)
+
+            result = create_ap_invoice_record(
+                db, now_fn,
+                vendor_id=item.vendor_id, order_id=order_id,
+                invoice_number=item.credit_number, po_number=current_order["number"],
+                items=[InvoiceItemIn(
+                    part_number=row["part_number"] or "N/A",
+                    description=row["description"],
+                    quantity=quantity,
+                    unit_cost=unit_cost,
+                    kind="credit",
+                )],
+                subtotal=credit_total, tax=0, total=credit_total,
+                source="part_return",
+            )
+            if result["status"] == "duplicate":
+                raise HTTPException(409, "This credit/RMA number is already posted for this vendor")
+
+            db.execute(
+                "UPDATE estimate_items SET return_invoice_number=? WHERE id=?",
+                (item.credit_number.strip(), item_id),
+            )
+            record_activity(
+                db, order_id, "part_return_credited", item.actor,
+                {"item_id": item_id, "vendor_id": item.vendor_id, "credit_number": item.credit_number.strip(), "credit_total": credit_total},
+                now_fn,
+            )
+            return {"ap_invoice_id": result["ap_invoice_id"], "credit_total": credit_total}
+
+    @router.get("/returns")
+    def list_returns():
+        """Feeds the Cores & Returns page's Returned Parts table -- every
+        part line marked returned (set_part_return), regardless of order,
+        with the original receiving vendor resolved (via
+        received_invoice_number) so the Post Credit dialog can default to
+        it, and whether a credit has already been posted for it."""
+        with connect() as db:
+            rows = db.execute(
+                """SELECT ei.id, ei.description, ei.part_number, ei.received_quantity, ei.unit_cost,
+                       ei.part_returned_at, ei.received_invoice_number, ei.return_invoice_number,
+                       o.id order_id, o.number ro_number, o.voided, o.segment,
+                       o.recon_vehicle_id, o.we_owe_id,
+                       rv.stock_number, wc.name we_owe_customer_name
+                   FROM estimate_items ei
+                   JOIN estimates e ON e.id=ei.estimate_id
+                   JOIN orders o ON o.id=e.order_id
+                   LEFT JOIN recon_vehicles rv ON rv.id=o.recon_vehicle_id
+                   LEFT JOIN we_owe_items wi ON wi.id=o.we_owe_id
+                   LEFT JOIN customers wc ON wc.id=wi.customer_id
+                   WHERE ei.part_returned=1
+                   ORDER BY (ei.return_invoice_number!='') ASC, ei.part_returned_at DESC""",
+            )
+            result = []
+            for row in rows:
+                value = dict(row)
+                if value["stock_number"]:
+                    value["vehicle_label"] = value["stock_number"]
+                elif value["we_owe_customer_name"]:
+                    value["vehicle_label"] = f"We-Owe: {value['we_owe_customer_name']}"
+                else:
+                    value["vehicle_label"] = "Retail"
+                vendor_id = None
+                vendor_name = ""
+                if value["received_invoice_number"]:
+                    invoice = find_received_invoice(db, value["order_id"], value["received_invoice_number"])
+                    if invoice:
+                        vendor = db.execute("SELECT id,name FROM vendors WHERE id=?", (invoice["vendor_id"],)).fetchone()
+                        if vendor:
+                            vendor_id, vendor_name = vendor["id"], vendor["name"]
+                value["vendor_id"] = vendor_id
+                value["vendor_name"] = vendor_name
+                value["credit_total"] = -round(value["received_quantity"] * value["unit_cost"], 2)
+                result.append(value)
+            return result
 
     @router.get("/cores")
     def list_cores():

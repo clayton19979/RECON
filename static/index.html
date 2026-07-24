@@ -24,7 +24,7 @@
     </button>
     <button class="rail-item" data-view="cores">
       <svg viewBox="0 0 24 24"><path d="M17 2l4 4-4 4M3 11V9a4 4 0 014-4h14M7 22l-4-4 4-4M21 13v2a4 4 0 01-4 4H3"/></svg>
-      <span>Cores</span>
+      <span>Cores &amp; Returns</span>
     </button>
     <button class="rail-item" data-view="staff">
       <svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.4"/><path d="M4.5 20c1-3.6 4-5.6 7.5-5.6s6.5 2 7.5 5.6"/></svg>
@@ -37,6 +37,10 @@
     <button class="rail-item" data-view="suggestions">
       <svg viewBox="0 0 24 24"><path d="M9 18h6M10 22h4M12 2a7 7 0 00-4 12.7c.6.5 1 1.3 1 2.3h6c0-1 .4-1.8 1-2.3A7 7 0 0012 2z"/></svg>
       <span>Ideas</span>
+    </button>
+    <button class="rail-item" data-view="backup">
+      <svg viewBox="0 0 24 24"><path d="M12 3a4 4 0 00-4 4v2H6a2 2 0 00-2 2v8a2 2 0 002 2h12a2 2 0 002-2v-8a2 2 0 00-2-2h-2V7a4 4 0 00-4-4z"/><path d="M12 12v5m0 0l-2-2m2 2l2-2"/></svg>
+      <span>Backup</span>
     </button>
     <div class="rail-spacer"></div>
     <div class="theme-picker">
@@ -79,9 +83,9 @@
             <p class="page-desc">Every recon car and we-owe promise, one list. Click a row for the full picture — cost, parts, technician, linked repair order.</p>
           </div>
           <div style="display:flex;gap:10px">
-            <a class="btn btn-ghost" href="/api/export/vehicles.csv" download>
+            <a class="btn btn-ghost" href="/api/export/vehicles.csv" download title="A spreadsheet of this list only -- not a full backup. Use the tray icon's Backup Now for that.">
               <svg viewBox="0 0 24 24"><path d="M12 4v12m0 0l-4-4m4 4l4-4M4 20h16"/></svg>
-              Export CSV
+              Export Vehicle Report (CSV)
             </a>
             <button class="btn btn-ghost" id="add-we-owe-btn">
               <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
@@ -462,6 +466,29 @@
             <tbody id="cores-table"></tbody>
           </table>
         </div>
+
+        <div class="page-head" style="margin-top:28px">
+          <div>
+            <h2 style="margin:0">Returned Parts</h2>
+            <p class="page-desc">Parts sent back to the vendor -- post the credit here once you have the vendor's RMA/credit number so the A/P books show what they owe back.</p>
+          </div>
+        </div>
+
+        <div class="filters">
+          <button class="chip active" data-returns-filter="pending">Pending Credit</button>
+          <button class="chip" data-returns-filter="credited">Credited</button>
+          <button class="chip" data-returns-filter="all">All</button>
+          <div class="filters-gap"></div>
+          <span class="filters-note" id="returns-count">0 returns</span>
+          <span class="filters-note" id="returns-total"></span>
+        </div>
+
+        <div class="panel">
+          <table>
+            <thead><tr><th>Part</th><th>Part #</th><th>RO / Vehicle</th><th>Vendor</th><th class="num-col">Credit Due</th><th>Status</th><th></th></tr></thead>
+            <tbody id="returns-table"></tbody>
+          </table>
+        </div>
       </section>
 
       <!-- STAFF -->
@@ -556,6 +583,40 @@
 
         <button type="button" class="btn btn-ghost btn-sm" id="suggestions-toggle-resolved" style="margin-top:14px">Show resolved (0)</button>
         <div id="suggestions-resolved-list" class="suggestion-list" style="display:none;margin-top:10px"></div>
+      </section>
+
+      <!-- BACKUP / RESTORE -->
+      <section class="view" id="view-backup">
+        <div class="page-head">
+          <div>
+            <h1>Backup &amp; Restore</h1>
+            <p class="page-desc">A backup here is the entire database -- every vehicle, estimate, invoice, task, and history entry -- not just a report. Restoring one replaces everything currently in the app.</p>
+          </div>
+          <div style="display:flex;gap:10px">
+            <button class="btn btn-primary" id="backup-run-btn">Back Up Now</button>
+          </div>
+        </div>
+
+        <div class="card" style="padding:16px;margin-bottom:18px">
+          <h3 style="margin-top:0">Restore onto this install</h3>
+          <p class="page-desc">Moving to a fresh install or a new PC: bring the backup file over (a USB stick, a synced folder) and upload it here. This replaces everything currently in this app with what's in that file.</p>
+          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+            <input type="file" id="backup-upload-input" accept=".db">
+            <button class="btn btn-ghost" id="backup-upload-btn" disabled>Restore From Uploaded File</button>
+          </div>
+        </div>
+
+        <div class="filters">
+          <h3 style="margin:0">Backups on this PC</h3>
+          <div class="filters-gap"></div>
+          <span class="filters-note" id="backup-count">0 backups</span>
+        </div>
+        <div class="panel">
+          <table>
+            <thead><tr><th>File</th><th class="num-col">Size</th><th>Created</th><th></th></tr></thead>
+            <tbody id="backup-list"></tbody>
+          </table>
+        </div>
       </section>
 
     </div>
@@ -713,6 +774,26 @@
     <div class="modal-actions">
       <button class="btn btn-ghost" formnovalidate type="button" id="move-item-cancel-2">Cancel</button>
       <button class="btn btn-primary" type="submit">Move Line</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- Post a Vendor Credit for a Returned Part -->
+<dialog id="post-return-dialog">
+  <form class="modal" id="post-return-form">
+    <div class="modal-head">
+      <div><p class="eyebrow">RETURN</p><h2>Post Vendor Credit</h2></div>
+      <button class="icon-btn" formnovalidate type="button" id="post-return-cancel">×</button>
+    </div>
+    <div class="modal-body">
+      <p class="hint" id="post-return-desc"></p>
+      <label>Vendor<select id="post-return-vendor" required></select></label>
+      <label>Credit / RMA #<input id="post-return-credit-number" required placeholder="RMA-1234"></label>
+      <div class="cost-summary" id="post-return-total-summary"></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" formnovalidate type="button" id="post-return-cancel-2">Cancel</button>
+      <button class="btn btn-primary" type="submit">Post Credit</button>
     </div>
   </form>
 </dialog>

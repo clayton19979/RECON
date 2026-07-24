@@ -173,14 +173,20 @@
             <div class="detail-concern" id="vd-concern-preview" style="display:none"><span class="detail-concern-label">Concern</span><span id="vd-concern-preview-text"></span></div>
           </div>
           <div style="display:flex;gap:10px;flex-wrap:wrap;justify-content:flex-end" id="vd-actions">
+            <span class="pill" id="vd-status-pill" style="display:none"></span>
             <div class="status-picker" id="vd-status-picker" style="display:none">
-              <button type="button" class="status-picker-toggle" id="vd-status-picker-toggle">
-                <span class="status-picker-dot"></span><span id="vd-status-picker-label">Status</span>
+              <span class="status-picker-dot"></span>
+              <select id="vd-status-select" class="status-picker-select"></select>
+            </div>
+            <div class="status-picker" id="vd-assign-picker" style="display:none">
+              <button type="button" class="status-picker-toggle" id="vd-assign-picker-toggle">
+                <span id="vd-assign-picker-label">Assign</span>
                 <svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
               </button>
-              <div class="status-picker-menu" id="vd-status-picker-menu">
-                <select id="vd-status-select" class="inline-select"></select>
-                <button class="btn btn-primary btn-sm" id="vd-status-save">Save</button>
+              <div class="status-picker-menu wide" id="vd-assign-picker-menu">
+                <label>Technician<select id="vd-technician"></select></label>
+                <label>Advisor<select id="vd-advisor"></select></label>
+                <button class="btn btn-primary btn-sm" id="vd-save-assignment">Save</button>
               </div>
             </div>
             <button class="btn btn-ghost btn-sm" id="vd-print-ticket" style="display:none">Print Ticket</button>
@@ -208,15 +214,10 @@
                 <div class="card-head">
                   <div>
                     <p class="section-eyebrow" id="vd-ro-number">Repair Order</p>
-                    <h3 class="section-title">Status</h3>
+                    <h3 class="section-title">Concern</h3>
                   </div>
-                  <span class="pill" id="vd-status-pill"></span>
                 </div>
-                <div style="display:flex;gap:8px;align-items:center;padding:14px 16px">
-                  <select id="vd-status-select" class="inline-select"></select>
-                  <button class="btn btn-ghost btn-sm" id="vd-status-save">Save</button>
-                </div>
-                <div style="padding:0 16px 14px">
+                <div style="padding:14px 16px">
                   <label>Concern / What's being done<textarea id="vd-concern" placeholder="e.g. Front end recon prep, or: replace missing passenger mirror"></textarea></label>
                   <button class="btn btn-ghost btn-sm" id="vd-concern-save" style="margin-top:8px">Save</button>
                 </div>
@@ -232,7 +233,7 @@
                     <button class="btn btn-ghost btn-sm" id="vd-add-job">＋ Add Job</button>
                     <button class="btn btn-ghost btn-sm" id="vd-add-part">＋ Part</button>
                     <button class="btn btn-ghost btn-sm" id="vd-add-labor">＋ Labor</button>
-                    <button class="btn btn-ghost btn-sm" id="vd-order-parts">Order Parts</button>
+                    <button class="btn btn-ghost btn-sm" id="vd-order-parts" title="Marks quoted parts as ordered on this ticket -- doesn't place a purchase order with a vendor">Mark Parts Ordered</button>
                     <button class="btn btn-primary btn-sm" id="vd-receive-parts" disabled>Receive Selected</button>
                   </div>
                 </div>
@@ -245,24 +246,6 @@
                 </div>
               </div>
 
-              <div class="card">
-                <div class="card-head">
-                  <p class="section-eyebrow" style="margin:0">Assigned</p>
-                </div>
-                <div class="form-row" style="padding:14px 16px">
-                  <label>Technician<select id="vd-technician"></select></label>
-                  <label>Advisor<select id="vd-advisor"></select></label>
-                </div>
-                <div class="form-row" style="padding:0 16px 14px">
-                  <label>Date in<input id="vd-date-in" type="date"></label>
-                  <label>Odometer in<input id="vd-odometer" type="number" min="0"></label>
-                </div>
-                <div class="form-row" style="padding:0 16px 14px">
-                  <label>Promised<input id="vd-promised" type="datetime-local"></label>
-                </div>
-                <div style="padding:0 16px 14px"><button class="btn btn-ghost btn-sm" id="vd-save-assignment">Save</button></div>
-              </div>
-
             </div>
           </div>
 
@@ -273,14 +256,21 @@
           <div class="details-drawer" id="vd-details-drawer">
             <div class="details-drawer-head">
               <span class="details-drawer-title">Details</span>
-              <button type="button" class="panel-icon-btn" id="vd-details-close">
-                <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
-              </button>
             </div>
             <div class="details-drawer-body">
             <div class="card" id="vd-cost-card">
               <div class="card-head"><p class="section-eyebrow" style="margin:0">Cost Summary</p></div>
               <div class="cost-summary" id="vd-cost-summary"></div>
+            </div>
+
+            <div class="card" id="vd-timing-card">
+              <div class="card-head"><p class="section-eyebrow" style="margin:0">Timing</p></div>
+              <div style="padding:14px 16px">
+                <label>Date in<input id="vd-date-in" type="date"></label>
+                <label>Odometer in<input id="vd-odometer" type="number" min="0"></label>
+                <label>Promised<input id="vd-promised" type="datetime-local"></label>
+              </div>
+              <div style="padding:0 16px 14px"><button class="btn btn-ghost btn-sm" id="vd-save-timing">Save</button></div>
             </div>
 
             <div class="card" id="vd-order-history-card" style="display:none">
@@ -343,9 +333,8 @@
             </div>
           </div>
 
-          <button type="button" class="details-tab" id="vd-details-tab">
-            <svg viewBox="0 0 24 24"><path d="M11 17l-5-5 5-5M18 17l-5-5 5-5"/></svg>
-            <span>Details</span>
+          <button type="button" class="details-handle" id="vd-details-handle" aria-label="Toggle details panel" title="Toggle details panel">
+            <svg viewBox="0 0 24 24"><path d="M13 5l-6 7 6 7"/></svg>
           </button>
         </div>
       </section>

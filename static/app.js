@@ -583,10 +583,11 @@ function applyArchivedLockUI(archived) {
   // re-enable them, not just skip re-disabling, or they'd stay disabled
   // forever once archived once.
   const disableIds = [
-    "vd-status-select", "vd-status-save", "vd-concern", "vd-concern-save",
+    "vd-status-select", "vd-concern", "vd-concern-save",
     "vd-add-job", "vd-add-part", "vd-add-labor", "vd-order-parts",
     "vd-add-note", "vd-note-text",
-    "vd-save-assignment", "vd-technician", "vd-advisor", "vd-date-in", "vd-odometer", "vd-promised",
+    "vd-save-assignment", "vd-technician", "vd-advisor",
+    "vd-save-timing", "vd-date-in", "vd-odometer", "vd-promised",
     "vd-edit-vehicle", "vd-recon-info-save", "vd-decode-vin", "vd-recon-vin", "vd-recon-mileage", "vd-recon-year",
     "vd-recon-make", "vd-recon-model", "vd-recon-trim", "vd-recon-color", "vd-recon-purchase-price",
     "vd-edit-customer", "vd-we-owe-save", "vd-we-owe-description", "vd-we-owe-category", "vd-we-owe-target", "vd-we-owe-status",
@@ -1218,17 +1219,18 @@ function wireVehicleDetail() {
     }
   });
 
-  $("#vd-status-save").addEventListener("click", async (e) => {
-    const status = $("#vd-status-select").value;
-    await withLoading(e.target, "Saving…", async () => {
-      try {
-        await patch(`/api/orders/${state.detail.order.id}/status`, { status, actor: currentActor() });
-        toast(`Status set to ${STATUS_LABEL[status]}`);
-        await loadVehicleDetail();
-      } catch (err) {
-        toast(err.message, true);
-      }
-    });
+  $("#vd-status-select").addEventListener("change", async (e) => {
+    const select = e.target;
+    const status = select.value;
+    select.disabled = true;
+    try {
+      await patch(`/api/orders/${state.detail.order.id}/status`, { status, actor: currentActor() });
+      toast(`Status set to ${STATUS_LABEL[status]}`);
+      await loadVehicleDetail();
+    } catch (err) {
+      toast(err.message, true);
+      select.disabled = false;
+    }
   });
 
   $("#vd-concern-save").addEventListener("click", async (e) => {
@@ -1331,7 +1333,7 @@ function wireVehicleDetail() {
     if (e.key === "Enter") { e.preventDefault(); addNote(); }
   });
 
-  $("#vd-save-assignment").addEventListener("click", async (e) => {
+  const saveAssignment = async (e) => {
     await withLoading(e.target, "Saving…", async () => {
       try {
         await put(`/api/orders/${state.detail.order.id}/assignment`, {
@@ -1342,13 +1344,15 @@ function wireVehicleDetail() {
           promised_at: $("#vd-promised").value,
           actor: currentActor(),
         });
-        toast("Assignment saved");
+        toast("Saved");
         await loadVehicleDetail();
       } catch (err) {
         toast(err.message, true);
       }
     });
-  });
+  };
+  $("#vd-save-assignment").addEventListener("click", saveAssignment);
+  $("#vd-save-timing").addEventListener("click", saveAssignment);
 
   $("#vd-we-owe-save").addEventListener("click", async (e) => {
     const { id, item } = state.detail;
@@ -2817,12 +2821,12 @@ renderStatusCard = function (order) {
   _origRenderStatusCard(order);
   const pillEl = $("#vd-status-pill");
   const picker = $("#vd-status-picker");
-  const label = $("#vd-status-picker-label");
+  const assignPicker = $("#vd-assign-picker");
   const dot = $(".status-picker-dot", picker || document);
-  if (pillEl && picker && label) {
+  if (pillEl && picker) {
     const text = pillEl.textContent.trim();
     picker.style.display = text ? "" : "none";
-    if (text) label.textContent = text;
+    if (assignPicker) assignPicker.style.display = text ? "" : "none";
     if (dot) dot.style.background = getComputedStyle(pillEl).backgroundColor;
   }
   const concernBox = $("#vd-concern");
@@ -2837,33 +2841,34 @@ renderStatusCard = function (order) {
 
 document.addEventListener("DOMContentLoaded", () => {
   // Details drawer: collapsible, remembers open/closed like the theme does.
+  // A single handle sits on the drawer's edge at all times -- its chevron
+  // flips direction to show which way it'll swing, instead of a close-only
+  // "x" that disappears once collapsed.
   const drawer = $("#vd-details-drawer");
-  const tab = $("#vd-details-tab");
-  const closeBtn = $("#vd-details-close");
+  const handle = $("#vd-details-handle");
   function setDrawerOpen(open) {
-    if (!drawer || !tab) return;
+    if (!drawer || !handle) return;
     drawer.classList.toggle("closed", !open);
-    tab.classList.toggle("visible", !open);
+    handle.classList.toggle("closed", !open);
     localStorage.setItem("dao-details-open", open ? "1" : "0");
   }
-  if (drawer && tab) {
+  if (drawer && handle) {
     const saved = localStorage.getItem("dao-details-open");
     setDrawerOpen(saved === null ? true : saved === "1");
-    tab.addEventListener("click", () => setDrawerOpen(true));
-    if (closeBtn) closeBtn.addEventListener("click", () => setDrawerOpen(false));
+    handle.addEventListener("click", () => setDrawerOpen(drawer.classList.contains("closed")));
   }
 
-  // Status picker popover -- reveals the real select+save controls without
-  // keeping them inline in their own card all the time.
-  const statusToggle = $("#vd-status-picker-toggle");
-  const statusMenu = $("#vd-status-picker-menu");
-  if (statusToggle && statusMenu) {
-    statusToggle.addEventListener("click", (e) => {
+  // Assign picker popover (technician/advisor) -- reveals the real
+  // select+save controls without keeping them inline in their own card.
+  const assignToggle = $("#vd-assign-picker-toggle");
+  const assignMenu = $("#vd-assign-picker-menu");
+  if (assignToggle && assignMenu) {
+    assignToggle.addEventListener("click", (e) => {
       e.stopPropagation();
-      statusMenu.classList.toggle("open");
+      assignMenu.classList.toggle("open");
     });
     document.addEventListener("click", (e) => {
-      if (!e.target.closest(".status-picker")) statusMenu.classList.remove("open");
+      if (!e.target.closest(".status-picker")) assignMenu.classList.remove("open");
     });
   }
 

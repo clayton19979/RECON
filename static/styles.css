@@ -641,17 +641,21 @@ dialog::backdrop { background: rgba(20, 18, 14, .45); }
   overflow: hidden; border-bottom: 1px solid var(--line) !important;
 }
 
-/* Status picker: compact pill in the RO header that reveals the real
-   select+save controls in a small popover, instead of always showing them
-   inline on their own card. */
-.status-picker { position: relative; }
+/* Status picker: a plain select styled as a pill -- directly changes status
+   on selection, no extra popover step. Assign picker (technician/advisor)
+   keeps the popover pattern since it's a real multi-field form. */
+.status-picker { position: relative; display: inline-flex; align-items: center; gap: 7px; }
+.status-picker-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); flex-shrink: 0; }
+.status-picker-select {
+  background: var(--accent-tint); border: 1px solid var(--accent); color: var(--accent);
+  border-radius: 8px; padding: 9px 13px; font-size: 12.5px; font-weight: 700; cursor: pointer; font-family: inherit;
+}
 .status-picker-toggle {
   display: inline-flex; align-items: center; gap: 7px;
   background: var(--accent-tint); border: 1px solid var(--accent); color: var(--accent);
   border-radius: 8px; padding: 9px 13px; font-size: 12.5px; font-weight: 700; cursor: pointer; font-family: inherit;
 }
 .status-picker-toggle svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 2.4; }
-.status-picker-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); flex-shrink: 0; }
 .status-picker-menu {
   display: none; position: absolute; top: calc(100% + 6px); right: 0; z-index: 30;
   background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
@@ -659,6 +663,9 @@ dialog::backdrop { background: rgba(20, 18, 14, .45); }
 }
 .status-picker-menu.open { display: flex; }
 .status-picker-menu select { width: auto; flex: 1; }
+.status-picker-menu.wide { flex-direction: column; align-items: stretch; min-width: 240px; padding: 14px; gap: 4px; }
+.status-picker-menu.wide label { margin-bottom: 10px; }
+.status-picker-menu.wide .btn { margin-top: 4px; align-self: flex-start; }
 
 /* Details drawer: collapsible right-hand panel for cost/vehicle-info/notes/
    activity, plus the persistent pull-tab that toggles it (mirrors the
@@ -673,13 +680,12 @@ dialog::backdrop { background: rgba(20, 18, 14, .45); }
 .panel-icon-btn:hover { color: var(--accent); }
 .panel-icon-btn svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2.2; }
 
-.details-tab {
-  width: 38px; align-self: stretch; flex-shrink: 0; display: none;
-  flex-direction: column; align-items: center; justify-content: flex-start; gap: 10px; padding: 16px 0;
-  background: var(--surface); border: 1px solid var(--accent); border-radius: var(--radius);
-  color: var(--ink-soft); cursor: pointer; font-family: inherit;
+.details-handle {
+  width: 22px; align-self: stretch; flex-shrink: 0; display: flex;
+  align-items: center; justify-content: center; padding: 0;
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+  color: var(--ink-faint); cursor: pointer; font-family: inherit;
 }
-.details-tab.visible { display: flex; }
-.details-tab:hover { color: var(--accent); }
-.details-tab svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2; flex-shrink: 0; }
-.details-tab span { writing-mode: vertical-rl; transform: rotate(180deg); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; }
+.details-handle:hover { color: var(--accent); border-color: var(--accent); }
+.details-handle svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2.2; flex-shrink: 0; transition: transform .15s; }
+.details-handle.closed svg { transform: rotate(180deg); }

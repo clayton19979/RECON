@@ -128,7 +128,10 @@ CREATE TABLE IF NOT EXISTS estimate_items (
   review_required INTEGER NOT NULL DEFAULT 0,
   reviewed_by TEXT NOT NULL DEFAULT '',
   reviewed_at TEXT NOT NULL DEFAULT '',
-  sort_order INTEGER NOT NULL DEFAULT 0
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  core_charge REAL NOT NULL DEFAULT 0,
+  core_returned INTEGER NOT NULL DEFAULT 0,
+  core_returned_at TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS estimate_jobs (
@@ -359,6 +362,11 @@ def _migrate(db: sqlite3.Connection) -> None:
     if "sort_order" not in estimate_item_columns:
         db.execute("ALTER TABLE estimate_items ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0")
         db.execute("UPDATE estimate_items SET sort_order = id")
+
+    if "core_charge" not in estimate_item_columns:
+        db.execute("ALTER TABLE estimate_items ADD COLUMN core_charge REAL NOT NULL DEFAULT 0")
+        db.execute("ALTER TABLE estimate_items ADD COLUMN core_returned INTEGER NOT NULL DEFAULT 0")
+        db.execute("ALTER TABLE estimate_items ADD COLUMN core_returned_at TEXT NOT NULL DEFAULT ''")
 
     task_columns = {row[1] for row in db.execute("PRAGMA table_info(tasks)")}
     if "order_id" not in task_columns:

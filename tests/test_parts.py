@@ -162,6 +162,111 @@ def test_receive_parts_requires_invoice_number(client):
     assert res.status_code == 422
 
 
+def test_core_charge_is_saved_and_listed_in_cores(client):
+    vehicle = make_recon_vehicle(client)
+    order = make_recon_order(client, vehicle["id"])
+    estimate = save_estimate(
+        client, order["id"],
+        [{"kind": "part", "description": "Caliper", "part_number": "CAL-1", "quantity": 1, "unit_price": 80, "unit_cost": 80, "core_charge": 25}],
+    )
+    item = estimate["items"][0]
+    assert item["core_charge"] == 25
+    assert not item["core_returned"]
+
+    cores = client.get("/api/cores").json()
+    assert len(cores) == 1
+    assert cores[0]["id"] == item["id"]
+    assert cores[0]["core_charge"] == 25
+    assert not cores[0]["core_returned"]
+    assert cores[0]["vehicle_label"] == vehicle["stock_number"]
+
+    res = client.patch(f"/api/orders/{order['id']}/estimate/items/{item['id']}/core-return", json={"actor": "tester"})
+    assert res.status_code == 200
+    body = res.json()
+    assert body["core_returned"] is True
+
+    cores = client.get("/api/cores").json()
+    assert cores[0]["core_returned"]
+    assert cores[0]["core_returned_at"]
+
+    # undo
+    res = client.patch(f"/api/orders/{order['id']}/estimate/items/{item['id']}/core-return", json={"returned": False})
+    assert res.status_code == 200
+    assert not client.get("/api/cores").json()[0]["core_returned"]
+
+
+def test_core_return_rejects_line_with_no_core_charge(client):
+    vehicle = make_recon_vehicle(client)
+    order = make_recon_order(client, vehicle["id"])
+    estimate = save_estimate(
+        client, order["id"],
+        [{"kind": "part", "description": "Brake pads", "part_number": "BP-1", "quantity": 1, "unit_price": 10, "unit_cost": 10}],
+    )
+    item_id = estimate["items"][0]["id"]
+    res = client.patch(f"/api/orders/{order['id']}/estimate/items/{item_id}/core-return", json={})
+    assert res.status_code == 400
+
+
+def test_move_item_to_a_different_ticket_recomputes_both_totals(client):
+    vehicle_a = make_recon_vehicle(client, stock_number="R-2001")
+    order_a = make_recon_order(client, vehicle_a["id"])
+    vehicle_b = make_recon_vehicle(client, stock_number="R-2002")
+    order_b = make_recon_order(client, vehicle_b["id"])
+
+    estimate_a = save_estimate(
+        client, order_a["id"],
+        [{"kind": "part", "description": "Alternator", "part_number": "ALT-1", "quantity": 1, "unit_price": 150, "unit_cost": 150, "core_charge": 40}],
+    )
+    item_id = estimate_a["items"][0]["id"]
+
+    res = client.patch(
+        f"/api/orders/{order_a['id']}/estimate/items/{item_id}/move",
+        json={"target_order_id": order_b["id"], "actor": "tester"},
+    )
+    assert res.status_code == 200, res.text
+
+    order_a_after = client.get(f"/api/orders/{order_a['id']}").json()
+    assert order_a_after["estimate"]["items"] == []
+    assert order_a_after["estimate"]["total"] == 0
+
+    order_b_after = client.get(f"/api/orders/{order_b['id']}").json()
+    moved = order_b_after["estimate"]["items"][0]
+    assert moved["id"] == item_id
+    assert moved["description"] == "Alternator"
+    assert moved["core_charge"] == 40
+    assert order_b_after["estimate"]["total"] > 0
+
+    # the moved item's core charge still shows up in /api/cores, now
+    # attributed to vehicle B instead of vehicle A
+    cores = client.get("/api/cores").json()
+    assert cores[0]["vehicle_label"] == vehicle_b["stock_number"]
+
+
+def test_move_item_rejects_same_order(client):
+    vehicle = make_recon_vehicle(client)
+    order = make_recon_order(client, vehicle["id"])
+    estimate = save_estimate(
+        client, order["id"],
+        [{"kind": "part", "description": "Brake pads", "part_number": "BP-1", "quantity": 1, "unit_price": 10, "unit_cost": 10}],
+    )
+    item_id = estimate["items"][0]["id"]
+    res = client.patch(f"/api/orders/{order['id']}/estimate/items/{item_id}/move", json={"target_order_id": order["id"]})
+    assert res.status_code == 400
+
+
+def test_move_item_blocked_once_either_side_is_invoiced(client):
+    order_a = make_retail_order(client)
+    estimate = save_estimate(client, order_a["id"], [{"kind": "part", "description": "Brake pads", "part_number": "BP-1", "quantity": 1, "unit_price": 50, "unit_cost": 40}])
+    item_id = estimate["items"][0]["id"]
+    client.post(f"/api/orders/{order_a['id']}/authorization", json={"status": "approved", "approved_by": "Jamie", "method": "in_person"})
+    res = client.post(f"/api/orders/{order_a['id']}/invoice", json={"actor": "t"})
+    assert res.status_code == 201, res.text
+
+    order_b = make_retail_order(client, concern="Different job")
+    res = client.patch(f"/api/orders/{order_a['id']}/estimate/items/{item_id}/move", json={"target_order_id": order_b["id"]})
+    assert res.status_code == 409
+
+
 def test_receive_parts_wrong_order_404(client):
     vendor = client.post("/api/vendors", json={"name": "WorldPac"}).json()
     vehicle = make_recon_vehicle(client)

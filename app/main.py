@@ -109,6 +109,10 @@ class EstimateItem(BaseModel):
     unit_cost: float = Field(default=0, ge=0)
     source: Literal["manual", "technician_finding"] = "manual"
     job_id: int | None = None
+    # A vendor's core deposit for this specific part (calipers, alternators,
+    # engines) -- tracked per line, not as a free-floating invoice line item,
+    # so it's traceable back to exactly which part it's owed against.
+    core_charge: float = Field(default=0, ge=0)
 
 
 class EstimateIn(BaseModel):
@@ -422,13 +426,13 @@ def create_app(db_path: Path = DEFAULT_DB) -> FastAPI:
                 if existing:
                     retained_ids.add(int(existing["id"]))
                     db.execute(
-                        "UPDATE estimate_items SET kind=?,description=?,part_number=?,quantity=?,unit_price=?,unit_cost=?,line_total=?,review_required=0,reviewed_by=?,reviewed_at=?,sort_order=?,job_id=? WHERE id=?",
-                        (item.kind, item.description.strip(), item.part_number.strip().upper(), item.quantity, item.unit_price, item.unit_cost, round(item.quantity * item.unit_price, 2), estimate.actor, now(), position, item.job_id, item.id),
+                        "UPDATE estimate_items SET kind=?,description=?,part_number=?,quantity=?,unit_price=?,unit_cost=?,line_total=?,review_required=0,reviewed_by=?,reviewed_at=?,sort_order=?,job_id=?,core_charge=? WHERE id=?",
+                        (item.kind, item.description.strip(), item.part_number.strip().upper(), item.quantity, item.unit_price, item.unit_cost, round(item.quantity * item.unit_price, 2), estimate.actor, now(), position, item.job_id, item.core_charge, item.id),
                     )
                 else:
                     cur = db.execute(
-                        "INSERT INTO estimate_items(estimate_id,kind,description,part_number,quantity,unit_price,unit_cost,line_total,source,review_required,reviewed_by,reviewed_at,sort_order,job_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                        (estimate_id, item.kind, item.description.strip(), item.part_number.strip().upper(), item.quantity, item.unit_price, item.unit_cost, round(item.quantity * item.unit_price, 2), item.source, 0, estimate.actor, now(), position, item.job_id),
+                        "INSERT INTO estimate_items(estimate_id,kind,description,part_number,quantity,unit_price,unit_cost,line_total,source,review_required,reviewed_by,reviewed_at,sort_order,job_id,core_charge) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        (estimate_id, item.kind, item.description.strip(), item.part_number.strip().upper(), item.quantity, item.unit_price, item.unit_cost, round(item.quantity * item.unit_price, 2), item.source, 0, estimate.actor, now(), position, item.job_id, item.core_charge),
                     )
                     if cur.lastrowid is not None:
                         retained_ids.add(int(cur.lastrowid))

@@ -22,6 +22,10 @@
       <svg viewBox="0 0 24 24"><path d="M4 19V5a2 2 0 012-2h9l5 5v11a2 2 0 01-2 2H6a2 2 0 01-2-2z"/><path d="M14 3v5h5M9 13h6M9 17h6"/></svg>
       <span>A/P</span>
     </button>
+    <button class="rail-item" data-view="cores">
+      <svg viewBox="0 0 24 24"><path d="M17 2l4 4-4 4M3 11V9a4 4 0 014-4h14M7 22l-4-4 4-4M21 13v2a4 4 0 01-4 4H3"/></svg>
+      <span>Cores</span>
+    </button>
     <button class="rail-item" data-view="staff">
       <svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.4"/><path d="M4.5 20c1-3.6 4-5.6 7.5-5.6s6.5 2 7.5 5.6"/></svg>
       <span>Staff</span>
@@ -434,6 +438,32 @@
         </div>
       </section>
 
+      <!-- CORES -->
+      <section class="view" id="view-cores">
+        <div class="page-head">
+          <div>
+            <h1>Cores &amp; Returns</h1>
+            <p class="page-desc">Core deposits owed back from vendors on parts like calipers, alternators, and engines — tracked per part so nothing gets left uncollected.</p>
+          </div>
+        </div>
+
+        <div class="filters">
+          <button class="chip active" data-cores-filter="pending">Pending</button>
+          <button class="chip" data-cores-filter="returned">Returned</button>
+          <button class="chip" data-cores-filter="all">All</button>
+          <div class="filters-gap"></div>
+          <span class="filters-note" id="cores-count">0 cores</span>
+          <span class="filters-note" id="cores-total"></span>
+        </div>
+
+        <div class="panel">
+          <table>
+            <thead><tr><th>Part</th><th>Part #</th><th>RO / Vehicle</th><th class="num-col">Core Charge</th><th>Status</th><th></th></tr></thead>
+            <tbody id="cores-table"></tbody>
+          </table>
+        </div>
+      </section>
+
       <!-- STAFF -->
       <section class="view" id="view-staff">
         <div class="page-head">
@@ -659,6 +689,25 @@
     <div class="modal-actions">
       <button class="btn btn-ghost" formnovalidate type="button" id="job-cancel-2">Cancel</button>
       <button class="btn btn-primary" type="submit">Save Job</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- Move Estimate Item to a Different Ticket -->
+<dialog id="move-item-dialog">
+  <form class="modal" id="move-item-form">
+    <div class="modal-head">
+      <div><p class="eyebrow">FIX</p><h2>Move to a Different Ticket</h2></div>
+      <button class="icon-btn" formnovalidate type="button" id="move-item-cancel">×</button>
+    </div>
+    <div class="modal-body">
+      <p class="hint" id="move-item-desc"></p>
+      <label>Move to repair order<select id="move-item-target" required></select></label>
+      <p class="hint">The line (and its received status/cost) moves onto that ticket's estimate and starts counting toward that vehicle's cost instead. Any vendor invoice already posted for it stays where it is, as the record of what was ordered.</p>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" formnovalidate type="button" id="move-item-cancel-2">Cancel</button>
+      <button class="btn btn-primary" type="submit">Move Line</button>
     </div>
   </form>
 </dialog>

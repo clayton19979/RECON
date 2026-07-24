@@ -103,6 +103,8 @@ const state = {
   suggestionSearch: "",
   showResolvedSuggestions: false,
   apInvoices: [],
+  cores: [],
+  coresFilter: "pending",
   vehicleSelection: new Set(), // "segment:id" strings, cleared on filter change/reload
   tasks: [],
   taskFilter: "",
@@ -153,6 +155,7 @@ function showView(name) {
   $$(".rail-item").forEach((b) => b.classList.toggle("active", b.dataset.view === name));
   if (name === "vehicles") loadVehiclesView();
   if (name === "accounting") loadAccountingView();
+  if (name === "cores") loadCoresView();
   if (name === "staff") loadStaffView();
   if (name === "tasks") loadTasksView();
   if (name === "suggestions") loadSuggestionsView();
@@ -645,6 +648,9 @@ function renderEstimate(order) {
       <input class="ei-part" value="${esc(item.part_number || "")}" placeholder="Part #">
       <input class="ei-qty" type="number" min="0.01" step="0.01" value="${item.quantity ?? 1}">
       <input class="ei-cost" type="number" min="0" step="0.01" value="${item.unit_cost ?? 0}">
+      ${item.kind === "part"
+        ? `<input class="ei-core" type="number" min="0" step="0.01" placeholder="Core" title="Core deposit owed back from the vendor" value="${item.core_charge ?? 0}">`
+        : `<span></span>`}
       ${jobs.length ? `<select class="ei-job">${jobOptionsHtml(item.job_id ?? null)}</select>` : ""}
       ${item.id
         ? (item.status === "received"
@@ -654,12 +660,13 @@ function renderEstimate(order) {
                  <option value="ordered" ${item.status === "ordered" ? "selected" : ""}>Ordered</option>
                </select>`)
         : `<span class="status-pill sp-quoted">Saving…</span>`}
+      ${item.id ? `<button type="button" class="row-move-btn" title="Move to a different ticket" data-id="${item.id}" data-desc="${esc(item.description || "")}">⇄</button>` : `<span></span>`}
       <button type="button" class="rm-btn" title="Remove line">×</button>
     </div>
   `;
   };
 
-  const headRow = `<div class="part-row head"><span></span><span></span><span>Kind</span><span>Description</span><span>Part #</span><span>Qty</span><span>Cost</span>${jobs.length ? "<span>Job</span>" : ""}<span>Status</span><span></span></div>`;
+  const headRow = `<div class="part-row head"><span></span><span></span><span>Kind</span><span>Description</span><span>Part #</span><span>Qty</span><span>Cost</span><span>Core</span>${jobs.length ? "<span>Job</span>" : ""}<span>Status</span><span></span><span></span></div>`;
 
   if (!jobs.length) {
     // Unchanged flat list -- grouping only appears once a job exists, so the
@@ -708,7 +715,7 @@ function renderEstimate(order) {
   // Every field auto-saves on change -- there is no "forgot to click Save and
   // it silently vanished" window, because nothing is ever left DOM-only.
   $$(".part-row:not(.head)", box).forEach((row) => {
-    row.querySelectorAll(".ei-kind, .ei-desc, .ei-part, .ei-qty, .ei-cost, .ei-job").forEach((field) => {
+    row.querySelectorAll(".ei-kind, .ei-desc, .ei-part, .ei-qty, .ei-cost, .ei-core, .ei-job").forEach((field) => {
       field.addEventListener("change", () => persistEstimate());
     });
   });
@@ -720,6 +727,9 @@ function renderEstimate(order) {
       row.remove();
       persistEstimate();
     });
+  });
+  $$(".row-move-btn", box).forEach((btn) => {
+    btn.addEventListener("click", () => openMoveItemDialog(order.id, Number(btn.dataset.id), btn.dataset.desc));
   });
   $$(".ei-status", box).forEach((sel) => {
     const previousValue = sel.value;
@@ -799,6 +809,7 @@ function wireEstimateRowDragging(box) {
 function collectEstimateItems() {
   return $$(".part-row:not(.head)", $("#vd-estimate-items")).map((row) => {
     const cost = parseFloat(row.querySelector(".ei-cost").value || "0");
+    const coreInput = row.querySelector(".ei-core");
     const jobSelect = row.querySelector(".ei-job");
     return {
       id: row.dataset.id ? Number(row.dataset.id) : null,
@@ -808,6 +819,7 @@ function collectEstimateItems() {
       quantity: parseFloat(row.querySelector(".ei-qty").value || "1"),
       unit_cost: cost,
       unit_price: cost,
+      core_charge: coreInput ? parseFloat(coreInput.value || "0") : 0,
       source: row.dataset.source || "manual",
       // A freshly-added row (addEstimateRow) has no .ei-job select yet --
       // just the data-job-id it was created with -- so fall back to that.
@@ -971,6 +983,46 @@ function wireJobDialog() {
       }
       $("#job-dialog").close();
       toast(editingId ? "Job updated" : "Job added");
+      await loadVehicleDetail();
+    } catch (err) {
+      toast(err.message, true);
+    }
+  });
+}
+
+/* ---------- move a mis-logged line to a different ticket ---------- */
+async function openMoveItemDialog(orderId, itemId, desc) {
+  state.detail.movingItemId = itemId;
+  state.detail.movingFromOrderId = orderId;
+  $("#move-item-desc").textContent = `Moving "${desc}" off this ticket.`;
+  const select = $("#move-item-target");
+  select.innerHTML = `<option value="">Loading…</option>`;
+  $("#move-item-dialog").showModal();
+  try {
+    const orders = await get("/api/orders");
+    const options = orders.filter((o) => o.id !== orderId && !o.voided).map((o) => {
+      const vehicleLabel = o.stock_number ? `${o.stock_number} · ${o.year} ${o.make} ${o.model}` : `${o.year} ${o.make} ${o.model} · ${o.customer_name}`;
+      return `<option value="${o.id}">${esc(o.number)} — ${esc(vehicleLabel)}</option>`;
+    }).join("");
+    select.innerHTML = options || `<option value="">No other repair orders</option>`;
+  } catch (err) {
+    select.innerHTML = `<option value="">Could not load repair orders</option>`;
+    toast(err.message, true);
+  }
+}
+
+function wireMoveItemDialog() {
+  $("#move-item-cancel").addEventListener("click", () => $("#move-item-dialog").close());
+  $("#move-item-cancel-2").addEventListener("click", () => $("#move-item-dialog").close());
+  $("#move-item-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const targetOrderId = Number($("#move-item-target").value);
+    if (!targetOrderId) return;
+    const { movingItemId, movingFromOrderId } = state.detail;
+    try {
+      await patch(`/api/orders/${movingFromOrderId}/estimate/items/${movingItemId}/move`, { target_order_id: targetOrderId, actor: currentActor() });
+      $("#move-item-dialog").close();
+      toast("Line moved to the other ticket");
       await loadVehicleDetail();
     } catch (err) {
       toast(err.message, true);
@@ -2046,6 +2098,79 @@ function wireAccountingView() {
 }
 
 /* ==================================================================
+   CORES & RETURNS
+   ================================================================== */
+async function loadCoresView() {
+  try {
+    state.cores = await get("/api/cores");
+  } catch (err) {
+    toast(`Could not load cores: ${err.message}`, true);
+    return;
+  }
+  renderCoresTable();
+}
+
+function renderCoresTable() {
+  const filter = state.coresFilter;
+  const rows = state.cores.filter((c) => {
+    if (filter === "pending") return !c.core_returned;
+    if (filter === "returned") return !!c.core_returned;
+    return true;
+  });
+  $("#cores-count").textContent = `${rows.length} core${rows.length === 1 ? "" : "s"}`;
+  const pendingTotal = state.cores.filter((c) => !c.core_returned).reduce((s, c) => s + c.core_charge, 0);
+  $("#cores-total").textContent = pendingTotal > 0 ? `${money(pendingTotal)} pending` : "";
+
+  $("#cores-table").innerHTML = rows.length ? rows.map((c) => {
+    const clickable = c.stock_number || c.we_owe_customer_name;
+    const voided = !!c.voided;
+    return `
+    <tr class="${clickable ? "clickable" : ""} ${voided ? "voided-row" : ""}" ${clickable ? `data-order-id="${c.order_id}" title="Open this vehicle"` : ""}>
+      <td>${esc(c.description)}</td><td>${esc(c.part_number || "")}</td>
+      <td>${esc(c.ro_number)} · ${esc(c.vehicle_label)}</td>
+      <td class="num-col">${money(c.core_charge)}</td>
+      <td><span class="pill ${c.core_returned ? "pill-done" : "pill-progress"}">${c.core_returned ? "Returned" : "Pending"}</span></td>
+      <td><button type="button" class="btn btn-ghost btn-sm cores-toggle" data-order-id="${c.order_id}" data-item-id="${c.id}" data-returned="${c.core_returned ? 1 : 0}">${c.core_returned ? "Undo" : "Mark Returned"}</button></td>
+    </tr>
+  `;
+  }).join("") : `<tr><td colspan="6" style="text-align:center;color:var(--ink-faint);padding:20px">No cores in this view.</td></tr>`;
+
+  $$(".clickable", $("#cores-table")).forEach((row) => {
+    row.addEventListener("click", (e) => {
+      if (e.target.closest(".cores-toggle")) return;
+      const order = state.orders.find((o) => o.id === Number(row.dataset.orderId));
+      const refId = order ? (order.recon_vehicle_id ?? order.we_owe_id) : null;
+      const segment = order ? order.segment : null;
+      if (refId != null && (segment === "recon" || segment === "we_owe")) openVehicleDetail(segment, refId);
+    });
+  });
+  $$(".cores-toggle", $("#cores-table")).forEach((btn) => {
+    btn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const returned = btn.dataset.returned !== "1";
+      try {
+        await patch(`/api/orders/${btn.dataset.orderId}/estimate/items/${btn.dataset.itemId}/core-return`, { returned, actor: currentActor() });
+        toast(returned ? "Core marked returned" : "Core return undone");
+        await loadCoresView();
+      } catch (err) {
+        toast(err.message, true);
+      }
+    });
+  });
+}
+
+function wireCoresView() {
+  $$('#view-cores [data-cores-filter]').forEach((chip) => {
+    chip.addEventListener("click", () => {
+      state.coresFilter = chip.dataset.coresFilter;
+      $$('#view-cores [data-cores-filter]').forEach((c) => c.classList.remove("active"));
+      chip.classList.add("active");
+      renderCoresTable();
+    });
+  });
+}
+
+/* ==================================================================
    STAFF
    ================================================================== */
 async function loadStaffView() {
@@ -2501,8 +2626,10 @@ document.addEventListener("DOMContentLoaded", () => {
   wireWeOweDialog();
   wireReceiveDialog();
   wireJobDialog();
+  wireMoveItemDialog();
   wireReportsView();
   wireAccountingView();
+  wireCoresView();
   wireStaffView();
   wireTasksView();
   wireSuggestionsView();

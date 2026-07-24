@@ -334,9 +334,13 @@ textarea { min-height: 70px; resize: vertical; font-family: inherit; }
 
 /* ---------- estimate / parts rows ---------- */
 .part-row {
-  display: grid; grid-template-columns: 16px 20px .8fr 2.1fr 1fr .6fr .9fr 1fr 26px;
+  display: grid; grid-template-columns: 16px 20px .8fr 2.1fr 1fr .6fr .9fr .7fr 1fr 22px 26px;
   gap: 8px; align-items: center; padding: 9px 16px; border-bottom: 1px solid var(--line-soft); font-size: 12.5px;
 }
+.row-move-btn {
+  background: none; border: none; color: var(--ink-faint); cursor: pointer; font-size: 14px; padding: 2px 4px;
+}
+.row-move-btn:hover { color: var(--accent); }
 .part-row .ei-receive-check { width: auto; margin: 0; cursor: pointer; }
 .row-drag-handle { cursor: grab; color: var(--ink-faint); font-size: 12px; letter-spacing: -2px; user-select: none; }
 .part-row.dragging { opacity: .4; }
@@ -350,7 +354,7 @@ textarea { min-height: 70px; resize: vertical; font-family: inherit; }
 /* One extra column (Job) only appears once a ticket actually has jobs --
    the plain flat list (the common case) keeps its original column count. */
 #vd-estimate-items.has-jobs .part-row {
-  grid-template-columns: 16px 20px .8fr 2.1fr 1fr .6fr .9fr .9fr 1fr 26px;
+  grid-template-columns: 16px 20px .8fr 2.1fr 1fr .6fr .9fr .7fr .9fr 1fr 22px 26px;
 }
 
 /* ---------- job groups ---------- */

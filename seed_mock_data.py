@@ -222,6 +222,12 @@ def main() -> None:
         {"kind": "part", "description": "Brake pads + rotors, all 4", "quantity": 1, "unit_price": 0, "unit_cost": 240.0, "part_number": "BR-KIT-90"},
         {"kind": "labor", "description": "Install windshield, full brake job, detail", "quantity": 4.5, "unit_price": 0},
     ], labor_rate=0.0)
+    # Parts are on order and haven't landed, which is why this car is still
+    # sitting -- the board's Parts column and its "Waiting on parts" card
+    # exist for exactly this state, and until now no lot vehicle in the seed
+    # data was ever in it (the only ordered parts were on a retail ticket,
+    # which has no recon or we-owe vehicle and so never reaches the board).
+    patch(client, f"/api/orders/{ro_r2['id']}/estimate/order-parts", {})
     patch(client, f"/api/recon/vehicles/{r2['id']}", {"status": "in_repair"})
     assign(client, ro_r2["id"], dana["id"], ray["id"], "2026-07-11", 84500)
 
@@ -265,10 +271,23 @@ def main() -> None:
 
     cust, veh = customer_and_vehicle(client, "Jordan Whitfield", "555-0301", "jordan.whitfield@example.com",
                                       year=2020, make="Kia", model="Soul", vin="KNDJP3A50L7123456", mileage=31000)
-    post(client, "/api/we-owe", {
+    we1 = post(client, "/api/we-owe", {
         "customer_id": cust["id"], "vehicle_id": veh["id"], "description": "Install aftermarket running boards (customer supplied)",
         "category": "accessory", "target_date": "2026-08-01",
     })
+    # The only we-owe in the seed with a live ticket behind it, so the board's
+    # we-owe half isn't uniformly $0 with an empty status. Its bracket kit is
+    # on order and hasn't arrived -- the promise the customer is waiting on is
+    # waiting on a vendor, which is the whole point of the Parts column.
+    ro_we1 = post(client, "/api/orders", {
+        "concern": "Install running boards (customer-supplied)", "segment": "we_owe", "we_owe_id": we1["id"],
+    })
+    save_estimate(client, ro_we1["id"], [
+        {"kind": "part", "description": "Mounting bracket kit", "quantity": 1, "unit_price": 0, "unit_cost": 95.0, "part_number": "RB-BRK-20"},
+        {"kind": "labor", "description": "Install running boards", "quantity": 1.5, "unit_price": 0},
+    ], labor_rate=0.0)
+    patch(client, f"/api/orders/{ro_we1['id']}/estimate/order-parts", {})
+    set_status(client, ro_we1["id"], "in_progress")
 
     cust, veh = customer_and_vehicle(client, "Renata Silva", "555-0302", "renata.silva@example.com",
                                       year=2019, make="Toyota", model="RAV4", vin="2T3P1RFV0KW123456", mileage=48200)

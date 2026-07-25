@@ -201,23 +201,34 @@ def test_board_row_cells_match_the_header(js: str, html: str) -> None:
     assert columns == cells, f"the vehicles header has {columns} columns but vehicleRowHtml emits {cells} cells"
 
 
-def test_board_empty_state_spans_the_whole_table(js: str, html: str) -> None:
+def _board_columns(js: str) -> int:
+    declared = re.search(r"^const BOARD_COLUMNS = (\d+);", js, re.M)
+    assert declared, "BOARD_COLUMNS is gone -- the skeleton and empty state have no shared width"
+    return int(declared.group(1))
+
+
+def test_board_columns_constant_matches_the_header(js: str, html: str) -> None:
+    """The one number the loading skeleton and the empty state are both built
+    from. Adding a <th> without bumping it is the mistake it exists to catch --
+    exactly what happened when the Parts column went in."""
     columns = len(re.findall(r"<th\b", _vehicles_thead(html)))
-    colspan = re.search(r"emptyRow\((\d+), vehiclesEmptyState\(\)\)", js)
-    assert colspan, "the vehicles empty state no longer goes through emptyRow()"
-    assert int(colspan.group(1)) == columns, (
-        f"the vehicles empty row spans {colspan.group(1)} of {columns} columns"
+    assert _board_columns(js) == columns, (
+        f"BOARD_COLUMNS is {_board_columns(js)} but the vehicles header has {columns} columns"
     )
 
 
-def test_board_loading_skeleton_matches_the_header(js: str, html: str) -> None:
+def test_board_empty_state_spans_the_whole_table(js: str) -> None:
+    assert re.search(r"emptyRow\(BOARD_COLUMNS, vehiclesEmptyState\(\)\)", js), (
+        "the vehicles empty state no longer spans BOARD_COLUMNS -- a hardcoded "
+        "colspan goes stale the next time a column is added"
+    )
+
+
+def test_board_loading_skeleton_matches_the_header(js: str) -> None:
     """The skeleton is the first thing drawn on every load; a short one makes
     the table visibly jump a column wider the moment the data lands."""
-    columns = len(re.findall(r"<th\b", _vehicles_thead(html)))
-    declared = re.search(r'vehicles:\s*\[\["#vehicles-table",\s*(\d+)\]\]', js)
-    assert declared, "the vehicles view lost its loading-placeholder entry"
-    assert int(declared.group(1)) == columns, (
-        f"the vehicles skeleton draws {declared.group(1)} columns for a {columns}-column table"
+    assert re.search(r'vehicles:\s*\[\["#vehicles-table",\s*BOARD_COLUMNS\]\]', js), (
+        "the vehicles loading placeholder no longer draws BOARD_COLUMNS columns"
     )
 
 
@@ -324,3 +335,73 @@ def test_report_controls_refetch_rather_than_waiting_for_a_button(html: str, js:
     assert len(ranges) == len(set(ranges)) == 5, f"expected 5 distinct range chips, found {ranges}"
     known = set(re.findall(r'"(\w+)"', re.search(r'const match = \[([^\]]+)\]', js).group(1)))
     assert set(ranges) == known, f"range chips {sorted(ranges)} don't match the ranges the app can detect {sorted(known)}"
+
+
+def test_board_cards_are_scoped_to_the_visible_rows(js: str) -> None:
+    """The bug the board's cards exist to have fixed: they were computed from
+    every vehicle in state.vehicles while the table below them was filtered,
+    so filtering to We-Owe left a recon count on screen. renderStats has to
+    take the rows the table is about to draw, and has to be driven from the
+    render rather than from the fetch -- called once at load time it would go
+    stale on the very next filter click."""
+    assert re.search(r"function renderStats\(rows\)", js), (
+        "renderStats no longer takes the visible rows -- it's summarizing something else"
+    )
+    assert not re.search(r"renderStats\(state\.vehicles\)", js), (
+        "renderStats is being handed the whole board again instead of the filtered rows"
+    )
+    table = _function_source(js, "renderVehiclesTable")
+    assert "renderStats(rows)" in table, (
+        "renderStats isn't called from renderVehiclesTable, so the cards won't follow the filters"
+    )
+
+
+def test_board_card_elements_all_exist(declared_ids: set[str], js: str) -> None:
+    """renderStats writes into eight elements by id; a renamed card silently
+    stops updating and shows its placeholder markup forever."""
+    written = set(re.findall(r'[$]\("#(stat-[a-z-]+|vehicles-scope)"\)', _function_source(js, "renderStats")))
+    assert len(written) >= 5, f"renderStats only writes {written} -- did the cards move?"
+    missing = written - declared_ids
+    assert not missing, f"renderStats writes into ids index.html doesn't declare: {sorted(missing)}"
+
+
+def test_over_quote_rule_has_exactly_one_definition(js: str) -> None:
+    """The Over Quote card counts the cars whose Cost cell is red. Two copies
+    of the 10%-past-estimate rule is two chances for the count and the
+    coloring to disagree, which makes both of them useless."""
+    assert len(re.findall(r"quoted_cost \* 1\.1", js)) == 1, (
+        "the over-quote threshold appears more than once -- isOverQuote should be the only definition"
+    )
+    assert "isOverQuote(v) ? \"over-quote\"" in js, "costCellClass no longer defers to isOverQuote"
+
+
+def test_parts_filter_toggle_is_not_a_segment_chip(js: str, html: str) -> None:
+    """The 'Waiting on parts' toggle sits in the same row as the four
+    mutually exclusive segment chips and carries the same .chip class. Both
+    the radio-group wiring and the prefs loader select those chips by class,
+    so an unscoped selector either clears the toggle on every segment click
+    or lights it up on every page load. Both must ask for [data-filter]."""
+    assert 'id="vehicles-parts-filter"' in html, "the parts toggle is gone from the board toolbar"
+    assert 'data-filter' not in re.search(
+        r'<button[^>]*id="vehicles-parts-filter"[^>]*>', html
+    ).group(0), "the parts toggle grew a data-filter and will be treated as a fifth segment"
+    unscoped = re.findall(r'\$\$\("#view-vehicles \.filters \.chip"\)', js)
+    assert not unscoped, (
+        "a segment-chip selector isn't scoped to [data-filter] and will sweep up the parts toggle"
+    )
+    assert len(re.findall(r'\$\$\("#view-vehicles \.filters \.chip\[data-filter\]"\)', js)) >= 3, (
+        "the segment chips are no longer selected by [data-filter] in all three places"
+    )
+
+
+def test_board_view_preferences_round_trip_every_filter(js: str) -> None:
+    """Anything the toolbar can change has to survive a refresh, and has to
+    count toward whether Reset view is offered -- a filter that persists but
+    doesn't light up Reset leaves the advisor with a narrowed board and no
+    visible way back."""
+    save = _function_source(js, "saveVehicleViewPrefs")
+    load = _function_source(js, "loadVehicleViewPrefs")
+    for key in ("filter", "status", "sort", "partsOnly"):
+        assert key in save, f"{key} isn't persisted with the board's view preferences"
+    assert "partsOnly" in load, "the parts toggle is saved but never restored"
+    assert "state.vehiclePartsOnly" in save, "Reset view won't appear for a board filtered to parts-only"

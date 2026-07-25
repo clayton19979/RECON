@@ -115,28 +115,34 @@
           </div>
         </div>
 
-        <div class="stats">
+        <!-- These four describe exactly the rows in the table below, not the
+             whole lot: filter to Recon and every number here follows. The
+             scope line spells out what's included so the count can't be
+             misread as lot-wide. Cards 2 and 4 are the "go look at
+             something" cards and go warn/crit when they're non-zero. -->
+        <div class="stats stats-board">
           <div class="stat">
-            <div class="stat-label">In Recon</div>
-            <div class="stat-value" id="stat-recon-open">0</div>
-            <div class="stat-sub" id="stat-recon-actual">$0 in it</div>
+            <div class="stat-label">Vehicles</div>
+            <div class="stat-value" id="stat-veh-count">0</div>
+            <div class="stat-sub" id="stat-veh-split">no vehicles</div>
           </div>
           <div class="stat">
-            <div class="stat-label">Open We-Owe</div>
-            <div class="stat-value" id="stat-we-owe-open">0</div>
-            <div class="stat-sub" id="stat-we-owe-actual">$0 in it</div>
+            <div class="stat-label">Waiting on Parts</div>
+            <div class="stat-value" id="stat-parts-waiting">0</div>
+            <div class="stat-sub" id="stat-parts-waiting-sub">nothing on order</div>
           </div>
           <div class="stat">
-            <div class="stat-label">Cost (Open)</div>
+            <div class="stat-label">Cost</div>
             <div class="stat-value num" id="stat-actual-total">$0</div>
-            <div class="stat-sub">received parts + labor</div>
+            <div class="stat-sub" id="stat-quoted-sub">received parts + labor</div>
           </div>
           <div class="stat">
-            <div class="stat-label">Quoted (Open)</div>
-            <div class="stat-value num" id="stat-quoted-total">$0</div>
-            <div class="stat-sub">full estimate, not just received</div>
+            <div class="stat-label">Over Quote</div>
+            <div class="stat-value" id="stat-over-quote">0</div>
+            <div class="stat-sub" id="stat-over-quote-sub">none past estimate</div>
           </div>
         </div>
+        <p class="stats-scope" id="vehicles-scope">Every vehicle on the board.</p>
 
         <div class="filters">
           <button class="chip active" data-filter="">All</button>
@@ -149,6 +155,8 @@
               <option value="">Any</option>
             </select>
           </label>
+          <button type="button" class="chip chip-toggle" id="vehicles-parts-filter" aria-pressed="false"
+                  title="Show only vehicles with parts ordered but not yet received">Waiting on parts</button>
           <button type="button" class="btn btn-ghost btn-sm" id="vehicles-reset-view" hidden>Reset view</button>
           <div class="filters-gap"></div>
           <span class="filters-note" id="vehicles-count">0 vehicles</span>
@@ -172,8 +180,9 @@
                   <th class="sortable" data-sort-key="segment" aria-sort="none">Type <span class="sort-arrow"></span></th>
                   <th class="sortable" data-sort-key="status" aria-sort="none">Status <span class="sort-arrow"></span></th>
                   <th class="sortable" data-sort-key="tech" aria-sort="none">Technician <span class="sort-arrow"></span></th>
+                  <th class="sortable col-parts" data-sort-key="parts" aria-sort="none">Parts <span class="sort-arrow"></span></th>
                   <th class="num-col sortable" data-sort-key="age" aria-sort="none">Age <span class="sort-arrow"></span></th>
-                  <th class="num-col sortable" data-sort-key="quoted" aria-sort="none">Quoted <span class="sort-arrow"></span></th>
+                  <th class="num-col quoted-col sortable" data-sort-key="quoted" aria-sort="none">Quoted <span class="sort-arrow"></span></th>
                   <th class="num-col sortable" data-sort-key="cost" aria-sort="none">Cost <span class="sort-arrow"></span></th>
                 </tr>
               </thead>

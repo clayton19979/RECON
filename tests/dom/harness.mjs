@@ -73,13 +73,26 @@ export async function boot({ fetch: handler, expose = [] } = {}) {
 
   const fails = [];
   const ok = (cond, msg) => { if (!cond) fails.push(msg); };
+  const report = (label) => {
+    if (!fails.length) return false;
+    console.error(`FAIL (${label})\n` + fails.join("\n"));
+    return true;
+  };
   const finish = (label) => {
-    if (fails.length) {
-      console.error(`FAIL (${label})\n` + fails.join("\n"));
-      process.exit(1);
-    }
+    if (report(label)) process.exit(1);
     console.log(`PASS -- ${label}`);
   };
+
+  // Failures are only collected until finish() prints them, so a test that
+  // dies partway -- typically querySelector().click() on an element the
+  // broken code never rendered -- used to exit with nothing but a TypeError
+  // stack, hiding the half-dozen assertions that had already recorded
+  // exactly what went wrong. Print what we have, then the crash.
+  process.on("uncaughtException", (err) => {
+    report("crashed before finishing");
+    console.error(err && err.stack ? err.stack : err);
+    process.exit(1);
+  });
 
   return { dom, w, doc: w.document, fetchLog, settle, ok, fails, rejections, finish };
 }

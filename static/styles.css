@@ -225,7 +225,26 @@ button { font-family: inherit; }
 .stat-label { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--ink-faint); font-weight: 600; }
 .stat-value { font-family: "IBM Plex Mono", "Cascadia Mono", Consolas, monospace; font-size: 26px; font-weight: 600; margin-top: 6px; }
 .stat-value.warn { color: var(--warn); }
+.stat-value.crit { color: var(--crit); }
 .stat-sub { font-size: 11.5px; color: var(--ink-faint); margin-top: 3px; }
+
+/* The board's cards summarize the filtered rows below them, so their edges
+   are driven by what the number says rather than by position: a card that
+   means "go look at something" earns the color, and a zero is quiet.
+   The :nth-child rules above are position-based and would otherwise paint
+   card 2 we-owe-purple whatever it happens to be counting. */
+.stats-board .stat:nth-child(2),
+.stats-board .stat:nth-child(3),
+.stats-board .stat:nth-child(4) { border-top-color: var(--line); }
+.stats-board .stat:nth-child(1) { border-top-color: var(--accent); }
+.stats-board .stat:has(.stat-value.warn) { border-top-color: var(--warn); }
+.stats-board .stat:has(.stat-value.crit) { border-top-color: var(--crit); }
+
+/* Says in words which rows the cards above are counting -- "4 vehicles" is
+   only meaningful next to what's included. */
+.stats-scope {
+  margin: -12px 0 16px; font-size: 11.5px; color: var(--ink-faint);
+}
 
 /* ---------- filters ---------- */
 .filters { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; }
@@ -235,6 +254,21 @@ button { font-family: inherit; }
 }
 .chip:hover { border-color: var(--accent); }
 .chip.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+/* An independent on/off beside the mutually-exclusive segment chips. Same
+   shape so it belongs to the row, warn-colored when on so it doesn't read as
+   a fifth segment -- and a leading dot to say "toggle" while it's off. */
+.chip-toggle { display: inline-flex; align-items: center; gap: 7px; }
+.chip-toggle::before {
+  content: ""; width: 7px; height: 7px; border-radius: 50%;
+  background: var(--line); border: 1px solid var(--ink-faint);
+}
+.chip-toggle:hover { border-color: var(--warn); }
+.chip-toggle.active {
+  background: var(--warn-tint); border-color: var(--warn); color: var(--warn);
+}
+.chip-toggle.active::before { background: var(--warn); border-color: var(--warn); }
+
 .filters-gap { flex: 1; }
 .filters-note { font-size: 12px; color: var(--ink-faint); }
 .filters-search { width: 220px; padding: 6px 10px; font-size: 12.5px; }
@@ -335,6 +369,25 @@ table.sticky-head thead th { position: sticky; top: 0; z-index: 2; }
 
 .tech { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; }
 .tech-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); flex-shrink: 0; }
+
+/* ---------- parts-waiting badge ----------
+   Only rendered on rows that are actually waiting on something, so the
+   column is blank down most of a full board and the badges are the only
+   thing in it -- which is the point. Warn rather than crit: a part on order
+   is normal, it's just the answer to "why is this car still here". */
+.col-parts { width: 76px; }
+.parts-badge {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 2px 8px 2px 6px; border-radius: 999px;
+  background: var(--warn-tint); color: var(--warn);
+  font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums;
+  cursor: default;
+}
+.parts-badge svg {
+  width: 13px; height: 13px; flex-shrink: 0;
+  fill: none; stroke: currentColor; stroke-width: 1.8;
+  stroke-linecap: round; stroke-linejoin: round;
+}
 
 /* ---------- back link ---------- */
 .back-link {
@@ -1100,8 +1153,11 @@ input:focus-visible, select:focus-visible, textarea:focus-visible { outline: non
 }
 @media (max-width: 1000px) {
   /* Quoted is the first column to go: it's context for Cost, not the number
-     anyone scans for, and dropping it keeps Technician readable. */
-  .board-table th:nth-child(8), .board-table td:nth-child(8) { display: none; }
+     anyone scans for, and dropping it keeps Technician readable.
+     Targeted by class, not by nth-child(8): inserting the Parts column ahead
+     of it silently moved position 8 onto Quoted's neighbour, and a
+     position-based rule breaks again on the next column anyone adds. */
+  .board-table th.quoted-col, .board-table td.quoted-col { display: none; }
 }
 @media (max-width: 1100px) {
   /* The toolbar's two halves stop fitting on one line well before the chart

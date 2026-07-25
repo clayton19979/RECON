@@ -14,15 +14,28 @@ const veh = (over) => ({
   segment: "recon", recon_id: null, we_owe_id: null, stock_number: "", vehicle: "",
   vin: "", customer_name: "", status: "in_progress", status_bucket: "in_progress",
   purchase_price: 0, actual_cost: 0, quoted_cost: 0, technicians: [], updated_at: "2026-07-01T09:00:00",
-  age_days: 1, ...over,
+  age_days: 1, parts_pending: 0, parts_pending_value: 0, ...over,
 });
 
-// Deliberately not in any column's sorted order, so "did it sort?" can't pass
-// by accident on the server's own ordering.
+/* Deliberately not in any column's sorted order, so "did it sort?" can't pass
+   by accident on the server's own ordering.
+
+   Every summary number this fixture produces is checkable by hand, which is
+   the only way an assertion about a card is worth anything:
+
+     whole board  5 vehicles (3 recon / 2 we-owe), $2,940 of $3,000 quoted,
+                  2 waiting on parts worth $425, 1 over quote by $550
+     recon only   3 vehicles, $2,630 of $2,700, 1 waiting ($340), 1 over ($550)
+     we-owe only  2 vehicles, $310 of $300,     1 waiting ($85),  0 over
+
+   The Camry is the over-quote slack case on purpose: $310 against a $300
+   quote is past the estimate but inside the 10% band, so a card that counted
+   "actual > quoted" rather than the band would report 2 instead of 1 and
+   disagree with the one red cell in the table. */
 let board = [
-  veh({ recon_id: 1, stock_number: "B204", vehicle: "2019 Ford F-150", vin: "1FTEW1E5XKF", status: "in_progress", technicians: ["Dana"], age_days: 22, quoted_cost: 900, actual_cost: 1450 }),
+  veh({ recon_id: 1, stock_number: "B204", vehicle: "2019 Ford F-150", vin: "1FTEW1E5XKF", status: "in_progress", technicians: ["Dana"], age_days: 22, quoted_cost: 900, actual_cost: 1450, parts_pending: 2, parts_pending_value: 340 }),
   veh({ recon_id: 2, stock_number: "A118", vehicle: "2021 Honda Civic", vin: "2HGFC2F69MH", status: "estimate", technicians: [], age_days: 3, quoted_cost: 600, actual_cost: 0 }),
-  veh({ segment: "we_owe", we_owe_id: 5, stock_number: "", vehicle: "2017 Toyota Camry", customer_name: "R. Alvarez", status: "pending_approval", status_bucket: "in_progress", technicians: ["Chris", "Dana"], age_days: 41, quoted_cost: 300, actual_cost: 310 }),
+  veh({ segment: "we_owe", we_owe_id: 5, stock_number: "", vehicle: "2017 Toyota Camry", customer_name: "R. Alvarez", status: "pending_approval", status_bucket: "in_progress", technicians: ["Chris", "Dana"], age_days: 41, quoted_cost: 300, actual_cost: 310, parts_pending: 1, parts_pending_value: 85 }),
   veh({ recon_id: 3, stock_number: "C007", vehicle: "2015 Chevy Silverado", vin: "3GCUKREC0FG", status: "complete", status_bucket: "finished", technicians: ["Bo"], age_days: 9, quoted_cost: 1200, actual_cost: 1180 }),
   veh({ segment: "we_owe", we_owe_id: 6, stock_number: "D451", vehicle: "2020 Subaru Outback", customer_name: "T. Nguyen", status: "fulfilled", status_bucket: "finished", technicians: [], age_days: 15, quoted_cost: 0, actual_cost: 0 }),
 ];
@@ -30,7 +43,7 @@ let board = [
 const { w, doc, fetchLog, settle, ok, finish, rejections } = await boot({
   expose: ["state", "renderVehiclesTable", "loadVehiclesView", "visibleVehicles", "sortVehicleRows",
            "vehicleKey", "loadVehicleViewPrefs", "renderVehicleStatusOptions", "VEHICLE_SORTS",
-           "VEHICLE_PREFS_KEY", "resetVehicleView"],
+           "VEHICLE_PREFS_KEY", "resetVehicleView", "boardStats", "isOverQuote", "BOARD_COLUMNS"],
   fetch: async (url) => {
     if (url.startsWith("/api/vehicles-board")) return url.includes("archived=true") ? [] : board;
     if (/^\/api\/(recon\/vehicles|we-owe)\/\d+$/.test(url)) return { id: 1, archived_at: "", stock_number: "B204", vehicle: "2019 Ford F-150" };
@@ -55,6 +68,53 @@ ok(dataRows().every((tr) => tr.dataset.key && tr.dataset.sig),
    "rows are missing the data-key/data-sig the incremental renderer keys off");
 ok(doc.querySelector("#vehicles-bulk-bar").style.display === "none", "bulk bar is showing with nothing selected");
 
+/* ---------- summary cards ----------
+   The cards summarize the rows on screen. Unfiltered, that's the whole
+   board, so this run also pins the arithmetic before the filtering section
+   starts moving it around. */
+const card = (id) => doc.querySelector(`#${id}`).textContent.trim();
+const cards = () => ({
+  count: card("stat-veh-count"), split: card("stat-veh-split"),
+  parts: card("stat-parts-waiting"), partsSub: card("stat-parts-waiting-sub"),
+  cost: card("stat-actual-total"), costSub: card("stat-quoted-sub"),
+  over: card("stat-over-quote"), overSub: card("stat-over-quote-sub"),
+  scope: card("vehicles-scope"),
+});
+
+let c = cards();
+ok(c.count === "5", `Vehicles card reads "${c.count}", expected 5`);
+ok(c.split === "3 recon · 2 we-owe", `Vehicles sub reads "${c.split}"`);
+ok(c.cost === "$2,940.00", `Cost card reads "${c.cost}", expected $2,940.00`);
+ok(c.costSub === "of $3,000.00 quoted", `Cost sub reads "${c.costSub}"`);
+ok(c.parts === "2", `Waiting on Parts reads "${c.parts}", expected 2 vehicles`);
+ok(c.partsSub === "$425.00 on order", `parts sub reads "${c.partsSub}", expected $425.00`);
+ok(c.over === "1", `Over Quote reads "${c.over}", expected 1 (the Camry is inside the 10% band)`);
+ok(c.overSub === "$550.00 past estimate", `over-quote sub reads "${c.overSub}"`);
+ok(c.scope === "Every vehicle on the board.", `scope line reads "${c.scope}" on an unfiltered board`);
+
+// The card and the red cells are two renderings of one rule; if they can
+// disagree, neither is trustworthy.
+ok(Number(c.over) === dataRows().filter((tr) => tr.querySelector("td.over-quote")).length,
+   "the Over Quote card and the red Cost cells disagree about how many cars are past estimate");
+ok(w.boardStats(w.state.vehicles).overCount === w.state.vehicles.filter(w.isOverQuote).length,
+   "boardStats and isOverQuote disagree");
+
+// Tone: the two "go look at something" cards carry color, the neutral ones
+// must not (a permanently-orange card stops meaning anything).
+ok(doc.querySelector("#stat-parts-waiting").classList.contains("warn"), "a non-zero parts count isn't flagged");
+ok(doc.querySelector("#stat-over-quote").classList.contains("crit"), "a non-zero over-quote count isn't flagged");
+ok(!doc.querySelector("#stat-veh-count").classList.contains("warn"), "the plain Vehicles count is flagged");
+
+/* ---------- parts column ---------- */
+const partsCell = (key) => dataRows().find((tr) => tr.dataset.key === key).querySelector("td.col-parts");
+ok(partsCell("recon:1").textContent.trim() === "2", `parts badge reads "${partsCell("recon:1").textContent.trim()}", expected 2`);
+ok(/2 parts ordered, not yet received · \$340/.test(partsCell("recon:1").querySelector(".parts-badge").title),
+   `parts tooltip reads "${partsCell("recon:1").querySelector(".parts-badge").title}"`);
+ok(/^1 part ordered/.test(partsCell("we_owe:5").querySelector(".parts-badge").title),
+   "a single pending part is pluralised");
+ok(!partsCell("recon:2").querySelector(".parts-badge") && partsCell("recon:2").textContent.trim() === "",
+   "a car waiting on nothing still draws something in the Parts column");
+
 /* ---------- sorting ---------- */
 click(w, th("stock"));
 ok(stocks()[0] === "D451", `first click on Stock # should sort descending, got ${stocks().join(",")}`);
@@ -68,6 +128,10 @@ click(w, th("stock"));
 ok(!th("stock").classList.contains("sorted"), "a third click should clear the sort");
 ok(stocks()[0] === "B204", `clearing the sort should fall back to the server's order, got ${stocks().join(",")}`);
 
+click(w, th("parts"));
+ok(dataRows().slice(0, 2).map((tr) => tr.dataset.key).join(",") === "recon:1,we_owe:5",
+   `sorting by Parts descending should surface the two cars waiting on something, got ${dataRows().map((tr) => tr.dataset.key).join(",")}`);
+// no need to clear -- the next click sets a different sort key
 click(w, th("age"));
 ok(dataRows()[0].dataset.key === "we_owe:5", "sorting by Age descending should put the 41-day car first");
 click(w, th("cost"));
@@ -113,6 +177,31 @@ ok(dataRows().length === 2, `We-Owe filter should leave 2 rows, got ${dataRows()
 ok(chip("we_owe").classList.contains("active") && !chip("").classList.contains("active"),
    "the active chip didn't move");
 
+/* ---------- the cards follow the filter ----------
+   The bug this whole section exists for: the cards were computed from every
+   vehicle in state.vehicles while the table below them was filtered, so
+   filtering to We-Owe left "3 recon" on screen above two we-owe rows. */
+c = cards();
+ok(c.count === "2", `filtered to We-Owe the Vehicles card should read 2, got "${c.count}"`);
+ok(c.split === "0 recon · 2 we-owe", `Vehicles sub reads "${c.split}" with the board filtered to We-Owe`);
+ok(c.cost === "$310.00", `Cost card reads "${c.cost}" for the We-Owe rows, expected $310.00 (not the lot's $2,940.00)`);
+ok(c.costSub === "of $300.00 quoted", `Cost sub reads "${c.costSub}"`);
+ok(c.parts === "1" && c.partsSub === "$85.00 on order",
+   `parts card reads "${c.parts}" / "${c.partsSub}" for We-Owe, expected 1 / $85.00 on order`);
+ok(c.over === "0" && c.overSub === "none past estimate",
+   `over-quote reads "${c.over}" for We-Owe, where nothing is past estimate`);
+ok(!doc.querySelector("#stat-over-quote").classList.contains("crit"), "a zero over-quote count is still flagged");
+ok(c.scope === "Showing vehicles: we-owe.", `scope line reads "${c.scope}"`);
+
+chip("recon").click();
+c = cards();
+ok(c.count === "3" && c.cost === "$2,630.00" && c.costSub === "of $2,700.00 quoted",
+   `Recon cards read ${c.count} / ${c.cost} / ${c.costSub}, expected 3 / $2,630.00 / of $2,700.00 quoted`);
+ok(c.over === "1" && c.parts === "1" && c.partsSub === "$340.00 on order",
+   `Recon cards read over=${c.over} parts=${c.parts} (${c.partsSub})`);
+
+chip("we_owe").click();
+
 const statusSel = doc.querySelector("#vehicles-status-filter");
 ok([...statusSel.options].map((o) => o.value).includes("pending_approval"),
    "the status dropdown wasn't built from the statuses actually on the board");
@@ -151,6 +240,68 @@ await settle();
 ok(w.state.filter === "" && w.state.vehicleStatus === "" && !w.state.vehicleSort.key, "Reset view didn't clear the view");
 ok(dataRows().length === 5, `after reset the whole board should be back, got ${dataRows().length}`);
 ok(doc.querySelector("#vehicles-reset-view").hidden, "Reset view stayed visible on a clean view");
+
+/* ---------- "Waiting on parts" toggle ----------
+   An independent on/off sitting in the same row as the four mutually
+   exclusive segment chips, which is exactly the shape that goes wrong: it's
+   a .chip, so the radio-group wiring and the prefs loader both used to
+   collect it by selector and would either clear it on every segment click or
+   light it up on every page load. */
+const partsChip = doc.querySelector("#vehicles-parts-filter");
+ok(partsChip && !partsChip.classList.contains("active") && partsChip.getAttribute("aria-pressed") === "false",
+   "the parts toggle starts switched on");
+
+partsChip.click();
+ok(partsChip.classList.contains("active") && partsChip.getAttribute("aria-pressed") === "true",
+   "clicking the parts toggle didn't switch it on (or didn't update aria-pressed)");
+ok(dataRows().length === 2 && dataRows().map((tr) => tr.dataset.key).sort().join(",") === "recon:1,we_owe:5",
+   `the parts toggle should leave the 2 cars waiting on something, got ${dataRows().map((tr) => tr.dataset.key).join(",")}`);
+c = cards();
+ok(c.count === "2" && c.parts === "2" && c.cost === "$1,760.00",
+   `parts-only cards read ${c.count} / ${c.parts} / ${c.cost}, expected 2 / 2 / $1,760.00`);
+ok(c.scope === "Showing vehicles: waiting on parts.", `scope line reads "${c.scope}"`);
+
+// composes with the segment chips rather than replacing them
+chip("we_owe").click();
+ok(partsChip.classList.contains("active"),
+   "clicking a segment chip switched the parts toggle off -- it's being swept into the segment radio group");
+ok(dataRows().length === 1 && dataRows()[0].dataset.key === "we_owe:5",
+   `We-Owe + waiting on parts should compose to one row, got ${dataRows().length}`);
+ok(cards().scope === "Showing vehicles: we-owe · waiting on parts.", `scope line reads "${cards().scope}"`);
+
+// persisted, and restored without lighting up the wrong chip
+const savedParts = JSON.parse(w.localStorage.getItem("dao-vehicle-view"));
+ok(savedParts.partsOnly === true, `the parts toggle wasn't persisted: ${JSON.stringify(savedParts)}`);
+w.state.vehiclePartsOnly = false;
+partsChip.classList.remove("active");
+w.loadVehicleViewPrefs();
+ok(w.state.vehiclePartsOnly === true && partsChip.classList.contains("active"),
+   "the parts toggle wasn't restored from preferences");
+ok(chip("").classList.contains("active") === false,
+   "restoring preferences lit the All chip while the board is filtered to We-Owe");
+
+// its own empty state: "no recon vehicles" would be a lie about the lot when
+// what's true is that none of them are waiting on a part
+chip("recon").click();
+w.state.vehicles = board.map((v) => ({ ...v, parts_pending: 0, parts_pending_value: 0 }));
+w.renderVehiclesTable();
+const partsEmpty = body.querySelector("tr");
+ok(partsEmpty.textContent.includes("Nothing is waiting on parts"),
+   `parts-only empty state reads "${partsEmpty.textContent.trim().slice(0, 60)}"`);
+ok(Number(partsEmpty.querySelector("td").getAttribute("colspan")) === w.BOARD_COLUMNS,
+   "the parts empty row doesn't span the table");
+ok(cards().count === "0" && cards().cost === "$0.00" && cards().parts === "0",
+   "the cards kept the previous view's numbers over an empty board");
+ok(!doc.querySelector("#stat-parts-waiting").classList.contains("warn"), "an empty board still flags the parts card");
+body.querySelector('[data-empty-action="clear-parts"]').click();
+ok(!w.state.vehiclePartsOnly && !partsChip.classList.contains("active"),
+   "the empty state's Show all vehicles button didn't switch the toggle off");
+
+w.state.vehicles = board;
+w.resetVehicleView();
+await settle();
+ok(!w.state.vehiclePartsOnly && !partsChip.classList.contains("active"), "Reset view left the parts toggle on");
+ok(dataRows().length === 5, `after reset the whole board should be back, got ${dataRows().length}`);
 
 /* ---------- row clicks: open, toggle, shift-range ---------- */
 const rowFor = (key) => dataRows().find((tr) => tr.dataset.key === key);

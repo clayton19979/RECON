@@ -495,3 +495,148 @@ Next time, in rough priority order:
   5. Debounced input on the estimate's money/qty fields (carried over).
   6. Tab out of the last estimate row should add a new line (carried over).
   7. Persist the message log to localStorage, capped (carried over).
+
+================================================================================
+2026-07-25 -- The vehicles board tells the truth, and says what it's waiting on
+================================================================================
+
+Two things this run. The first was the item at the top of last run's list; the
+second is the answer to the question the board couldn't answer.
+
+1. The summary cards now describe the rows on screen.
+
+   They were computed from every in-progress vehicle in state.vehicles while
+   the table below them was filtered by segment, status and search. Filter to
+   We-Owe and the card still read "14 in recon"; search for one car and Cost
+   still showed the lot's total. Reports has described its own rows since it
+   was rebuilt, so the two screens gave different answers for the same
+   question, which makes both of them untrustworthy rather than one of them
+   wrong. renderStats() takes the visible rows now and is called from inside
+   renderVehiclesTable(), so it can't go stale on a filter click -- called
+   once at fetch time, which is where it used to live, it would.
+
+   The four cards changed with them, because "In Recon / Open We-Owe" as two
+   separate cards stops meaning anything once the board is filtered to one
+   segment:
+
+     Vehicles          count, split "3 recon · 2 we-owe"
+     Waiting on Parts  vehicles with a part on order, $ on order  (warn)
+     Cost              actual, sub "of $X quoted"  -- the comparison inline
+     Over Quote        cars past estimate, $ past  (crit)
+
+   Colour is driven by the number rather than by position, so a zero card is
+   quiet and an orange one always means go look at something. Underneath them
+   a scope line spells out what's included ("Showing vehicles: recon ·
+   waiting on parts.") so "2 vehicles" can't be read as the size of the lot.
+   It describes the filters, not the result, so it still explains an empty
+   board -- and deliberately doesn't agree its noun with the count, which
+   would produce "Showing vehicle: we-owe" whenever a filter left one car.
+
+   Over Quote counts exactly the red Cost cells: isOverQuote() is now the one
+   definition of the >10%-past-estimate rule. Reports had quietly grown a
+   second copy whose comment claimed it was the same rule as the board's --
+   it differed in whether it tested actual_cost, agreed with the board only
+   by accident, and now goes through the same predicate.
+
+2. "Waiting on parts" -- a new column, a filter, and a card.
+
+   The single most common reason a car sits on the lot, and until now the
+   only way to find out was to open the ticket and read the estimate.
+   cost_rollup() returns parts_pending / parts_pending_value: part lines with
+   status 'ordered', which is precisely "a vendor owes the shop this". Quoted
+   lines nobody has ordered aren't pending, labor is never pending, received
+   has landed, and returned lines drop out for the same reason they drop out
+   of cost. Voided ROs don't count, same as cost.
+
+   On screen: a count badge in a new Parts column (blank, not a dash, on the
+   rows that aren't waiting on anything -- on a full board most aren't, and
+   50 dashes would draw the eye to exactly the wrong rows), the dollar value
+   on the tooltip, a sortable column, and a "Waiting on parts" toggle chip
+   beside the segment chips. The toggle composes with them rather than
+   replacing them, and has its own empty state: with it on, "No recon
+   vehicles" would be a lie about the lot when what's true is that none of
+   them are waiting on a part -- which is good news and now reads as such.
+
+   That toggle is a .chip sitting in the same row as the four mutually
+   exclusive segment chips, which is the shape that goes wrong: the
+   radio-group wiring and the prefs loader both collected chips by class, so
+   an unscoped selector would clear it on every segment click and light it up
+   on every page load. All three selectors ask for [data-filter] now, and
+   there's a test that fails if any of them stops.
+
+Things found on the way:
+
+  * BOARD_COLUMNS. The loading skeleton's column count and the empty state's
+    colspan were separate literals; adding the Parts column made both wrong,
+    and the existing tests caught it, which is what they're for. One constant
+    now, with the test rewritten to hold *it* to the <thead> instead of
+    checking two hardcoded numbers that can drift apart from each other.
+
+  * A responsive rule hid board column nth-child(8) -- Quoted. Inserting
+    Parts ahead of it silently moved that rule onto Cost. Targeted by class
+    now, so it survives the next column anyone adds.
+
+  * The seed data never had a lot vehicle waiting on parts: the only two
+    'ordered' part lines were on a retail ticket, which has no recon or
+    we-owe vehicle and so never reaches the board. The feature was invisible
+    in the demo. R-1002 (mid-repair, "needs brakes and a windshield") now has
+    its parts on order, and the running-boards we-owe got the only live
+    ticket on that half of the board, so both segments show the column.
+
+  * tests/dom/harness.mjs collected failures until finish() printed them, so
+    a smoke test that died partway -- typically querySelector().click() on an
+    element the broken code never rendered -- exited with nothing but a
+    TypeError stack, hiding the half-dozen assertions that had already
+    recorded exactly what was wrong. It prints what it has on an uncaught
+    exception now. Two of this run's mutation tests were unreadable before
+    this and legible after.
+
+Tests: 183 -> 192, and everything new was mutation-tested.
+  * test_recon.py -- three cases walking a part through quoted -> ordered ->
+    received -> returned, plus voided ROs and the we-owe half of the board.
+    Mutations killed: counting quoted lines, counting labor, counting
+    returned lines, counting voided ROs. The labor mutation survived the
+    first draft (labor never reaches 'ordered' by the order-parts route) so
+    the test now sets it through the per-line status endpoint, which doesn't
+    look at kind.
+  * board_smoke.mjs -- fixture extended so every card is checkable by hand
+    (5 vehicles, $2,940 of $3,000, 2 waiting worth $425, 1 over by $550; the
+    Camry at $310 against $300 is the inside-the-10%-band case). Asserts the
+    cards follow segment/status/search, the Over Quote card equals the count
+    of red cells, badge rendering and pluralisation, the parts sort, and the
+    toggle's filtering, composition, persistence, restore and empty state.
+    Mutations killed: cards fed the whole board, the 10% band dropped, the
+    parts filter no-op'd, the toggle swept into the segment chips, the toggle
+    not persisted, the toggle not restored.
+  * test_static_assets.py -- five new checks pinning renderStats to the
+    visible rows, the card ids to index.html, the single over-quote rule,
+    [data-filter] on every segment selector, and the prefs round-trip. All
+    seven mutations caught.
+
+Suite green (192; the 3 jsdom cases run via node), server boots, and the
+board was rendered in jsdom against a real seeded database -- 8 rows, both
+badges on the right cars, toggle and cards behaving.
+
+Sandbox notes for next run: `uv` can't reach the Python build host here, but
+`pip install --break-system-packages fastapi uvicorn httpx pytest` works and
+the app runs fine on 3.10 despite requires-python >=3.12. jsdom: install to
+/tmp and point NODE_PATH at it; the repo's tests/dom/node_modules hangs on
+read over the mount. Background processes don't survive between shell calls,
+so start the server and drive it in the same call, and the full suite needs
+splitting across two calls to fit the timeout.
+
+Next time, in rough priority order:
+  1. The dashboard is still the one screen with no chart -- barChart() from
+     Reports would cover cost-by-status or aging buckets, and the board's new
+     boardStats() is the same shape the dashboard's tiles want. (Carried.)
+  2. Aging: age_days is time since acquisition, not since anything happened.
+     updated_at only moves when the vehicle record itself is patched, so a
+     "days idle" column built on it would say 37 days on a car the tech
+     touched yesterday. Doing this honestly means a real last-activity
+     timestamp -- max of the vehicle's own updated_at and its orders'
+     activity log -- which is a backend change worth its own run.
+  3. A/P and Cores/Returns still have no jsdom coverage; ~20 lines of fixture
+     each now that harness.mjs is doing the work. (Carried.)
+  4. Debounced input on the estimate's money/qty fields. (Carried.)
+  5. Tab out of the last estimate row should add a new line. (Carried.)
+  6. Persist the message log to localStorage, capped. (Carried.)

@@ -326,3 +326,129 @@ def test_cost_rollup_actual_vs_quoted(client):
     detail = client.get(f"/api/recon/vehicles/{vehicle['id']}").json()
     assert detail["total_cost"] == 70  # now fully landed
     assert detail["quoted_cost"] == 70
+
+
+def test_board_reports_parts_ordered_but_not_received(client):
+    """The board's Parts column and its "Waiting on parts" card both come
+    from parts_pending, which counts part lines a vendor owes the shop:
+    'ordered' and nothing else. A quoted line nobody has actually ordered
+    isn't something anyone is waiting on, labor is never pending, and a
+    received line has landed -- counting any of those would light up the
+    whole board and make the column mean nothing."""
+    vendor = client.post("/api/vendors", json={"name": "WorldPac"}).json()
+    vehicle = make_recon_vehicle(client, stock_number="R-7100")
+    order = make_recon_order(client, vehicle["id"])
+    estimate = save_estimate(
+        client,
+        order["id"],
+        [
+            {"kind": "part", "description": "Brake pads", "part_number": "BP-1", "quantity": 2, "unit_price": 10, "unit_cost": 15},
+            {"kind": "part", "description": "Rotors", "part_number": "RT-1", "quantity": 1, "unit_price": 30, "unit_cost": 40},
+            {"kind": "labor", "description": "Install", "quantity": 3, "unit_price": 50, "unit_cost": 50},
+        ],
+    )
+
+    def row():
+        board = client.get("/api/vehicles-board").json()
+        return next(r for r in board if r["recon_id"] == vehicle["id"])
+
+    # Quoted, not ordered: nobody is waiting on anything yet.
+    assert row()["parts_pending"] == 0
+    assert row()["parts_pending_value"] == 0
+
+    # Ordered: both part lines are outstanding, labor is not.
+    client.patch(f"/api/orders/{order['id']}/estimate/order-parts")
+    assert row()["parts_pending"] == 2
+    # 2 * 15 + 1 * 40 -- full ordered quantity at cost, not the received one
+    assert row()["parts_pending_value"] == 70
+
+    # order-parts only ever touches part lines, so labor never reaches
+    # 'ordered' by that route -- but the per-line status endpoint takes any
+    # line and doesn't look at its kind, so a labor line can carry the status.
+    # It's still not something a vendor owes the shop: without the kind='part'
+    # filter this would read 3 pending worth $220.
+    labor = next(i for i in estimate["items"] if i["kind"] == "labor")
+    assert client.patch(
+        f"/api/orders/{order['id']}/estimate/items/{labor['id']}/status", json={"status": "ordered"}
+    ).status_code == 200
+    assert row()["parts_pending"] == 2, "a labor line marked 'ordered' counted as a part on order"
+    assert row()["parts_pending_value"] == 70
+
+    # Receiving one line drops it out of the count.
+    pads = next(i for i in estimate["items"] if i["part_number"] == "BP-1")
+    res = client.post(
+        f"/api/orders/{order['id']}/estimate/receive-parts",
+        json={"item_ids": [pads["id"]], "vendor_id": vendor["id"], "invoice_number": "INV-77"},
+    )
+    assert res.status_code == 200, res.text
+    assert row()["parts_pending"] == 1
+    assert row()["parts_pending_value"] == 40
+
+
+def test_board_parts_pending_ignores_returned_and_voided(client):
+    """A line sent back to the vendor isn't something the shop is still
+    waiting on, and a voided RO's lines were never really ordered -- both
+    already drop out of cost, and both have to drop out of the count for the
+    same reason."""
+    vehicle = make_recon_vehicle(client, stock_number="R-7200")
+    kept = make_recon_order(client, vehicle["id"])
+    save_estimate(client, kept["id"], [
+        {"kind": "part", "description": "Filter", "part_number": "F-1", "quantity": 1, "unit_price": 9, "unit_cost": 9},
+    ])
+    client.patch(f"/api/orders/{kept['id']}/estimate/order-parts")
+
+    voided = make_recon_order(client, vehicle["id"], concern="Started by mistake")
+    estimate = save_estimate(client, voided["id"], [
+        {"kind": "part", "description": "Alternator", "part_number": "ALT-1", "quantity": 1, "unit_price": 300, "unit_cost": 300},
+    ])
+    client.patch(f"/api/orders/{voided['id']}/estimate/order-parts")
+
+    def row():
+        board = client.get("/api/vehicles-board").json()
+        return next(r for r in board if r["recon_id"] == vehicle["id"])
+
+    assert row()["parts_pending"] == 2, "both ordered lines should count before anything is voided"
+
+    res = client.post(f"/api/orders/{voided['id']}/void", json={"actor": "tester"})
+    assert res.status_code == 200, res.text
+    assert row()["parts_pending"] == 1, "a voided RO's ordered parts still count as pending"
+    assert row()["parts_pending_value"] == 9
+
+    # A returned line put back to 'ordered'. Only a *received* part can be
+    # returned, so this is the one route by which a returned line carries the
+    # ordered status: receive it, send it back to the vendor, then re-order a
+    # replacement against the same line. Without the part_returned guard the
+    # board would say the shop is waiting on a part it decided not to keep.
+    vendor = client.post("/api/vendors", json={"name": "WorldPac"}).json()
+    item_id = client.get(f"/api/orders/{kept['id']}").json()["estimate"]["items"][0]["id"]
+    assert client.post(
+        f"/api/orders/{kept['id']}/estimate/receive-parts",
+        json={"item_ids": [item_id], "vendor_id": vendor["id"], "invoice_number": "INV-9"},
+    ).status_code == 200
+    assert row()["parts_pending"] == 0, "a received part is not still pending"
+    assert client.patch(
+        f"/api/orders/{kept['id']}/estimate/items/{item_id}/part-return",
+        json={"returned": True, "actor": "tester"},
+    ).status_code == 200
+    assert client.patch(
+        f"/api/orders/{kept['id']}/estimate/items/{item_id}/status", json={"status": "ordered"}
+    ).status_code == 200
+    assert row()["parts_pending"] == 0, "a returned part put back to 'ordered' counts as pending"
+
+
+def test_we_owe_board_row_carries_parts_pending(client):
+    """Both halves of the board are one list on screen, so a field that only
+    exists on recon rows shows a blank column for every we-owe car."""
+    item = make_we_owe(client, description="Replace mirror")
+    order = client.post(
+        "/api/orders", json={"concern": "Mirror", "segment": "we_owe", "we_owe_id": item["id"]}
+    ).json()
+    save_estimate(client, order["id"], [
+        {"kind": "part", "description": "Mirror", "part_number": "M-1", "quantity": 1, "unit_price": 120, "unit_cost": 85},
+    ])
+    client.patch(f"/api/orders/{order['id']}/estimate/order-parts")
+
+    board = client.get("/api/vehicles-board", params={"segment": "we_owe"}).json()
+    row = next(r for r in board if r["we_owe_id"] == item["id"])
+    assert row["parts_pending"] == 1
+    assert row["parts_pending_value"] == 85

@@ -112,13 +112,23 @@ def cost_rollup(db: sqlite3.Connection, column: str, ref_id: int) -> dict:
     """Actual cost = what's really landed: labor/fees count in full the moment
     they're logged, but parts only count once received, and stop counting
     again once sent back to the vendor (part_returned). quoted_cost (full
-    quantity regardless of receipt) is returned alongside for comparison."""
+    quantity regardless of receipt) is returned alongside for comparison.
+
+    parts_pending counts part lines that have been ordered from a vendor but
+    haven't shown up yet (status='ordered'; 'received' means it landed,
+    'quoted' means nobody has actually ordered it). That's the single most
+    common reason a car sits on the lot doing nothing, and until now it was
+    only visible by opening the ticket -- see the board's Parts column.
+    Returned parts are excluded: a line sent back to the vendor isn't
+    something the shop is still waiting on."""
     rows = db.execute(
         f"""SELECT o.id, o.number, o.status, o.voided,
                coalesce(sum(CASE WHEN ei.kind='part' AND ei.part_returned=0 THEN ei.received_quantity*ei.unit_cost ELSE 0 END),0) parts_cost,
                coalesce(sum(CASE WHEN ei.kind='labor' THEN ei.quantity*ei.unit_cost ELSE 0 END),0) labor_cost,
                coalesce(sum(CASE WHEN ei.kind='fee'   THEN ei.quantity*ei.unit_cost ELSE 0 END),0) fee_cost,
-               coalesce(sum(ei.quantity*ei.unit_cost),0) quoted_cost
+               coalesce(sum(ei.quantity*ei.unit_cost),0) quoted_cost,
+               coalesce(sum(CASE WHEN ei.kind='part' AND ei.status='ordered' AND ei.part_returned=0 THEN 1 ELSE 0 END),0) parts_pending,
+               coalesce(sum(CASE WHEN ei.kind='part' AND ei.status='ordered' AND ei.part_returned=0 THEN ei.quantity*ei.unit_cost ELSE 0 END),0) parts_pending_value
            FROM orders o
            LEFT JOIN estimates e ON e.order_id=o.id
            LEFT JOIN estimate_items ei ON ei.estimate_id=e.id
@@ -140,6 +150,8 @@ def cost_rollup(db: sqlite3.Connection, column: str, ref_id: int) -> dict:
         "orders": orders,
         "total_cost": round(sum(o["total_cost"] for o in countable), 2),
         "quoted_cost": round(sum(o["quoted_cost"] for o in countable), 2),
+        "parts_pending": int(sum(o["parts_pending"] for o in countable)),
+        "parts_pending_value": round(sum(o["parts_pending_value"] for o in countable), 2),
     }
 
 
@@ -224,6 +236,8 @@ def vehicle_board_rows(db: sqlite3.Connection, start: str | None = None, end: st
                 "purchase_price": row["purchase_price"],
                 "actual_cost": rollup["total_cost"],
                 "quoted_cost": rollup["quoted_cost"],
+                "parts_pending": rollup["parts_pending"],
+                "parts_pending_value": rollup["parts_pending_value"],
                 "technicians": technician_names(db, order_ids),
                 "updated_at": row["updated_at"],
                 "age_days": age_days(row["created_at"]),
@@ -266,6 +280,8 @@ def vehicle_board_rows(db: sqlite3.Connection, start: str | None = None, end: st
                 "status_bucket": "finished" if row["status"] in ("fulfilled", "waived") else "in_progress",
                 "actual_cost": rollup["total_cost"],
                 "quoted_cost": rollup["quoted_cost"],
+                "parts_pending": rollup["parts_pending"],
+                "parts_pending_value": rollup["parts_pending_value"],
                 "customer_paid": customer_paid,
                 "net_cost": round(rollup["total_cost"] - customer_paid, 2),
                 "technicians": technician_names(db, order_ids),

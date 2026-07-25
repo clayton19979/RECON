@@ -275,10 +275,19 @@ function skeletonCards(count = 3) {
     </div>`).join("");
 }
 
+// Select, Stock #, Vehicle, Type, Status, Technician, Parts, Age, Quoted,
+// Cost. Two places have to agree with the board's <thead>: the loading
+// skeleton (a short one makes the table visibly jump a column wider the
+// moment data lands) and the empty state's colspan (a short one narrows the
+// "no vehicles" panel to part of the table). Both were separate literals and
+// both were wrong the moment the Parts column went in, so they share one
+// constant now. tests/test_static_assets.py holds it to the real <th> count.
+const BOARD_COLUMNS = 10;
+
 // Which containers to fill with a placeholder when a view is opened, and how
 // many columns each table has (so the skeleton lines up with its header).
 const VIEW_PLACEHOLDERS = {
-  vehicles:    [["#vehicles-table", 9]],
+  vehicles:    [["#vehicles-table", BOARD_COLUMNS]],
   // Only the table is listed: the summary cards and chart above it get a
   // shape-matched skeleton of their own (showReportPlaceholders), and a
   // failed load should say so once rather than three times down the page.
@@ -309,6 +318,7 @@ const state = {
   // an app restart, and a trip through a repair order and back.
   vehicleSort: { key: "", dir: "desc" }, // key "" == the server's own order (newest first)
   vehicleStatus: "",                      // "" == any status
+  vehiclePartsOnly: false,                // "Waiting on parts" toggle
   vehicleCursor: null,                    // key of the keyboard-focused row
   vehicleAnchor: null,                    // key of the last row clicked, for Shift+click ranges
   staff: [],
@@ -501,7 +511,11 @@ async function loadVehiclesView() {
     return;
   }
   state.vehicleSelection.clear();
-  renderStats();
+  // renderStats is driven from inside renderVehiclesTable now -- the cards
+  // describe the visible rows, so they have to be recomputed on every filter,
+  // search and sort, not just on fetch. Calling it here as well would render
+  // them once against a status filter that renderVehicleStatusOptions is
+  // about to drop for not existing in this segment.
   renderVehicleStatusOptions();
   renderVehiclesTable();
 }
@@ -523,29 +537,44 @@ function loadVehicleViewPrefs() {
   if (saved.sort && (saved.sort.key === "" || VEHICLE_SORTS[saved.sort.key])) {
     state.vehicleSort = { key: saved.sort.key, dir: saved.sort.dir === "asc" ? "asc" : "desc" };
   }
-  const chips = $$("#view-vehicles .filters .chip");
+  if (typeof saved.partsOnly === "boolean") state.vehiclePartsOnly = saved.partsOnly;
+  const chips = $$("#view-vehicles .filters .chip[data-filter]");
   chips.forEach((c) => c.classList.toggle("active", (c.dataset.filter || "") === state.filter));
   $("#vehicles-status-filter").value = state.vehicleStatus;
+  syncPartsFilterChip();
+}
+
+// The toggle's pressed state lives in two places the DOM cares about --
+// .active for the paint, aria-pressed for screen readers -- and is set from
+// state on load, on reset, and on click, so there's one writer for all three.
+function syncPartsFilterChip() {
+  const chip = $("#vehicles-parts-filter");
+  if (!chip) return;
+  chip.classList.toggle("active", state.vehiclePartsOnly);
+  chip.setAttribute("aria-pressed", state.vehiclePartsOnly ? "true" : "false");
 }
 
 function saveVehicleViewPrefs() {
   try {
     localStorage.setItem(VEHICLE_PREFS_KEY, JSON.stringify({
       filter: state.filter, status: state.vehicleStatus, sort: state.vehicleSort,
+      partsOnly: state.vehiclePartsOnly,
     }));
   } catch {}
-  const dirty = !!(state.filter || state.vehicleStatus || state.vehicleSort.key || state.search);
+  const dirty = !!(state.filter || state.vehicleStatus || state.vehicleSort.key || state.search || state.vehiclePartsOnly);
   $("#vehicles-reset-view").hidden = !dirty;
 }
 
 function resetVehicleView() {
   state.filter = "";
   state.vehicleStatus = "";
+  state.vehiclePartsOnly = false;
   state.vehicleSort = { key: "", dir: "desc" };
   state.search = "";
   $("#global-search").value = "";
   $("#vehicles-status-filter").value = "";
-  $$("#view-vehicles .filters .chip").forEach((c) => c.classList.toggle("active", !c.dataset.filter));
+  $$("#view-vehicles .filters .chip[data-filter]").forEach((c) => c.classList.toggle("active", !c.dataset.filter));
+  syncPartsFilterChip();
   loadVehiclesView();
 }
 
@@ -563,16 +592,85 @@ function renderVehicleStatusOptions() {
   sel.value = state.vehicleStatus;
 }
 
-function renderStats() {
-  const recon = state.vehicles.filter((v) => v.segment === "recon" && v.status_bucket === "in_progress");
-  const weOwe = state.vehicles.filter((v) => v.segment === "we_owe" && v.status_bucket === "in_progress");
-  const open = [...recon, ...weOwe];
-  $("#stat-recon-open").textContent = recon.length;
-  $("#stat-recon-actual").textContent = `${money(recon.reduce((s, v) => s + v.actual_cost, 0))} in it`;
-  $("#stat-we-owe-open").textContent = weOwe.length;
-  $("#stat-we-owe-actual").textContent = `${money(weOwe.reduce((s, v) => s + v.actual_cost, 0))} in it`;
-  $("#stat-actual-total").textContent = money(open.reduce((s, v) => s + v.actual_cost, 0));
-  $("#stat-quoted-total").textContent = money(open.reduce((s, v) => s + v.quoted_cost, 0));
+/* ---------- board summary cards ----------
+
+   These summarize the rows that are actually on screen, not the whole lot.
+
+   They used to do the opposite: the cards were hardcoded to every
+   in-progress vehicle in state.vehicles while the table below them was
+   filtered by segment, status and search. Filter the board to We-Owe and the
+   card still said "14 in recon"; search for one car and "Cost" still showed
+   the lot's total. Reports got this right (its cards describe its own rows)
+   and the two screens visibly disagreed about the same numbers, which makes
+   both of them untrustworthy. Same source as the table now -- one call to
+   visibleVehicles(), passed in so the table and the cards can't drift by
+   being computed at different moments.
+
+   The scope line under the cards says in words which rows are included, so
+   "4 vehicles" can't be misread as the size of the lot. */
+function boardStats(rows) {
+  const overs = rows.filter(isOverQuote);
+  return {
+    count: rows.length,
+    recon: rows.filter((v) => v.segment === "recon").length,
+    weOwe: rows.filter((v) => v.segment === "we_owe").length,
+    cost: rows.reduce((s, v) => s + (v.actual_cost || 0), 0),
+    quoted: rows.reduce((s, v) => s + (v.quoted_cost || 0), 0),
+    partsWaiting: rows.filter((v) => (v.parts_pending || 0) > 0).length,
+    partsValue: rows.reduce((s, v) => s + (v.parts_pending_value || 0), 0),
+    overCount: overs.length,
+    overAmount: overs.reduce((s, v) => s + (v.actual_cost - v.quoted_cost), 0),
+  };
+}
+
+function renderStats(rows) {
+  const s = boardStats(rows);
+  const setValue = (sel, text, tone) => {
+    const el = $(sel);
+    el.textContent = text;
+    el.classList.toggle("warn", tone === "warn");
+    el.classList.toggle("crit", tone === "crit");
+  };
+
+  setValue("#stat-veh-count", s.count);
+  $("#stat-veh-split").textContent = s.count
+    ? `${s.recon} recon · ${s.weOwe} we-owe`
+    : "no vehicles";
+
+  setValue("#stat-parts-waiting", s.partsWaiting, s.partsWaiting ? "warn" : null);
+  $("#stat-parts-waiting-sub").textContent = s.partsWaiting
+    ? `${money(s.partsValue)} on order`
+    : "nothing on order";
+
+  setValue("#stat-actual-total", money(s.cost));
+  $("#stat-quoted-sub").textContent = s.quoted
+    ? `of ${money(s.quoted)} quoted`
+    : "received parts + labor";
+
+  setValue("#stat-over-quote", s.overCount, s.overCount ? "crit" : null);
+  $("#stat-over-quote-sub").textContent = s.overCount
+    ? `${money(s.overAmount)} past estimate`
+    : "none past estimate";
+
+  $("#vehicles-scope").textContent = boardScopeLabel();
+}
+
+// Reads back the filters in the order the toolbar shows them. Deliberately
+// describes the filters rather than the result ("Recon, waiting on parts")
+// so it still explains an empty board, where there are no rows to describe --
+// and for the same reason the noun doesn't agree with the row count, which
+// would give "Showing vehicle: we-owe" whenever a filter happened to leave
+// exactly one car.
+function boardScopeLabel() {
+  const parts = [];
+  if (state.filter === "history") parts.push("archived to History");
+  else if (state.filter === "recon") parts.push("recon");
+  else if (state.filter === "we_owe") parts.push("we-owe");
+  if (state.vehicleStatus) parts.push(STATUS_LABEL[state.vehicleStatus] || state.vehicleStatus);
+  if (state.vehiclePartsOnly) parts.push("waiting on parts");
+  if (state.search) parts.push(`matching “${state.search}”`);
+  if (!parts.length) return "Every vehicle on the board.";
+  return `Showing vehicles: ${parts.join(" · ")}.`;
 }
 
 // Age severity: how long a car has actually been sitting is the natural
@@ -604,6 +702,17 @@ function vehiclesEmptyState() {
       title: "No vehicles match that search",
       hint: `Nothing matched "${state.search}". Searches cover stock number, VIN, customer name, and the vehicle description.`,
       actions: `<button type="button" class="btn btn-ghost btn-sm" data-empty-action="clear-search">Clear search</button>`,
+    };
+  }
+  // Checked before the segment cases: with the toggle on, "no recon
+  // vehicles" would be a lie about the lot when what's true is that none of
+  // them are waiting on a part -- which is good news, and reads as such.
+  if (state.vehiclePartsOnly) {
+    return {
+      icon: "check",
+      title: "Nothing is waiting on parts",
+      hint: "No vehicle in this view has a part that's been ordered from a vendor but hasn't arrived yet.",
+      actions: `<button type="button" class="btn btn-ghost btn-sm" data-empty-action="clear-parts">Show all vehicles</button>`,
     };
   }
   if (state.filter === "history") {
@@ -652,6 +761,7 @@ const VEHICLE_SORTS = {
   segment: { label: "Type", type: "text", value: (v) => (v.segment === "recon" ? "Recon" : "We-Owe") },
   status: { label: "Status", type: "text", value: (v) => STATUS_LABEL[v.status] || v.status || "" },
   tech: { label: "Technician", type: "text", value: (v) => v.technicians.join(", ") },
+  parts: { label: "Parts", type: "number", value: (v) => v.parts_pending || 0 },
   age: { label: "Age", type: "number", value: (v) => v.age_days },
   quoted: { label: "Quoted", type: "number", value: (v) => v.quoted_cost },
   cost: { label: "Cost", type: "number", value: (v) => v.actual_cost },
@@ -676,6 +786,7 @@ function visibleVehicles() {
   let rows = state.vehicles;
   if (state.filter && state.filter !== "history") rows = rows.filter((v) => v.segment === state.filter);
   if (state.vehicleStatus) rows = rows.filter((v) => v.status === state.vehicleStatus);
+  if (state.vehiclePartsOnly) rows = rows.filter((v) => (v.parts_pending || 0) > 0);
   if (state.search) {
     const q = state.search.toLowerCase();
     rows = rows.filter((v) =>
@@ -703,13 +814,39 @@ function renderVehicleSortHeaders() {
   });
 }
 
-// Cost against quote is the number the manager actually reads this board for,
-// so a car that's run past its estimate says so in the row rather than making
-// you open it and do the subtraction.
+/* Cost against quote is the number the manager actually reads this board for,
+   so a car that's run past its estimate says so in the row rather than making
+   you open it and do the subtraction.
+
+   One definition, used by the row's red Cost cell and by the Over Quote
+   summary card, so the card's count is always exactly the number of red cells
+   below it. 10% of slack, because a car finishing a few dollars over its
+   estimate is normal and flagging it would make the color meaningless. */
+function isOverQuote(v) {
+  return !!(v.quoted_cost && v.actual_cost && v.actual_cost > v.quoted_cost * 1.1);
+}
+
 function costCellClass(v) {
-  if (!v.quoted_cost || !v.actual_cost) return "";
-  if (v.actual_cost > v.quoted_cost * 1.1) return "over-quote";
-  return "";
+  return isOverQuote(v) ? "over-quote" : "";
+}
+
+/* "Waiting on parts" is the single most common reason a car sits, and until
+   now the only way to find out was to open the ticket and read the estimate.
+   A count rather than a yes/no, because one back-ordered bumper and nine
+   outstanding lines are very different situations, and the dollar value on
+   the tooltip answers the follow-up question without a click.
+
+   A blank cell, not a dash: on a full board most cars aren't waiting on
+   anything, and 50 dashes down the column would draw the eye to exactly the
+   rows that don't need it. */
+function partsCellHtml(v) {
+  const n = v.parts_pending || 0;
+  if (!n) return "";
+  const value = v.parts_pending_value ? ` · ${money(v.parts_pending_value)}` : "";
+  const label = `${n} part${n === 1 ? "" : "s"} ordered, not yet received${value}`;
+  return `<span class="parts-badge" title="${esc(label)}">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7h13v10H3zM16 10h3.5l1.5 3v4h-5z"/><circle cx="7" cy="18" r="1.6"/><circle cx="18" cy="18" r="1.6"/></svg>
+      ${n}</span>`;
 }
 
 function vehicleRowHtml(v) {
@@ -725,6 +862,7 @@ function vehicleRowHtml(v) {
       <td><span class="pill ${v.segment === "recon" ? "pill-recon" : "pill-weowe"}">${v.segment === "recon" ? "Recon" : "We-Owe"}</span></td>
       <td><span class="pill ${vehicleStatusPillClass(v)}">${esc(STATUS_LABEL[v.status] || v.status)}</span></td>
       <td>${v.technicians.length ? `<span class="tech"><span class="tech-dot"></span>${esc(v.technicians.join(", "))}</span>` : `<span class="muted-dash">—</span>`}</td>
+      <td class="col-parts">${partsCellHtml(v)}</td>
       <td class="num-col ${ageClass(v.age_days)}">${v.age_days}d</td>
       <td class="num-col quoted-col">${v.quoted_cost ? money(v.quoted_cost) : `<span class="muted-dash">—</span>`}</td>
       <td class="num-col ${over}"${over ? ` title="Over the estimate by ${money(v.actual_cost - v.quoted_cost)}"` : ""}>${money(v.actual_cost)}</td>`;
@@ -737,6 +875,7 @@ function vehicleRowSignature(v) {
   return [
     v.stock_number, v.vehicle, v.vin, v.customer_name, v.segment, v.status, v.status_bucket,
     v.technicians.join("|"), v.age_days, v.quoted_cost, v.actual_cost,
+    v.parts_pending, v.parts_pending_value,
     state.vehicleSelection.has(vehicleKey(v)) ? 1 : 0,
   ].join("");
 }
@@ -759,11 +898,12 @@ function renderVehiclesTable() {
   const scrollTop = scroller ? scroller.scrollTop : 0;
 
   $("#vehicles-count").textContent = `${rows.length} vehicle${rows.length === 1 ? "" : "s"}`;
+  renderStats(rows);
   renderVehicleSortHeaders();
   saveVehicleViewPrefs();
 
   if (!rows.length) {
-    body.innerHTML = emptyRow(9, vehiclesEmptyState());
+    body.innerHTML = emptyRow(BOARD_COLUMNS, vehiclesEmptyState());
     state.vehicleCursor = null;
     $("#vehicles-select-all").checked = false;
     $("#vehicles-select-all").indeterminate = false;
@@ -881,7 +1021,14 @@ function wireVehiclesView() {
   // filters -- so clicking any one of those also ran this handler, wiping the
   // active state off every chip on every screen and setting state.filter to
   // undefined. Every other view already scopes its chip wiring this way.
-  const vehicleChips = $$("#view-vehicles .filters .chip");
+  //
+  // [data-filter] narrows it further, to the four mutually-exclusive segment
+  // chips. The "Waiting on parts" toggle beside them is also a .chip but it's
+  // an independent on/off, so it must not be swept into the radio-group
+  // behaviour below (nor lit up by the prefs loader, which decides active
+  // state by comparing dataset.filter to state.filter -- undefined || ""
+  // would have matched the All case and lit the toggle on every load).
+  const vehicleChips = $$("#view-vehicles .filters .chip[data-filter]");
   vehicleChips.forEach((chip) => {
     chip.addEventListener("click", () => {
       vehicleChips.forEach((c) => c.classList.remove("active"));
@@ -896,6 +1043,14 @@ function wireVehiclesView() {
   $("#vehicles-status-filter").addEventListener("change", (e) => {
     state.vehicleStatus = e.target.value;
     state.vehicleCursor = null;
+    renderVehiclesTable();
+  });
+  // An independent toggle, not one of the segment chips: "Recon" and
+  // "Waiting on parts" are a question worth asking together.
+  $("#vehicles-parts-filter").addEventListener("click", () => {
+    state.vehiclePartsOnly = !state.vehiclePartsOnly;
+    state.vehicleCursor = null;
+    syncPartsFilterChip();
     renderVehiclesTable();
   });
   $("#vehicles-reset-view").addEventListener("click", () => resetVehicleView());
@@ -919,6 +1074,11 @@ function wireVehiclesView() {
       if (trigger.dataset.emptyAction === "clear-search") {
         state.search = "";
         $("#global-search").value = "";
+        renderVehiclesTable();
+      }
+      if (trigger.dataset.emptyAction === "clear-parts") {
+        state.vehiclePartsOnly = false;
+        syncPartsFilterChip();
         renderVehiclesTable();
       }
       return;
@@ -2902,7 +3062,12 @@ function renderReportStats(rows, shape) {
 
 // A car counts as over quote on the same >10% rule the board colors Cost
 // with, so the two screens can't disagree about which cars are running hot.
-const overQuote = (r) => r.quoted_cost > 0 && r.actual_cost > r.quoted_cost * 1.1;
+// This was a second copy of that rule, differing from the board's in whether
+// it tested actual_cost -- the two happened to agree, but only by accident,
+// and the comment above was claiming a guarantee nothing enforced. Report
+// rows carry the same quoted_cost/actual_cost fields board rows do, so they
+// go through the same predicate now.
+const overQuote = isOverQuote;
 
 function vehicleSpendStatCards(rows) {
   const recon = rows.filter((r) => r.segment === "recon").length;

@@ -4525,9 +4525,14 @@ function renderVendorSelect() {
   $("#ap-vendor").innerHTML = state.vendors.map((v) => `<option value="${esc(v.name)}">${esc(v.name)}</option>`).join("") || `<option value="">Add a vendor first</option>`;
 }
 function renderVendorChips() {
-  $("#vendor-list").innerHTML = state.vendors.map((v) => `<span class="vendor-chip clickable" data-id="${v.id}" title="Click to edit">${esc(v.name)}${v.account_number ? ` · ${esc(v.account_number)}` : ""}</span>`).join("") || emptyState({ icon: "invoice", title: "No vendors yet", hint: "Add the parts suppliers you buy from so invoices can be posted against them.", compact: true });
+  $("#vendor-list").innerHTML = state.vendors.map((v) => `<span class="vendor-chip clickable" data-id="${v.id}" role="button" tabindex="0" title="Click to edit">${esc(v.name)}${v.account_number ? ` · ${esc(v.account_number)}` : ""}</span>`).join("") || emptyState({ icon: "invoice", title: "No vendors yet", hint: "Add the parts suppliers you buy from so invoices can be posted against them.", compact: true });
   $$(".vendor-chip.clickable", $("#vendor-list")).forEach((chip) => {
     chip.addEventListener("click", () => openVendorForEdit(Number(chip.dataset.id)));
+    chip.addEventListener("keydown", (e) => {
+      if (e.key !== "Enter" && e.key !== " ") return;
+      e.preventDefault();
+      openVendorForEdit(Number(chip.dataset.id));
+    });
   });
 }
 
@@ -4573,7 +4578,7 @@ function renderApTable(invoices) {
     const clickable = refId != null && (a.segment === "recon" || a.segment === "we_owe");
     const voided = a.status === "voided";
     return `
-    <tr class="${clickable ? "clickable" : ""} ${voided ? "voided-row" : ""}" ${clickable ? `data-segment="${a.segment}" data-ref-id="${refId}" title="Open this vehicle"` : `title="Retail ticket — no vehicle page"`}>
+    <tr class="${clickable ? "clickable" : ""} ${voided ? "voided-row" : ""}" ${clickable ? `data-segment="${a.segment}" data-ref-id="${refId}" role="button" tabindex="0" title="Open this vehicle"` : `title="Retail ticket — no vehicle page"`}>
       <td>${esc(a.invoice_number)}</td>
       <td>${esc(fmtDate(a.posted_at))}</td>
       <td>${esc(a.vendor_name)}</td><td>${esc(a.po_number)}</td>
@@ -4587,6 +4592,7 @@ function renderApTable(invoices) {
         icon: "search",
         title: "No invoices match that search",
         hint: `Nothing matched "${state.apSearch}". Searches cover invoice number, vendor, PO, and vehicle.`,
+        actions: `<button type="button" class="btn btn-ghost btn-sm" data-empty-action="ap-clear-search">Clear search</button>`,
       }
     : {
         icon: "invoice",
@@ -4595,6 +4601,12 @@ function renderApTable(invoices) {
       });
   $$(".clickable", $("#ap-table")).forEach((row) => {
     row.addEventListener("click", () => openVehicleDetail(row.dataset.segment, Number(row.dataset.refId)));
+    // role="button" without keyboard activation is a lie to a screen reader.
+    row.addEventListener("keydown", (e) => {
+      if (e.key !== "Enter" && e.key !== " ") return;
+      e.preventDefault();
+      openVehicleDetail(row.dataset.segment, Number(row.dataset.refId));
+    });
   });
   $$(".ap-void", $("#ap-table")).forEach((btn) => {
     btn.addEventListener("click", async (e) => {
@@ -4671,7 +4683,7 @@ function addApLine() {
   const box = $("#ap-invoice-items");
   const tr = document.createElement("tr");
   tr.innerHTML = `
-    <td><select class="apl-kind"><option value="part">Part</option><option value="labor">Labor</option><option value="freight">Freight</option><option value="core_charge">Core charge</option><option value="shop_supplies">Shop supplies</option><option value="credit">Credit</option></select></td>
+    <td><select class="apl-kind"><option value="part">Part</option><option value="labor">Labor</option><option value="freight">Freight</option><option value="core_charge">Core charge</option><option value="shop_supplies">Shop supplies</option></select></td>
     <td><input class="apl-part" placeholder="Part #"></td>
     <td><input class="apl-desc" placeholder="Description"></td>
     <td><input class="apl-qty" type="number" min="0.01" step="0.01" value="1" style="width:70px"></td>
@@ -4748,6 +4760,12 @@ function wireAccountingView() {
   });
   $("#ap-search").addEventListener("input", (e) => {
     state.apSearch = e.target.value.trim();
+    renderApTable(filterApInvoices(state.apInvoices));
+  });
+  $("#ap-table").addEventListener("click", (e) => {
+    if (!e.target.closest('[data-empty-action="ap-clear-search"]')) return;
+    state.apSearch = "";
+    $("#ap-search").value = "";
     renderApTable(filterApInvoices(state.apInvoices));
   });
   $("#vendor-form").addEventListener("submit", async (e) => {

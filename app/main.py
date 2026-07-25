@@ -58,16 +58,52 @@ DEFAULT_DB = Path(os.getenv("DISCOUNT_AUTO_OPS_DB", DATA_ROOT / "data" / "shop.d
 DEFAULT_BACKUPS_DIR = Path(os.getenv("DISCOUNT_AUTO_OPS_BACKUPS_DIR", DATA_ROOT / "backups"))
 
 
+_US_STATE_ABBREV = {
+    "alabama": "AL", "alaska": "AK", "arizona": "AZ", "arkansas": "AR", "california": "CA",
+    "colorado": "CO", "connecticut": "CT", "delaware": "DE", "district of columbia": "DC",
+    "florida": "FL", "georgia": "GA", "hawaii": "HI", "idaho": "ID", "illinois": "IL",
+    "indiana": "IN", "iowa": "IA", "kansas": "KS", "kentucky": "KY", "louisiana": "LA",
+    "maine": "ME", "maryland": "MD", "massachusetts": "MA", "michigan": "MI", "minnesota": "MN",
+    "mississippi": "MS", "missouri": "MO", "montana": "MT", "nebraska": "NE", "nevada": "NV",
+    "new hampshire": "NH", "new jersey": "NJ", "new mexico": "NM", "new york": "NY",
+    "north carolina": "NC", "north dakota": "ND", "ohio": "OH", "oklahoma": "OK", "oregon": "OR",
+    "pennsylvania": "PA", "rhode island": "RI", "south carolina": "SC", "south dakota": "SD",
+    "tennessee": "TN", "texas": "TX", "utah": "UT", "vermont": "VT", "virginia": "VA",
+    "washington": "WA", "west virginia": "WV", "wisconsin": "WI", "wyoming": "WY",
+}
+
+
+def _state_abbrev(state: str) -> str:
+    """Geocoders return the full state name ('Indiana'); the form field holds
+    the two-letter code. Pass through anything already short (a code, or a
+    name we don't recognize) unchanged."""
+    if not state:
+        return ""
+    if len(state) == 2:
+        return state.upper()
+    return _US_STATE_ABBREV.get(state.strip().lower(), state)
+
+
 class CustomerIn(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     phone: str = ""
     email: str = ""
+    address_line1: str = ""
+    address_line2: str = ""
+    city: str = ""
+    state: str = ""
+    postal_code: str = ""
 
 
 class CustomerPatch(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=120)
     phone: str | None = None
     email: str | None = None
+    address_line1: str | None = None
+    address_line2: str | None = None
+    city: str | None = None
+    state: str | None = None
+    postal_code: str | None = None
 
 
 class VehicleIn(BaseModel):
@@ -215,7 +251,12 @@ def create_app(db_path: Path = DEFAULT_DB, backups_dir: Path = DEFAULT_BACKUPS_D
     @app.post("/api/customers", status_code=201)
     def create_customer(item: CustomerIn):
         with connect() as db:
-            cur = db.execute("INSERT INTO customers(name,phone,email,created_at) VALUES(?,?,?,?)", (item.name.strip(), item.phone.strip(), item.email.strip(), now()))
+            cur = db.execute(
+                "INSERT INTO customers(name,phone,email,address_line1,address_line2,city,state,postal_code,created_at) VALUES(?,?,?,?,?,?,?,?,?)",
+                (item.name.strip(), item.phone.strip(), item.email.strip(),
+                 item.address_line1.strip(), item.address_line2.strip(), item.city.strip(),
+                 item.state.strip(), item.postal_code.strip(), now()),
+            )
             return rowdict(db.execute("SELECT * FROM customers WHERE id=?", (cur.lastrowid,)).fetchone())
 
     @app.patch("/api/customers/{customer_id}")
@@ -237,10 +278,67 @@ def create_app(db_path: Path = DEFAULT_DB, backups_dir: Path = DEFAULT_BACKUPS_D
             if item.email is not None:
                 fields.append("email=?")
                 params.append(item.email.strip())
+            for column, value in (
+                ("address_line1", item.address_line1),
+                ("address_line2", item.address_line2),
+                ("city", item.city),
+                ("state", item.state),
+                ("postal_code", item.postal_code),
+            ):
+                if value is not None:
+                    fields.append(f"{column}=?")
+                    params.append(value.strip())
             if fields:
                 params.append(customer_id)
                 db.execute(f"UPDATE customers SET {','.join(fields)} WHERE id=?", params)
             return rowdict(db.execute("SELECT * FROM customers WHERE id=?", (customer_id,)).fetchone())
+
+    @app.get("/api/address-suggest")
+    def address_suggest(q: str = ""):
+        """As-you-type address autocomplete for the customer editor.
+
+        Proxied server-side (rather than called from the browser) so no API
+        key is ever exposed and there's no CORS to fight. Photon is a free,
+        keyless typeahead geocoder over OpenStreetMap data -- swap the URL/
+        parser here for Google Places or the Census geocoder if desired.
+
+        Results are biased toward the shop's area (Merrillville, IN) and
+        filtered to US addresses. Anything that isn't a clean win -- no
+        internet, a slow provider, a bad response -- degrades to an empty
+        list so the structured fields keep working as plain manual entry."""
+        query = q.strip()
+        if len(query) < 3:
+            return []
+        try:
+            resp = httpx.get(
+                "https://photon.komoot.io/api/",
+                params={"q": query, "limit": 5, "lang": "en", "lat": 41.4931, "lon": -87.3328},
+                timeout=3.0,
+            )
+            resp.raise_for_status()
+            features = resp.json().get("features", [])
+        except (httpx.HTTPError, ValueError):
+            return []
+        suggestions = []
+        for feature in features:
+            p = feature.get("properties", {})
+            if p.get("countrycode") not in (None, "US"):
+                continue
+            line1 = " ".join(part for part in (p.get("housenumber"), p.get("street") or p.get("name")) if part).strip()
+            city = p.get("city") or p.get("town") or p.get("village") or p.get("county") or ""
+            state = p.get("state") or ""
+            postal = p.get("postcode") or ""
+            if not line1 and not city:
+                continue
+            label = ", ".join(part for part in (line1, city, " ".join(x for x in (state, postal) if x)) if part)
+            suggestions.append({
+                "label": label,
+                "line1": line1,
+                "city": city,
+                "state": _state_abbrev(state),
+                "postal_code": postal,
+            })
+        return suggestions
 
     @app.get("/api/vehicles")
     def list_vehicles():

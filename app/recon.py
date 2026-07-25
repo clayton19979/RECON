@@ -412,6 +412,8 @@ def build_recon_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
     def we_owe_row(db: sqlite3.Connection, we_owe_id: int) -> sqlite3.Row:
         row = db.execute(
             """SELECT w.*, c.name customer_name, c.phone customer_phone, c.email customer_email,
+                      c.address_line1 customer_address_line1, c.address_line2 customer_address_line2,
+                      c.city customer_city, c.state customer_state, c.postal_code customer_postal_code,
                       v.year, v.make, v.model, v.vin, v.mileage, v.trim, v.engine, v.color
                FROM we_owe_items w JOIN customers c ON c.id=w.customer_id JOIN vehicles v ON v.id=w.vehicle_id
                WHERE w.id=?""",

@@ -17,6 +17,11 @@ CREATE TABLE IF NOT EXISTS customers (
   name TEXT NOT NULL,
   phone TEXT NOT NULL DEFAULT '',
   email TEXT NOT NULL DEFAULT '',
+  address_line1 TEXT NOT NULL DEFAULT '',
+  address_line2 TEXT NOT NULL DEFAULT '',
+  city TEXT NOT NULL DEFAULT '',
+  state TEXT NOT NULL DEFAULT '',
+  postal_code TEXT NOT NULL DEFAULT '',
   is_shop_owned INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL
 );
@@ -454,6 +459,14 @@ def _migrate(db: sqlite3.Connection) -> None:
     # are relabeled "manual" so a future re-save of that estimate doesn't
     # fail validation on a value the API no longer accepts.
     db.execute("UPDATE estimate_items SET source='manual' WHERE source='partstech'")
+
+    # A we-owe customer is a real person with a mailing address, not just a
+    # name and phone -- these columns were added after the first releases, so
+    # live databases need them backfilled in place with empty defaults.
+    customer_columns = {row[1] for row in db.execute("PRAGMA table_info(customers)")}
+    for column in ("address_line1", "address_line2", "city", "state", "postal_code"):
+        if column not in customer_columns:
+            db.execute(f"ALTER TABLE customers ADD COLUMN {column} TEXT NOT NULL DEFAULT ''")
 
 
 def init_db(path: Path) -> None:

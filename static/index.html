@@ -364,10 +364,17 @@
               <div class="kv-list" id="vd-vehicle-info-summary"></div>
             </div>
 
+            <div class="card" id="vd-customer-info-card" style="display:none">
+              <div class="card-head">
+                <p class="section-eyebrow" style="margin:0">Customer Info</p>
+                <button class="btn btn-ghost btn-sm" id="vd-edit-customer">Edit Customer</button>
+              </div>
+              <div class="kv-list" id="vd-customer-info-summary"></div>
+            </div>
+
             <div class="card" id="vd-we-owe-status-card" style="display:none">
               <div class="card-head">
                 <p class="section-eyebrow" style="margin:0">We-Owe</p>
-                <button class="btn btn-ghost btn-sm" id="vd-edit-customer">Edit Customer</button>
               </div>
               <div style="padding:14px 16px">
                 <label>Description<input id="vd-we-owe-description"></label>
@@ -995,8 +1002,21 @@
     </div>
     <div class="modal-body">
       <label>Name<input id="customer-edit-name" required></label>
-      <label>Phone<input id="customer-edit-phone"></label>
-      <label>Email<input id="customer-edit-email" type="email"></label>
+      <div class="form-row">
+        <label>Phone<input id="customer-edit-phone" type="tel" inputmode="tel" autocomplete="off"></label>
+        <label>Email<input id="customer-edit-email" type="email"></label>
+      </div>
+      <p class="section-eyebrow" style="margin:6px 0 2px">Address</p>
+      <div class="addr-autocomplete">
+        <label>Street<input id="customer-edit-address1" autocomplete="off" placeholder="Start typing an address…"></label>
+        <div class="addr-suggestions" id="customer-edit-address-suggestions" hidden></div>
+      </div>
+      <label>Apt / Unit<input id="customer-edit-address2" autocomplete="off"></label>
+      <div class="form-row">
+        <label style="flex:2">City<input id="customer-edit-city" autocomplete="off"></label>
+        <label style="flex:1">State<input id="customer-edit-state" maxlength="2" autocomplete="off"></label>
+        <label style="flex:1">ZIP<input id="customer-edit-postal" inputmode="numeric" autocomplete="off"></label>
+      </div>
     </div>
     <div class="modal-actions">
       <button class="btn btn-ghost" formnovalidate type="button" id="customer-edit-cancel-2">Cancel</button>

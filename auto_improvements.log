@@ -1,0 +1,82 @@
+RECON — automated improvement log
+=================================
+One entry per scheduled run: what changed, and what's worth picking up next.
+
+
+2026-07-24 — Empty states, loading skeletons, responsive shell, line-ending fix
+------------------------------------------------------------------------------
+First automated run, so it started by clearing two things that would have
+taxed every run after it.
+
+Housekeeping first (two separate commits, kept apart from the feature work):
+  * Checkpointed pre-existing uncommitted work found in the tree — Backup
+    promoted from a modal to a full rail view, tray master/client discovery,
+    Chrome/Edge app-mode window — so there was a rollback point before
+    touching anything.
+  * Added .gitattributes and normalized static/ to LF. The four static files
+    were saved CRLF against LF-stored blobs, so each one diffed as a total
+    rewrite: app.js showed ~5,900 changed lines for ~115 lines of real edits.
+    This run's feature diff is 368 lines and actually reviewable as a result.
+    Also un-ignored auto_improvements.log, which the blanket *.log rule in
+    .gitignore was silently swallowing.
+
+Bug fixed:
+  * wireVehiclesView() bound its filter chips with the global selector
+    ".filters .chip", which matched every chip in the app — the A/P date
+    ranges, cores, returns, and task filters. Clicking any of those also ran
+    the vehicles handler, wiping the active state off every chip on every
+    screen and setting state.filter to undefined. Now scoped to
+    "#view-vehicles .filters .chip", matching how every other view already
+    did it.
+
+UI work:
+  * Empty states: one emptyState()/emptyRow() component replaced ~14 hand-
+    rolled inline-styled one-liners. Each list now distinguishes "nothing
+    added yet" (with a button that starts the thing) from "your search or
+    filter hid it all" (with a way to clear it) instead of a flat "No
+    vehicles match." Covers vehicles, A/P, cores, returns, staff, backups,
+    tasks, suggestions, vendors, notes, activity, deposits, estimate lines,
+    and report output. Failed loads render in the critical colour so they
+    aren't mistaken for an ordinary empty list.
+  * Loading skeletons: showView() now paints shimmer rows before the fetch
+    starts. Previously the old view's rows sat on screen until the request
+    resolved, so the app looked like it had ignored the click.
+  * Responsive: the shell was a fixed 236px rail and a hardcoded 4-column
+    stats grid. Added breakpoints — stats reflow at 1240/700, the rail
+    narrows at 1100 and collapses to an icon strip at 900, filters and topbar
+    wrap. Matters more than it looks like it does now that the tray opens the
+    UI in a resizable app-mode window.
+  * Focus rings via :focus-visible (buttons, chips, rail items and rows had
+    none — keyboard nav was invisible), themed scrollbars, and the topbar
+    shows the shop name again via the .shop-name rule that had been sitting
+    in the stylesheet unused. Dropped the dead .shop-acronym rule.
+
+Tests: added tests/test_static_assets.py (5 tests) — cross-checks that every
+$("#id") in app.js resolves to an element in index.html (259 references
+checked), that rail buttons point at views that exist, that referenced
+/assets/ files are present, that no id is declared twice, and that new empty
+states go through the shared component. There's no build step for this
+front-end, so nothing else catches a renamed element; a dead selector just
+silently returns null. All five were mutation-tested to confirm they fail
+when the thing they check is broken.
+
+Suite: 155 -> 160 passing. Server boots clean; /, /assets/*, /api/health and
+/api/dashboard all verified over real HTTP.
+
+Next time, in rough priority order:
+  1. The vehicle detail page is the densest screen and still the least
+     polished — the parts/labor grid is an 11-column CSS grid with hardcoded
+     fr units that will overflow badly under ~1100px, where the rest of the
+     app now reflows. It needs a real responsive treatment or a horizontal
+     scroll container.
+  2. renderEstimate() and friends re-bind every row's listeners on every
+     render. Event delegation (as now used for the empty-state buttons)
+     would cut a lot of that and fix the subtle focus-loss on re-render.
+  3. No client-side error boundary: a throw inside a render function leaves
+     a half-drawn screen with no message. A try/catch at the view level that
+     renders the error empty-state variant would make failures legible.
+  4. Toasts are the only feedback channel and they auto-dismiss at 3.2s —
+     destructive actions (void, delete, restore) deserve a confirm pattern
+     better than window.confirm().
+  5. Consider a real front-end smoke test (Playwright) — the static checks
+     added this run catch dead selectors but nothing exercises a click path.

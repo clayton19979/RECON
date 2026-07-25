@@ -86,6 +86,89 @@ function relativeTime(value) {
   return `${days} day${days === 1 ? "" : "s"} ago`;
 }
 
+/* ---------- empty states ----------
+   One component for every "there's nothing to show" case, so the wording and
+   spacing stay consistent instead of each call site inventing its own inline
+   style. The distinction that matters to someone using this is "nothing has
+   been added yet" (here's how to add one) versus "your filter hid it all"
+   (here's how to clear it), so callers are expected to pass different copy
+   for the two rather than a single generic "No results". */
+const EMPTY_ICONS = {
+  search: `<circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/>`,
+  vehicle: `<path d="M3 12l2-8h14l2 8M3 12v7a1 1 0 001 1h2a1 1 0 001-1v-2h10v2a1 1 0 001 1h2a1 1 0 001-1v-7M3 12h18M7 16h.01M17 16h.01"/>`,
+  invoice: `<path d="M4 19V5a2 2 0 012-2h9l5 5v11a2 2 0 01-2 2H6a2 2 0 01-2-2z"/><path d="M14 3v5h5M9 13h6M9 17h6"/>`,
+  core: `<path d="M17 2l4 4-4 4M3 11V9a4 4 0 014-4h14M7 22l-4-4 4-4M21 13v2a4 4 0 01-4 4H3"/>`,
+  staff: `<circle cx="12" cy="8" r="3.4"/><path d="M4.5 20c1-3.6 4-5.6 7.5-5.6s6.5 2 7.5 5.6"/>`,
+  task: `<path d="M9 11l2.5 2.5L16 9"/><rect x="3" y="4" width="18" height="16" rx="2"/>`,
+  idea: `<path d="M9 18h6M10 22h4M12 2a7 7 0 00-4 12.7c.6.5 1 1.3 1 2.3h6c0-1 .4-1.8 1-2.3A7 7 0 0012 2z"/>`,
+  archive: `<rect x="3" y="4" width="18" height="4" rx="1"/><path d="M5 8v11a1 1 0 001 1h12a1 1 0 001-1V8M10 12h4"/>`,
+  backup: `<path d="M12 4v12m0 0l-4-4m4 4l4-4M4 20h16"/>`,
+  check: `<circle cx="12" cy="12" r="9"/><path d="M8.5 12.5l2.5 2.5 4.5-5"/>`,
+};
+
+function emptyState({ icon = "search", title, hint = "", actions = "", compact = false, tone = "" }) {
+  const classes = ["empty-state", compact ? "compact" : "", tone === "error" ? "error" : ""].filter(Boolean).join(" ");
+  return `<div class="${classes}">
+    <div class="empty-state-icon"><svg viewBox="0 0 24 24">${EMPTY_ICONS[icon] || EMPTY_ICONS.search}</svg></div>
+    <div class="empty-state-title">${esc(title)}</div>
+    ${hint ? `<div class="empty-state-hint">${esc(hint)}</div>` : ""}
+    ${actions ? `<div class="empty-state-actions">${actions}</div>` : ""}
+  </div>`;
+}
+
+// Same thing, wrapped so it can sit inside a <tbody> without breaking the
+// table's column layout.
+function emptyRow(colspan, opts) {
+  return `<tr class="empty-row"><td class="empty-cell" colspan="${colspan}">${emptyState(opts)}</td></tr>`;
+}
+
+/* ---------- loading skeletons ----------
+   Painted synchronously before a view's fetch starts, so switching views
+   never leaves the previous screen's rows on display while the new data is
+   still in flight. Widths vary per cell so it reads as content rather than a
+   progress bar; the sequence is deterministic (no Math.random) so a re-render
+   doesn't visibly reshuffle. */
+const SKELETON_WIDTHS = [62, 84, 45, 72, 91, 54, 68, 79, 58, 88];
+
+function skeletonRows(cols, rows = 5) {
+  let html = "";
+  for (let r = 0; r < rows; r++) {
+    html += `<tr class="skeleton-row" aria-hidden="true">`;
+    for (let c = 0; c < cols; c++) {
+      html += `<td><div class="skeleton-line" style="width:${SKELETON_WIDTHS[(r * cols + c) % SKELETON_WIDTHS.length]}%"></div></td>`;
+    }
+    html += `</tr>`;
+  }
+  return html;
+}
+
+function skeletonCards(count = 3) {
+  return Array.from({ length: count }, (_, i) => `
+    <div class="skeleton-card" aria-hidden="true">
+      <div class="skeleton-line" style="width:${SKELETON_WIDTHS[i % SKELETON_WIDTHS.length]}%"></div>
+      <div class="skeleton-line" style="width:28%;height:8px;margin-top:11px"></div>
+    </div>`).join("");
+}
+
+// Which containers to fill with a placeholder when a view is opened, and how
+// many columns each table has (so the skeleton lines up with its header).
+const VIEW_PLACEHOLDERS = {
+  vehicles:    [["#vehicles-table", 8]],
+  accounting:  [["#ap-table", 7]],
+  cores:       [["#cores-table", 6], ["#returns-table", 7]],
+  staff:       [["#staff-table", 4]],
+  backup:      [["#backup-table", 4]],
+  tasks:       [["#tasks-list", 0]],
+  suggestions: [["#suggestions-list", 0]],
+};
+
+function showPlaceholders(viewName) {
+  for (const [selector, cols] of VIEW_PLACEHOLDERS[viewName] || []) {
+    const el = $(selector);
+    if (el) el.innerHTML = cols > 0 ? skeletonRows(cols) : skeletonCards();
+  }
+}
+
 /* ---------- state ---------- */
 const state = {
   vehicles: [],
@@ -156,6 +239,9 @@ const KIND_GROUP_LABEL = { part: "Parts", labor: "Labor", fee: "Fees" };
 function showView(name) {
   $$(".view").forEach((v) => v.classList.toggle("active", v.id === `view-${name}`));
   $$(".rail-item").forEach((b) => b.classList.toggle("active", b.dataset.view === name));
+  // Paint placeholders before kicking off the fetch -- otherwise the old
+  // view's rows stay on screen until it resolves.
+  showPlaceholders(name);
   if (name === "vehicles") loadVehiclesView();
   if (name === "accounting") loadAccountingView();
   if (name === "cores") loadCoresView();
@@ -238,6 +324,50 @@ function vehicleStatusPillClass(v) {
   return v.segment === "recon" ? (STATUS_PILL_CLASS[v.status] || "pill-progress") : (v.status_bucket === "finished" ? "pill-done" : (STATUS_PILL_CLASS[v.status] || "pill-progress"));
 }
 
+// "Nothing here" and "your filter hid everything" are different problems with
+// different fixes, so they get different copy and different buttons rather
+// than one generic "No vehicles match."
+function vehiclesEmptyState() {
+  if (state.search) {
+    return {
+      icon: "search",
+      title: "No vehicles match that search",
+      hint: `Nothing matched "${state.search}". Searches cover stock number, VIN, customer name, and the vehicle description.`,
+      actions: `<button type="button" class="btn btn-ghost btn-sm" data-empty-action="clear-search">Clear search</button>`,
+    };
+  }
+  if (state.filter === "history") {
+    return {
+      icon: "archive",
+      title: "Nothing in History yet",
+      hint: "Vehicles you send to History are archived out of the main list. They stay fully readable, and can be reopened at any time.",
+    };
+  }
+  if (state.filter === "recon") {
+    return {
+      icon: "vehicle",
+      title: "No recon vehicles",
+      hint: "Recon vehicles are the lot's own stock being prepped for sale.",
+      actions: `<button type="button" class="btn btn-primary btn-sm" data-empty-action="add-recon">Add Recon Vehicle</button>`,
+    };
+  }
+  if (state.filter === "we_owe") {
+    return {
+      icon: "vehicle",
+      title: "No open we-owe promises",
+      hint: "A we-owe is something promised to a customer at the time of sale that still has to be made good.",
+      actions: `<button type="button" class="btn btn-primary btn-sm" data-empty-action="add-we-owe">Add We-Owe Promise</button>`,
+    };
+  }
+  return {
+    icon: "vehicle",
+    title: "No vehicles yet",
+    hint: "Add the first recon vehicle or we-owe promise, and its cost, parts, and technician all start tracking from here.",
+    actions: `<button type="button" class="btn btn-ghost btn-sm" data-empty-action="add-we-owe">We-Owe Promise</button>
+              <button type="button" class="btn btn-primary btn-sm" data-empty-action="add-recon">Recon Vehicle</button>`,
+  };
+}
+
 function renderVehiclesTable() {
   let rows = state.vehicles;
   if (state.filter && state.filter !== "history") rows = rows.filter((v) => v.segment === state.filter);
@@ -256,7 +386,7 @@ function renderVehiclesTable() {
   $("#vehicles-count").textContent = `${rows.length} vehicle${rows.length === 1 ? "" : "s"}`;
   const body = $("#vehicles-table");
   if (!rows.length) {
-    body.innerHTML = `<tr><td colspan="8" style="text-align:center;color:var(--ink-faint);padding:30px">No vehicles match.</td></tr>`;
+    body.innerHTML = emptyRow(8, vehiclesEmptyState());
     renderVehicleBulkBar();
     return;
   }
@@ -309,9 +439,15 @@ function renderVehicleBulkBar() {
 }
 
 function wireVehiclesView() {
-  $$(".filters .chip").forEach((chip) => {
+  // Scoped to this view's own chips. ".filters .chip" matched every chip in
+  // the app -- the A/P date ranges, the cores and returns filters, the task
+  // filters -- so clicking any one of those also ran this handler, wiping the
+  // active state off every chip on every screen and setting state.filter to
+  // undefined. Every other view already scopes its chip wiring this way.
+  const vehicleChips = $$("#view-vehicles .filters .chip");
+  vehicleChips.forEach((chip) => {
     chip.addEventListener("click", () => {
-      $$(".filters .chip").forEach((c) => c.classList.remove("active"));
+      vehicleChips.forEach((c) => c.classList.remove("active"));
       chip.classList.add("active");
       const wasHistory = state.filter === "history";
       state.filter = chip.dataset.filter;
@@ -326,6 +462,20 @@ function wireVehiclesView() {
   });
   $("#add-recon-btn").addEventListener("click", () => openReconDialog());
   $("#add-we-owe-btn").addEventListener("click", () => openWeOweDialog());
+
+  // The empty state's buttons are re-rendered with the table, so they're
+  // handled by delegation rather than re-bound on every render.
+  $("#vehicles-table").addEventListener("click", (e) => {
+    const trigger = e.target.closest("[data-empty-action]");
+    if (!trigger) return;
+    if (trigger.dataset.emptyAction === "add-recon") openReconDialog();
+    if (trigger.dataset.emptyAction === "add-we-owe") openWeOweDialog();
+    if (trigger.dataset.emptyAction === "clear-search") {
+      state.search = "";
+      $("#global-search").value = "";
+      renderVehiclesTable();
+    }
+  });
 
   $("#th-age").addEventListener("click", () => {
     state.sortByAge = state.sortByAge === "desc" ? "asc" : "desc";
@@ -555,7 +705,7 @@ function renderPaymentDialogList() {
       </div>
       <div class="mi-meta">${esc(p.actor || "Unspecified")} · ${fmtDate(p.created_at)}</div>
     </div>
-  `).join("") : `<div style="color:var(--ink-faint);font-size:12px;padding:8px 0">No deposits recorded yet.</div>`;
+  `).join("") : emptyState({ icon: "invoice", title: "No deposits recorded", hint: "Money taken from the customer up front is recorded here and counted against what they owe.", compact: true });
   $$(".deposit-rm", $("#vd-deposits-list")).forEach((btn) => {
     btn.addEventListener("click", async () => {
       if (!confirm("Remove this deposit?")) return;
@@ -689,7 +839,13 @@ function renderEstimate(order) {
   if (!jobs.length) {
     // Unchanged flat list -- grouping only appears once a job exists, so the
     // common/simple ticket looks exactly as clean as it always has.
-    box.innerHTML = headRow + (items.length ? items.map(rowHtml).join("") : `<div class="ei-empty" style="padding:16px;color:var(--ink-faint);font-size:12.5px">No lines yet — add a part or labor entry, or ＋ Add Job to organize this ticket.</div>`);
+    // The .ei-empty wrapper is load-bearing -- adding a line looks for it by
+    // that class and removes it rather than re-rendering the whole list.
+    box.innerHTML = headRow + (items.length ? items.map(rowHtml).join("") : `<div class="ei-empty">${emptyState({
+      icon: "invoice",
+      title: "No parts or labor yet",
+      hint: "Add a part or labor line, or start with ＋ Add Job to group this ticket's work by repair.",
+    })}</div>`);
   } else {
     const buckets = [...jobs, { id: null, title: "General" }];
     box.innerHTML = headRow + buckets.map((bucket) => {
@@ -724,7 +880,7 @@ function renderEstimate(order) {
               <div class="kind-subgroup-label">${KIND_GROUP_LABEL[g.kind]}</div>
               ${g.kindItems.map(rowHtml).join("")}
             </div>
-          `).join("") : `<div class="ei-empty" style="padding:10px 16px;color:var(--ink-faint);font-size:12px">No lines in this job yet.</div>`}
+          `).join("") : `<div class="ei-empty">${emptyState({ icon: "invoice", title: "No lines in this job yet", compact: true })}</div>`}
         </div>
       `;
     }).join("");
@@ -1097,13 +1253,13 @@ function renderNotes(order) {
   const box = $("#vd-note-list");
   box.innerHTML = order.notes.length ? order.notes.map((n) => `
     <div class="mini-item"><div>${esc(n.text)} <span class="pill" style="background:var(--line-soft);color:var(--ink-faint);text-transform:none;font-weight:600">${n.visibility}</span></div><div class="mi-meta">${esc(n.actor)} · ${fmtDate(n.created_at)}</div></div>
-  `).join("") : `<div style="color:var(--ink-faint);font-size:12px">No notes yet.</div>`;
+  `).join("") : emptyState({ icon: "idea", title: "No notes yet", hint: "Anything worth remembering about this vehicle -- what the customer said, what you found.", compact: true });
 }
 function renderActivity(order) {
   const box = $("#vd-activity-list");
   box.innerHTML = order.activity.length ? order.activity.slice().reverse().map((a) => `
     <div class="mini-item"><div>${esc(a.action.replace(/_/g, " "))}</div><div class="mi-meta">${esc(a.actor)} · ${fmtDate(a.created_at)}</div></div>
-  `).join("") : `<div style="color:var(--ink-faint);font-size:12px">No activity yet.</div>`;
+  `).join("") : emptyState({ icon: "check", title: "No activity yet", hint: "Status changes, assignments, and receipts on this ticket get logged here.", compact: true });
 }
 
 /* ---------- assignment ---------- */
@@ -1792,7 +1948,11 @@ function quickRange(kind, chip) {
 
 function renderReportTable(rows, type) {
   if (!rows.length) {
-    return `<div class="panel" style="padding:24px;text-align:center;color:var(--ink-faint);font-size:12.5px">No ${type === "technicians" ? "technicians" : "vehicles"} match this range.</div>`;
+    return `<div class="panel">${emptyState({
+      icon: type === "technicians" ? "staff" : "vehicle",
+      title: type === "technicians" ? "No technician activity in this range" : "No vehicles in this range",
+      hint: "Nothing was worked on between those dates. Try a wider range, or one of the quick ranges above.",
+    })}</div>`;
   }
   if (type === "technicians") {
     return `<div class="panel"><table><thead><tr><th>Technician</th><th class="num-col">ROs</th><th class="num-col">Completed</th><th class="num-col">Labor Hours</th><th class="num-col">Labor Cost</th></tr></thead>
@@ -1955,7 +2115,7 @@ function renderVendorSelect() {
   $("#ap-vendor").innerHTML = state.vendors.map((v) => `<option value="${esc(v.name)}">${esc(v.name)}</option>`).join("") || `<option value="">Add a vendor first</option>`;
 }
 function renderVendorChips() {
-  $("#vendor-list").innerHTML = state.vendors.map((v) => `<span class="vendor-chip clickable" data-id="${v.id}" title="Click to edit">${esc(v.name)}${v.account_number ? ` · ${esc(v.account_number)}` : ""}</span>`).join("") || `<span style="color:var(--ink-faint);font-size:12px;padding:8px 0">No vendors yet.</span>`;
+  $("#vendor-list").innerHTML = state.vendors.map((v) => `<span class="vendor-chip clickable" data-id="${v.id}" title="Click to edit">${esc(v.name)}${v.account_number ? ` · ${esc(v.account_number)}` : ""}</span>`).join("") || emptyState({ icon: "invoice", title: "No vendors yet", hint: "Add the parts suppliers you buy from so invoices can be posted against them.", compact: true });
   $$(".vendor-chip.clickable", $("#vendor-list")).forEach((chip) => {
     chip.addEventListener("click", () => openVendorForEdit(Number(chip.dataset.id)));
   });
@@ -2009,7 +2169,17 @@ function renderApTable(invoices) {
       <td>${voided ? "" : `<button type="button" class="btn btn-ghost btn-sm ap-void" data-id="${a.id}" data-number="${esc(a.invoice_number)}">Void</button>`}</td>
     </tr>
   `;
-  }).join("") : `<tr><td colspan="7" style="text-align:center;color:var(--ink-faint);padding:20px">No vendor invoices posted for this range.</td></tr>`;
+  }).join("") : emptyRow(7, state.apSearch
+    ? {
+        icon: "search",
+        title: "No invoices match that search",
+        hint: `Nothing matched "${state.apSearch}". Searches cover invoice number, vendor, PO, and vehicle.`,
+      }
+    : {
+        icon: "invoice",
+        title: "No vendor invoices in this range",
+        hint: "Post one with the form above, or widen the date range. Receiving parts on a ticket also posts an invoice here automatically.",
+      });
   $$(".clickable", $("#ap-table")).forEach((row) => {
     row.addEventListener("click", () => openVehicleDetail(row.dataset.segment, Number(row.dataset.refId)));
   });
@@ -2032,7 +2202,7 @@ function renderAuditList(audits) {
     <div class="mini-item"><div>${esc(a.invoice_number)} — <span style="text-transform:capitalize">${esc(a.status)}</span></div>
     ${a.issues.length ? `<div class="mi-meta" style="color:var(--warn)">${a.issues.map(esc).join("; ")}</div>` : ""}
     <div class="mi-meta">${fmtDate(a.created_at)}</div></div>
-  `).join("") : `<div style="color:var(--ink-faint);font-size:12px">No activity yet.</div>`;
+  `).join("") : emptyState({ icon: "invoice", title: "No activity yet", hint: "Posting or voiding a vendor invoice is recorded here.", compact: true });
 }
 
 // Subtotal is always exactly the sum of the line items, and Total is always
@@ -2205,7 +2375,15 @@ function renderCoresTable() {
       <td><button type="button" class="btn btn-ghost btn-sm cores-toggle" data-order-id="${c.order_id}" data-item-id="${c.id}" data-returned="${c.core_returned ? 1 : 0}">${c.core_returned ? "Undo" : "Mark Returned"}</button></td>
     </tr>
   `;
-  }).join("") : `<tr><td colspan="6" style="text-align:center;color:var(--ink-faint);padding:20px">No cores in this view.</td></tr>`;
+  }).join("") : emptyRow(6, {
+    icon: filter === "returned" ? "check" : "core",
+    title: filter === "pending" ? "No cores waiting to go back"
+      : filter === "returned" ? "No cores returned yet"
+      : "No core charges tracked yet",
+    hint: filter === "returned"
+      ? "Cores you mark returned move here, so you can confirm what's already gone back to the vendor."
+      : "Put a core charge on a part line and it shows up here until the old unit goes back to the vendor and the deposit is recovered.",
+  });
 
   $$(".clickable", $("#cores-table")).forEach((row) => {
     row.addEventListener("click", (e) => {
@@ -2267,7 +2445,15 @@ function renderReturnsTable() {
       <td>${credited ? "" : `<button type="button" class="btn btn-ghost btn-sm returns-post" data-id="${r.id}">Post Credit</button>`}</td>
     </tr>
   `;
-  }).join("") : `<tr><td colspan="7" style="text-align:center;color:var(--ink-faint);padding:20px">No returned parts in this view.</td></tr>`;
+  }).join("") : emptyRow(7, {
+    icon: filter === "credited" ? "check" : "core",
+    title: filter === "pending" ? "No returns waiting on credit"
+      : filter === "credited" ? "No credited returns yet"
+      : "No parts returned yet",
+    hint: filter === "credited"
+      ? "Once you post a vendor credit against a return it moves here with its RMA number."
+      : "Mark a received part as returned on its ticket and it lands here until the vendor's credit is posted against it.",
+  });
 
   $$(".clickable", $("#returns-table")).forEach((row) => {
     row.addEventListener("click", (e) => {
@@ -2367,7 +2553,9 @@ function renderStaffTable() {
       <td><span class="pill ${s.active ? "pill-done" : "pill-progress"}">${s.active ? "Active" : "Inactive"}</span></td>
       <td><button type="button" class="btn btn-ghost btn-sm stf-toggle">${s.active ? "Deactivate" : "Activate"}</button></td>
     </tr>
-  `).join("") : `<tr><td colspan="4" style="text-align:center;color:var(--ink-faint);padding:20px">No staff match.</td></tr>`;
+  `).join("") : emptyRow(4, query
+    ? { icon: "search", title: "No staff match that search", hint: `Nothing matched "${state.staffSearch}".` }
+    : { icon: "staff", title: "No staff added yet", hint: "Add your technicians and advisors above so work can be assigned and productivity reported." });
 
   // Name/role auto-save like everywhere else in the app -- editing then
   // navigating away (or clicking Deactivate) used to silently discard an
@@ -2603,7 +2791,11 @@ function renderTasksList() {
   $("#tasks-count").textContent = `${open.length} open`;
   $("#tasks-list").innerHTML = open.length
     ? open.map(taskRowHtml).join("")
-    : `<div style="color:var(--ink-faint);font-size:12.5px;padding:26px;text-align:center">Nothing here — add a task above.</div>`;
+    : emptyState(query
+        ? { icon: "search", title: "No tasks match that search", hint: `Nothing open matched "${state.taskSearch}". Completed tasks are searched too -- check the list below.` }
+        : state.taskFilter === "mine"
+        ? { icon: "check", title: "Nothing assigned to you", hint: `No open tasks are assigned to ${currentActor()}. Switch to All to see everyone else's.` }
+        : { icon: "task", title: "No open tasks", hint: "Add one above and it syncs to everyone the moment they open RECON." });
 
   $("#tasks-toggle-completed").textContent = `${state.showCompletedTasks ? "Hide" : "Show"} completed (${done.length})`;
   $("#tasks-completed-list").style.display = state.showCompletedTasks ? "" : "none";
@@ -2740,7 +2932,9 @@ function renderSuggestionsList() {
   $("#suggestions-count").textContent = `${open.length} open`;
   $("#suggestions-list").innerHTML = open.length
     ? open.map(suggestionCardHtml).join("")
-    : `<div style="color:var(--ink-faint);font-size:12.5px;padding:26px;text-align:center">No suggestions yet — be the first to add one.</div>`;
+    : emptyState(query
+        ? { icon: "search", title: "No suggestions match that search", hint: `Nothing open matched "${state.suggestionSearch}".` }
+        : { icon: "idea", title: "No open suggestions", hint: "Write down anything the system should add or fix while it's fresh -- mark it done once it's handled." });
 
   $("#suggestions-toggle-resolved").textContent = `${state.showResolvedSuggestions ? "Hide" : "Show"} resolved (${resolved.length})`;
   $("#suggestions-resolved-list").style.display = state.showResolvedSuggestions ? "" : "none";
@@ -2888,7 +3082,7 @@ async function loadBackupView() {
   try {
     backups = await get("/api/backup");
   } catch (err) {
-    tbody.innerHTML = `<tr><td colspan="4" style="text-align:center;color:var(--crit);padding:20px">Couldn't load backups: ${esc(err.message)}</td></tr>`;
+    tbody.innerHTML = emptyRow(4, { icon: "backup", title: "Couldn't load backups", hint: err.message, tone: "error" });
     return;
   }
   tbody.innerHTML = backups.length ? backups.map((b) => `
@@ -2902,7 +3096,12 @@ async function loadBackupView() {
         <button type="button" class="btn btn-ghost btn-sm backup-delete-btn" data-name="${esc(b.name)}" style="color:var(--crit)">Delete</button>
       </td>
     </tr>
-  `).join("") : `<tr><td colspan="4" style="text-align:center;color:var(--ink-faint);padding:20px">No backups yet -- click "Create Backup Now".</td></tr>`;
+  `).join("") : emptyRow(4, {
+    icon: "backup",
+    title: "No backups yet",
+    hint: "One is taken automatically every 24 hours and the last 14 are kept. You can also take one right now.",
+    actions: `<button type="button" class="btn btn-primary btn-sm" data-empty-action="run-backup">Create Backup Now</button>`,
+  });
   $$(".backup-restore-btn", tbody).forEach((btn) => {
     btn.addEventListener("click", async () => {
       const name = btn.dataset.name;
@@ -2932,7 +3131,7 @@ async function loadBackupView() {
 }
 
 function wireBackupView() {
-  $("#backup-run-btn")?.addEventListener("click", async () => {
+  const runBackup = async () => {
     try {
       const created = await post("/api/backup/run");
       toast(`Backup created: ${created.name}`);
@@ -2940,6 +3139,12 @@ function wireBackupView() {
     } catch (err) {
       toast(err.message, true);
     }
+  };
+  $("#backup-run-btn")?.addEventListener("click", runBackup);
+  // Same action offered from the empty state, which is re-rendered on every
+  // load and so has to be delegated.
+  $("#backup-table")?.addEventListener("click", (e) => {
+    if (e.target.closest('[data-empty-action="run-backup"]')) runBackup();
   });
 
   $("#backup-restore-submit")?.addEventListener("click", async () => {

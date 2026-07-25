@@ -14,6 +14,7 @@ import pystray
 import uvicorn
 from PIL import Image, ImageDraw
 
+from app import discovery
 from app.backup import backup_database, list_backups, most_recent_backup_age_hours, prune_backups, restore_database
 from app.main import DATA_ROOT, DEFAULT_BACKUPS_DIR, DEFAULT_DB, NETWORK_FLAG, create_app
 
@@ -60,6 +61,11 @@ CHROME_CANDIDATES = [
     Path(os.environ.get("LOCALAPPDATA", "")) / "Google" / "Chrome" / "Application" / "chrome.exe",
 ]
 
+EDGE_CANDIDATES = [
+    Path(os.environ.get("PROGRAMFILES(X86)", r"C:\Program Files (x86)")) / "Microsoft" / "Edge" / "Application" / "msedge.exe",
+    Path(os.environ.get("PROGRAMFILES", r"C:\Program Files")) / "Microsoft" / "Edge" / "Application" / "msedge.exe",
+]
+
 
 def network_mode_enabled() -> bool:
     return NETWORK_FLAG.is_file()
@@ -88,12 +94,17 @@ def local_url() -> str:
     return f"http://{host}:{PORT}"
 
 
-def open_in_chrome(url: str) -> None:
-    """Launch Chrome directly rather than whatever the OS default handler
-    resolves to (which can land on Explorer instead of a browser)."""
-    chrome_path = next((p for p in CHROME_CANDIDATES if p.is_file()), None)
-    if chrome_path is not None:
-        subprocess.Popen([str(chrome_path), url])
+def open_app_window(url: str) -> None:
+    """Opens the UI in a chromeless Chrome/Edge "app mode" window instead of
+    a normal browser tab -- no address bar, no tabs, its own taskbar entry,
+    so it looks and behaves like a standalone program. Reusing a fixed
+    profile dir means clicking "Open RECON" again focuses the existing
+    window instead of spawning a duplicate. Falls back to whatever the OS
+    default handler resolves to if neither browser is installed."""
+    browser_path = next((p for p in CHROME_CANDIDATES + EDGE_CANDIDATES if p.is_file()), None)
+    if browser_path is not None:
+        profile_dir = DATA_ROOT / "app-window-profile"
+        subprocess.Popen([str(browser_path), f"--app={url}", f"--user-data-dir={profile_dir}"])
         return
     webbrowser.open(url)
 
@@ -123,6 +134,30 @@ class TrayApp:
         self.server: uvicorn.Server | None = None
         self.thread: threading.Thread | None = None
         self.icon: pystray.Icon | None = None
+        self.mode: str = "master"
+        self.master_ip: str | None = None
+        self._responder_stop = threading.Event()
+        self._responder_thread: threading.Thread | None = None
+
+    def effective_url(self) -> str:
+        if self.mode == "client" and self.master_ip:
+            return f"http://{self.master_ip}:{PORT}"
+        return local_url()
+
+    def _start_responder(self) -> None:
+        if self._responder_thread is not None and self._responder_thread.is_alive():
+            return
+        self._responder_stop.clear()
+        self._responder_thread = threading.Thread(
+            target=discovery.run_responder, args=(PORT, self._responder_stop.is_set), daemon=True
+        )
+        self._responder_thread.start()
+
+    def _stop_responder(self) -> None:
+        self._responder_stop.set()
+        if self._responder_thread is not None:
+            self._responder_thread.join(timeout=2)
+        self._responder_thread = None
 
     def start_server(self) -> bool:
         try:
@@ -154,22 +189,42 @@ class TrayApp:
         if self.icon is not None:
             self.icon.icon = ICON_OK if ok else ICON_DOWN
 
-    def open_browser(self, _icon: pystray.Icon, _item: pystray.MenuItem) -> None:
-        open_in_chrome(local_url())
+    def open_app(self, _icon: pystray.Icon, _item: pystray.MenuItem) -> None:
+        open_app_window(self.effective_url())
+
+    def promote_to_master(self, icon: pystray.Icon, _item: pystray.MenuItem) -> None:
+        """Manual fallback for when the real master goes offline (closed,
+        rebooted, unplugged from the network): lets this PC take over as
+        master instead of being stuck pointed at a master that's gone."""
+        if self.mode == "master":
+            return
+        log.info("Promoting this PC to master (was pointed at %s)", self.master_ip)
+        self.mode = "master"
+        self.master_ip = None
+        if not NETWORK_FLAG.is_file():
+            NETWORK_FLAG.write_text("enabled")
+        ok = self.start_server()
+        self._start_responder()
+        threading.Thread(target=self._auto_backup_loop, daemon=True).start()
+        if icon is not None:
+            icon.icon = ICON_OK if ok else ICON_DOWN
+            icon.notify("This PC is now the master. Other PCs can connect to it.", "RECON")
 
     def toggle_network_mode(self, _icon: pystray.Icon, _item: pystray.MenuItem) -> None:
         if network_mode_enabled():
             NETWORK_FLAG.unlink(missing_ok=True)
+            self._stop_responder()
             log.info("Network access disabled from tray")
         else:
             NETWORK_FLAG.write_text("enabled")
+            self._start_responder()
             log.info("Network access enabled from tray")
         self.stop_server()
         ok = self.start_server()
         if self.icon is not None:
             self.icon.icon = ICON_OK if ok else ICON_DOWN
             if network_mode_enabled() and ok:
-                self.icon.notify(f"Network access on. Other PCs go to: {local_url()}", "RECON")
+                self.icon.notify("Network access on. Other PCs on this network will find it automatically.", "RECON")
             elif ok:
                 self.icon.notify("Network access off -- only this PC can reach it now.", "RECON")
 
@@ -256,29 +311,62 @@ class TrayApp:
 
     def quit_app(self, icon: pystray.Icon, _item: pystray.MenuItem) -> None:
         log.info("Exit requested from tray")
+        self._stop_responder()
         self.stop_server()
         icon.stop()
 
+    def _on_ready(self, icon: pystray.Icon) -> None:
+        icon.visible = True
+        self.open_app(icon, None)
+
     def run(self) -> None:
-        ok = self.start_server()
-        threading.Thread(target=self._auto_backup_loop, daemon=True).start()
+        log.info("Looking for an existing master on the LAN...")
+        master_ip = discovery.find_master(PORT)
+        if master_ip:
+            self.mode = "client"
+            self.master_ip = master_ip
+            icon_state = ICON_OK
+            log.info("Found master at %s -- running as client", master_ip)
+        else:
+            self.mode = "master"
+            ok = self.start_server()
+            icon_state = ICON_OK if ok else ICON_DOWN
+            if network_mode_enabled():
+                self._start_responder()
+            threading.Thread(target=self._auto_backup_loop, daemon=True).start()
+            log.info("No master found -- this PC is the master")
+
         menu = pystray.Menu(
-            pystray.MenuItem("Open RECON", self.open_browser, default=True),
+            pystray.MenuItem("Open RECON", self.open_app, default=True),
             pystray.MenuItem(
                 "Allow other PCs on this network",
                 self.toggle_network_mode,
                 checked=lambda _item: network_mode_enabled(),
+                visible=lambda _item: self.mode == "master",
             ),
-            pystray.MenuItem("Show Server Address", self.show_server_address),
-            pystray.MenuItem("Backup Now (entire database)", self.backup_now),
-            pystray.MenuItem("Restore Latest Backup", self.restore_latest_backup),
-            pystray.MenuItem("Restore From File...", self.restore_from_file),
-            pystray.MenuItem("Show Backups Folder", self.show_backups_folder),
-            pystray.MenuItem("Restart Server", self.restart),
+            pystray.MenuItem(
+                lambda _item: f"Connected to master at {self.master_ip} (click to become master)",
+                self.promote_to_master,
+                visible=lambda _item: self.mode == "client",
+            ),
+            pystray.MenuItem("Show Server Address", self.show_server_address, visible=lambda _item: self.mode == "master"),
+            pystray.MenuItem(
+                "Backup Now (entire database)", self.backup_now, visible=lambda _item: self.mode == "master"
+            ),
+            pystray.MenuItem(
+                "Restore Latest Backup", self.restore_latest_backup, visible=lambda _item: self.mode == "master"
+            ),
+            pystray.MenuItem(
+                "Restore From File...", self.restore_from_file, visible=lambda _item: self.mode == "master"
+            ),
+            pystray.MenuItem(
+                "Show Backups Folder", self.show_backups_folder, visible=lambda _item: self.mode == "master"
+            ),
+            pystray.MenuItem("Restart Server", self.restart, visible=lambda _item: self.mode == "master"),
             pystray.MenuItem("Exit", self.quit_app),
         )
-        self.icon = pystray.Icon("discount-auto-ops", ICON_OK if ok else ICON_DOWN, "RECON", menu)
-        self.icon.run()
+        self.icon = pystray.Icon("discount-auto-ops", icon_state, "RECON", menu)
+        self.icon.run(setup=self._on_ready)
 
 
 def main() -> None:

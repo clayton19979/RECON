@@ -1,15 +1,13 @@
-# Builds the distributable Discount Auto Ops.exe with PyInstaller.
+# Builds the distributable DiscountAutoOps.exe with PyInstaller, using
+# DiscountAutoOps.spec (single-file / onefile mode) as the source of truth,
+# so this script and the spec can't drift out of sync with each other.
 # Run from the repo root: powershell -File installers\build_exe.ps1
 $ErrorActionPreference = "Stop"
 Set-Location (Split-Path -Parent $PSScriptRoot)
 
 uv sync --group build
-uv run pyinstaller --noconfirm --clean `
-  --name "DiscountAutoOps" `
-  --windowed `
-  --add-data "static;static" `
-  app/tray_app.py
+uv run pyinstaller --noconfirm DiscountAutoOps.spec
 
 Write-Host ""
-Write-Host "Built: dist\DiscountAutoOps\DiscountAutoOps.exe"
-Write-Host "Copy the whole dist\DiscountAutoOps folder to the target PC -- the .exe needs its _internal folder alongside it."
+Write-Host "Built: dist\DiscountAutoOps.exe (single self-contained file)"
+Write-Host "Copy just that one .exe to the target PC -- nothing else is needed to run it."

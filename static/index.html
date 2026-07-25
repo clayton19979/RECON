@@ -42,7 +42,8 @@
       <svg viewBox="0 0 24 24"><path d="M9 18h6M10 22h4M12 2a7 7 0 00-4 12.7c.6.5 1 1.3 1 2.3h6c0-1 .4-1.8 1-2.3A7 7 0 0012 2z"/></svg>
       <span>Ideas</span>
     </button>
-    <button class="rail-item" type="button" id="open-backup-btn">
+    <div class="rail-group-label">Data</div>
+    <button class="rail-item" data-view="backup">
       <svg viewBox="0 0 24 24"><path d="M12 4v12m0 0l-4-4m4 4l4-4M4 20h16"/></svg>
       <span>Backup</span>
     </button>
@@ -600,6 +601,38 @@
         <div id="suggestions-resolved-list" class="suggestion-list" style="display:none;margin-top:10px"></div>
       </section>
 
+      <!-- BACKUP / RESTORE -->
+      <section class="view" id="view-backup">
+        <div class="page-head">
+          <div>
+            <h1>Backup &amp; Restore</h1>
+            <p class="page-desc">A full database backup (.db) is made automatically every 24 hours and the last 14 are kept. Make one manually any time, and download, restore, or delete any backup below.</p>
+          </div>
+          <div style="display:flex;gap:10px">
+            <a class="btn btn-ghost btn-sm" href="/api/export/vehicles.csv" download>Export Vehicles CSV</a>
+            <button type="button" class="btn btn-primary" id="backup-run-btn">Create Backup Now</button>
+          </div>
+        </div>
+
+        <div class="panel">
+          <table>
+            <thead><tr><th>Name</th><th>Size</th><th>Created</th><th></th></tr></thead>
+            <tbody id="backup-table"></tbody>
+          </table>
+        </div>
+
+        <div class="page-head" style="margin-top:28px">
+          <div>
+            <h2 style="margin:0">Restore From a File</h2>
+            <p class="page-desc">Point at a .db backup file from anywhere -- a USB stick, a synced folder, wherever it was stashed. The current database is saved aside first, so this can be undone.</p>
+          </div>
+        </div>
+        <div class="panel" style="padding:16px 20px">
+          <label>Backup file<input type="file" id="backup-restore-file" accept=".db"></label>
+          <button type="button" class="btn btn-ghost" id="backup-restore-submit" style="margin-top:10px">Choose File &amp; Restore</button>
+        </div>
+      </section>
+
     </div>
   </div>
 </div>
@@ -859,30 +892,6 @@
       <button class="btn btn-ghost" formnovalidate type="button" id="payment-cancel-2">Close</button>
     </div>
   </form>
-</dialog>
-
-<!-- Backup / Restore -->
-<dialog id="backup-dialog">
-  <div class="modal">
-    <div class="modal-head">
-      <div><p class="eyebrow">DATA</p><h2>Backup &amp; Restore</h2></div>
-      <button class="icon-btn" type="button" id="backup-cancel">×</button>
-    </div>
-    <div style="display:flex;gap:8px;padding:16px 20px 0">
-      <button type="button" class="chip active" id="backup-tab-backup">Backup</button>
-      <button type="button" class="chip" id="backup-tab-restore">Restore</button>
-    </div>
-    <div class="modal-body" id="backup-tab-backup-panel">
-      <p class="hint" style="margin:0 0 16px">Download a CSV export of vehicles, repair orders, and cost data for your records or an outside backup.</p>
-      <a class="btn btn-primary" href="/api/export/vehicles.csv" download>Download Backup (.csv)</a>
-    </div>
-    <div class="modal-body" id="backup-tab-restore-panel" style="display:none">
-      <p class="hint warn" style="margin:0 0 14px">Restoring overwrites current data with the contents of the file. This can't be undone from here — use Backup first if unsure.</p>
-      <label>Backup file<input type="file" id="backup-restore-file" accept=".csv,.db"></label>
-      <button type="button" class="btn btn-ghost" id="backup-restore-submit">Choose File &amp; Restore</button>
-      <p class="hint" style="margin-top:10px">Full database restore is also available from the RECON tray icon on this PC (Restore Latest Backup).</p>
-    </div>
-  </div>
 </dialog>
 
 <div id="toast"></div>

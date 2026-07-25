@@ -162,6 +162,7 @@ function showView(name) {
   if (name === "staff") loadStaffView();
   if (name === "tasks") loadTasksView();
   if (name === "suggestions") loadSuggestionsView();
+  if (name === "backup") loadBackupView();
 }
 
 const THEMES = ["midnight", "carbon", "slate", "paper"];
@@ -2803,6 +2804,7 @@ document.addEventListener("DOMContentLoaded", () => {
   wireStaffView();
   wireTasksView();
   wireSuggestionsView();
+  wireBackupView();
 
   $$(".rail-item").forEach((btn) => btn.addEventListener("click", () => showView(btn.dataset.view)));
 
@@ -2872,28 +2874,93 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
-  // Backup / Restore modal on the Vehicles page.
-  const backupDialog = $("#backup-dialog");
-  const openBackupBtn = $("#open-backup-btn");
-  if (backupDialog && openBackupBtn) {
-    openBackupBtn.addEventListener("click", () => backupDialog.showModal());
-    $("#backup-cancel")?.addEventListener("click", () => backupDialog.close());
-    const tabBackupBtn = $("#backup-tab-backup");
-    const tabRestoreBtn = $("#backup-tab-restore");
-    const backupPanel = $("#backup-tab-backup-panel");
-    const restorePanel = $("#backup-tab-restore-panel");
-    function showBackupTab(which) {
-      tabBackupBtn.classList.toggle("active", which === "backup");
-      tabRestoreBtn.classList.toggle("active", which === "restore");
-      backupPanel.style.display = which === "backup" ? "" : "none";
-      restorePanel.style.display = which === "restore" ? "" : "none";
-    }
-    tabBackupBtn.addEventListener("click", () => showBackupTab("backup"));
-    tabRestoreBtn.addEventListener("click", () => showBackupTab("restore"));
-    $("#backup-restore-submit")?.addEventListener("click", () => {
-      const file = $("#backup-restore-file").files[0];
-      if (!file) return toast("Choose a file first", true);
-      toast("Full restore isn't wired up over the web yet -- use the tray icon's \"Restore Latest Backup\" on this PC.", true);
-    });
-  }
 });
+
+function fmtBackupSize(bytes) {
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+}
+
+async function loadBackupView() {
+  const tbody = $("#backup-table");
+  if (!tbody) return;
+  let backups;
+  try {
+    backups = await get("/api/backup");
+  } catch (err) {
+    tbody.innerHTML = `<tr><td colspan="4" style="text-align:center;color:var(--crit);padding:20px">Couldn't load backups: ${esc(err.message)}</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = backups.length ? backups.map((b) => `
+    <tr>
+      <td>${esc(b.name)}</td>
+      <td>${fmtBackupSize(b.size_bytes)}</td>
+      <td>${fmtDate(b.modified_at * 1000)}</td>
+      <td style="display:flex;gap:8px;justify-content:flex-end">
+        <a class="btn btn-ghost btn-sm" href="/api/backup/download/${encodeURIComponent(b.name)}" download>Download</a>
+        <button type="button" class="btn btn-ghost btn-sm backup-restore-btn" data-name="${esc(b.name)}">Restore</button>
+        <button type="button" class="btn btn-ghost btn-sm backup-delete-btn" data-name="${esc(b.name)}" style="color:var(--crit)">Delete</button>
+      </td>
+    </tr>
+  `).join("") : `<tr><td colspan="4" style="text-align:center;color:var(--ink-faint);padding:20px">No backups yet -- click "Create Backup Now".</td></tr>`;
+  $$(".backup-restore-btn", tbody).forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const name = btn.dataset.name;
+      if (!confirm(`Restore from "${name}"? The current database is saved aside first, but this replaces it.`)) return;
+      try {
+        await post(`/api/backup/restore/${encodeURIComponent(name)}`);
+        toast(`Restored from ${name}`);
+        location.reload();
+      } catch (err) {
+        toast(err.message, true);
+      }
+    });
+  });
+  $$(".backup-delete-btn", tbody).forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const name = btn.dataset.name;
+      if (!confirm(`Delete backup "${name}"? This can't be undone.`)) return;
+      try {
+        await api(`/api/backup/${encodeURIComponent(name)}`, { method: "DELETE" });
+        toast("Backup deleted");
+        loadBackupView();
+      } catch (err) {
+        toast(err.message, true);
+      }
+    });
+  });
+}
+
+function wireBackupView() {
+  $("#backup-run-btn")?.addEventListener("click", async () => {
+    try {
+      const created = await post("/api/backup/run");
+      toast(`Backup created: ${created.name}`);
+      loadBackupView();
+    } catch (err) {
+      toast(err.message, true);
+    }
+  });
+
+  $("#backup-restore-submit")?.addEventListener("click", async () => {
+    const file = $("#backup-restore-file").files[0];
+    if (!file) return toast("Choose a file first", true);
+    if (!file.name.toLowerCase().endsWith(".db")) return toast("Choose a .db backup file", true);
+    if (!confirm(`Restore from "${file.name}"? The current database is saved aside first, but this replaces it.`)) return;
+    try {
+      const res = await fetch("/api/backup/restore-upload", {
+        method: "POST",
+        headers: { "x-backup-filename": file.name },
+        body: await file.arrayBuffer(),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail || res.statusText);
+      }
+      toast(`Restored from ${file.name}`);
+      location.reload();
+    } catch (err) {
+      toast(err.message, true);
+    }
+  });
+}

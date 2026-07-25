@@ -698,15 +698,58 @@ textarea { min-height: 70px; resize: vertical; font-family: inherit; }
 }
 .task-urgent-toggle input { width: auto; }
 
+/* Cards read as one row of four like every other summary in the app; the
+   first is context and the rest are pressable filters. */
+.stats-tasks .stat:nth-child(1) { border-top-color: var(--accent); }
+.stats-tasks .stat:nth-child(2) { border-top-color: var(--crit); }
+.stats-tasks .stat:nth-child(3) { border-top-color: var(--warn); }
+.stats-tasks .stat:nth-child(4) { border-top-color: var(--ink-faint); }
+
+.tasks-select-all-wrap {
+  display: flex; flex-direction: row; align-items: center; gap: 6px; margin: 0;
+  font-size: 12px; color: var(--ink-faint); font-weight: 600; white-space: nowrap; cursor: pointer;
+}
+.tasks-select-all-wrap input { width: auto; margin: 0; }
+.bulk-field { display: flex; flex-direction: row; align-items: center; gap: 6px; margin: 0; font-size: 12px; white-space: nowrap; }
+.bulk-field input[type="date"] { width: auto; padding: 4px 8px; font-size: 12px; }
+.ms-partial { margin-left: auto; padding-left: 8px; color: var(--ink-faint); font-size: 11px; font-variant-numeric: tabular-nums; }
+
+/* Group headings are the point of the list -- what has to happen today is a
+   heading, not a sort order you have to reconstruct by reading dates. */
+.task-group + .task-group { margin-top: 18px; }
+.task-group-head {
+  display: flex; align-items: center; gap: 9px; margin-bottom: 9px;
+  font-size: 11px; text-transform: uppercase; letter-spacing: .05em; font-weight: 700; color: var(--ink-faint);
+}
+.task-group-head::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+.task-group-count {
+  min-width: 20px; text-align: center; padding: 1px 7px; border-radius: 999px;
+  background: var(--line-soft); color: var(--ink-soft); font-size: 10.5px; font-variant-numeric: tabular-nums;
+}
+.task-group-head.overdue { color: var(--crit); }
+.task-group-head.overdue::after { background: var(--crit-tint); }
+.task-group-head.overdue .task-group-count { background: var(--crit-tint); color: var(--crit); }
+.task-group-head.today { color: var(--warn); }
+.task-group-head.today::after { background: var(--warn-tint); }
+.task-group-head.today .task-group-count { background: var(--warn-tint); color: var(--warn); }
+
 .task-list { display: flex; flex-direction: column; gap: 9px; }
+.task-group .task-list { gap: 9px; }
 .task-row {
   display: flex; align-items: flex-start; gap: 13px;
   background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
   padding: 13px 15px; transition: border-color .12s, transform .1s, box-shadow .12s;
 }
+.task-group .task-row + .task-row { margin-top: 9px; }
 .task-row:hover { border-color: var(--accent); transform: translateY(-1px); box-shadow: var(--shadow); }
 .task-row.urgent { border-left: 3px solid var(--crit); }
 .task-row.done { opacity: .5; }
+/* Muted until it matters: the checkbox is always there so bulk editing is
+   discoverable, but it shouldn't compete with the title on a screen where
+   most visits are read-only. */
+.task-select { width: auto; margin: 4px 0 0; flex-shrink: 0; opacity: .4; cursor: pointer; transition: opacity .12s; }
+.task-row:hover .task-select, .task-select:checked, .task-select:focus-visible { opacity: 1; }
+.task-row.selected { border-color: var(--accent); background: var(--accent-tint); }
 .task-check {
   width: 23px; height: 23px; border-radius: 50%; border: 2px solid var(--ink-faint);
   background: none; cursor: pointer; flex-shrink: 0; margin-top: 1px; padding: 0;
@@ -721,11 +764,25 @@ textarea { min-height: 70px; resize: vertical; font-family: inherit; }
 .task-title { font-size: 14px; font-weight: 600; }
 .task-row.done .task-title { text-decoration: line-through; color: var(--ink-faint); }
 .task-meta { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 6px; font-size: 11.5px; color: var(--ink-faint); }
-.task-due { padding: 2px 9px; border-radius: 999px; background: var(--line-soft); font-weight: 700; }
+/* Both chips are buttons now: the due date and the urgent flag were settable
+   only at creation, which is the wrong moment for either of them. */
+.task-due {
+  padding: 2px 9px; border-radius: 999px; background: var(--line-soft); font-weight: 700;
+  border: 1px solid transparent; color: var(--ink-soft); font-size: 11.5px; cursor: pointer;
+}
+.task-due:hover { border-color: var(--accent); }
 .task-due.overdue { background: var(--crit-tint); color: var(--crit); }
 .task-due.soon { background: var(--warn-tint); color: var(--warn); }
-.task-urgent-badge {
-  padding: 2px 9px; border-radius: 999px; background: var(--crit-tint); color: var(--crit);
+.task-due-empty { background: none; border: 1px dashed var(--line); color: var(--ink-faint); font-weight: 600; }
+.task-due-empty:hover { color: var(--accent); border-style: solid; }
+.task-due-edit { width: auto; padding: 1px 7px; font-size: 11.5px; }
+.task-flag {
+  padding: 2px 9px; border-radius: 999px; background: none; border: 1px dashed var(--line);
+  color: var(--ink-faint); font-weight: 600; font-size: 11.5px; cursor: pointer;
+}
+.task-flag:hover { color: var(--crit); border-color: var(--crit); border-style: solid; }
+.task-flag.on {
+  background: var(--crit-tint); color: var(--crit); border: 1px solid transparent;
   font-weight: 700; text-transform: uppercase; letter-spacing: .03em; font-size: 10px;
 }
 .task-order-link {

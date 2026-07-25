@@ -354,6 +354,12 @@ const state = {
   tasks: [],
   taskFilter: "",
   taskSearch: "",
+  // The three filtering stat cards are mutually exclusive (a task can't be
+  // both overdue and due today), so one slot holds whichever is lit.
+  taskCard: "",                 // "" | "overdue" | "today" | "unassigned"
+  taskUrgentOnly: false,
+  taskSelection: new Set(),     // task ids, cleared whenever the visible set changes
+  taskAnchor: null,             // last row clicked, for shift+click ranges
   newTaskAssignees: [],
   showCompletedTasks: false,
   suggestions: [],
@@ -4538,6 +4544,9 @@ function wireAssigneeToggle(toggleEl, menuEl) {
    ================================================================== */
 // Due-date coloring mirrors the Vehicles board's age-severity pattern --
 // outliers (overdue, due today/tomorrow) jump out without reading every row.
+// `days` is exposed alongside because the buckets, the stat cards and the
+// chip all have to agree on what "overdue" means; three separate date
+// comparisons would eventually disagree by a day at some timezone boundary.
 function taskDueInfo(dueDate) {
   if (!dueDate) return null;
   const today = new Date();
@@ -4545,15 +4554,43 @@ function taskDueInfo(dueDate) {
   const due = new Date(`${dueDate}T00:00:00`);
   const diffDays = Math.round((due - today) / 86400000);
   const cls = diffDays < 0 ? "overdue" : diffDays <= 1 ? "soon" : "";
-  return { cls, label: due.toLocaleDateString("en-US", { month: "short", day: "numeric" }) };
+  const label = diffDays === 0 ? "today"
+    : diffDays === 1 ? "tomorrow"
+    : diffDays === -1 ? "yesterday"
+    : due.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  return { cls, label, days: diffDays };
+}
+
+/* The list is grouped by when the work is due rather than shown flat. A flat
+   list sorted by date reads as one undifferentiated column and gives no
+   answer to the only question anyone opens this screen with -- what has to
+   happen today. The headers are the answer, and they carry their own counts
+   so an empty morning is visible without counting rows. */
+const TASK_BUCKETS = [
+  { key: "overdue", label: "Overdue" },
+  { key: "today", label: "Due Today" },
+  { key: "week", label: "Next 7 Days" },
+  { key: "later", label: "Later" },
+  { key: "none", label: "No Due Date" },
+];
+
+function taskBucket(t) {
+  const due = taskDueInfo(t.due_date);
+  if (!due) return "none";
+  if (due.days < 0) return "overdue";
+  if (due.days === 0) return "today";
+  if (due.days <= 7) return "week";
+  return "later";
 }
 
 function taskRowHtml(t) {
   const due = taskDueInfo(t.due_date);
   const refId = t.order_recon_vehicle_id ?? t.order_we_owe_id;
   const linkable = t.order_id && refId != null && (t.order_segment === "recon" || t.order_segment === "we_owe");
+  const selected = state.taskSelection.has(t.id);
   return `
-    <div class="task-row ${t.urgent ? "urgent" : ""} ${t.done ? "done" : ""}" data-id="${t.id}">
+    <div class="task-row ${t.urgent ? "urgent" : ""} ${t.done ? "done" : ""} ${selected ? "selected" : ""}" data-id="${t.id}">
+      ${t.done ? "" : `<input type="checkbox" class="task-select" ${selected ? "checked" : ""} title="Select for bulk edit">`}
       <button type="button" class="task-check" title="${t.done ? "Mark not done" : "Mark done"}">
         <svg viewBox="0 0 24 24"><path d="M5 13l4 4L19 7"/></svg>
       </button>
@@ -4564,8 +4601,10 @@ function taskRowHtml(t) {
             <button type="button" class="ms-toggle task-assignee-toggle">${esc(assigneeSummaryLabel(t.assigned_to))}</button>
             <div class="ms-menu task-assignee-menu"></div>
           </div>
-          ${due ? `<span class="task-due ${due.cls}">Due ${due.label}</span>` : ""}
-          ${t.urgent ? `<span class="task-urgent-badge">Urgent</span>` : ""}
+          ${due
+            ? `<button type="button" class="task-due ${due.cls}" data-due="${esc(t.due_date)}" title="Change the due date">Due ${due.label}</button>`
+            : `<button type="button" class="task-due task-due-empty" data-due="" title="Set a due date">+ due date</button>`}
+          <button type="button" class="task-flag ${t.urgent ? "on" : ""}" title="${t.urgent ? "Clear the urgent flag" : "Flag this urgent"}">${t.urgent ? "Urgent" : "Flag urgent"}</button>
           ${linkable ? `<button type="button" class="task-order-link" data-segment="${t.order_segment}" data-ref-id="${refId}">🚗 ${esc(t.order_label || t.order_number)}</button>` : ""}
           <span>by ${esc(t.created_by || "Unspecified")} · ${relativeTime(t.created_at)}</span>
         </div>
@@ -4609,6 +4648,68 @@ function wireTaskRowActions(container) {
   $$(".task-order-link", container).forEach((btn) => {
     btn.addEventListener("click", () => openVehicleDetail(btn.dataset.segment, Number(btn.dataset.refId)));
   });
+  /* Due date was write-once: settable in the quick-add form and nowhere else,
+     which is exactly backwards for the tasks the board creates in bulk (those
+     arrive with no date at all). The chip swaps itself for a date input in
+     place rather than opening a dialog -- retyping a date is a two-second job
+     and a modal for it is heavier than the edit. */
+  $$(".task-due", container).forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const row = btn.closest(".task-row");
+      const input = document.createElement("input");
+      input.type = "date";
+      input.className = "task-due-edit";
+      input.value = btn.dataset.due || "";
+      btn.replaceWith(input);
+      input.focus();
+      // Not in jsdom, and not in every browser -- worth having where it exists
+      // because it saves a click, but never worth throwing over.
+      if (typeof input.showPicker === "function") { try { input.showPicker(); } catch {} }
+      let saving = false;
+      const save = async () => {
+        if (saving) return;
+        saving = true;
+        if (input.value === (btn.dataset.due || "")) return renderTasksList();
+        try {
+          await patch(`/api/tasks/${row.dataset.id}`, { due_date: input.value });
+          await loadTasksView();
+        } catch (err) {
+          toast(err.message, true);
+          renderTasksList();
+        }
+      };
+      input.addEventListener("change", save);
+      input.addEventListener("blur", save);
+      input.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") { saving = true; renderTasksList(); }
+      });
+    });
+  });
+  // Urgency was also creation-only. Same reasoning: the flag's whole job is to
+  // be changed when priorities change, which is after the task exists.
+  $$(".task-flag", container).forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const row = btn.closest(".task-row");
+      try {
+        await patch(`/api/tasks/${row.dataset.id}`, { urgent: !row.classList.contains("urgent") });
+        await loadTasksView();
+      } catch (err) {
+        toast(err.message, true);
+      }
+    });
+  });
+  $$(".task-select", container).forEach((box) => {
+    box.addEventListener("click", (e) => {
+      const id = Number(box.closest(".task-row").dataset.id);
+      if (e.shiftKey && state.taskAnchor != null) selectTaskRange(state.taskAnchor, id);
+      else {
+        if (box.checked) state.taskSelection.add(id);
+        else state.taskSelection.delete(id);
+      }
+      state.taskAnchor = id;
+      renderTasksList();
+    });
+  });
   // Each row's assignee picker saves immediately on change (like every other
   // auto-save control in this app) and updates local state directly rather
   // than reloading the whole list -- reloading would tear down and rebuild
@@ -4631,23 +4732,155 @@ function wireTaskRowActions(container) {
   });
 }
 
-function renderTasksList() {
+/* ---------- filtering ----------
+   Split from the render so the stat cards, the select-all box, the shift-range
+   and every bulk action all read the same list the user is looking at. When
+   the board grew selection this was the bug that kept coming back: "select
+   all" meaning something subtly different from what the table showed. */
+function taskMatchesSearch(t, query) {
+  if (!query) return true;
+  return t.title.toLowerCase().includes(query)
+    || (t.notes || "").toLowerCase().includes(query)
+    || t.assigned_to.some((a) => a.toLowerCase().includes(query));
+}
+
+// Everything except the stat-card filter. The cards count off this list, so
+// clicking "Overdue" narrows the rows without changing the number on the card
+// that did the narrowing -- a card that renumbers itself when pressed reads
+// as though the data changed underneath you.
+function taskBaseList() {
   const actor = currentActor();
   const query = (state.taskSearch || "").toLowerCase();
-  let open = state.tasks.filter((t) => !t.done);
-  if (state.taskFilter === "mine") open = open.filter((t) => t.assigned_to.includes(actor));
-  const matches = (t) => t.title.toLowerCase().includes(query) || t.notes.toLowerCase().includes(query) || t.assigned_to.some((a) => a.toLowerCase().includes(query));
-  if (query) open = open.filter(matches);
-  let done = state.tasks.filter((t) => t.done);
-  if (query) done = done.filter(matches);
+  return state.tasks.filter((t) => !t.done
+    && (state.taskFilter !== "mine" || t.assigned_to.includes(actor))
+    && (!state.taskUrgentOnly || !!t.urgent)
+    && taskMatchesSearch(t, query));
+}
 
-  $("#tasks-count").textContent = `${open.length} open`;
-  $("#tasks-list").innerHTML = open.length
-    ? open.map(taskRowHtml).join("")
+function taskCardMatches(t, card) {
+  if (card === "overdue") return taskBucket(t) === "overdue";
+  if (card === "today") return taskBucket(t) === "today";
+  if (card === "unassigned") return !t.assigned_to.length;
+  return true;
+}
+
+function visibleTasks() {
+  const rows = taskBaseList().filter((t) => taskCardMatches(t, state.taskCard));
+  // Grouped display order, so a shift+click range covers what the eye sees
+  // between the two rows rather than what the array happened to hold.
+  const order = new Map(TASK_BUCKETS.map((b, i) => [b.key, i]));
+  return rows.sort((a, b) =>
+    order.get(taskBucket(a)) - order.get(taskBucket(b))
+    || (b.urgent ? 1 : 0) - (a.urgent ? 1 : 0)
+    || (a.due_date || "9999-99-99").localeCompare(b.due_date || "9999-99-99")
+    || b.id - a.id);
+}
+
+/* ---------- stat cards ---------- */
+function syncTaskStatCards() {
+  const base = taskBaseList();
+  const counts = {
+    open: base.length,
+    overdue: base.filter((t) => taskBucket(t) === "overdue").length,
+    today: base.filter((t) => taskBucket(t) === "today").length,
+    unassigned: base.filter((t) => !t.assigned_to.length).length,
+  };
+  const setValue = (sel, n, tone) => {
+    const el = $(sel);
+    if (!el) return;
+    el.textContent = n;
+    el.classList.toggle("warn", tone === "warn");
+    el.classList.toggle("crit", tone === "crit");
+  };
+  setValue("#stat-tasks-open", counts.open, null);
+  setValue("#stat-tasks-overdue", counts.overdue, counts.overdue ? "crit" : null);
+  setValue("#stat-tasks-today", counts.today, counts.today ? "warn" : null);
+  setValue("#stat-tasks-unassigned", counts.unassigned, null);
+
+  const urgent = base.filter((t) => t.urgent).length;
+  $("#stat-tasks-open-sub").textContent = counts.open
+    ? (urgent ? `${urgent} flagged urgent` : "none flagged urgent")
+    : "nothing outstanding";
+  const worst = Math.min(...base.map((t) => taskDueInfo(t.due_date)?.days ?? Infinity));
+  $("#stat-tasks-overdue-sub").textContent = counts.overdue
+    ? `worst ${Math.abs(worst)} day${Math.abs(worst) === 1 ? "" : "s"} late`
+    : "nothing past due";
+  $("#stat-tasks-today-sub").textContent = counts.today ? "due before close" : "clear for today";
+  $("#stat-tasks-unassigned-sub").textContent = counts.unassigned ? "nobody picked these up" : "everything has an owner";
+
+  // A zero card is disabled rather than merely inert, same rule as the board:
+  // "0 overdue" is good news and clicking it could only produce an empty list.
+  $$("#view-tasks [data-task-card]").forEach((el) => {
+    const key = el.dataset.taskCard;
+    const active = state.taskCard === key;
+    el.classList.toggle("active", active);
+    el.setAttribute("aria-pressed", active ? "true" : "false");
+    el.disabled = !counts[key] && !active;
+    el.title = active ? "Showing only these — click to clear" : (counts[key] ? `Show only these ${counts[key]}` : "");
+  });
+}
+
+// Describes the filters rather than the result, so it still explains an empty
+// screen -- there are no rows to describe in the case that most needs it.
+function taskScopeLabel() {
+  const parts = [];
+  if (state.taskFilter === "mine") parts.push(`assigned to ${currentActor() || "you"}`);
+  if (state.taskCard === "overdue") parts.push("past due");
+  if (state.taskCard === "today") parts.push("due today");
+  if (state.taskCard === "unassigned") parts.push("with nobody assigned");
+  if (state.taskUrgentOnly) parts.push("flagged urgent");
+  if (state.taskSearch) parts.push(`matching "${state.taskSearch}"`);
+  return parts.length ? `Open tasks ${parts.join(", ")}.` : "Every open task.";
+}
+
+function taskFiltersActive() {
+  return !!(state.taskFilter || state.taskCard || state.taskUrgentOnly || state.taskSearch);
+}
+
+function resetTaskView() {
+  state.taskFilter = "";
+  state.taskCard = "";
+  state.taskUrgentOnly = false;
+  state.taskSearch = "";
+  const search = $("#task-search");
+  if (search) search.value = "";
+  $$('#view-tasks [data-task-filter]').forEach((c) => c.classList.toggle("active", c.dataset.taskFilter === ""));
+  state.taskSelection.clear();
+  saveTaskPrefs();
+  renderTasksList();
+}
+
+function renderTasksList() {
+  const query = (state.taskSearch || "").toLowerCase();
+  const rows = visibleTasks();
+  // A selection surviving a filter change would act on rows nobody can see --
+  // the bulk bar would say "6 selected" over a list of two.
+  const shown = new Set(rows.map((t) => t.id));
+  [...state.taskSelection].forEach((id) => { if (!shown.has(id)) state.taskSelection.delete(id); });
+
+  let done = state.tasks.filter((t) => t.done);
+  if (query) done = done.filter((t) => taskMatchesSearch(t, query));
+
+  $("#tasks-count").textContent = `${rows.length} open`;
+  $("#tasks-scope").textContent = taskScopeLabel();
+  const reset = $("#tasks-reset-view");
+  if (reset) reset.hidden = !taskFiltersActive();
+  const urgentChip = $("#tasks-urgent-filter");
+  if (urgentChip) {
+    urgentChip.classList.toggle("active", state.taskUrgentOnly);
+    urgentChip.setAttribute("aria-pressed", state.taskUrgentOnly ? "true" : "false");
+  }
+
+  $("#tasks-list").innerHTML = rows.length
+    ? renderTaskGroups(rows)
     : emptyState(query
         ? { icon: "search", title: "No tasks match that search", hint: `Nothing open matched "${state.taskSearch}". Completed tasks are searched too -- check the list below.` }
+        : state.taskCard
+        ? { icon: "check", title: `Nothing ${state.taskCard === "unassigned" ? "unassigned" : state.taskCard === "today" ? "due today" : "overdue"}`, hint: "Click the card again to see everything else." }
         : state.taskFilter === "mine"
         ? { icon: "check", title: "Nothing assigned to you", hint: `No open tasks are assigned to ${currentActor()}. Switch to All to see everyone else's.` }
+        : state.taskUrgentOnly
+        ? { icon: "check", title: "Nothing flagged urgent", hint: "Turn off the Urgent filter to see the rest." }
         : { icon: "task", title: "No open tasks", hint: "Add one above and it syncs to everyone the moment they open RECON." });
 
   $("#tasks-toggle-completed").textContent = `${state.showCompletedTasks ? "Hide" : "Show"} completed (${done.length})`;
@@ -4656,6 +4889,208 @@ function renderTasksList() {
 
   wireTaskRowActions($("#tasks-list"));
   wireTaskRowActions($("#tasks-completed-list"));
+  syncTaskStatCards();
+  syncTaskSelectAll(rows);
+  renderTaskBulkBar();
+}
+
+// Empty buckets are dropped rather than rendered as a header over nothing --
+// five headings for two tasks is worse than no headings at all.
+function renderTaskGroups(rows) {
+  return TASK_BUCKETS.map((bucket) => {
+    const group = rows.filter((t) => taskBucket(t) === bucket.key);
+    if (!group.length) return "";
+    return `<div class="task-group" data-bucket="${bucket.key}">
+        <div class="task-group-head ${bucket.key}">
+          <span class="task-group-label">${bucket.label}</span>
+          <span class="task-group-count">${group.length}</span>
+        </div>
+        ${group.map(taskRowHtml).join("")}
+      </div>`;
+  }).join("");
+}
+
+/* ==================================================================
+   TASK SELECTION + BULK EDIT
+   ==================================================================
+   The board can already turn eight stalled cars into eight follow-ups in one
+   click. It creates them unassigned and undated, because who and when are
+   decisions you make once you're looking at the list -- and until now the only
+   way to record those decisions was to open eight rows. Everything below
+   exists to close that loop. */
+
+function selectTaskRange(fromId, toId) {
+  const ids = visibleTasks().map((t) => t.id);
+  const a = ids.indexOf(fromId), b = ids.indexOf(toId);
+  if (a === -1 || b === -1) return state.taskSelection.add(toId);
+  for (let i = Math.min(a, b); i <= Math.max(a, b); i++) state.taskSelection.add(ids[i]);
+}
+
+function syncTaskSelectAll(rows) {
+  const box = $("#tasks-select-all");
+  if (!box) return;
+  const n = rows.filter((t) => state.taskSelection.has(t.id)).length;
+  box.checked = rows.length > 0 && n === rows.length;
+  box.indeterminate = n > 0 && n < rows.length;
+  box.disabled = !rows.length;
+}
+
+function selectedTaskIds() {
+  return [...state.taskSelection];
+}
+
+function renderTaskBulkBar() {
+  const n = state.taskSelection.size;
+  const bar = $("#tasks-bulk-bar");
+  if (!bar) return;
+  bar.style.display = n ? "" : "none";
+  if (!n) return;
+  $("#tasks-bulk-count").textContent = `${n} selected`;
+  const chosen = state.tasks.filter((t) => state.taskSelection.has(t.id));
+  // "Flag Urgent" flips to "Clear Urgent" once everything selected already
+  // carries the flag -- otherwise the button is a no-op you can press forever.
+  const allUrgent = chosen.length > 0 && chosen.every((t) => t.urgent);
+  $("#tasks-bulk-urgent").textContent = allUrgent ? "Clear Urgent" : "Flag Urgent";
+  $("#tasks-bulk-urgent").dataset.next = allUrgent ? "0" : "1";
+  $("#tasks-bulk-done").textContent = n === 1 ? "Complete" : `Complete ${n}`;
+  renderBulkAssigneeMenu(chosen);
+}
+
+/* Tri-state on purpose. Checked means every selected task has that person,
+   indeterminate means some do. Checking adds them to the rest rather than
+   overwriting the row, and unchecking takes them off -- an assignment picker
+   that replaced the list would silently drop whoever else was already on a
+   task that happened to be in the selection, which is the kind of data loss
+   nobody notices until the person who was dropped doesn't show up. */
+function renderBulkAssigneeMenu(chosen) {
+  const menuEl = $("#tasks-bulk-assignee-menu");
+  const toggleEl = $("#tasks-bulk-assignee-toggle");
+  if (!menuEl || !toggleEl) return;
+  const countFor = (name) => chosen.filter((t) => t.assigned_to.includes(name)).length;
+  menuEl.innerHTML = state.staff.length
+    ? state.staff.map((s) => {
+        const has = countFor(s.name);
+        const all = has === chosen.length && chosen.length > 0;
+        return `<label class="ms-option"><input type="checkbox" value="${esc(s.name)}" ${all ? "checked" : ""} data-some="${has && !all ? "1" : ""}"> ${esc(s.name)}${has && !all ? ` <span class="ms-partial">${has}/${chosen.length}</span>` : ""}</label>`;
+      }).join("")
+    : `<div class="ms-empty">No staff yet</div>`;
+  const everyone = state.staff.filter((s) => countFor(s.name) === chosen.length && chosen.length);
+  toggleEl.textContent = everyone.length ? `Assigned: ${assigneeSummaryLabel(everyone.map((s) => s.name))}` : "Assign to…";
+  $$("input[type=checkbox]", menuEl).forEach((cb) => {
+    if (cb.dataset.some) cb.indeterminate = true;
+    cb.addEventListener("change", async () => {
+      await applyTaskBulk({ assigned_to: [cb.value], assign_mode: cb.checked ? "add" : "remove" },
+                          cb.checked ? `Assigned to ${cb.value}` : `Removed ${cb.value}`);
+    });
+  });
+}
+
+/* One request for N rows rather than N requests. Beyond the round trips, the
+   server applies them in a single transaction and refuses the whole batch if
+   any id is missing -- so the toast's count is one the server actually
+   verified, instead of an optimistic tally of promises that mostly settled. */
+async function applyTaskBulk(patchBody, successMessage) {
+  const ids = selectedTaskIds();
+  if (!ids.length) return;
+  try {
+    const res = await post("/api/tasks/bulk", { ids, ...patchBody });
+    await loadTasksView();
+    toast(`${successMessage} · ${res.updated} task${res.updated === 1 ? "" : "s"}`);
+  } catch (err) {
+    toast(err.message, true);
+  }
+}
+
+function wireTaskBulkActions() {
+  wireAssigneeToggle($("#tasks-bulk-assignee-toggle"), $("#tasks-bulk-assignee-menu"));
+
+  $("#tasks-select-all").addEventListener("change", (e) => {
+    const rows = visibleTasks();
+    if (e.target.checked) rows.forEach((t) => state.taskSelection.add(t.id));
+    else state.taskSelection.clear();
+    renderTasksList();
+  });
+
+  $("#tasks-bulk-clear").addEventListener("click", () => {
+    state.taskSelection.clear();
+    state.taskAnchor = null;
+    renderTasksList();
+  });
+
+  $("#tasks-bulk-due").addEventListener("change", async (e) => {
+    const value = e.target.value;
+    if (!value) return;
+    e.target.value = "";
+    await applyTaskBulk({ due_date: value }, `Due ${value}`);
+  });
+
+  $("#tasks-bulk-urgent").addEventListener("click", async (e) => {
+    const on = e.currentTarget.dataset.next === "1";
+    await applyTaskBulk({ urgent: on }, on ? "Flagged urgent" : "Urgent cleared");
+  });
+
+  // Completing and deleting both confirm, because both make a selection you
+  // can no longer see -- and unlike the per-row buttons, they take the whole
+  // batch with them.
+  $("#tasks-bulk-done").addEventListener("click", async () => {
+    const n = state.taskSelection.size;
+    if (!(await confirmAction({
+      eyebrow: "TASKS",
+      title: n === 1 ? "Complete this task?" : `Complete ${n} tasks?`,
+      body: "They move to the completed list and drop off the board's counts.",
+      confirmLabel: n === 1 ? "Complete Task" : `Complete ${n} Tasks`,
+    }))) return;
+    await applyTaskBulk({ done: true }, "Completed");
+  });
+
+  $("#tasks-bulk-delete").addEventListener("click", async () => {
+    const n = state.taskSelection.size;
+    if (!(await confirmAction({
+      eyebrow: "TASKS",
+      title: n === 1 ? "Delete this task?" : `Delete ${n} tasks?`,
+      body: "This can't be undone. Complete them instead if you want a record.",
+      confirmLabel: n === 1 ? "Delete Task" : `Delete ${n} Tasks`,
+      danger: true,
+    }))) return;
+    const ids = selectedTaskIds();
+    try {
+      const res = await post("/api/tasks/bulk-delete", { ids });
+      state.taskSelection.clear();
+      await loadTasksView();
+      toast(`Deleted ${res.deleted} task${res.deleted === 1 ? "" : "s"}`);
+    } catch (err) {
+      toast(err.message, true);
+    }
+  });
+}
+
+/* ---------- preferences ----------
+   Same rule as the board and Reports: the screen opens on the view you were
+   last using. Selection is deliberately not persisted -- a selection restored
+   from a previous session is a set of rows you don't remember picking sitting
+   in front of a Delete button. */
+const TASK_PREFS_KEY = "dao-task-prefs";
+
+function loadTaskPrefs() {
+  let saved;
+  try { saved = JSON.parse(localStorage.getItem(TASK_PREFS_KEY) || "null"); } catch { saved = null; }
+  if (!saved) return;
+  if (typeof saved.filter === "string") state.taskFilter = saved.filter;
+  if (["", "overdue", "today", "unassigned"].includes(saved.card)) state.taskCard = saved.card;
+  state.taskUrgentOnly = !!saved.urgentOnly;
+  state.showCompletedTasks = !!saved.showCompleted;
+  $$('#view-tasks [data-task-filter]').forEach((c) => c.classList.toggle("active", c.dataset.taskFilter === state.taskFilter));
+}
+
+function saveTaskPrefs() {
+  try {
+    localStorage.setItem(TASK_PREFS_KEY, JSON.stringify({
+      filter: state.taskFilter,
+      card: state.taskCard,
+      urgentOnly: state.taskUrgentOnly,
+      showCompleted: state.showCompletedTasks,
+    }));
+  } catch {}
 }
 
 // Only recon/we-owe orders are offered -- retail ROs have no vehicle-detail
@@ -4713,9 +5148,33 @@ function wireTasksView() {
       $$('#view-tasks [data-task-filter]').forEach((c) => c.classList.remove("active"));
       chip.classList.add("active");
       state.taskFilter = chip.dataset.taskFilter;
+      state.taskSelection.clear();
+      saveTaskPrefs();
       renderTasksList();
     });
   });
+
+  // Delegated off the container and keyed on data-task-card rather than bound
+  // per button, so the cards keep working across re-renders -- and clicking a
+  // lit card clears it, which is the only obvious way back out of a filter you
+  // reached by clicking a number.
+  $(".stats-tasks").addEventListener("click", (e) => {
+    const card = e.target.closest("[data-task-card]");
+    if (!card || card.disabled) return;
+    state.taskCard = state.taskCard === card.dataset.taskCard ? "" : card.dataset.taskCard;
+    state.taskSelection.clear();
+    saveTaskPrefs();
+    renderTasksList();
+  });
+
+  $("#tasks-urgent-filter").addEventListener("click", () => {
+    state.taskUrgentOnly = !state.taskUrgentOnly;
+    state.taskSelection.clear();
+    saveTaskPrefs();
+    renderTasksList();
+  });
+
+  $("#tasks-reset-view").addEventListener("click", resetTaskView);
 
   $("#task-search").addEventListener("input", (e) => {
     state.taskSearch = e.target.value.trim();
@@ -4724,6 +5183,21 @@ function wireTasksView() {
 
   $("#tasks-toggle-completed").addEventListener("click", () => {
     state.showCompletedTasks = !state.showCompletedTasks;
+    saveTaskPrefs();
+    renderTasksList();
+  });
+
+  wireTaskBulkActions();
+  loadTaskPrefs();
+
+  // Escape drops the selection, matching the board. Scoped to this view so it
+  // doesn't fight the dialog's own Escape handling on any other screen.
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape" || !state.taskSelection.size) return;
+    if (!$("#view-tasks").classList.contains("active")) return;
+    if (document.querySelector("dialog[open]")) return;
+    state.taskSelection.clear();
+    state.taskAnchor = null;
     renderTasksList();
   });
 }

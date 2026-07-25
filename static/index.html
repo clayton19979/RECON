@@ -633,6 +633,33 @@
           </div>
         </div>
 
+        <!-- Same three-card grammar as the Vehicles board: a plain count for
+             context, and the rest are filters, so "4 overdue" is one click away
+             from being the only four rows on screen. -->
+        <div class="stats stats-tasks">
+          <div class="stat">
+            <div class="stat-label">Open</div>
+            <div class="stat-value" id="stat-tasks-open">0</div>
+            <div class="stat-sub" id="stat-tasks-open-sub">nothing outstanding</div>
+          </div>
+          <button type="button" class="stat stat-action" data-task-card="overdue" aria-pressed="false">
+            <div class="stat-label">Overdue</div>
+            <div class="stat-value" id="stat-tasks-overdue">0</div>
+            <div class="stat-sub" id="stat-tasks-overdue-sub">nothing past due</div>
+          </button>
+          <button type="button" class="stat stat-action" data-task-card="today" aria-pressed="false">
+            <div class="stat-label">Due Today</div>
+            <div class="stat-value" id="stat-tasks-today">0</div>
+            <div class="stat-sub" id="stat-tasks-today-sub">clear for today</div>
+          </button>
+          <button type="button" class="stat stat-action" data-task-card="unassigned" aria-pressed="false">
+            <div class="stat-label">Unassigned</div>
+            <div class="stat-value" id="stat-tasks-unassigned">0</div>
+            <div class="stat-sub" id="stat-tasks-unassigned-sub">everything has an owner</div>
+          </button>
+        </div>
+        <p class="stats-scope" id="tasks-scope">Every open task.</p>
+
         <form id="task-quick-add" class="task-quick-add">
           <input id="task-title-input" placeholder="Add a task… e.g. Call John back about his Civic" required>
           <div class="ms-picker" id="task-assignee-picker">
@@ -648,9 +675,37 @@
         <div class="filters">
           <button class="chip active" data-task-filter="">All</button>
           <button class="chip" data-task-filter="mine">Assigned to Me</button>
+          <button type="button" class="chip chip-toggle" id="tasks-urgent-filter" aria-pressed="false"
+                  title="Show only tasks flagged urgent">Urgent only</button>
           <input id="task-search" class="filters-search" placeholder="Search tasks…" autocomplete="off">
+          <button type="button" class="btn btn-ghost btn-sm" id="tasks-reset-view" hidden>Reset view</button>
           <div class="filters-gap"></div>
+          <label class="tasks-select-all-wrap" for="tasks-select-all">
+            <input type="checkbox" id="tasks-select-all" title="Select all shown">
+            <span>Select all</span>
+          </label>
           <span class="filters-note" id="tasks-count">0 open</span>
+        </div>
+
+        <!-- The other half of the board's "Make N Tasks": those land unassigned
+             and undated, and fixing that one row at a time is what stopped
+             anyone from using them. Every control here applies to the whole
+             selection in one request. -->
+        <div class="bulk-bar" id="tasks-bulk-bar" style="display:none">
+          <span id="tasks-bulk-count"></span>
+          <div class="ms-picker" id="tasks-bulk-assignee-picker">
+            <button type="button" class="ms-toggle" id="tasks-bulk-assignee-toggle">Assign to…</button>
+            <div class="ms-menu" id="tasks-bulk-assignee-menu"></div>
+          </div>
+          <label class="bulk-field" for="tasks-bulk-due">
+            <span>Due</span>
+            <input type="date" id="tasks-bulk-due" title="Set a due date on every selected task">
+          </label>
+          <button type="button" class="btn btn-ghost btn-sm" id="tasks-bulk-urgent">Flag Urgent</button>
+          <div class="filters-gap"></div>
+          <button type="button" class="btn btn-ghost btn-sm" id="tasks-bulk-clear">Clear selection</button>
+          <button type="button" class="btn btn-ghost btn-sm" id="tasks-bulk-delete">Delete</button>
+          <button type="button" class="btn btn-primary btn-sm" id="tasks-bulk-done">Complete</button>
         </div>
 
         <div id="tasks-list" class="task-list"></div>

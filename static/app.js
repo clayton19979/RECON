@@ -6589,6 +6589,7 @@ function suggestionCardHtml(s) {
         <span title="${esc(fmtDate(s.created_at))}">${author ? `${esc(author)} · ` : ""}${esc(relativeTime(s.created_at))}</span>
         ${s.resolved ? `<span class="pill pill-done">Done</span>${s.updated_at && s.updated_at !== s.created_at ? `<span title="${esc(fmtDate(s.updated_at))}">done ${esc(relativeTime(s.updated_at))}</span>` : ""}` : ""}
         <div class="suggestion-actions">
+          ${s.resolved ? "" : `<button type="button" class="btn btn-ghost btn-sm suggestion-make-task">Make a Task</button>`}
           <button type="button" class="btn btn-ghost btn-sm suggestion-toggle">${s.resolved ? "Reopen" : "Mark Done"}</button>
           <button type="button" class="rm-btn suggestion-delete" title="Delete" aria-label="Delete idea">×</button>
         </div>
@@ -6618,6 +6619,27 @@ function wireSuggestionCardActions(container) {
             renderSuggestionsList();
           }
         },
+      });
+    });
+  });
+  // Turns an idea into real, trackable work: posts a task titled from the
+  // idea's text (truncated to the task title's 300-char limit -- ideas can
+  // run to 2000) and resolves the idea, so it doesn't sit open twice over.
+  $$(".suggestion-make-task", container).forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const card = btn.closest(".suggestion-card");
+      const s = state.suggestions.find((x) => x.id === Number(card.dataset.id));
+      if (!s) return;
+      const title = s.text.length > 300 ? `${s.text.slice(0, 297)}...` : s.text;
+      await withLoading(btn, "Creating…", async () => {
+        try {
+          await post("/api/tasks", { title, actor: currentActor() });
+          await patch(`/api/suggestions/${s.id}`, { resolved: true });
+          toast("Task created from this idea");
+          await loadSuggestionsView();
+        } catch (err) {
+          toast(err.message, true);
+        }
       });
     });
   });

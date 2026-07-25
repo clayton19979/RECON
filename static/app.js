@@ -412,6 +412,7 @@ const state = {
   reportStart: "",
   reportEnd: "",
   reportSort: { key: "cost", dir: "desc" },
+  reportOverOnly: false,                // "Over Quote" card toggle -- vehicle-spend shape only
   report: null,                         // { rows, type, start, end } -- what's on screen, for print/CSV
   tasks: [],
   taskFilter: "",
@@ -3909,7 +3910,13 @@ function sortReportRows(rows, shape, { key, dir }) {
 // was on screen when Print was pressed.
 function visibleReportRows() {
   if (!state.report) return [];
-  return sortReportRows(state.report.rows, reportShape(state.report.type), state.reportSort);
+  const shape = reportShape(state.report.type);
+  let rows = state.report.rows;
+  // Same rule as the board's own Over Quote card: the filter keeps exactly
+  // the rows it counts, so the card's own number reads the same whether it's
+  // on or off -- no separate "count ignoring this filter" pool needed.
+  if (shape === "vehicle-spend" && state.reportOverOnly) rows = rows.filter(overQuote);
+  return sortReportRows(rows, shape, state.reportSort);
 }
 
 function reportSortHeader(shape, key, extraClass = "") {
@@ -3927,12 +3934,27 @@ function reportSortHeader(shape, key, extraClass = "") {
    them -- same range, same segment -- so there's nothing to reconcile. */
 function renderReportStats(rows, shape) {
   const cards = shape === "technicians" ? technicianStatCards(rows) : vehicleSpendStatCards(rows);
-  $("#report-stats").innerHTML = cards.map((c) => `
-    <div class="stat">
-      <div class="stat-label">${esc(c.label)}</div>
-      <div class="stat-value${c.tone ? ` ${c.tone}` : ""}">${esc(c.value)}</div>
-      <div class="stat-sub">${esc(c.sub)}</div>
-    </div>`).join("");
+  $("#report-stats").innerHTML = cards.map((c) => {
+    if (!c.action) {
+      return `
+      <div class="stat">
+        <div class="stat-label">${esc(c.label)}</div>
+        <div class="stat-value${c.tone ? ` ${c.tone}` : ""}">${esc(c.value)}</div>
+        <div class="stat-sub">${esc(c.sub)}</div>
+      </div>`;
+    }
+    // Same convention as the board's filtering cards: pressed state and
+    // disabled-when-zero both come from state, and the card is the filter --
+    // clicking it again clears it rather than needing a separate control.
+    const active = state.reportOverOnly;
+    const count = Number(c.value) || 0;
+    return `
+      <button type="button" class="stat stat-action" data-report-filter="over-quote" aria-pressed="${active ? "true" : "false"}" ${!count && !active ? "disabled" : ""} title="${active ? "Showing only these — click to clear" : (count ? "Show only vehicles past their estimate" : "")}">
+        <div class="stat-label">${esc(c.label)}</div>
+        <div class="stat-value${c.tone ? ` ${c.tone}` : ""}">${esc(c.value)}</div>
+        <div class="stat-sub">${esc(c.sub)}</div>
+      </button>`;
+  }).join("");
 }
 
 // A car counts as over quote on the same >10% rule the board colors Cost
@@ -3959,6 +3981,7 @@ function vehicleSpendStatCards(rows) {
       // to read -- it earns the green, not a neutral grey.
       label: "Over Quote", value: String(over.length), tone: over.length ? "warn" : (quoted ? "good" : ""),
       sub: over.length ? `${money(overBy)} past estimate` : "every quoted car came in on budget",
+      action: true,
     },
   ];
 }
@@ -4085,6 +4108,17 @@ function reportEmptyState(shape) {
   })}</div>`;
 }
 
+// Shared by the real table and its loading skeleton, so the two can never
+// draw a different column count -- the skeleton renders with hasDeposits
+// forced true (the max shape) so the real table only ever narrows once data
+// lands, never widens.
+function reportHeaderRow(shape, hasDeposits) {
+  if (shape === "technicians") {
+    return `${reportSortHeader("technicians", "technician")}${reportSortHeader("technicians", "ros", "num-col")}${reportSortHeader("technicians", "completed", "num-col")}${reportSortHeader("technicians", "hours", "num-col")}${reportSortHeader("technicians", "cost", "num-col")}`;
+  }
+  return `${reportSortHeader("vehicle-spend", "stock")}${reportSortHeader("vehicle-spend", "vehicle")}${reportSortHeader("vehicle-spend", "segment")}${reportSortHeader("vehicle-spend", "status")}${reportSortHeader("vehicle-spend", "tech")}${reportSortHeader("vehicle-spend", "cost", "num-col")}${hasDeposits ? reportSortHeader("vehicle-spend", "paid", "num-col") + reportSortHeader("vehicle-spend", "net", "num-col") : ""}`;
+}
+
 function renderReportTable(rows, shape) {
   if (!rows.length) return reportEmptyState(shape);
   if (shape === "technicians") {
@@ -4094,13 +4128,9 @@ function renderReportTable(rows, shape) {
     const totHours = Math.round(rows.reduce((s, r) => s + r.labor_hours, 0) * 100) / 100;
     const totCost = rows.reduce((s, r) => s + r.labor_cost, 0);
     return `<div class="panel"><div class="table-wrap table-scroll"><table class="sticky-head"><thead><tr>
-      ${reportSortHeader("technicians", "technician")}
-      ${reportSortHeader("technicians", "ros", "num-col")}
-      ${reportSortHeader("technicians", "completed", "num-col")}
-      ${reportSortHeader("technicians", "hours", "num-col")}
-      ${reportSortHeader("technicians", "cost", "num-col")}
+      ${reportHeaderRow("technicians")}
       </tr></thead>
-      <tbody>${rows.map((r) => `<tr${r.ro_count ? "" : ' class="row-muted"'}><td>${esc(r.technician)}</td><td class="num-col">${r.ro_count}</td><td class="num-col">${r.completed_count}</td><td class="num-col">${r.labor_hours}</td><td class="num-col">${money(r.labor_cost)}</td></tr>`).join("")}</tbody>
+      <tbody>${rows.map((r) => `<tr${r.ro_count ? "" : ' class="row-muted"'}><td>${esc(r.technician)}</td><td class="num-col">${r.ro_count}</td><td class="num-col">${r.completed_count}</td><td class="num-col">${Math.round(r.labor_hours * 100) / 100}</td><td class="num-col">${money(r.labor_cost)}</td></tr>`).join("")}</tbody>
       <tfoot><tr><td>Total (${working} working)</td><td class="num-col">${totRos}</td><td class="num-col">${totDone}</td><td class="num-col">${totHours}</td><td class="num-col">${money(totCost)}</td></tr></tfoot>
       </table></div></div>`;
   }
@@ -4110,18 +4140,12 @@ function renderReportTable(rows, shape) {
   // Rows navigate to the vehicle -- Reports is where you find the problem
   // car, so it shouldn't make you memorize a stock number to go act on it.
   return `<div class="panel"><div class="table-wrap table-scroll"><table class="sticky-head"><thead><tr>
-    ${reportSortHeader("vehicle-spend", "stock")}
-    ${reportSortHeader("vehicle-spend", "vehicle")}
-    ${reportSortHeader("vehicle-spend", "segment")}
-    ${reportSortHeader("vehicle-spend", "status")}
-    ${reportSortHeader("vehicle-spend", "tech")}
-    ${reportSortHeader("vehicle-spend", "cost", "num-col")}
-    ${hasDeposits ? reportSortHeader("vehicle-spend", "paid", "num-col") + reportSortHeader("vehicle-spend", "net", "num-col") : ""}
+    ${reportHeaderRow("vehicle-spend", hasDeposits)}
     </tr></thead>
     <tbody>${rows.map((r) => {
       const refId = r.segment === "recon" ? r.recon_id : r.we_owe_id;
       const clickable = refId != null;
-      return `<tr${clickable ? ` class="clickable" data-seg="${esc(r.segment)}" data-ref-id="${refId}" tabindex="0" title="Open this vehicle"` : ""}><td class="num">${esc(r.stock_number || "—")}</td><td>${esc(r.vehicle)}${r.customer_name ? ` <span style="color:var(--ink-faint)">(${esc(r.customer_name)})</span>` : ""}</td>
+      return `<tr${clickable ? ` class="clickable" data-seg="${esc(r.segment)}" data-ref-id="${refId}" tabindex="0" title="Open this vehicle"` : ""}><td class="num">${esc(r.stock_number || "—")}</td><td>${esc(r.vehicle)}${r.customer_name ? ` <span class="cell-sub">(${esc(r.customer_name)})</span>` : ""}</td>
     <td>${r.segment === "recon" ? "Recon" : "We-Owe"}</td><td><span class="pill ${vehicleStatusPillClass(r)}">${esc(STATUS_LABEL[r.status] || r.status)}</span></td>
     <td>${esc((r.technicians || []).join(", ")) || "—"}</td><td class="num-col${overQuote(r) ? " over-quote" : ""}" ${overQuote(r) ? `title="${money(r.actual_cost - r.quoted_cost)} over the ${money(r.quoted_cost)} quote"` : ""}>${money(r.actual_cost)}</td>${hasDeposits ? `<td class="num-col">${r.customer_paid ? money(r.customer_paid) : "—"}</td><td class="num-col">${r.customer_paid ? money(r.net_cost) : "—"}</td>` : ""}</tr>`;
     }).join("")}</tbody>
@@ -4168,9 +4192,9 @@ function renderPrintReport(rows, type, start, end) {
         <thead><tr><th>Stock #</th><th>Vehicle</th><th>Type</th><th>Status</th><th>Technician(s)</th><th class="num-col">Cost</th>${hasDeposits ? `<th class="num-col">Customer Paid</th><th class="num-col">Net to Shop</th>` : ""}</tr></thead>
         <tbody>${rows.map((r) => `<tr><td class="num">${esc(r.stock_number || "—")}</td><td>${esc(r.vehicle)}${r.customer_name ? ` (${esc(r.customer_name)})` : ""}</td>
         <td>${r.segment === "recon" ? "Recon" : "We-Owe"}</td><td>${esc(STATUS_LABEL[r.status] || r.status)}</td>
-        <td>${esc((r.technicians || []).join(", ")) || "—"}</td><td class="num-col">${money(r.actual_cost)}</td>${hasDeposits ? `<td class="num-col">${r.customer_paid ? money(r.customer_paid) : "—"}</td><td class="num-col">${r.customer_paid ? money(r.net_cost) : "—"}</td>` : ""}</tr>`).join("")}</tbody>
+        <td>${esc((r.technicians || []).join(", ")) || "—"}</td><td class="num-col${overQuote(r) ? " over-quote-mark" : ""}">${money(r.actual_cost)}${overQuote(r) ? "*" : ""}</td>${hasDeposits ? `<td class="num-col">${r.customer_paid ? money(r.customer_paid) : "—"}</td><td class="num-col">${r.customer_paid ? money(r.net_cost) : "—"}</td>` : ""}</tr>`).join("")}</tbody>
         <tfoot><tr><td colspan="4">Total (${rows.length} vehicle${rows.length === 1 ? "" : "s"})</td><td class="num-col"></td><td class="num-col">${money(totalActual)}</td>${hasDeposits ? `<td class="num-col">${money(totalPaid)}</td><td class="num-col">${money(totalActual - totalPaid)}</td>` : ""}</tr></tfoot>
-      </table>`;
+      </table>${rows.some(overQuote) ? `<p class="print-note">* over the quoted estimate</p>` : ""}`;
   }
   return `
     <header class="print-letterhead">
@@ -4203,8 +4227,15 @@ function showReportPlaceholders() {
       <span class="bar-track"><span class="skeleton-line" style="width:${w}%;height:12px"></span></span>
       <span class="bar-value"><span class="skeleton-line" style="width:80%"></span></span>
     </li>`).join("")}</ul></div>`;
-  const cols = reportShape(state.reportType) === "technicians" ? 5 : 6;
-  $("#report-output").innerHTML = `<div class="panel"><table><tbody>${skeletonRows(cols)}</tbody></table></div>`;
+  // Same shell the real table renders into (table-wrap/table-scroll/
+  // sticky-head, a real header) so switching reports doesn't visibly jump
+  // height or flash the header in once data lands. Rendered at the max
+  // column count (deposits included) so the real table only ever narrows.
+  const shape = reportShape(state.reportType);
+  const cols = shape === "technicians" ? 5 : 8;
+  $("#report-output").innerHTML = `<div class="panel"><div class="table-wrap table-scroll"><table class="sticky-head"><thead><tr>
+    ${reportHeaderRow(shape, true)}
+    </tr></thead><tbody>${skeletonRows(cols)}</tbody></table></div></div>`;
 }
 
 // The view loader, so opening Reports shows the last report you were reading
@@ -4227,6 +4258,11 @@ function renderReport() {
   $("#report-scope").textContent =
     `${REPORT_TITLES[state.report.type]} · ${reportDateRangeLabel(state.report.start, state.report.end)} · ${rows.length} row${rows.length === 1 ? "" : "s"}`;
   $("#report-print").disabled = !rows.length;
+  // <a> has no native disabled attribute -- aria-disabled + the CSS rule
+  // that kills pointer-events is what actually stops the click, matching
+  // the Print button sitting right next to it for the same empty state.
+  if (rows.length) $("#report-csv").removeAttribute("aria-disabled");
+  else $("#report-csv").setAttribute("aria-disabled", "true");
   $("#print-report").innerHTML = renderPrintReport(rows, state.report.type, state.report.start, state.report.end);
 }
 
@@ -4282,8 +4318,16 @@ function wireReportsView() {
     const btn = e.target.closest("[data-report-type]");
     if (!btn || btn.dataset.reportType === state.reportType) return;
     state.reportType = btn.dataset.reportType;
+    state.reportOverOnly = false; // the technicians shape has no over-quote concept
     syncReportControls();
     refreshReport();
+  });
+
+  $("#report-stats").addEventListener("click", (e) => {
+    const btn = e.target.closest('[data-report-filter="over-quote"]');
+    if (!btn || btn.disabled) return;
+    state.reportOverOnly = !state.reportOverOnly;
+    renderReport();
   });
 
   // Delegated on the view, so the "Show all time" button inside an empty

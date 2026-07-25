@@ -1140,6 +1140,11 @@ dialog::backdrop { background: color-mix(in srgb, #0a0c0f 45%, transparent); bac
   .print-concern .label { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; color: #444; font-weight: 700; }
   .print-concern .text { font-size: 15px; font-weight: 600; color: #000; margin-top: 3px; }
   .print-meta-line { font-size: 12px; color: #333; margin-top: 2px; }
+  /* Color alone (.over-quote on screen) doesn't survive to paper -- every
+     body cell is forced to #000 for print. Bold plus an asterisk/footnote
+     carries the same "over quote" signal without depending on color. */
+  .print-note { font-size: 11px; color: #333; margin: 4px 0 0; }
+  .print-table .over-quote-mark { font-weight: 700; }
   /* Ticket printouts get more breathing room than the dense multi-row
      report tables -- a technician reading one printed RO on the shop
      floor needs it legible at a glance, not packed tight. */
@@ -1770,6 +1775,8 @@ th.sel-col, td.sel-col { width: 32px; padding-right: 0; }
 
 /* ---------- reports ---------- */
 #report-scope { min-height: 16px; }
+.cell-sub { color: var(--ink-faint); }
+#report-csv[aria-disabled="true"] { pointer-events: none; opacity: .5; }
 /* Custom-range state: when no chip is lit, the date inputs carry the "this
    is what's active" accent so the toolbar never looks unselected. */
 .report-date.custom { color: var(--accent); }

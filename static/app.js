@@ -278,7 +278,7 @@ function skeletonCards(count = 3) {
 // Which containers to fill with a placeholder when a view is opened, and how
 // many columns each table has (so the skeleton lines up with its header).
 const VIEW_PLACEHOLDERS = {
-  vehicles:    [["#vehicles-table", 8]],
+  vehicles:    [["#vehicles-table", 9]],
   accounting:  [["#ap-table", 7]],
   cores:       [["#cores-table", 6], ["#returns-table", 7]],
   staff:       [["#staff-table", 4]],
@@ -299,7 +299,14 @@ const state = {
   vehicles: [],
   filter: "",
   search: "",
-  sortByAge: null, // null | "asc" | "desc"
+  // The board's whole view state -- which segment, which status, which column
+  // it's sorted by -- is restored from localStorage on load (see
+  // loadVehicleViewPrefs) so the advisor's working view survives a refresh,
+  // an app restart, and a trip through a repair order and back.
+  vehicleSort: { key: "", dir: "desc" }, // key "" == the server's own order (newest first)
+  vehicleStatus: "",                      // "" == any status
+  vehicleCursor: null,                    // key of the keyboard-focused row
+  vehicleAnchor: null,                    // key of the last row clicked, for Shift+click ranges
   staff: [],
   vendors: [],
   orders: [],
@@ -480,7 +487,65 @@ async function loadVehiclesView() {
   }
   state.vehicleSelection.clear();
   renderStats();
+  renderVehicleStatusOptions();
   renderVehiclesTable();
+}
+
+/* ---------- board view preferences ----------
+   Segment, status, and sort are the advisor's working view, not incidental UI
+   state: a tech-lead who lives on "Recon, In Progress, oldest first" had to
+   rebuild that view after every refresh. All three persist; search
+   deliberately does not, because a stale search box that hides most of the
+   board is confusing to come back to. */
+const VEHICLE_PREFS_KEY = "dao-vehicle-view";
+
+function loadVehicleViewPrefs() {
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem(VEHICLE_PREFS_KEY) || "null"); } catch { saved = null; }
+  if (!saved || typeof saved !== "object") return;
+  if (["", "recon", "we_owe", "history"].includes(saved.filter)) state.filter = saved.filter;
+  if (typeof saved.status === "string") state.vehicleStatus = saved.status;
+  if (saved.sort && (saved.sort.key === "" || VEHICLE_SORTS[saved.sort.key])) {
+    state.vehicleSort = { key: saved.sort.key, dir: saved.sort.dir === "asc" ? "asc" : "desc" };
+  }
+  const chips = $$("#view-vehicles .filters .chip");
+  chips.forEach((c) => c.classList.toggle("active", (c.dataset.filter || "") === state.filter));
+  $("#vehicles-status-filter").value = state.vehicleStatus;
+}
+
+function saveVehicleViewPrefs() {
+  try {
+    localStorage.setItem(VEHICLE_PREFS_KEY, JSON.stringify({
+      filter: state.filter, status: state.vehicleStatus, sort: state.vehicleSort,
+    }));
+  } catch {}
+  const dirty = !!(state.filter || state.vehicleStatus || state.vehicleSort.key || state.search);
+  $("#vehicles-reset-view").hidden = !dirty;
+}
+
+function resetVehicleView() {
+  state.filter = "";
+  state.vehicleStatus = "";
+  state.vehicleSort = { key: "", dir: "desc" };
+  state.search = "";
+  $("#global-search").value = "";
+  $("#vehicles-status-filter").value = "";
+  $$("#view-vehicles .filters .chip").forEach((c) => c.classList.toggle("active", !c.dataset.filter));
+  loadVehiclesView();
+}
+
+// Statuses differ by segment (recon carries the ticket's status, we-owe can
+// also be fulfilled/waived), and which ones exist depends on the data, so the
+// dropdown is built from what's actually on the board rather than hardcoded --
+// a status nobody has is a dead option that only ever produces an empty list.
+function renderVehicleStatusOptions() {
+  const sel = $("#vehicles-status-filter");
+  const present = [...new Set(state.vehicles.map((v) => v.status))]
+    .sort((a, b) => (STATUS_LABEL[a] || a).localeCompare(STATUS_LABEL[b] || b));
+  if (state.vehicleStatus && !present.includes(state.vehicleStatus)) state.vehicleStatus = "";
+  sel.innerHTML = `<option value="">Any</option>` +
+    present.map((s) => `<option value="${esc(s)}">${esc(STATUS_LABEL[s] || s)}</option>`).join("");
+  sel.value = state.vehicleStatus;
 }
 
 function renderStats() {
@@ -558,9 +623,44 @@ function vehiclesEmptyState() {
   };
 }
 
-function renderVehiclesTable() {
+/* ---------- sorting ----------
+   One comparator per column, all of them stable against the server's own
+   ordering (newest first) because Array.prototype.sort is stable in every
+   engine this ships to -- so sorting by Type, say, leaves each type's cars in
+   the order they'd have been in anyway. Text columns compare
+   case-insensitively and always sort blanks last regardless of direction: a
+   we-owe with no stock number is missing data, not "the first car", and
+   burying it at the bottom either way is what every list app does. */
+const VEHICLE_SORTS = {
+  stock: { label: "Stock #", type: "text", value: (v) => v.stock_number || "" },
+  vehicle: { label: "Vehicle", type: "text", value: (v) => v.vehicle || "" },
+  segment: { label: "Type", type: "text", value: (v) => (v.segment === "recon" ? "Recon" : "We-Owe") },
+  status: { label: "Status", type: "text", value: (v) => STATUS_LABEL[v.status] || v.status || "" },
+  tech: { label: "Technician", type: "text", value: (v) => v.technicians.join(", ") },
+  age: { label: "Age", type: "number", value: (v) => v.age_days },
+  quoted: { label: "Quoted", type: "number", value: (v) => v.quoted_cost },
+  cost: { label: "Cost", type: "number", value: (v) => v.actual_cost },
+};
+
+function sortVehicleRows(rows, { key, dir }) {
+  const spec = VEHICLE_SORTS[key];
+  if (!spec) return rows;
+  const sign = dir === "asc" ? 1 : -1;
+  return rows.slice().sort((a, b) => {
+    const av = spec.value(a), bv = spec.value(b);
+    if (spec.type === "number") return ((av || 0) - (bv || 0)) * sign;
+    // blanks last, in both directions
+    if (!av && !bv) return 0;
+    if (!av) return 1;
+    if (!bv) return -1;
+    return av.localeCompare(bv, undefined, { numeric: true, sensitivity: "base" }) * sign;
+  });
+}
+
+function visibleVehicles() {
   let rows = state.vehicles;
   if (state.filter && state.filter !== "history") rows = rows.filter((v) => v.segment === state.filter);
+  if (state.vehicleStatus) rows = rows.filter((v) => v.status === state.vehicleStatus);
   if (state.search) {
     const q = state.search.toLowerCase();
     rows = rows.filter((v) =>
@@ -570,47 +670,149 @@ function renderVehiclesTable() {
       v.vehicle.toLowerCase().includes(q)
     );
   }
-  if (state.sortByAge) {
-    rows = rows.slice().sort((a, b) => state.sortByAge === "desc" ? b.age_days - a.age_days : a.age_days - b.age_days);
-  }
-  $("#vehicles-count").textContent = `${rows.length} vehicle${rows.length === 1 ? "" : "s"}`;
-  const body = $("#vehicles-table");
-  if (!rows.length) {
-    body.innerHTML = emptyRow(8, vehiclesEmptyState());
-    renderVehicleBulkBar();
-    return;
-  }
-  body.innerHTML = rows.map((v) => {
-    const key = vehicleKey(v);
-    return `
-    <tr class="clickable" data-segment="${v.segment}" data-id="${v.segment === "recon" ? v.recon_id : v.we_owe_id}" data-key="${key}">
-      <td><input type="checkbox" class="veh-select" data-key="${key}" ${state.vehicleSelection.has(key) ? "checked" : ""}></td>
+  return sortVehicleRows(rows, state.vehicleSort);
+}
+
+function renderVehicleSortHeaders() {
+  $$("#view-vehicles th.sortable").forEach((th) => {
+    const active = th.dataset.sortKey === state.vehicleSort.key;
+    th.classList.toggle("sorted", active);
+    th.setAttribute("aria-sort", active ? (state.vehicleSort.dir === "asc" ? "ascending" : "descending") : "none");
+    const spec = VEHICLE_SORTS[th.dataset.sortKey];
+    const nextDir = active && state.vehicleSort.dir === "desc" ? "ascending" : "descending";
+    th.title = active && state.vehicleSort.dir === "asc" && spec
+      ? `Sort by ${spec.label} — click to clear`
+      : `Sort by ${spec ? spec.label : "column"} (${nextDir})`;
+    const arrow = $(".sort-arrow", th);
+    if (arrow) arrow.textContent = active ? (state.vehicleSort.dir === "desc" ? "▼" : "▲") : "";
+  });
+}
+
+// Cost against quote is the number the manager actually reads this board for,
+// so a car that's run past its estimate says so in the row rather than making
+// you open it and do the subtraction.
+function costCellClass(v) {
+  if (!v.quoted_cost || !v.actual_cost) return "";
+  if (v.actual_cost > v.quoted_cost * 1.1) return "over-quote";
+  return "";
+}
+
+function vehicleRowHtml(v) {
+  const key = vehicleKey(v);
+  const over = costCellClass(v);
+  return `
+      <td class="col-select"><input type="checkbox" class="veh-select" data-key="${key}" aria-label="Select ${esc(v.stock_number || v.vehicle)}" ${state.vehicleSelection.has(key) ? "checked" : ""}></td>
       <td class="num">${esc(v.stock_number || "—")}</td>
       <td>
-        <div style="font-weight:600">${esc(v.vehicle)}</div>
-        <div style="font-size:11.5px;color:var(--ink-faint)">${v.segment === "we_owe" ? esc(v.customer_name || "") : esc(v.vin || "")}</div>
+        <div class="veh-name">${esc(v.vehicle)}</div>
+        <div class="veh-sub">${v.segment === "we_owe" ? esc(v.customer_name || "") : esc(v.vin || "")}</div>
       </td>
       <td><span class="pill ${v.segment === "recon" ? "pill-recon" : "pill-weowe"}">${v.segment === "recon" ? "Recon" : "We-Owe"}</span></td>
       <td><span class="pill ${vehicleStatusPillClass(v)}">${esc(STATUS_LABEL[v.status] || v.status)}</span></td>
-      <td>${v.technicians.length ? `<span class="tech"><span class="tech-dot"></span>${esc(v.technicians.join(", "))}</span>` : `<span style="color:var(--ink-faint)">—</span>`}</td>
+      <td>${v.technicians.length ? `<span class="tech"><span class="tech-dot"></span>${esc(v.technicians.join(", "))}</span>` : `<span class="muted-dash">—</span>`}</td>
       <td class="num-col ${ageClass(v.age_days)}">${v.age_days}d</td>
-      <td class="num-col">${money(v.actual_cost)}</td>
-    </tr>
-  `;
-  }).join("");
-  $$("tr.clickable", body).forEach((tr) => {
-    tr.addEventListener("click", () => openVehicleDetail(tr.dataset.segment, Number(tr.dataset.id)));
-  });
-  $$(".veh-select", body).forEach((cb) => {
-    cb.addEventListener("click", (e) => e.stopPropagation());
-    cb.addEventListener("change", () => {
-      if (cb.checked) state.vehicleSelection.add(cb.dataset.key);
-      else state.vehicleSelection.delete(cb.dataset.key);
-      renderVehicleBulkBar();
-    });
-  });
-  $("#vehicles-select-all").checked = rows.length > 0 && rows.every((v) => state.vehicleSelection.has(vehicleKey(v)));
+      <td class="num-col quoted-col">${v.quoted_cost ? money(v.quoted_cost) : `<span class="muted-dash">—</span>`}</td>
+      <td class="num-col ${over}"${over ? ` title="Over the estimate by ${money(v.actual_cost - v.quoted_cost)}"` : ""}>${money(v.actual_cost)}</td>`;
+}
+
+// A signature of everything vehicleRowHtml() reads. Two renders with the same
+// signature produce byte-identical markup, so the existing <tr> can be reused
+// as-is -- see renderVehiclesTable.
+function vehicleRowSignature(v) {
+  return [
+    v.stock_number, v.vehicle, v.vin, v.customer_name, v.segment, v.status, v.status_bucket,
+    v.technicians.join("|"), v.age_days, v.quoted_cost, v.actual_cost,
+    state.vehicleSelection.has(vehicleKey(v)) ? 1 : 0,
+  ].join("");
+}
+
+/* Incremental, keyed render.
+
+   The board used to rebuild tbody.innerHTML on every keystroke of the search
+   box, every filter chip and every sort click, then re-bind two listeners per
+   row. That threw away scroll position (annoying on a 60-car lot), threw away
+   focus, and made a checkbox you'd just clicked flicker. Now each <tr> is
+   keyed by segment:id and carries a signature of the data it was built from:
+   rows whose data hasn't changed are moved rather than rebuilt, rows that
+   changed have only their cells replaced, and only genuinely new rows are
+   created. Reordering a list of existing nodes doesn't disturb the scroll
+   container, so sorting a long board keeps your place in it. */
+function renderVehiclesTable() {
+  const rows = visibleVehicles();
+  const body = $("#vehicles-table");
+  const scroller = $("#vehicles-scroll");
+  const scrollTop = scroller ? scroller.scrollTop : 0;
+
+  $("#vehicles-count").textContent = `${rows.length} vehicle${rows.length === 1 ? "" : "s"}`;
+  renderVehicleSortHeaders();
+  saveVehicleViewPrefs();
+
+  if (!rows.length) {
+    body.innerHTML = emptyRow(9, vehiclesEmptyState());
+    state.vehicleCursor = null;
+    $("#vehicles-select-all").checked = false;
+    $("#vehicles-select-all").indeterminate = false;
+    renderVehicleBulkBar();
+    return;
+  }
+
+  const existing = new Map();
+  for (const tr of body.children) {
+    if (tr.dataset && tr.dataset.key) existing.set(tr.dataset.key, tr);
+  }
+
+  let cursor = body.firstElementChild;
+  for (const v of rows) {
+    const key = vehicleKey(v);
+    const sig = vehicleRowSignature(v);
+    let tr = existing.get(key);
+    if (tr) {
+      existing.delete(key);
+      if (tr.dataset.sig !== sig) {
+        tr.innerHTML = vehicleRowHtml(v);
+        tr.dataset.sig = sig;
+      }
+    } else {
+      tr = document.createElement("tr");
+      tr.className = "clickable";
+      tr.dataset.segment = v.segment;
+      tr.dataset.id = String(v.segment === "recon" ? v.recon_id : v.we_owe_id);
+      tr.dataset.key = key;
+      tr.dataset.sig = sig;
+      tr.innerHTML = vehicleRowHtml(v);
+    }
+    tr.classList.toggle("selected", state.vehicleSelection.has(key));
+    if (tr === cursor) cursor = cursor.nextElementSibling;
+    else body.insertBefore(tr, cursor);
+  }
+  // whatever's left never made it into this render (filtered out, or gone)
+  for (const tr of existing.values()) tr.remove();
+  while (cursor) { const next = cursor.nextElementSibling; cursor.remove(); cursor = next; }
+
+  if (state.vehicleCursor && !rows.some((v) => vehicleKey(v) === state.vehicleCursor)) state.vehicleCursor = null;
+  applyVehicleCursor();
+
+  const selectedCount = rows.filter((v) => state.vehicleSelection.has(vehicleKey(v))).length;
+  const all = $("#vehicles-select-all");
+  all.checked = selectedCount === rows.length;
+  all.indeterminate = selectedCount > 0 && selectedCount < rows.length;
   renderVehicleBulkBar();
+  if (scroller && scroller.scrollTop !== scrollTop) scroller.scrollTop = scrollTop;
+}
+
+function applyVehicleCursor() {
+  $$("#vehicles-table tr.cursor").forEach((tr) => tr.classList.remove("cursor"));
+  if (!state.vehicleCursor) return;
+  const tr = $(`#vehicles-table tr[data-key="${cssEscape(state.vehicleCursor)}"]`);
+  if (tr) tr.classList.add("cursor");
+}
+
+// Keys are "segment:id" -- the colon needs escaping inside an attribute
+// selector, and CSS.escape doesn't exist in every environment this runs in
+// (notably the jsdom used by the front-end smoke test).
+function cssEscape(value) {
+  if (typeof CSS !== "undefined" && CSS.escape) return CSS.escape(value);
+  return String(value).replace(/[^a-zA-Z0-9_-]/g, (ch) => `\\${ch}`);
 }
 
 function vehicleKey(v) {
@@ -628,6 +830,36 @@ function renderVehicleBulkBar() {
   $("#vehicles-bulk-archive").textContent = state.filter === "history" ? "Reopen Selected" : "Send Selected to History";
 }
 
+/* ---------- selection ---------- */
+function setVehicleSelected(key, on) {
+  if (on) state.vehicleSelection.add(key);
+  else state.vehicleSelection.delete(key);
+}
+
+// Shift+click selects everything between the last row you touched and this
+// one, in the order they're currently displayed -- the standard file-list
+// gesture, and the only sane way to archive twenty cars at once.
+function selectVehicleRange(fromKey, toKey) {
+  const keys = visibleVehicles().map(vehicleKey);
+  const a = keys.indexOf(fromKey), b = keys.indexOf(toKey);
+  if (a === -1 || b === -1) return setVehicleSelected(toKey, true);
+  for (let i = Math.min(a, b); i <= Math.max(a, b); i++) state.vehicleSelection.add(keys[i]);
+}
+
+function moveVehicleCursor(delta) {
+  const keys = visibleVehicles().map(vehicleKey);
+  if (!keys.length) return;
+  const at = state.vehicleCursor ? keys.indexOf(state.vehicleCursor) : -1;
+  let next;
+  if (delta === "first") next = 0;
+  else if (delta === "last") next = keys.length - 1;
+  else next = at === -1 ? (delta > 0 ? 0 : keys.length - 1) : Math.min(keys.length - 1, Math.max(0, at + delta));
+  state.vehicleCursor = keys[next];
+  applyVehicleCursor();
+  const tr = $(`#vehicles-table tr[data-key="${cssEscape(state.vehicleCursor)}"]`);
+  if (tr && tr.scrollIntoView) tr.scrollIntoView({ block: "nearest" });
+}
+
 function wireVehiclesView() {
   // Scoped to this view's own chips. ".filters .chip" matched every chip in
   // the app -- the A/P date ranges, the cores and returns filters, the task
@@ -641,10 +873,17 @@ function wireVehiclesView() {
       chip.classList.add("active");
       const wasHistory = state.filter === "history";
       state.filter = chip.dataset.filter;
+      state.vehicleCursor = null;
       if (wasHistory !== (state.filter === "history")) loadVehiclesView();
-      else renderVehiclesTable();
+      else { renderVehicleStatusOptions(); renderVehiclesTable(); }
     });
   });
+  $("#vehicles-status-filter").addEventListener("change", (e) => {
+    state.vehicleStatus = e.target.value;
+    state.vehicleCursor = null;
+    renderVehiclesTable();
+  });
+  $("#vehicles-reset-view").addEventListener("click", () => resetVehicleView());
   $("#global-search").addEventListener("input", (e) => {
     state.search = e.target.value.trim();
     if (!$("#view-vehicles").classList.contains("active")) showView("vehicles");
@@ -653,33 +892,102 @@ function wireVehiclesView() {
   $("#add-recon-btn").addEventListener("click", () => openReconDialog());
   $("#add-we-owe-btn").addEventListener("click", () => openWeOweDialog());
 
-  // The empty state's buttons are re-rendered with the table, so they're
-  // handled by delegation rather than re-bound on every render.
+  // One delegated click handler for the whole table body: the empty state's
+  // buttons, the per-row checkboxes and opening a vehicle. Rows are recycled
+  // across renders now, so per-row binding would either double up or be lost
+  // depending on which side of the reuse a row landed on.
   $("#vehicles-table").addEventListener("click", (e) => {
     const trigger = e.target.closest("[data-empty-action]");
-    if (!trigger) return;
-    if (trigger.dataset.emptyAction === "add-recon") openReconDialog();
-    if (trigger.dataset.emptyAction === "add-we-owe") openWeOweDialog();
-    if (trigger.dataset.emptyAction === "clear-search") {
-      state.search = "";
-      $("#global-search").value = "";
+    if (trigger) {
+      if (trigger.dataset.emptyAction === "add-recon") openReconDialog();
+      if (trigger.dataset.emptyAction === "add-we-owe") openWeOweDialog();
+      if (trigger.dataset.emptyAction === "clear-search") {
+        state.search = "";
+        $("#global-search").value = "";
+        renderVehiclesTable();
+      }
+      return;
+    }
+    const row = e.target.closest("tr.clickable");
+    if (!row) return;
+    const key = row.dataset.key;
+    const box = e.target.closest(".veh-select");
+    if (box) {
+      // the checkbox owns the click; opening the vehicle would be a surprise
+      if (e.shiftKey && state.vehicleAnchor && state.vehicleAnchor !== key) selectVehicleRange(state.vehicleAnchor, key);
+      else setVehicleSelected(key, box.checked);
+      state.vehicleAnchor = key;
+      state.vehicleCursor = key;
+      renderVehiclesTable();
+      return;
+    }
+    if (e.shiftKey || e.ctrlKey || e.metaKey) {
+      // modifier-click anywhere on the row is a selection gesture, not navigation
+      if (e.shiftKey && state.vehicleAnchor) selectVehicleRange(state.vehicleAnchor, key);
+      else setVehicleSelected(key, !state.vehicleSelection.has(key));
+      state.vehicleAnchor = key;
+      state.vehicleCursor = key;
+      renderVehiclesTable();
+      return;
+    }
+    state.vehicleCursor = key;
+    openVehicleDetail(row.dataset.segment, Number(row.dataset.id));
+  });
+
+  // Keyboard: the board is a work list, and a work list you can only drive
+  // with a mouse is slow to triage. Arrows move a cursor row, Enter opens it,
+  // Space selects it, "/" jumps to search.
+  document.addEventListener("keydown", (e) => {
+    if (!$("#view-vehicles").classList.contains("active")) return;
+    const tag = (e.target.tagName || "").toLowerCase();
+    const typing = tag === "input" || tag === "textarea" || tag === "select" || e.target.isContentEditable;
+    if (e.key === "/" && !typing) {
+      e.preventDefault();
+      $("#global-search").focus();
+      $("#global-search").select();
+      return;
+    }
+    if (typing) {
+      if (e.key === "Escape" && e.target.id === "global-search") {
+        state.search = "";
+        e.target.value = "";
+        renderVehiclesTable();
+      }
+      return;
+    }
+    if (e.key === "ArrowDown" || e.key === "j") { e.preventDefault(); moveVehicleCursor(1); }
+    else if (e.key === "ArrowUp" || e.key === "k") { e.preventDefault(); moveVehicleCursor(-1); }
+    else if (e.key === "Home") { e.preventDefault(); moveVehicleCursor("first"); }
+    else if (e.key === "End") { e.preventDefault(); moveVehicleCursor("last"); }
+    else if (e.key === "Enter" && state.vehicleCursor) {
+      const tr = $(`#vehicles-table tr[data-key="${cssEscape(state.vehicleCursor)}"]`);
+      if (tr) openVehicleDetail(tr.dataset.segment, Number(tr.dataset.id));
+    } else if (e.key === " " && state.vehicleCursor) {
+      e.preventDefault();
+      setVehicleSelected(state.vehicleCursor, !state.vehicleSelection.has(state.vehicleCursor));
+      state.vehicleAnchor = state.vehicleCursor;
+      renderVehiclesTable();
+    } else if (e.key === "Escape" && state.vehicleSelection.size) {
+      state.vehicleSelection.clear();
       renderVehiclesTable();
     }
   });
 
-  $("#th-age").addEventListener("click", () => {
-    state.sortByAge = state.sortByAge === "desc" ? "asc" : "desc";
-    $("#th-age .sort-arrow").textContent = state.sortByAge === "desc" ? "▼" : "▲";
-    renderVehiclesTable();
+  $$("#view-vehicles th.sortable").forEach((th) => {
+    th.addEventListener("click", () => {
+      const key = th.dataset.sortKey;
+      if (state.vehicleSort.key !== key) state.vehicleSort = { key, dir: "desc" };
+      else if (state.vehicleSort.dir === "desc") state.vehicleSort = { key, dir: "asc" };
+      else state.vehicleSort = { key: "", dir: "desc" }; // third click clears back to newest-first
+      renderVehiclesTable();
+    });
   });
 
   $("#vehicles-select-all").addEventListener("change", (e) => {
-    $$(".veh-select", $("#vehicles-table")).forEach((cb) => {
-      cb.checked = e.target.checked;
-      if (e.target.checked) state.vehicleSelection.add(cb.dataset.key);
-      else state.vehicleSelection.delete(cb.dataset.key);
-    });
-    renderVehicleBulkBar();
+    // Select-all means every row the current filter shows, not every row the
+    // DOM happens to have painted.
+    visibleVehicles().forEach((v) => setVehicleSelected(vehicleKey(v), e.target.checked));
+    renderVehiclesTable();
   });
 
   $("#vehicles-bulk-clear").addEventListener("click", () => {
@@ -3494,6 +3802,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
   $$(".rail-item").forEach((btn) => btn.addEventListener("click", () => showView(btn.dataset.view)));
 
+  // Before the first load, so the board fetches the right side of the
+  // archived/live split rather than loading the live board and then
+  // discovering the saved filter was History.
+  loadVehicleViewPrefs();
   showView("vehicles");
 });
 

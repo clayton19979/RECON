@@ -1,62 +1,25 @@
-// Front-end smoke test.
+// Parts & Labor grid smoke test.
 //
 // The static checks in tests/test_static_assets.py hold app.js and index.html
 // to each other, but nothing actually *ran* the front end -- a render function
 // could throw on every ticket and the suite would stay green. This boots the
-// real index.html in jsdom, evaluates the real app.js, and drives the densest
-// screen in the app (Parts & Labor) with fixture data.
-//
-// Requires jsdom, which is not a dependency of the app itself:
-//     cd tests/dom && npm install jsdom
-// tests/test_dom_smoke.py skips when node or jsdom isn't there, so this is
-// strictly a bonus check on machines that have them.
+// real index.html in jsdom (see harness.mjs), evaluates the real app.js, and
+// drives the densest screen in the app (Parts & Labor) with fixture data.
 
-import fs from "fs";
-import path from "path";
-import { createRequire } from "module";
-import { fileURLToPath } from "url";
-
-// CommonJS resolution, so NODE_PATH works and jsdom can live anywhere the
-// caller points at rather than only in a node_modules beside this file.
-const { JSDOM } = createRequire(import.meta.url)("jsdom");
-
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "static");
-const html = fs.readFileSync(`${ROOT}/index.html`, "utf8");
-const js = fs.readFileSync(`${ROOT}/app.js`, "utf8");
-
-const dom = new JSDOM(html, { runScripts: "outside-only", url: "http://localhost/", pretendToBeVisual: true });
-const w = dom.window;
+import { boot } from "./harness.mjs";
 
 // Scriptable fetch: POST /api/orders/N/estimate hands back whatever the
 // current test staged, everything else returns an empty list. Lets the autosave
 // round-trip (change -> persistEstimate -> applyEstimateResponse) be driven
 // end to end without a server.
 let stagedEstimate = null;
-const fetchLog = [];
-w.fetch = async (url, opts = {}) => {
-  fetchLog.push({ url: String(url), method: opts.method || "GET" });
-  return {
-    ok: true,
-    status: 200,
-    json: async () => (stagedEstimate && /\/estimate$/.test(String(url)) ? stagedEstimate : []),
-  };
-};
-w.eval(js + "\n;Object.assign(window, { state, renderEstimate, collectEstimateItems, addEstimateRow, confirmAction, renderViewFailure, wireConfirmDialog, wireViewRetry, estimateShape, applyEstimateResponse, syncEstimateInPlace, captureEstimateFocus, restoreEstimateFocus, persistEstimate, setEstimateSaveState, toast, messageLog });");
-// Wait for jsdom's *own* DOMContentLoaded rather than dispatching one.
-// Dispatching it manually ran the app's whole init twice (jsdom fires the real
-// event a tick after the constructor returns), which quietly doubled every
-// listener the app binds at startup -- so a toggle handler bound at init ran
-// twice per click and appeared not to work at all.
-await new Promise((resolve) => {
-  if (w.document.readyState === "loading") w.document.addEventListener("DOMContentLoaded", resolve, { once: true });
-  else { w.document.dispatchEvent(new w.Event("DOMContentLoaded", { bubbles: true })); resolve(); }
+const { w, fetchLog, settle, ok, fails } = await boot({
+  expose: ["state", "renderEstimate", "collectEstimateItems", "addEstimateRow", "confirmAction",
+           "renderViewFailure", "wireConfirmDialog", "wireViewRetry", "estimateShape",
+           "applyEstimateResponse", "syncEstimateInPlace", "captureEstimateFocus",
+           "restoreEstimateFocus", "persistEstimate", "setEstimateSaveState", "toast", "messageLog"],
+  fetch: async (url) => (stagedEstimate && /\/estimate$/.test(url) ? stagedEstimate : []),
 });
-
-// Give queued promise callbacks (fetch -> json -> render) a chance to run.
-const settle = async (times = 6) => { for (let i = 0; i < times; i++) await new Promise((r) => setTimeout(r, 0)); };
-
-const fails = [];
-const ok = (cond, msg) => { if (!cond) fails.push(msg); };
 
 const mkOrder = (jobs) => ({
   id: 1, number: "RO-1", status: "in_progress", concern: "",

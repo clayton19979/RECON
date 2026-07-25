@@ -173,6 +173,79 @@ def test_every_estimate_cell_is_reachable_from_css(js: str, css: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Vehicles board
+#
+# The board's header lives in index.html and its rows are emitted from a
+# template literal in app.js, with a third copy of the column count in the
+# empty state's colspan. Nothing connects the three, so adding a column in one
+# place shifts every cell in the rows below the header, or leaves the empty
+# state short of the table's width.
+# ---------------------------------------------------------------------------
+
+def _vehicles_thead(html: str) -> str:
+    section = html[html.index('id="view-vehicles"'):]
+    return section[section.index("<thead"):section.index("</thead>")]
+
+
+def _function_source(js: str, name: str) -> str:
+    start = js.index(f"function {name}(")
+    end = js.index("\nfunction ", start + 1)
+    return js[start:end]
+
+
+def test_board_row_cells_match_the_header(js: str, html: str) -> None:
+    """A row a cell out of step with its header puts every number under the
+    wrong label -- and Cost and Quoted sit next to each other."""
+    columns = len(re.findall(r"<th\b", _vehicles_thead(html)))
+    cells = len(re.findall(r"<td\b", _function_source(js, "vehicleRowHtml")))
+    assert columns == cells, f"the vehicles header has {columns} columns but vehicleRowHtml emits {cells} cells"
+
+
+def test_board_empty_state_spans_the_whole_table(js: str, html: str) -> None:
+    columns = len(re.findall(r"<th\b", _vehicles_thead(html)))
+    colspan = re.search(r"emptyRow\((\d+), vehiclesEmptyState\(\)\)", js)
+    assert colspan, "the vehicles empty state no longer goes through emptyRow()"
+    assert int(colspan.group(1)) == columns, (
+        f"the vehicles empty row spans {colspan.group(1)} of {columns} columns"
+    )
+
+
+def test_board_loading_skeleton_matches_the_header(js: str, html: str) -> None:
+    """The skeleton is the first thing drawn on every load; a short one makes
+    the table visibly jump a column wider the moment the data lands."""
+    columns = len(re.findall(r"<th\b", _vehicles_thead(html)))
+    declared = re.search(r'vehicles:\s*\[\["#vehicles-table",\s*(\d+)\]\]', js)
+    assert declared, "the vehicles view lost its loading-placeholder entry"
+    assert int(declared.group(1)) == columns, (
+        f"the vehicles skeleton draws {declared.group(1)} columns for a {columns}-column table"
+    )
+
+
+def test_every_sortable_header_has_a_comparator(js: str, html: str) -> None:
+    """A `data-sort-key` with no VEHICLE_SORTS entry is a header that looks
+    clickable, highlights when clicked, and sorts nothing."""
+    declared = set(re.findall(r'data-sort-key="([^"]+)"', _vehicles_thead(html)))
+    block = js[js.index("const VEHICLE_SORTS"):js.index("function sortVehicleRows")]
+    comparators = set(re.findall(r"^\s{2}(\w+): \{ label:", block, re.M))
+    assert declared, "no sortable headers found on the vehicles board"
+    assert declared == comparators, (
+        f"sortable headers without a comparator: {sorted(declared - comparators)}; "
+        f"comparators no header can reach: {sorted(comparators - declared)}"
+    )
+
+
+def test_board_rows_are_not_wired_one_by_one(js: str) -> None:
+    """Board rows are recycled between renders now, so a listener bound per row
+    would either double up or be lost depending on whether that row survived
+    the last render. Everything goes through the delegated handler."""
+    strays = re.findall(r"\.addEventListener\(", _function_source(js, "renderVehiclesTable"))
+    assert not strays, (
+        f"{len(strays)} addEventListener call(s) inside renderVehiclesTable -- board row events "
+        "belong in the delegated handler in wireVehiclesView()"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Destructive actions and the error boundary
 # ---------------------------------------------------------------------------
 

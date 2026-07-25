@@ -284,3 +284,100 @@ Next time, in rough priority order:
   5. Keyboard: Tab out of the last row's last field should add a new line
      (every shop-management product does this); right now you have to reach
      for ＋ Part with the mouse.
+
+
+2026-07-25 — Vehicles board rebuilt as a real work list
+-------------------------------------------------------
+The Parts & Labor grid has had three runs of attention now; the board you
+land on had had none. It was a table with one sortable column, two listeners
+bound per row on every keystroke, and no way to drive it from the keyboard.
+This run rebuilt it.
+
+Sorting:
+  * All eight columns sort, not just Age. One comparator per column in
+    VEHICLE_SORTS (text vs number), and the click cycle is desc -> asc ->
+    off, so a third click puts you back on the server's newest-first order
+    instead of trapping you in a sort you didn't want.
+  * Text columns compare case-insensitively with numeric collation ("R-99"
+    before "R-100") and always sort blanks last in *both* directions. A
+    we-owe with no stock number is missing data, not the alphabetically
+    first car, and floating it to the top on an ascending sort is what the
+    old single-column sort would have done.
+  * aria-sort on the active header, a placeholder-width arrow so headers
+    don't shift sideways when you sort them, and a title that tells you what
+    the next click does.
+
+Incremental render:
+  * renderVehiclesTable() used to rebuild tbody.innerHTML on every keystroke,
+    chip and sort click, then re-bind two listeners per row. Now each <tr> is
+    keyed by "segment:id" and carries data-sig, a signature of every field
+    the row template reads. Unchanged rows are *moved* rather than rebuilt,
+    changed rows get their cells replaced, only genuinely new rows are
+    created, and the scroll offset is captured and restored around the whole
+    thing. Sorting a 60-car board no longer throws you back to the top of it.
+  * All row events are one delegated click handler on #vehicles-table, since
+    a recycled row would otherwise either double up listeners or lose them
+    depending on which side of the reuse it landed on.
+
+Selection:
+  * Shift+click extends from the last row touched, in *displayed* order
+    (via visibleVehicles(), so it follows the current sort rather than the
+    server's). Ctrl/Cmd+click toggles a row without navigating.
+  * Select-all takes what the filter is showing, not every row in memory --
+    it used to walk the DOM checkboxes, which was accidentally right, and
+    would have gone quietly wrong the moment the table virtualized.
+  * The header checkbox goes indeterminate on a partial selection.
+
+Keyboard: ↑/↓ (and j/k) move a cursor row, Home/End jump, Enter opens, Space
+  selects, Esc clears the selection, "/" focuses search and Esc inside search
+  clears it. The cursor is styled distinctly from hover *and* from selection,
+  since all three can land on the same row. A legend sits under the table
+  (hidden on touch widths, where none of it applies).
+
+Also: a Status filter built from the statuses actually present in the data
+  (a hardcoded list would offer dead options — recon and we-owe don't share
+  a status vocabulary); a Quoted column beside Cost, with Cost turning red
+  when a car has run >10% past its estimate, which is the number the board
+  is actually read for; segment/status/sort persisted to localStorage and
+  restored *before* the first fetch, so a saved History filter loads the
+  archived side rather than loading the live board and then discovering it;
+  a "Reset view" button that appears only when something is filtered; sticky
+  table header in a scroll container; Quoted hidden below 1000px.
+
+Tests: 169 -> 176.
+  * tests/dom/harness.mjs — the jsdom boot (including the DOMContentLoaded
+    subtlety) extracted out of estimate_smoke.mjs, plus press()/click()
+    helpers and an unhandledRejection recorder, so a render that throws
+    inside a click handler is reported instead of killing the process
+    mid-suite. test_dom_smoke.py now discovers *_smoke.mjs by glob and runs
+    one test case per screen; adding a screen is a new file and nothing else.
+  * tests/dom/board_smoke.mjs — 50-odd assertions over sorting (including
+    blanks-last and numeric-vs-lexicographic), node reuse, over-quote
+    flagging, segment+status composition, select-all vs. filter, preference
+    round-trip, click/shift/ctrl selection, the whole keyboard map, both
+    empty states, and HTML escaping of vehicle fields. Mutation-tested:
+    killing node reuse, flipping blanks-first, and making select-all ignore
+    the filter each fail it.
+  * test_static_assets.py: the header's column count is now pinned to
+    vehicleRowHtml's cells, to the empty state's colspan, and to the loading
+    skeleton's width; every data-sort-key must have a VEHICLE_SORTS entry;
+    and renderVehiclesTable may not contain addEventListener. All bite.
+
+Suite green (176), server boots, and the board was rendered in jsdom against
+a real seeded /api/vehicles-board response to confirm it paints.
+
+Next time, in rough priority order:
+  1. The stat cards still summarize the whole board while the table below
+     them is filtered. Either scope them to the current filter or label them
+     as lot-wide -- right now they silently disagree with the list.
+  2. Rows are cheap to render but there are still no columns for what the
+     board is missing: days since last activity (updated_at is already in
+     the payload) and an at-a-glance parts-waiting indicator.
+  3. Now that harness.mjs exists, the A/P and Cores/Returns screens are ~20
+     lines of fixture away from having the same coverage.
+  4. Debounced input on the estimate's money/qty fields so totals update as
+     you type rather than on blur (carried over -- still worth doing).
+  5. Tab out of the last estimate row should add a new line; you still have
+     to reach for ＋ Part with the mouse.
+  6. The message log is session-only; persisting it (localStorage, capped)
+     would make "what was that error before I refreshed?" answerable.

@@ -143,6 +143,13 @@
           <button class="chip" data-filter="recon">Recon</button>
           <button class="chip" data-filter="we_owe">We-Owe</button>
           <button class="chip" data-filter="history">History</button>
+          <label class="filters-select-wrap" for="vehicles-status-filter">
+            <span>Status</span>
+            <select class="filters-select" id="vehicles-status-filter">
+              <option value="">Any</option>
+            </select>
+          </label>
+          <button type="button" class="btn btn-ghost btn-sm" id="vehicles-reset-view" hidden>Reset view</button>
           <div class="filters-gap"></div>
           <span class="filters-note" id="vehicles-count">0 vehicles</span>
         </div>
@@ -155,22 +162,28 @@
         </div>
 
         <div class="panel" style="margin-bottom:0">
-          <table>
-            <thead>
-              <tr>
-                <th style="width:26px"><input type="checkbox" id="vehicles-select-all" title="Select all"></th>
-                <th>Stock #</th>
-                <th>Vehicle</th>
-                <th>Type</th>
-                <th>Status</th>
-                <th>Technician</th>
-                <th class="num-col sortable" id="th-age" title="Click to sort by age">Age <span class="sort-arrow"></span></th>
-                <th class="num-col">Cost</th>
-              </tr>
-            </thead>
-            <tbody id="vehicles-table"></tbody>
-          </table>
+          <div class="table-wrap table-scroll" id="vehicles-scroll">
+            <table class="board-table sticky-head">
+              <thead>
+                <tr>
+                  <th class="col-select"><input type="checkbox" id="vehicles-select-all" title="Select all"></th>
+                  <th class="sortable" data-sort-key="stock" aria-sort="none">Stock # <span class="sort-arrow"></span></th>
+                  <th class="sortable" data-sort-key="vehicle" aria-sort="none">Vehicle <span class="sort-arrow"></span></th>
+                  <th class="sortable" data-sort-key="segment" aria-sort="none">Type <span class="sort-arrow"></span></th>
+                  <th class="sortable" data-sort-key="status" aria-sort="none">Status <span class="sort-arrow"></span></th>
+                  <th class="sortable" data-sort-key="tech" aria-sort="none">Technician <span class="sort-arrow"></span></th>
+                  <th class="num-col sortable" data-sort-key="age" aria-sort="none">Age <span class="sort-arrow"></span></th>
+                  <th class="num-col sortable" data-sort-key="quoted" aria-sort="none">Quoted <span class="sort-arrow"></span></th>
+                  <th class="num-col sortable" data-sort-key="cost" aria-sort="none">Cost <span class="sort-arrow"></span></th>
+                </tr>
+              </thead>
+              <tbody id="vehicles-table"></tbody>
+            </table>
+          </div>
         </div>
+        <p class="board-hint">
+          <kbd>↑</kbd><kbd>↓</kbd> move · <kbd>Enter</kbd> open · <kbd>Space</kbd> select · <kbd>Shift</kbd>+click for a range · <kbd>/</kbd> search
+        </p>
       </section>
 
       <!-- VEHICLE DETAIL -->

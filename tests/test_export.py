@@ -42,3 +42,72 @@ def test_export_vehicles_csv(client):
     assert "WorldPac" in recon_row[7]
 
     assert any(r[3] == "We-Owe" for r in body)
+
+
+def _rows(res):
+    parsed = list(csv.reader(io.StringIO(res.text)))
+    return parsed[0], parsed[1:]
+
+
+def test_export_vehicle_spend_report_csv(client):
+    """The Reports screen's Download CSV. It takes the same start/end/segment
+    the report itself does and is built from the same row builder, so the
+    file can't quietly disagree with what's on screen."""
+    vehicle = make_recon_vehicle(client, stock_number="R-8001")
+    order = make_recon_order(client, vehicle["id"])
+    save_estimate(client, order["id"], [
+        {"kind": "labor", "description": "Diag", "quantity": 2, "unit_price": 60, "unit_cost": 45},
+        # Quoted but never received, so Quoted and Cost have to differ -- a
+        # file that reported one number for both would look right otherwise.
+        {"kind": "part", "description": "Rotor", "quantity": 1, "unit_price": 90, "unit_cost": 60},
+    ])
+    make_we_owe(client, description="Touch up paint")
+
+    res = client.get("/api/export/report/vehicle-spend.csv")
+    assert res.status_code == 200
+    assert res.headers["content-type"].startswith("text/csv")
+    assert "vehicle-spend" in res.headers["content-disposition"]
+
+    header, body = _rows(res)
+    assert header == [
+        "Stock #", "Vehicle", "VIN", "Type", "Status", "Technicians",
+        "Quoted", "Cost", "Customer Paid", "Net to Shop", "Age (days)",
+    ]
+    assert len(body) == 2
+    recon_row = next(r for r in body if r[0] == "R-8001")
+    assert recon_row[3] == "Recon"
+    assert recon_row[6] == "150.00"  # 2 x $45 labor + the $60 rotor, quoted in full
+    assert recon_row[7] == "90.00"   # only the labor has actually landed
+
+    # The segment filter has to reach the file, or "Recon only" on screen
+    # downloads every vehicle in the shop.
+    _, recon_only = _rows(client.get("/api/export/report/vehicle-spend.csv", params={"segment": "recon"}))
+    assert [r[0] for r in recon_only] == ["R-8001"]
+
+    # ...and so does the date range.
+    _, future = _rows(client.get("/api/export/report/vehicle-spend.csv", params={"start": "2099-01-01"}))
+    assert future == []
+
+
+def test_export_technician_report_csv(client):
+    technician = client.post("/api/staff", json={"name": "Wes", "role": "technician"}).json()
+    vehicle = make_recon_vehicle(client, stock_number="R-8002")
+    order = make_recon_order(client, vehicle["id"])
+    save_estimate(client, order["id"], [
+        {"kind": "labor", "description": "Brakes", "quantity": 3, "unit_price": 80, "unit_cost": 50},
+    ])
+    client.put(f"/api/orders/{order['id']}/assignment", json={"technician_id": technician["id"]})
+
+    res = client.get("/api/export/report/technicians.csv")
+    assert res.status_code == 200
+    header, body = _rows(res)
+    assert header == ["Technician", "Repair Orders", "Completed", "Labor Hours", "Labor Cost"]
+    wes = next(r for r in body if r[0] == "Wes")
+    assert wes[1] == "1" and wes[2] == "0"
+    assert wes[3] == "3.00" and wes[4] == "150.00"
+
+
+def test_report_csv_rejects_an_unknown_segment(client):
+    """The segment is a closed set on the report endpoint; the export has to
+    agree, or a typo'd link silently returns the whole lot instead."""
+    assert client.get("/api/export/report/vehicle-spend.csv", params={"segment": "wholesale"}).status_code == 422

@@ -279,6 +279,10 @@ function skeletonCards(count = 3) {
 // many columns each table has (so the skeleton lines up with its header).
 const VIEW_PLACEHOLDERS = {
   vehicles:    [["#vehicles-table", 9]],
+  // Only the table is listed: the summary cards and chart above it get a
+  // shape-matched skeleton of their own (showReportPlaceholders), and a
+  // failed load should say so once rather than three times down the page.
+  reports:     [["#report-output", 0]],
   accounting:  [["#ap-table", 7]],
   cores:       [["#cores-table", 6], ["#returns-table", 7]],
   staff:       [["#staff-table", 4]],
@@ -324,6 +328,16 @@ const state = {
   returnsFilter: "pending",
   postReturnItem: null,
   vehicleSelection: new Set(), // "segment:id" strings, cleared on filter change/reload
+  // Reports: which of the four reports, over what window, sorted how. Like
+  // the board, all of it is restored from localStorage before the first
+  // fetch (loadReportPrefs) so the screen opens on the report you were
+  // last reading rather than on a blank form.
+  reportType: "vehicle-spend",
+  reportRange: "month",                 // the quick-range chip, "" once dates are edited by hand
+  reportStart: "",
+  reportEnd: "",
+  reportSort: { key: "cost", dir: "desc" },
+  report: null,                         // { rows, type, start, end } -- what's on screen, for print/CSV
   tasks: [],
   taskFilter: "",
   taskSearch: "",
@@ -372,6 +386,7 @@ const KIND_GROUP_LABEL = { part: "Parts", labor: "Labor", fee: "Fees" };
 // a boundary around it (below) instead of a chain of `if (name === ...)`.
 const VIEW_LOADERS = {
   vehicles: () => loadVehiclesView(),
+  reports: () => loadReportsView(),
   accounting: () => loadAccountingView(),
   cores: () => loadCoresView(),
   staff: () => loadStaffView(),
@@ -2709,42 +2724,332 @@ function computeQuickRange(kind) {
   return { start, end };
 }
 
-function quickRange(kind, chip) {
-  const { start, end } = computeQuickRange(kind);
-  $("#report-start").value = start;
-  $("#report-end").value = end;
-  $$("#view-reports .chip").forEach((c) => c.classList.remove("active"));
-  chip.classList.add("active");
-}
-
-function renderReportTable(rows, type) {
-  if (!rows.length) {
-    return `<div class="panel">${emptyState({
-      icon: type === "technicians" ? "staff" : "vehicle",
-      title: type === "technicians" ? "No technician activity in this range" : "No vehicles in this range",
-      hint: "Nothing was worked on between those dates. Try a wider range, or one of the quick ranges above.",
-    })}</div>`;
-  }
-  if (type === "technicians") {
-    return `<div class="panel"><table><thead><tr><th>Technician</th><th class="num-col">ROs</th><th class="num-col">Completed</th><th class="num-col">Labor Hours</th><th class="num-col">Labor Cost</th></tr></thead>
-      <tbody>${rows.map((r) => `<tr><td>${esc(r.technician)}</td><td class="num-col">${r.ro_count}</td><td class="num-col">${r.completed_count}</td><td class="num-col">${r.labor_hours}</td><td class="num-col">${money(r.labor_cost)}</td></tr>`).join("")}</tbody></table></div>`;
-  }
-  const totalActual = rows.reduce((s, r) => s + r.actual_cost, 0);
-  const totalPaid = rows.reduce((s, r) => s + (r.customer_paid || 0), 0);
-  const hasDeposits = totalPaid > 0;
-  return `<div class="panel"><table><thead><tr><th>Stock #</th><th>Vehicle</th><th>Type</th><th>Status</th><th>Technicians</th><th class="num-col">Cost</th>${hasDeposits ? `<th class="num-col">Customer Paid</th><th class="num-col">Net to Shop</th>` : ""}</tr></thead>
-    <tbody>${rows.map((r) => `<tr><td class="num">${esc(r.stock_number || "—")}</td><td>${esc(r.vehicle)}${r.customer_name ? ` <span style="color:var(--ink-faint)">(${esc(r.customer_name)})</span>` : ""}</td>
-    <td>${r.segment === "recon" ? "Recon" : "We-Owe"}</td><td><span class="pill ${vehicleStatusPillClass(r)}">${esc(STATUS_LABEL[r.status] || r.status)}</span></td>
-    <td>${esc(r.technicians.join(", "))}</td><td class="num-col">${money(r.actual_cost)}</td>${hasDeposits ? `<td class="num-col">${r.customer_paid ? money(r.customer_paid) : "—"}</td><td class="num-col">${r.customer_paid ? money(r.net_cost) : "—"}</td>` : ""}</tr>`).join("")}
-    <tr style="font-weight:700"><td colspan="5">Total</td><td class="num-col">${money(totalActual)}</td>${hasDeposits ? `<td class="num-col">${money(totalPaid)}</td><td class="num-col">${money(totalActual - totalPaid)}</td>` : ""}</tr></tbody></table></div>`;
-}
-
+/* ---------- what the four reports are ----------
+   Everything that differs between them -- the title, which segment of the
+   board they cover, which endpoint backs them -- is declared once here.
+   Two shapes underneath: a per-vehicle spend table and a per-technician
+   productivity table. */
 const REPORT_TITLES = {
   "vehicle-spend": "All Vehicles (Combined)",
   "vehicle-spend-recon": "Recon Vehicles Only",
   "vehicle-spend-we_owe": "We-Owe Only",
   technicians: "Technician Productivity",
 };
+
+const REPORT_SEGMENT = {
+  "vehicle-spend-recon": "recon",
+  "vehicle-spend-we_owe": "we_owe",
+};
+
+// The two table/chart/summary shapes. Four report types, two renderings.
+const reportShape = (type) => (type === "technicians" ? "technicians" : "vehicle-spend");
+
+const REPORT_PREFS_KEY = "dao-report-view";
+
+function loadReportPrefs() {
+  let saved;
+  try {
+    saved = JSON.parse(localStorage.getItem(REPORT_PREFS_KEY) || "{}");
+  } catch {
+    return; // a corrupt entry shouldn't stop the screen from opening
+  }
+  if (!saved || typeof saved !== "object") return;
+  if (REPORT_TITLES[saved.type]) state.reportType = saved.type;
+  if (typeof saved.range === "string") state.reportRange = saved.range;
+  if (typeof saved.start === "string") state.reportStart = saved.start;
+  if (typeof saved.end === "string") state.reportEnd = saved.end;
+  if (saved.sort && REPORT_SORTS[reportShape(state.reportType)][saved.sort.key]) {
+    state.reportSort = { key: saved.sort.key, dir: saved.sort.dir === "asc" ? "asc" : "desc" };
+  }
+}
+
+function saveReportPrefs() {
+  try {
+    localStorage.setItem(REPORT_PREFS_KEY, JSON.stringify({
+      type: state.reportType, range: state.reportRange,
+      start: state.reportStart, end: state.reportEnd, sort: state.reportSort,
+    }));
+  } catch { /* private mode / quota -- the screen still works, it just forgets */ }
+}
+
+/* ---------- range ---------- */
+
+// Applying a quick range writes the two date inputs as well as state, so the
+// From/To fields always show what's actually being reported on -- the old
+// version left them blank whenever the range came from anywhere but a click.
+function setReportRange(kind) {
+  const { start, end } = computeQuickRange(kind);
+  state.reportRange = kind;
+  state.reportStart = start;
+  state.reportEnd = end;
+}
+
+// Hand-edited dates stop matching any chip, so no chip stays lit claiming a
+// range that isn't in effect.
+function readReportDateInputs() {
+  state.reportStart = $("#report-start").value || "";
+  state.reportEnd = $("#report-end").value || "";
+  const match = ["today", "week", "month", "year", "all"].find((kind) => {
+    const r = computeQuickRange(kind);
+    return r.start === state.reportStart && r.end === state.reportEnd;
+  });
+  state.reportRange = match || "";
+}
+
+function syncReportControls() {
+  $$("#report-type-seg .seg-btn").forEach((btn) => {
+    const on = btn.dataset.reportType === state.reportType;
+    btn.classList.toggle("active", on);
+    btn.setAttribute("aria-selected", on ? "true" : "false");
+  });
+  $$("#view-reports .chip[data-report-range]").forEach((chip) => {
+    chip.classList.toggle("active", chip.dataset.reportRange === state.reportRange);
+  });
+  $("#report-start").value = state.reportStart;
+  $("#report-end").value = state.reportEnd;
+}
+
+function reportParams() {
+  const params = new URLSearchParams();
+  if (state.reportStart) params.set("start", state.reportStart);
+  if (state.reportEnd) params.set("end", state.reportEnd);
+  const segment = REPORT_SEGMENT[state.reportType];
+  if (segment) params.set("segment", segment);
+  return params;
+}
+
+// The CSV comes from the server rather than being stitched together in the
+// browser, so it carries the same numbers the report does even for a range
+// nobody has clicked Generate on, and so it stays correct if the rollup
+// changes on the back end.
+function reportCsvHref() {
+  const params = reportParams();
+  const path = reportShape(state.reportType) === "technicians" ? "technicians" : "vehicle-spend";
+  const query = params.toString();
+  return `/api/export/report/${path}.csv${query ? `?${query}` : ""}`;
+}
+
+/* ---------- sorting ---------- */
+
+const REPORT_SORTS = {
+  "vehicle-spend": {
+    // What the cell shows, not what the row knows: a we-owe row displays a
+    // dash here (its customer is in the Vehicle column), so sorting it by
+    // the hidden customer name would scatter the dashes through the list
+    // instead of collecting them at the end. Same rule the board uses.
+    stock:   { label: "Stock #",       type: "text",   value: (r) => r.stock_number || "" },
+    vehicle: { label: "Vehicle",       type: "text",   value: (r) => r.vehicle || "" },
+    segment: { label: "Type",          type: "text",   value: (r) => (r.segment === "recon" ? "Recon" : "We-Owe") },
+    status:  { label: "Status",        type: "text",   value: (r) => STATUS_LABEL[r.status] || r.status || "" },
+    tech:    { label: "Technicians",   type: "text",   value: (r) => (r.technicians || []).join(", ") },
+    cost:    { label: "Cost",          type: "number", value: (r) => r.actual_cost },
+    paid:    { label: "Customer Paid", type: "number", value: (r) => r.customer_paid || 0 },
+    net:     { label: "Net to Shop",   type: "number", value: (r) => (r.customer_paid ? r.net_cost : r.actual_cost) },
+  },
+  technicians: {
+    technician: { label: "Technician",  type: "text",   value: (r) => r.technician || "" },
+    ros:        { label: "ROs",         type: "number", value: (r) => r.ro_count },
+    completed:  { label: "Completed",   type: "number", value: (r) => r.completed_count },
+    hours:      { label: "Labor Hours", type: "number", value: (r) => r.labor_hours },
+    cost:       { label: "Labor Cost",  type: "number", value: (r) => r.labor_cost },
+  },
+};
+
+function sortReportRows(rows, shape, { key, dir }) {
+  const spec = REPORT_SORTS[shape][key];
+  if (!spec) return rows;
+  const sign = dir === "asc" ? 1 : -1;
+  return rows.slice().sort((a, b) => {
+    const av = spec.value(a), bv = spec.value(b);
+    if (spec.type === "number") return ((av || 0) - (bv || 0)) * sign;
+    if (!av && !bv) return 0;
+    if (!av) return 1;   // blanks last in both directions, same as the board
+    if (!bv) return -1;
+    return String(av).localeCompare(String(bv), undefined, { numeric: true, sensitivity: "base" }) * sign;
+  });
+}
+
+// The rows as the screen is currently showing them -- what print and any
+// row-order-sensitive rendering should use, so the paper copy matches what
+// was on screen when Print was pressed.
+function visibleReportRows() {
+  if (!state.report) return [];
+  return sortReportRows(state.report.rows, reportShape(state.report.type), state.reportSort);
+}
+
+function reportSortHeader(shape, key, extraClass = "") {
+  const spec = REPORT_SORTS[shape][key];
+  const active = state.reportSort.key === key;
+  const arrow = active ? (state.reportSort.dir === "desc" ? "▼" : "▲") : "";
+  const cls = ["sortable", extraClass, active ? "sorted" : ""].filter(Boolean).join(" ");
+  return `<th class="${cls}" data-report-sort="${key}" aria-sort="${active ? (state.reportSort.dir === "asc" ? "ascending" : "descending") : "none"}"
+    title="Sort by ${esc(spec.label)} (${active && state.reportSort.dir === "desc" ? "ascending" : "descending"})">${esc(spec.label)} <span class="sort-arrow">${arrow}</span></th>`;
+}
+
+/* ---------- summary cards ----------
+   The four numbers a manager reads a spend report for, above the table
+   rather than buried in its footer. They describe exactly the rows below
+   them -- same range, same segment -- so there's nothing to reconcile. */
+function renderReportStats(rows, shape) {
+  const cards = shape === "technicians" ? technicianStatCards(rows) : vehicleSpendStatCards(rows);
+  $("#report-stats").innerHTML = cards.map((c) => `
+    <div class="stat">
+      <div class="stat-label">${esc(c.label)}</div>
+      <div class="stat-value${c.tone ? ` ${c.tone}` : ""}">${esc(c.value)}</div>
+      <div class="stat-sub">${esc(c.sub)}</div>
+    </div>`).join("");
+}
+
+// A car counts as over quote on the same >10% rule the board colors Cost
+// with, so the two screens can't disagree about which cars are running hot.
+const overQuote = (r) => r.quoted_cost > 0 && r.actual_cost > r.quoted_cost * 1.1;
+
+function vehicleSpendStatCards(rows) {
+  const recon = rows.filter((r) => r.segment === "recon").length;
+  const total = rows.reduce((s, r) => s + r.actual_cost, 0);
+  const quoted = rows.reduce((s, r) => s + (r.quoted_cost || 0), 0);
+  const over = rows.filter(overQuote);
+  const overBy = over.reduce((s, r) => s + (r.actual_cost - r.quoted_cost), 0);
+  return [
+    { label: "Vehicles", value: String(rows.length), sub: `${recon} recon · ${rows.length - recon} we-owe` },
+    { label: "Total Cost", value: money(total), sub: "received parts + labor" },
+    { label: "Average Per Vehicle", value: money(rows.length ? total / rows.length : 0), sub: quoted ? `${money(quoted)} quoted overall` : "nothing quoted in this range" },
+    {
+      label: "Over Quote", value: String(over.length), tone: over.length ? "warn" : "",
+      sub: over.length ? `${money(overBy)} past estimate` : "every quoted car came in on budget",
+    },
+  ];
+}
+
+function technicianStatCards(rows) {
+  const active = rows.filter((r) => r.ro_count > 0);
+  const ros = rows.reduce((s, r) => s + r.ro_count, 0);
+  const done = rows.reduce((s, r) => s + r.completed_count, 0);
+  const hours = rows.reduce((s, r) => s + r.labor_hours, 0);
+  const cost = rows.reduce((s, r) => s + r.labor_cost, 0);
+  return [
+    { label: "Technicians Working", value: String(active.length), sub: `of ${rows.length} on staff` },
+    { label: "Repair Orders", value: String(ros), sub: `${done} completed${ros ? ` · ${Math.round((done / ros) * 100)}%` : ""}` },
+    { label: "Labor Hours", value: String(Math.round(hours * 10) / 10), sub: ros ? `${(hours / ros).toFixed(1)} avg per RO` : "no orders in this range" },
+    { label: "Labor Cost", value: money(cost), sub: hours ? `${money(cost / hours)} per hour` : "no hours logged" },
+  ];
+}
+
+/* ---------- chart ----------
+   Horizontal bars built from plain elements rather than a charting library:
+   nothing to load, it inherits the theme's colors for free, and it reflows
+   with the panel instead of needing a resize observer. */
+// Nothing to plot is not the same as nothing to report: early in a month
+// every car on the list can legitimately be sitting at $0 (parts ordered,
+// nothing received). Dropping the panel silently reads like the chart broke,
+// so it says which of the two it is.
+function chartNothingToPlot(hasRows, what) {
+  if (!hasRows) return "";
+  return `<div class="panel chart-panel chart-empty">${esc(`No ${what} to chart in this range yet.`)}</div>`;
+}
+
+function barChart({ title, note, legend = "", items }) {
+  if (!items.length) return "";
+  const max = Math.max(...items.map((i) => Math.max(i.value || 0, i.marker || 0)));
+  const pct = (n) => (max > 0 ? Math.min((n / max) * 100, 100) : 0);
+  const bars = items.map((i) => `
+    <li class="bar-row">
+      <span class="bar-label" title="${esc(i.label)}">${esc(i.label)}</span>
+      <span class="bar-track">
+        <span class="bar-fill${i.tone ? ` ${i.tone}` : ""}" style="width:${pct(i.value).toFixed(2)}%"></span>
+        ${i.marker > 0 ? `<span class="bar-marker" style="left:${pct(i.marker).toFixed(2)}%" title="${esc(i.markerLabel || "")}"></span>` : ""}
+      </span>
+      <span class="bar-value">${esc(i.display)}</span>
+    </li>`).join("");
+  return `<div class="panel chart-panel">
+    <div class="chart-head">
+      <h3 class="chart-title">${esc(title)}</h3>
+      ${note ? `<span class="chart-note">${esc(note)}</span>` : ""}
+    </div>
+    <ul class="bar-chart">${bars}</ul>
+    ${legend ? `<div class="chart-legend">${legend}</div>` : ""}
+  </div>`;
+}
+
+const CHART_LIMIT = 12;
+
+function renderReportChart(rows, shape) {
+  const target = $("#report-chart");
+  if (shape === "technicians") {
+    const items = rows.filter((r) => r.labor_cost > 0)
+      .sort((a, b) => b.labor_cost - a.labor_cost)
+      .slice(0, CHART_LIMIT)
+      .map((r) => ({ label: r.technician, value: r.labor_cost, display: money(r.labor_cost) }));
+    target.innerHTML = barChart({
+      title: "Labor cost by technician",
+      note: items.length ? `${items.length} technician${items.length === 1 ? "" : "s"} with logged labor` : "",
+      items,
+    }) || chartNothingToPlot(rows.length, "labor cost");
+    return;
+  }
+  const priced = rows.filter((r) => r.actual_cost > 0).sort((a, b) => b.actual_cost - a.actual_cost);
+  const items = priced.slice(0, CHART_LIMIT).map((r) => ({
+    label: `${r.stock_number || r.customer_name || "—"} · ${r.vehicle}`,
+    value: r.actual_cost,
+    display: money(r.actual_cost),
+    marker: r.quoted_cost || 0,
+    markerLabel: r.quoted_cost ? `Quoted ${money(r.quoted_cost)}` : "",
+    tone: overQuote(r) ? "over" : "",
+  }));
+  target.innerHTML = barChart({
+    title: "What we have in it",
+    note: priced.length > CHART_LIMIT ? `Top ${CHART_LIMIT} of ${priced.length} vehicles with cost` : "",
+    legend: `<span class="legend-item"><span class="legend-swatch"></span>Cost</span>
+             <span class="legend-item"><span class="legend-swatch over"></span>Over quote</span>
+             <span class="legend-item"><span class="legend-swatch marker"></span>Quoted</span>`,
+    items,
+  }) || chartNothingToPlot(rows.length, "cost");
+}
+
+/* ---------- table ---------- */
+
+function reportEmptyState(shape) {
+  const ranged = state.reportStart || state.reportEnd;
+  return `<div class="panel">${emptyState({
+    icon: shape === "technicians" ? "staff" : "vehicle",
+    title: shape === "technicians" ? "No technician activity in this range" : "No vehicles in this range",
+    hint: ranged
+      ? "Nothing was worked on between those dates. Try a wider range, or one of the quick ranges above."
+      : "Nothing to report yet — this covers all time, so the shop has no activity of this kind recorded at all.",
+    actions: ranged ? `<button type="button" class="btn btn-ghost btn-sm" data-report-range="all">Show all time</button>` : "",
+  })}</div>`;
+}
+
+function renderReportTable(rows, shape) {
+  if (!rows.length) return reportEmptyState(shape);
+  if (shape === "technicians") {
+    return `<div class="panel"><div class="table-wrap"><table><thead><tr>
+      ${reportSortHeader("technicians", "technician")}
+      ${reportSortHeader("technicians", "ros", "num-col")}
+      ${reportSortHeader("technicians", "completed", "num-col")}
+      ${reportSortHeader("technicians", "hours", "num-col")}
+      ${reportSortHeader("technicians", "cost", "num-col")}
+      </tr></thead>
+      <tbody>${rows.map((r) => `<tr${r.ro_count ? "" : ' class="row-muted"'}><td>${esc(r.technician)}</td><td class="num-col">${r.ro_count}</td><td class="num-col">${r.completed_count}</td><td class="num-col">${r.labor_hours}</td><td class="num-col">${money(r.labor_cost)}</td></tr>`).join("")}</tbody></table></div></div>`;
+  }
+  const totalActual = rows.reduce((s, r) => s + r.actual_cost, 0);
+  const totalPaid = rows.reduce((s, r) => s + (r.customer_paid || 0), 0);
+  const hasDeposits = totalPaid > 0;
+  return `<div class="panel"><div class="table-wrap"><table><thead><tr>
+    ${reportSortHeader("vehicle-spend", "stock")}
+    ${reportSortHeader("vehicle-spend", "vehicle")}
+    ${reportSortHeader("vehicle-spend", "segment")}
+    ${reportSortHeader("vehicle-spend", "status")}
+    ${reportSortHeader("vehicle-spend", "tech")}
+    ${reportSortHeader("vehicle-spend", "cost", "num-col")}
+    ${hasDeposits ? reportSortHeader("vehicle-spend", "paid", "num-col") + reportSortHeader("vehicle-spend", "net", "num-col") : ""}
+    </tr></thead>
+    <tbody>${rows.map((r) => `<tr><td class="num">${esc(r.stock_number || "—")}</td><td>${esc(r.vehicle)}${r.customer_name ? ` <span style="color:var(--ink-faint)">(${esc(r.customer_name)})</span>` : ""}</td>
+    <td>${r.segment === "recon" ? "Recon" : "We-Owe"}</td><td><span class="pill ${vehicleStatusPillClass(r)}">${esc(STATUS_LABEL[r.status] || r.status)}</span></td>
+    <td>${esc((r.technicians || []).join(", ")) || "—"}</td><td class="num-col${overQuote(r) ? " over-quote" : ""}">${money(r.actual_cost)}</td>${hasDeposits ? `<td class="num-col">${r.customer_paid ? money(r.customer_paid) : "—"}</td><td class="num-col">${r.customer_paid ? money(r.net_cost) : "—"}</td>` : ""}</tr>`).join("")}</tbody>
+    <tfoot><tr><td colspan="5">Total (${rows.length} vehicle${rows.length === 1 ? "" : "s"})</td><td class="num-col">${money(totalActual)}</td>${hasDeposits ? `<td class="num-col">${money(totalPaid)}</td><td class="num-col">${money(totalActual - totalPaid)}</td>` : ""}</tr></tfoot>
+    </table></div></div>`;
+}
 
 function reportDateRangeLabel(start, end) {
   if (!start && !end) return "All time";
@@ -2761,14 +3066,14 @@ function renderPrintReport(rows, type, start, end) {
   const generated = new Date().toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" });
   const rangeLabel = reportDateRangeLabel(start, end);
   let body;
-  if (type === "technicians") {
+  if (reportShape(type) === "technicians") {
     const totalHours = rows.reduce((s, r) => s + r.labor_hours, 0);
     const totalCost = rows.reduce((s, r) => s + r.labor_cost, 0);
     body = `
       <table class="print-table">
         <thead><tr><th>Technician</th><th class="num-col">ROs</th><th class="num-col">Completed</th><th class="num-col">Labor Hours</th><th class="num-col">Labor Cost</th></tr></thead>
         <tbody>${rows.map((r) => `<tr><td>${esc(r.technician)}</td><td class="num-col">${r.ro_count}</td><td class="num-col">${r.completed_count}</td><td class="num-col">${r.labor_hours}</td><td class="num-col">${money(r.labor_cost)}</td></tr>`).join("")}</tbody>
-        <tfoot><tr><td>Total</td><td class="num-col"></td><td class="num-col"></td><td class="num-col">${totalHours}</td><td class="num-col">${money(totalCost)}</td></tr></tfoot>
+        <tfoot><tr><td>Total</td><td class="num-col"></td><td class="num-col"></td><td class="num-col">${Math.round(totalHours * 100) / 100}</td><td class="num-col">${money(totalCost)}</td></tr></tfoot>
       </table>`;
   } else {
     const totalActual = rows.reduce((s, r) => s + r.actual_cost, 0);
@@ -2779,7 +3084,7 @@ function renderPrintReport(rows, type, start, end) {
         <thead><tr><th>Stock #</th><th>Vehicle</th><th>Type</th><th>Status</th><th>Technician(s)</th><th class="num-col">Cost</th>${hasDeposits ? `<th class="num-col">Customer Paid</th><th class="num-col">Net to Shop</th>` : ""}</tr></thead>
         <tbody>${rows.map((r) => `<tr><td class="num">${esc(r.stock_number || "—")}</td><td>${esc(r.vehicle)}${r.customer_name ? ` (${esc(r.customer_name)})` : ""}</td>
         <td>${r.segment === "recon" ? "Recon" : "We-Owe"}</td><td>${esc(STATUS_LABEL[r.status] || r.status)}</td>
-        <td>${esc(r.technicians.join(", ")) || "—"}</td><td class="num-col">${money(r.actual_cost)}</td>${hasDeposits ? `<td class="num-col">${r.customer_paid ? money(r.customer_paid) : "—"}</td><td class="num-col">${r.customer_paid ? money(r.net_cost) : "—"}</td>` : ""}</tr>`).join("")}</tbody>
+        <td>${esc((r.technicians || []).join(", ")) || "—"}</td><td class="num-col">${money(r.actual_cost)}</td>${hasDeposits ? `<td class="num-col">${r.customer_paid ? money(r.customer_paid) : "—"}</td><td class="num-col">${r.customer_paid ? money(r.net_cost) : "—"}</td>` : ""}</tr>`).join("")}</tbody>
         <tfoot><tr><td colspan="4">Total (${rows.length} vehicle${rows.length === 1 ? "" : "s"})</td><td class="num-col"></td><td class="num-col">${money(totalActual)}</td>${hasDeposits ? `<td class="num-col">${money(totalPaid)}</td><td class="num-col">${money(totalActual - totalPaid)}</td>` : ""}</tr></tfoot>
       </table>`;
   }
@@ -2799,43 +3104,117 @@ function renderPrintReport(rows, type, start, end) {
   `;
 }
 
+/* ---------- load / render ---------- */
+
+// Switching report or range refetches, and the old report's numbers sitting
+// there while the new ones are in flight is worse than nothing -- they look
+// like an answer to the question you just asked. Skeletons shaped like the
+// four cards, the chart and the table replace them for the duration.
+function showReportPlaceholders() {
+  $("#report-stats").innerHTML = skeletonCards(4);
+  $("#report-chart").innerHTML = `<div class="panel chart-panel"><ul class="bar-chart">${
+    [72, 58, 44, 33, 21].map((w) => `<li class="bar-row" aria-hidden="true">
+      <span class="bar-label"><span class="skeleton-line" style="width:70%"></span></span>
+      <span class="bar-track"><span class="skeleton-line" style="width:${w}%;height:12px"></span></span>
+      <span class="bar-value"><span class="skeleton-line" style="width:80%"></span></span>
+    </li>`).join("")}</ul></div>`;
+  const cols = reportShape(state.reportType) === "technicians" ? 5 : 6;
+  $("#report-output").innerHTML = `<div class="panel"><table><tbody>${skeletonRows(cols)}</tbody></table></div>`;
+}
+
+// The view loader, so opening Reports shows the last report you were reading
+// instead of an empty form waiting for a Generate click.
+async function loadReportsView() {
+  syncReportControls();
+  await refreshReport();
+}
+
+// Re-renders from state.report without refetching -- what a sort click needs.
+function renderReport() {
+  if (!state.report) return;
+  const shape = reportShape(state.report.type);
+  const rows = visibleReportRows();
+  renderReportStats(rows, shape);
+  renderReportChart(rows, shape);
+  $("#report-output").innerHTML = renderReportTable(rows, shape);
+  $("#print-report").innerHTML = renderPrintReport(rows, state.report.type, state.report.start, state.report.end);
+}
+
 async function generateReport() {
-  const type = $("#report-type").value;
-  const start = $("#report-start").value || undefined;
-  const end = $("#report-end").value || undefined;
-  const params = new URLSearchParams();
-  if (start) params.set("start", start);
-  if (end) params.set("end", end);
+  const type = state.reportType;
+  const shape = reportShape(type);
+  // A sort key from the other shape (Cost exists on both, "hours" doesn't)
+  // would silently sort by nothing at all.
+  if (!REPORT_SORTS[shape][state.reportSort.key]) state.reportSort = { key: "cost", dir: "desc" };
+  const start = state.reportStart || undefined;
+  const end = state.reportEnd || undefined;
+  $("#report-csv").href = reportCsvHref();
+  showReportPlaceholders();
+  const path = shape === "technicians" ? "technicians" : "vehicle-spend";
+  const rows = await get(`/api/reports/${path}?${reportParams()}`);
+  state.report = { rows, type, start, end };
+  renderReport();
+  saveReportPrefs();
+}
+
+// Refetch and repaint, reporting a failure into the view rather than a toast
+// that leaves skeletons frozen on screen. The summary cards and the chart
+// have to be emptied by hand: they aren't VIEW_PLACEHOLDERS targets, so the
+// error boundary doesn't reach them, and leaving their skeletons shimmering
+// above the error message reads as "still loading" forever.
+async function refreshReport() {
   try {
-    let rows;
-    if (type === "technicians") {
-      rows = await get(`/api/reports/technicians?${params}`);
-    } else {
-      if (type === "vehicle-spend-recon") params.set("segment", "recon");
-      if (type === "vehicle-spend-we_owe") params.set("segment", "we_owe");
-      rows = await get(`/api/reports/vehicle-spend?${params}`);
-    }
-    $("#report-output").innerHTML = renderReportTable(rows, type === "technicians" ? "technicians" : "vehicle-spend");
-    state.report = { rows, type, start, end };
-    $("#print-report").innerHTML = renderPrintReport(rows, type, start, end);
+    await generateReport();
   } catch (err) {
-    toast(err.message, true);
+    $("#report-stats").innerHTML = "";
+    $("#report-chart").innerHTML = "";
+    renderViewFailure("reports", err);
   }
 }
 
 function wireReportsView() {
-  $("#report-quick-today").addEventListener("click", (e) => quickRange("today", e.target));
-  $("#report-quick-week").addEventListener("click", (e) => quickRange("week", e.target));
-  $("#report-quick-month").addEventListener("click", (e) => quickRange("month", e.target));
-  $("#report-quick-year").addEventListener("click", (e) => quickRange("year", e.target));
-  $("#report-quick-all").addEventListener("click", (e) => quickRange("all", e.target));
-  $("#report-generate").addEventListener("click", generateReport);
+  $("#report-type-seg").addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-report-type]");
+    if (!btn || btn.dataset.reportType === state.reportType) return;
+    state.reportType = btn.dataset.reportType;
+    syncReportControls();
+    refreshReport();
+  });
+
+  // Delegated on the view, so the "Show all time" button inside an empty
+  // state works the same as the chips in the toolbar.
+  $("#view-reports").addEventListener("click", (e) => {
+    const chip = e.target.closest("[data-report-range]");
+    if (!chip) return;
+    setReportRange(chip.dataset.reportRange);
+    syncReportControls();
+    refreshReport();
+  });
+
+  for (const id of ["#report-start", "#report-end"]) {
+    $(id).addEventListener("change", () => {
+      readReportDateInputs();
+      syncReportControls();
+      refreshReport();
+    });
+  }
+
+  $("#report-output").addEventListener("click", (e) => {
+    const th = e.target.closest("th[data-report-sort]");
+    if (!th || !state.report) return;
+    const key = th.dataset.reportSort;
+    state.reportSort = state.reportSort.key === key
+      ? { key, dir: state.reportSort.dir === "desc" ? "asc" : "desc" }
+      : { key, dir: REPORT_SORTS[reportShape(state.report.type)][key].type === "number" ? "desc" : "asc" };
+    renderReport();
+    saveReportPrefs();
+  });
+
   $("#report-print").addEventListener("click", async () => {
-    if (!state.report) await generateReport();
+    if (!state.report) await refreshReport();
     if (!state.report) return;
     window.print();
   });
-
 }
 
 /* ==================================================================
@@ -3806,6 +4185,11 @@ document.addEventListener("DOMContentLoaded", () => {
   // archived/live split rather than loading the live board and then
   // discovering the saved filter was History.
   loadVehicleViewPrefs();
+  // Same reasoning for Reports: the saved range has to be in state before
+  // loadReportsView() builds its query string, or the first render is of
+  // the default month and the saved one only appears on the second.
+  loadReportPrefs();
+  if (!state.reportStart && !state.reportEnd && state.reportRange) setReportRange(state.reportRange);
   showView("vehicles");
 });
 

@@ -274,5 +274,53 @@ def test_rail_views_all_have_a_loader_or_are_static(html: str, js: str) -> None:
     fetches anything."""
     nav_targets = set(re.findall(r'class="rail-item[^"]*"\s+data-view="([^"]+)"', html))
     loaders = set(re.findall(r'^\s{2}(\w+): \(\) => load', js[js.index("const VIEW_LOADERS"):js.index("/* ---------- render error boundary")], re.M))
-    STATIC_VIEWS = {"reports"}  # renders on demand from its own form, nothing to fetch on open
+    STATIC_VIEWS: set[str] = set()  # every rail view fetches something on open
     assert nav_targets - loaders <= STATIC_VIEWS, f"rail views with no loader: {sorted(nav_targets - loaders - STATIC_VIEWS)}"
+
+
+# ---------------------------------------------------------------------------
+# Reports
+# ---------------------------------------------------------------------------
+
+def test_every_report_sort_key_in_the_markup_has_a_spec(js: str) -> None:
+    """A th whose data-report-sort doesn't match a REPORT_SORTS entry looks
+    sortable, clicks, and then sorts by nothing at all."""
+    block = js[js.index("const REPORT_SORTS"):js.index("function sortReportRows")]
+    specced = set(re.findall(r"^\s{4}(\w+):\s*\{", block, re.M))
+    used = set(re.findall(r'reportSortHeader\("[\w-]+",\s*"(\w+)"', js))
+    assert used, "no reportSortHeader calls found"
+    assert used <= specced, f"report columns sorted by an undefined key: {sorted(used - specced)}"
+
+
+def test_report_sort_specs_are_partitioned_by_shape(js: str) -> None:
+    """The two report shapes have different columns, so a key from one is
+    meaningless in the other -- generateReport() resets the sort on a shape
+    change and needs both tables keyed independently."""
+    block = js[js.index("const REPORT_SORTS"):js.index("function sortReportRows")]
+    shapes = re.split(r'^  (?:"vehicle-spend"|technicians): \{$', block, flags=re.M)[1:]
+    assert len(shapes) == 2, f"expected 2 report shapes in REPORT_SORTS, found {len(shapes)}"
+    # Both must offer "cost" -- that's what generateReport falls back to when
+    # the saved sort key belongs to the other shape.
+    for body in shapes:
+        assert re.search(r"^\s{4}cost:", body, re.M), "a report shape has no cost sort to fall back to"
+
+
+def test_report_controls_refetch_rather_than_waiting_for_a_button(html: str, js: str) -> None:
+    """Every control on the screen is live; a leftover Generate button would
+    mean two ways to ask the same question, one of which goes stale."""
+    assert "report-generate" not in html and "report-generate" not in js
+    assert 'id="report-csv"' in html, "the Download CSV link is gone"
+    for control in ("report-start", "report-end"):
+        assert f'id="{control}"' in html, f"the Reports toolbar lost {control}"
+
+    # Every report the code knows how to build needs a way to ask for it, and
+    # every range setReportRange understands needs a chip -- one dropped
+    # attribute and an option is simply unreachable.
+    types = set(re.findall(r'data-report-type="([\w-]+)"', html))
+    titled = set(re.findall(r'^  (?:"([\w-]+)"|(\w+)):\s*"', js[js.index("const REPORT_TITLES"):js.index("const REPORT_SEGMENT")], re.M))
+    assert types == {a or b for a, b in titled}, f"report toolbar and REPORT_TITLES disagree: {types}"
+
+    ranges = re.findall(r'data-report-range="(\w+)"', html)
+    assert len(ranges) == len(set(ranges)) == 5, f"expected 5 distinct range chips, found {ranges}"
+    known = set(re.findall(r'"(\w+)"', re.search(r'const match = \[([^\]]+)\]', js).group(1)))
+    assert set(ranges) == known, f"range chips {sorted(ranges)} don't match the ranges the app can detect {sorted(known)}"

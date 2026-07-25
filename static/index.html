@@ -380,35 +380,42 @@
         <div class="page-head">
           <div>
             <h1>Reports</h1>
-            <p class="page-desc">Printable vehicle and technician reports.</p>
+            <p class="page-desc">What the shop spent, what it produced, and who did the work — over any stretch of time.</p>
+          </div>
+          <div style="display:flex;gap:10px">
+            <a class="btn btn-ghost" id="report-csv" href="/api/export/report/vehicle-spend.csv" download>
+              <svg viewBox="0 0 24 24"><path d="M12 4v11m0 0l-4-4m4 4l4-4M4 20h16"/></svg>
+              Download CSV
+            </a>
+            <button type="button" class="btn btn-primary" id="report-print">
+              <svg viewBox="0 0 24 24"><path d="M7 9V3h10v6M7 19H5a1 1 0 01-1-1v-5a2 2 0 012-2h12a2 2 0 012 2v5a1 1 0 01-1 1h-2M7 15h10v6H7z"/></svg>
+              Print
+            </button>
           </div>
         </div>
 
-        <div class="card">
-          <div class="card-head"><p class="section-eyebrow" style="margin:0">Printable</p><h3 class="section-title">Vehicle &amp; Technician Reports</h3></div>
-          <div class="form-row" style="padding:14px 16px 0">
-            <label>From<input type="date" id="report-start"></label>
-            <label>To<input type="date" id="report-end"></label>
-            <label>Report<select id="report-type">
-              <option value="vehicle-spend">All Vehicles (Combined)</option>
-              <option value="vehicle-spend-recon">Recon Vehicles Only</option>
-              <option value="vehicle-spend-we_owe">We-Owe Only</option>
-              <option value="technicians">Technician Productivity</option>
-            </select></label>
+        <div class="report-bar">
+          <div class="seg" id="report-type-seg" role="tablist" aria-label="Report">
+            <button type="button" class="seg-btn active" data-report-type="vehicle-spend" role="tab" aria-selected="true">All Vehicles</button>
+            <button type="button" class="seg-btn" data-report-type="vehicle-spend-recon" role="tab" aria-selected="false">Recon</button>
+            <button type="button" class="seg-btn" data-report-type="vehicle-spend-we_owe" role="tab" aria-selected="false">We-Owe</button>
+            <button type="button" class="seg-btn" data-report-type="technicians" role="tab" aria-selected="false">Technicians</button>
           </div>
-          <div class="form-row" style="padding:12px 16px">
-            <button type="button" class="chip" id="report-quick-today">Today</button>
-            <button type="button" class="chip" id="report-quick-week">This Week</button>
-            <button type="button" class="chip" id="report-quick-month">This Month</button>
-            <button type="button" class="chip" id="report-quick-year">This Year</button>
-            <button type="button" class="chip" id="report-quick-all">All Time</button>
+          <div class="report-bar-gap"></div>
+          <div class="report-range">
+            <button type="button" class="chip" data-report-range="today">Today</button>
+            <button type="button" class="chip" data-report-range="week">This Week</button>
+            <button type="button" class="chip" data-report-range="month">This Month</button>
+            <button type="button" class="chip" data-report-range="year">This Year</button>
+            <button type="button" class="chip" data-report-range="all">All Time</button>
+            <label class="report-date">From<input type="date" id="report-start"></label>
+            <label class="report-date">To<input type="date" id="report-end"></label>
           </div>
-          <div class="form-row" style="padding:0 16px 16px">
-            <button type="button" class="btn btn-primary" id="report-generate">Generate Report</button>
-            <button type="button" class="btn btn-ghost" id="report-print">Print</button>
-          </div>
-          <div id="report-output" style="padding:0 16px 20px"></div>
         </div>
+
+        <div class="stats stats-report" id="report-stats"></div>
+        <div id="report-chart"></div>
+        <div id="report-output"></div>
       </section>
 
       <!-- ACCOUNTING / A-P -->

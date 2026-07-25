@@ -381,3 +381,117 @@ Next time, in rough priority order:
      to reach for ＋ Part with the mouse.
   6. The message log is session-only; persisting it (localStorage, capped)
      would make "what was that error before I refreshed?" answerable.
+
+================================================================================
+2026-07-25 -- Reports rebuilt from a form into a screen
+================================================================================
+
+First, cleanup: the previous run finished its work but died before committing
+and left a stale .git/index.lock behind, so its whole vehicles-board change
+was sitting uncommitted. Committed it as-is (6c64085) before starting.
+Worth knowing next run, because it will happen again: when this repo is
+reached through the sandbox mount, unlink() is refused outright. Every git
+write therefore leaves its own .git/*.lock behind and blocks the *next* git
+command -- that's what .git/stale-tmp is, a previous run's graveyard. Rename
+within the same directory does work, so the fix is to sweep the locks aside
+before each git command:
+
+    for f in .git/index.lock .git/HEAD.lock .git/refs/heads/master.lock; do
+      [ -e "$f" ] && mv "$f" ".git/stale-tmp/$(basename $f).$RANDOM"
+    done
+
+(GIT_INDEX_FILE pointed at /tmp gets `git add` through but not the commit,
+since that still needs HEAD.lock.)
+
+Reports was the weakest screen in the app: a form in a card. You landed on it,
+it showed you nothing, and you had to fill in two dates and press Generate to
+get a bare table with a bold Total row. Everything else in the app had already
+moved on -- empty states, skeletons, an error boundary, sortable columns,
+remembered preferences -- and Reports had none of it.
+
+It's now a screen:
+
+  * Loads itself. VIEW_LOADERS/VIEW_PLACEHOLDERS entries, so opening it
+    fetches, with a skeleton shaped like the cards/chart/table it's about to
+    show, and a failure paints the error boundary instead of a toast. Generate
+    is gone -- every control refetches on change, so there's nothing to press
+    and nothing that can go stale relative to the controls above it.
+
+  * Four summary cards. Vehicles (split recon/we-owe), total cost, average per
+    vehicle, and an over-quote count with the dollar amount past estimate --
+    flagged warn, and the card's top edge picks up the warning color via
+    :has(). They describe exactly the rows below them, same range same
+    segment, which is the thing the vehicles board still gets wrong (its stats
+    are lot-wide while its table is filtered).
+
+  * A horizontal bar chart. Top 12 by cost, with a hairline marker showing
+    where the quote was, bars turning crit when a car ran >10% past it (same
+    rule the board colors Cost with). Technicians get labor cost by tech.
+    Built from plain elements -- no CDN, inherits the theme, reflows with the
+    panel. Bars and markers share one scale that accounts for quotes larger
+    than any bar, so an under-budget car's estimate can't pin to the end of
+    the track and read as the biggest number on the chart.
+
+  * Sortable columns, blanks-last, keyed per report shape (the two shapes
+    share only "cost", so switching reports resets a sort key the new shape
+    doesn't have rather than silently sorting by nothing). Print follows the
+    sort, so paper matches screen.
+
+  * Download CSV, server-side: /api/export/report/vehicle-spend.csv and
+    .../technicians.csv, taking the same start/end/segment the report does
+    and built from the same row builders, so the file can't disagree with
+    the screen. The link's href tracks the toolbar.
+
+  * Segmented control instead of a dropdown for the four reports, always-on
+    range chips, and hand-typed dates that re-light the matching chip (or
+    clear all of them, rather than leaving one lit claiming a range that
+    isn't in effect). Type/range/sort persisted to localStorage and restored
+    before the first fetch.
+
+Two bugs found by actually running it rather than by reading it:
+  * A failed refetch left the card and chart skeletons shimmering above the
+    error message, because those aren't VIEW_PLACEHOLDERS targets and the
+    error boundary never reached them. Found by pointing jsdom at a live
+    seeded server and watching the screen when the server went away.
+  * With real seed data every car is at $0 (parts ordered, none received) and
+    the chart panel simply vanished, which reads like it broke. It now says
+    there's nothing to plot yet.
+
+Tests: 176 -> 183.
+  * tests/dom/reports_smoke.mjs -- 50-odd assertions with every summary
+    number checkable by hand (total 3000 / 4 vehicles / avg 750 / one car
+    over by 550), chart scaling including the marker-past-the-max case,
+    sorting in both directions with blanks, shape switching, range chips vs.
+    hand-typed dates, the CSV href, prefs round-trip, and the empty /
+    nothing-to-plot / failed / recovered states. Mutation-tested: dropping
+    the marker from the chart scale, dropping the sort reset, dropping the
+    prefs save, sorting blanks first, letting the CSV href go stale, and
+    rendering unsorted rows each fail it. Two of those only started failing
+    after the fixture was fixed to actually exercise them.
+  * test_export.py -- both CSV endpoints, including that segment and date
+    range reach the file and that an unknown segment is a 422.
+  * test_static_assets.py -- report toolbar vs. REPORT_TITLES, range chips
+    vs. the ranges the app can detect, every data-report-sort has a spec,
+    both shapes keep a cost fallback, no Generate button. All mutation-tested.
+
+Suite green (183; the 3 jsdom cases run via node), server boots, and the
+screen was rendered against a real seeded database in both report modes.
+
+Note for next run: this sandbox can't run `uv` (no network to the Python
+build host) and the repo's tests/dom/node_modules hangs on read here. Use a
+local venv + a /tmp jsdom install; there's a mirror script pattern in this
+session's history.
+
+Next time, in rough priority order:
+  1. The vehicles board's stat cards still summarize the whole board while
+     the table below them is filtered -- Reports now does this correctly and
+     the two screens visibly disagree. Scope them to the filter.
+  2. Board columns for days-since-last-activity (updated_at is in the
+     payload) and a parts-waiting indicator.
+  3. A/P and Cores/Returns are ~20 lines of fixture from the same jsdom
+     coverage now that harness.mjs exists.
+  4. The Reports chart is the only chart in the app; the dashboard/board
+     could use the same barChart() for cost-by-status or aging buckets.
+  5. Debounced input on the estimate's money/qty fields (carried over).
+  6. Tab out of the last estimate row should add a new line (carried over).
+  7. Persist the message log to localStorage, capped (carried over).

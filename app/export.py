@@ -4,12 +4,26 @@ import csv
 import io
 import sqlite3
 from datetime import date
-from typing import Callable
+from typing import Callable, Literal
 
 from fastapi import APIRouter, Response
 
 from .recon import vehicle_board_rows
+from .reports import technician_productivity_rows
 from .workflow import STATUS_LABEL
+
+
+def _csv_response(header: list[str], rows: list[list], slug: str) -> Response:
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(header)
+    writer.writerows(rows)
+    filename = f"discount-auto-ops-{slug}-{date.today():%Y-%m-%d}.csv"
+    return Response(
+        content=buffer.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 def _linked_invoices(db: sqlite3.Connection, order_ids: list[int]) -> str:
@@ -64,6 +78,55 @@ def build_export_router(connect: Callable[[], sqlite3.Connection], now_fn: Calla
             content=buffer.getvalue(),
             media_type="text/csv",
             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    # The Reports screen's Download CSV. Deliberately the same query string
+    # the report itself is fetched with, and built from the same row builders,
+    # so the file can't disagree with what's on screen -- the alternative,
+    # serialising the rows in the browser, drifts the moment either rollup
+    # changes and can only ever export what happens to be loaded.
+    @router.get("/export/report/vehicle-spend.csv")
+    def export_vehicle_spend_csv(
+        start: str | None = None,
+        end: str | None = None,
+        segment: Literal["recon", "we_owe"] | None = None,
+    ):
+        with connect() as db:
+            rows = vehicle_board_rows(db, start, end, segment)
+        return _csv_response(
+            ["Stock #", "Vehicle", "VIN", "Type", "Status", "Technicians",
+             "Quoted", "Cost", "Customer Paid", "Net to Shop", "Age (days)"],
+            [
+                [
+                    row["stock_number"] or row.get("customer_name", ""),
+                    row["vehicle"],
+                    row.get("vin", ""),
+                    "Recon" if row["segment"] == "recon" else "We-Owe",
+                    STATUS_LABEL.get(row["status"], row["status"]),
+                    ", ".join(row.get("technicians") or []),
+                    f"{row.get('quoted_cost') or 0:.2f}",
+                    f"{row['actual_cost']:.2f}",
+                    f"{row.get('customer_paid') or 0:.2f}",
+                    f"{row.get('net_cost', row['actual_cost']):.2f}",
+                    row["age_days"],
+                ]
+                for row in rows
+            ],
+            f"vehicle-spend-{segment}" if segment else "vehicle-spend",
+        )
+
+    @router.get("/export/report/technicians.csv")
+    def export_technicians_csv(start: str | None = None, end: str | None = None):
+        with connect() as db:
+            rows = technician_productivity_rows(db, start, end)
+        return _csv_response(
+            ["Technician", "Repair Orders", "Completed", "Labor Hours", "Labor Cost"],
+            [
+                [row["technician"], row["ro_count"], row["completed_count"],
+                 f"{row['labor_hours']:.2f}", f"{row['labor_cost']:.2f}"]
+                for row in rows
+            ],
+            "technicians",
         )
 
     return router

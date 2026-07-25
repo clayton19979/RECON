@@ -71,6 +71,23 @@
         <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
         <input id="global-search" placeholder="Search stock #, VIN, customer…" autocomplete="off">
       </label>
+      <!-- Toasts are on screen for three seconds and then gone forever, which
+           is fine for "Saved" and useless for "Could not reach the server"
+           when it fired while you were looking at the keyboard. Every toast
+           also lands here. -->
+      <div class="notif" id="notif">
+        <button class="notif-toggle" id="notif-toggle" type="button" aria-haspopup="true" aria-expanded="false" aria-label="Recent messages" title="Recent messages">
+          <svg viewBox="0 0 24 24"><path d="M18 15.2V10a6 6 0 10-12 0v5.2L4.4 17.6a.6.6 0 00.5.9h14.2a.6.6 0 00.5-.9z"/><path d="M10 20.5a2.2 2.2 0 004 0"/></svg>
+          <span class="notif-dot" id="notif-dot" hidden></span>
+        </button>
+        <div class="notif-menu" id="notif-menu">
+          <div class="notif-head">
+            <span class="notif-title">Recent Messages</span>
+            <button type="button" class="btn btn-ghost btn-xs" id="notif-clear">Clear</button>
+          </div>
+          <div class="notif-list" id="notif-list"></div>
+        </div>
+      </div>
       <label class="whoami">
         Working as
         <select id="current-user"><option value="">Unspecified</option></select>
@@ -229,7 +246,11 @@
                 <div class="card-head">
                   <div>
                     <p class="section-eyebrow">At Cost · No Markup</p>
-                    <h3 class="section-title">Parts &amp; Labor</h3>
+                    <h3 class="section-title">Parts &amp; Labor
+                      <!-- Every field on this grid autosaves; this is the only
+                           thing that says so out loud. -->
+                      <span class="save-state" id="vd-estimate-save-state"></span>
+                    </h3>
                   </div>
                   <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end">
                     <button class="btn btn-ghost btn-sm" id="vd-add-job">＋ Add Job</button>

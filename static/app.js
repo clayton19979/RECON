@@ -27,12 +27,85 @@ const patch = (path, body) => api(path, { method: "PATCH", body: body === undefi
 
 let toastTimer = null;
 function toast(message, isError = false) {
+  logMessage(message, isError);
   const el = $("#toast");
+  if (!el) return;
   el.textContent = message;
   el.classList.toggle("error", isError);
   el.classList.add("show");
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => el.classList.remove("show"), 3200);
+}
+
+/* ---------- message log ----------
+   A toast lives for 3.2 seconds and then is gone for good. That's fine for
+   "Saved" and genuinely bad for "Could not reach the server", which tends to
+   fire while the advisor is looking at the keyboard rather than the screen --
+   the only evidence the save failed disappears unseen. Every toast is also
+   appended here, and the topbar bell opens the last 50 with timestamps.
+
+   The unread dot counts *errors* only. A wall of successful saves shouldn't
+   be the thing nagging you to go look. */
+const MESSAGE_LOG_LIMIT = 50;
+const messageLog = [];
+let messageLogUnread = 0;
+
+function logMessage(message, isError) {
+  messageLog.unshift({ message: String(message), isError: !!isError, at: new Date() });
+  if (messageLog.length > MESSAGE_LOG_LIMIT) messageLog.length = MESSAGE_LOG_LIMIT;
+  if (isError && !$("#notif-menu")?.classList.contains("open")) messageLogUnread += 1;
+  renderMessageLog();
+}
+
+function renderMessageLog() {
+  const list = $("#notif-list");
+  const dot = $("#notif-dot");
+  if (dot) {
+    dot.hidden = messageLogUnread === 0;
+    dot.textContent = messageLogUnread > 9 ? "9+" : String(messageLogUnread);
+  }
+  if (!list) return;
+  if (!messageLog.length) {
+    list.innerHTML = `<p class="notif-empty">Nothing yet. Saves, errors and status changes show up here.</p>`;
+    return;
+  }
+  list.innerHTML = messageLog.map((entry) => `
+    <div class="notif-item ${entry.isError ? "error" : ""}">
+      <span class="notif-item-text">${esc(entry.message)}</span>
+      <span class="notif-item-time">${esc(entry.at.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }))}</span>
+    </div>
+  `).join("");
+}
+
+function wireMessageLog() {
+  const wrap = $("#notif");
+  const toggle = $("#notif-toggle");
+  const menu = $("#notif-menu");
+  if (!wrap || !toggle || !menu) return;
+  const setOpen = (open) => {
+    menu.classList.toggle("open", open);
+    toggle.setAttribute("aria-expanded", String(open));
+    if (open) {
+      // Opening the panel *is* reading it.
+      messageLogUnread = 0;
+      renderMessageLog();
+    }
+  };
+  toggle.addEventListener("click", (e) => {
+    e.stopPropagation();
+    setOpen(!menu.classList.contains("open"));
+  });
+  menu.addEventListener("click", (e) => e.stopPropagation());
+  $("#notif-clear").addEventListener("click", () => {
+    messageLog.length = 0;
+    messageLogUnread = 0;
+    renderMessageLog();
+  });
+  document.addEventListener("click", () => setOpen(false));
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && menu.classList.contains("open")) setOpen(false);
+  });
+  renderMessageLog();
 }
 /* ---------- confirm dialog ----------
    Every destructive action used to call window.confirm(), which renders as
@@ -964,7 +1037,7 @@ function renderEstimate(order) {
                  <span class="status-pill ${item.part_returned ? "sp-returned" : "sp-received"}" ${item.received_invoice_number ? `title="Received via invoice ${esc(item.received_invoice_number)}"` : ""}>${item.part_returned ? "Returned" : (item.received_invoice_number ? `Received (${esc(item.received_invoice_number)})` : "Received")}</span>
                  ${item.kind === "part" ? `<button type="button" class="btn btn-ghost btn-xs part-return-btn" data-id="${item.id}" data-returned="${item.part_returned ? 1 : 0}" title="${item.part_returned ? "Undo -- this part was not actually sent back" : "Send this part back to the vendor"}">${item.part_returned ? "Undo" : "Mark Returned"}</button>` : ""}
                </span>`
-            : `<select class="ei-status status-pill sp-${item.status || "quoted"}">
+            : `<select class="ei-status status-pill sp-${item.status || "quoted"}" data-prev="${item.status || "quoted"}">
                  <option value="quoted" ${item.status === "quoted" ? "selected" : ""}>Quoted</option>
                  <option value="ordered" ${item.status === "ordered" ? "selected" : ""}>Ordered</option>
                </select>`)
@@ -1044,89 +1117,14 @@ function renderEstimate(order) {
     }).join("");
   }
 
-  // Every field auto-saves on change -- there is no "forgot to click Save and
-  // it silently vanished" window, because nothing is ever left DOM-only.
-  $$(".part-row:not(.head)", box).forEach((row) => {
-    row.querySelectorAll(".ei-kind, .ei-desc, .ei-part, .ei-qty, .ei-cost, .ei-core, .ei-job").forEach((field) => {
-      field.addEventListener("change", () => persistEstimate());
-    });
-  });
-  $$(".rm-btn", box).forEach((btn) => {
-    btn.addEventListener("click", async (e) => {
-      const row = e.target.closest(".part-row");
-      const desc = row.querySelector(".ei-desc").value.trim();
-      if (desc && !(await confirmAction({
-        eyebrow: "REMOVE LINE",
-        title: `Remove "${desc}"?`,
-        body: "It comes off this repair order and stops counting toward its cost.",
-        confirmLabel: "Remove Line",
-        danger: true,
-      }))) return;
-      row.remove();
-      persistEstimate();
-    });
-  });
-  $$(".row-move-btn", box).forEach((btn) => {
-    btn.addEventListener("click", () => openMoveItemDialog(order.id, Number(btn.dataset.id), btn.dataset.desc));
-  });
-  $$(".ei-status", box).forEach((sel) => {
-    const previousValue = sel.value;
-    sel.addEventListener("change", async () => {
-      const row = sel.closest(".part-row");
-      const itemId = row.dataset.id;
-      if (!itemId) return;
-      try {
-        await patch(`/api/orders/${order.id}/estimate/items/${itemId}/status`, { status: sel.value });
-        toast("Status updated");
-        await loadVehicleDetail();
-      } catch (err) {
-        sel.value = previousValue;
-        toast(err.message, true);
-      }
-    });
-  });
-  $$(".part-return-btn", box).forEach((btn) => {
-    btn.addEventListener("click", async () => {
-      const returned = btn.dataset.returned !== "1";
-      const desc = btn.closest(".part-row").querySelector(".ei-desc").value.trim();
-      if (returned && !(await confirmAction({
-        eyebrow: "VENDOR RETURN",
-        title: `Mark "${desc}" as returned?`,
-        body: "Its cost stops counting toward this ticket and it moves onto the returns board.",
-        confirmLabel: "Mark Returned",
-      }))) return;
-      try {
-        await patch(`/api/orders/${order.id}/estimate/items/${btn.dataset.id}/part-return`, { returned, actor: currentActor() });
-        toast(returned ? "Marked returned" : "Return undone");
-        await loadVehicleDetail();
-      } catch (err) {
-        toast(err.message, true);
-      }
-    });
-  });
-  $$(".ei-receive-check", box).forEach((cb) => {
-    cb.addEventListener("change", updateReceiveButtonState);
-  });
+  // No listeners are bound here. #vd-estimate-items carries one delegated set
+  // of handlers, wired once at startup by wireEstimateGrid(), so a re-render
+  // costs exactly one innerHTML swap -- it used to cost twelve
+  // addEventListener calls per row plus three more per job, every time any
+  // single field changed.
   updateReceiveButtonState();
-  wireJobControls(order);
-  if (jobs.length) {
-    // Scoped to each kind-subgroup (not the whole job) -- a part can only
-    // reorder among other parts in the same job, since dragging it into the
-    // Labor section wouldn't change its kind and would just look wrong.
-    $$(".kind-subgroup", box).forEach((groupEl) => wireEstimateRowDragging(groupEl));
-  } else {
-    wireEstimateRowDragging(box);
-  }
-  // Quoted = every line at its full quantity, whether or not it's landed yet
-  // (matches cost_rollup's quoted_cost); actual = only what's really in the
-  // car so far -- parts count once received, labor/fees count the moment
-  // they're logged. Same "at cost" basis as everywhere else (unit_cost, not
-  // unit_price) -- this panel has never shown customer-facing markup.
-  const quotedTotal = items.filter(notReturned).reduce((s, i) => s + i.quantity * i.unit_cost, 0);
-  const actualParts = items.filter((i) => i.kind === "part" && !i.part_returned).reduce((s, i) => s + i.received_quantity * i.unit_cost, 0);
-  const actualOther = items.filter((i) => i.kind !== "part").reduce((s, i) => s + i.quantity * i.unit_cost, 0);
-  $("#vd-quoted-cost").textContent = money(quotedTotal);
-  $("#vd-actual-cost").textContent = money(actualParts + actualOther);
+  renderEstimateTotals(order);
+  lastEstimateShape = estimateShape(order);
 }
 
 function updateReceiveButtonState() {
@@ -1134,32 +1132,335 @@ function updateReceiveButtonState() {
   $("#vd-receive-parts").disabled = checked.length === 0;
 }
 
-// Native HTML5 drag-and-drop: grabbing the ⋮⋮ handle (or anywhere on the
-// row) reorders it among its siblings live as you drag; persistEstimate()
-// on drop saves whatever order the DOM ends up in, same as every other
-// estimate edit. Called once per kind-subgroup (or once per job-group when
-// there are no jobs at all) rather than once globally, so a row can only
-// ever be dropped among its own group's siblings -- moving a line to a
-// *different* job or kind is the Job/Kind selects' job, not drag-and-drop's.
+// Quoted = every line at its full quantity, whether or not it's landed yet
+// (matches cost_rollup's quoted_cost); actual = only what's really in the
+// car so far -- parts count once received, labor/fees count the moment
+// they're logged. Same "at cost" basis as everywhere else (unit_cost, not
+// unit_price) -- this panel has never shown customer-facing markup.
+// Split out of renderEstimate because an in-place sync has to recompute
+// these without touching the rows.
+function renderEstimateTotals(order) {
+  const items = order.estimate ? order.estimate.items : [];
+  const notReturned = (i) => !(i.kind === "part" && i.part_returned);
+  const quotedTotal = items.filter(notReturned).reduce((s, i) => s + i.quantity * i.unit_cost, 0);
+  const actualParts = items.filter((i) => i.kind === "part" && !i.part_returned).reduce((s, i) => s + i.received_quantity * i.unit_cost, 0);
+  const actualOther = items.filter((i) => i.kind !== "part").reduce((s, i) => s + i.quantity * i.unit_cost, 0);
+  $("#vd-quoted-cost").textContent = money(quotedTotal);
+  $("#vd-actual-cost").textContent = money(actualParts + actualOther);
+}
+
+/* ---------- estimate grid: applying a save without redrawing ----------
+
+   Every field on the grid autosaves on change, and the save round-trips the
+   whole estimate. Re-rendering the grid from that response is correct but
+   brutal: it blew away the DOM the advisor was standing in, so tabbing
+   Description -> Qty put the caret in Qty, fired the save for Description,
+   and then the response landed a few hundred ms later and yanked focus back
+   out of Qty mid-keystroke. Half-typed numbers went missing that way.
+
+   So: renderEstimate() records a *shape* signature -- everything that decides
+   which elements exist and in what order. When a save comes back with the
+   same shape (the overwhelmingly common case: you edited a value, not the
+   structure), syncEstimateInPlace() writes the server's values into the
+   existing controls, skipping whichever one has focus, and nothing is
+   destroyed. Only a real structural change (a line added or deleted, a status
+   flipped, a job renamed, rows reordered) falls back to a full render -- and
+   even then focus is captured and restored around it.
+
+   Deliberately *not* in the signature: description, part number, quantity,
+   cost, core. Those live inside inputs the user is editing; they're the
+   values a re-render exists to avoid clobbering. */
+let lastEstimateShape = null;
+
+function estimateShape(order) {
+  const jobs = order.estimate?.jobs ?? [];
+  const items = order.estimate?.items ?? [];
+  return JSON.stringify([
+    jobs.map((j) => [j.id, j.title, j.technician_id ?? null]),
+    items.map((i) => [
+      i.id ?? null,
+      i.kind,
+      i.job_id ?? null,
+      i.status ?? "quoted",
+      i.part_returned ? 1 : 0,
+      i.received_invoice_number ?? "",
+      // decides whether the receive checkbox cell has a checkbox in it
+      i.kind === "part" && i.id && ((i.quantity ?? 0) - (i.received_quantity ?? 0)) > 0.001 ? 1 : 0,
+    ]),
+  ]);
+}
+
+// The single entry point for "the server just gave us a new estimate" --
+// cheap path when it can, full render when it must, focus intact either way.
+function applyEstimateResponse(order) {
+  if (syncEstimateInPlace(order)) return;
+  const snap = captureEstimateFocus();
+  renderEstimate(order);
+  restoreEstimateFocus(snap);
+}
+
+function syncEstimateInPlace(order) {
+  const box = $("#vd-estimate-items");
+  if (!box || lastEstimateShape === null) return false;
+  if (estimateShape(order) !== lastEstimateShape) return false;
+
+  const items = order.estimate?.items ?? [];
+  const active = document.activeElement;
+  for (const item of items) {
+    const row = $(`.part-row[data-id="${item.id}"]`, box);
+    if (!row) return false; // DOM drifted from what we think we rendered -- redraw
+    row.dataset.receivedQuantity = item.received_quantity ?? 0;
+    // Never write into the control the user is standing in; that's the whole
+    // point of this path.
+    const set = (sel, value) => {
+      const el = $(sel, row);
+      if (!el || el === active) return;
+      const next = String(value);
+      if (el.value !== next) el.value = next;
+    };
+    set(".ei-kind", item.kind);
+    set(".ei-desc", item.description || "");
+    set(".ei-part", item.part_number || "");
+    set(".ei-qty", item.quantity ?? 1);
+    const costEl = $(".ei-cost", row);
+    if (costEl && costEl.dataset.realCost !== undefined) {
+      // Returned part: the visible 0 is deliberate, the real number is the attribute.
+      costEl.dataset.realCost = String(item.unit_cost ?? 0);
+    } else {
+      set(".ei-cost", item.unit_cost ?? 0);
+    }
+    set(".ei-core", item.core_charge ?? 0);
+    const jobSel = $(".ei-job", row);
+    if (jobSel && jobSel !== active) jobSel.value = item.job_id ?? "";
+    const statusSel = $(".ei-status", row);
+    if (statusSel) {
+      const status = item.status || "quoted";
+      if (statusSel !== active) statusSel.value = status;
+      statusSel.dataset.prev = status;
+      statusSel.className = `ei-status status-pill sp-${status}`;
+    }
+  }
+
+  // Subtotals key off quantity x cost, which the shape signature ignores on
+  // purpose -- so they have to be recomputed here explicitly.
+  const notReturned = (i) => !(i.kind === "part" && i.part_returned);
+  $$(".job-group", box).forEach((groupEl) => {
+    const sub = $(".job-group-subtotal", groupEl);
+    if (!sub) return;
+    const jobId = groupEl.dataset.jobId === "" ? null : Number(groupEl.dataset.jobId);
+    sub.textContent = money(
+      items.filter((i) => (i.job_id ?? null) === jobId).filter(notReturned).reduce((s, i) => s + i.quantity * i.unit_cost, 0),
+    );
+  });
+  renderEstimateTotals(order);
+  updateReceiveButtonState();
+  return true;
+}
+
+// Identify the focused control well enough to find it again after the grid is
+// rebuilt: by row id when the row survives the round-trip, by position when it
+// doesn't (a brand-new row has no id until the server assigns one).
+function captureEstimateFocus() {
+  const box = $("#vd-estimate-items");
+  const el = document.activeElement;
+  if (!box || !el || !box.contains(el)) return null;
+  const row = el.closest(".part-row");
+  const field = [...el.classList].find((c) => c.startsWith("ei-"));
+  if (!row || !field) return null;
+  const snap = { id: row.dataset.id || "", index: $$(".part-row:not(.head)", box).indexOf(row), field };
+  // Number inputs report null here; only text fields carry a caret worth keeping.
+  if (typeof el.selectionStart === "number") {
+    snap.start = el.selectionStart;
+    snap.end = el.selectionEnd;
+  }
+  return snap;
+}
+
+function restoreEstimateFocus(snap) {
+  if (!snap) return;
+  const box = $("#vd-estimate-items");
+  if (!box) return;
+  const row = (snap.id && $(`.part-row[data-id="${snap.id}"]`, box)) || $$(".part-row:not(.head)", box)[snap.index];
+  const el = row && $(`.${snap.field}`, row);
+  if (!el || el.disabled) return;
+  el.focus();
+  if (typeof snap.start === "number" && typeof el.setSelectionRange === "function") {
+    try {
+      el.setSelectionRange(snap.start, snap.end);
+    } catch {
+      /* input types that don't support a selection range -- focus is enough */
+    }
+  }
+}
+
+/* ---------- estimate grid: one delegated listener set ----------
+   Wired once at startup against #vd-estimate-items, which never gets
+   replaced -- only its contents do. Everything the grid renders (rows, job
+   headers, the transient row addEstimateRow paints before its save lands) is
+   live the instant it exists, and re-rendering binds nothing. */
+function wireEstimateGrid() {
+  const box = $("#vd-estimate-items");
+  if (!box) return;
+
+  box.addEventListener("change", (e) => {
+    const t = e.target;
+    if (!(t instanceof Element)) return;
+    // Every field autosaves on change -- there is no "forgot to click Save and
+    // it silently vanished" window, because nothing is ever left DOM-only.
+    if (t.matches(".ei-kind, .ei-desc, .ei-part, .ei-qty, .ei-cost, .ei-core, .ei-job")) return void persistEstimate();
+    if (t.matches(".ei-receive-check")) return void updateReceiveButtonState();
+    if (t.matches(".ei-status")) return void onEstimateStatusChange(t);
+    if (t.matches(".ei-job-tech")) return void onJobTechnicianChange(t);
+  });
+
+  box.addEventListener("click", (e) => {
+    const btn = e.target instanceof Element ? e.target.closest("button") : null;
+    if (!btn || !box.contains(btn)) return;
+    if (btn.classList.contains("rm-btn")) return void onEstimateRowRemove(btn);
+    if (btn.classList.contains("row-move-btn")) return void onEstimateRowMove(btn);
+    if (btn.classList.contains("part-return-btn")) return void onEstimatePartReturn(btn);
+    if (btn.classList.contains("job-edit")) return void onJobEdit(btn);
+    if (btn.classList.contains("job-delete")) return void onJobDelete(btn);
+    if (btn.classList.contains("job-mini-add")) {
+      addEstimateRow(btn.dataset.kind, {}, btn.dataset.jobId ? Number(btn.dataset.jobId) : null);
+    }
+  });
+
+  wireEstimateRowDragging(box);
+}
+
+function currentEstimateJob(jobId) {
+  return (state.detail.order?.estimate?.jobs ?? []).find((j) => String(j.id) === String(jobId)) || null;
+}
+
+async function onEstimateRowRemove(btn) {
+  const row = btn.closest(".part-row");
+  if (!row) return;
+  const desc = row.querySelector(".ei-desc").value.trim();
+  if (desc && !(await confirmAction({
+    eyebrow: "REMOVE LINE",
+    title: `Remove "${desc}"?`,
+    body: "It comes off this repair order and stops counting toward its cost.",
+    confirmLabel: "Remove Line",
+    danger: true,
+  }))) return;
+  row.remove();
+  persistEstimate();
+}
+
+function onEstimateRowMove(btn) {
+  const order = state.detail.order;
+  if (!order) return;
+  openMoveItemDialog(order.id, Number(btn.dataset.id), btn.dataset.desc);
+}
+
+async function onEstimateStatusChange(sel) {
+  const order = state.detail.order;
+  const itemId = sel.closest(".part-row")?.dataset.id;
+  if (!order || !itemId) return;
+  try {
+    await patch(`/api/orders/${order.id}/estimate/items/${itemId}/status`, { status: sel.value });
+    sel.dataset.prev = sel.value;
+    toast("Status updated");
+    await loadVehicleDetail();
+  } catch (err) {
+    sel.value = sel.dataset.prev || "quoted";
+    toast(err.message, true);
+  }
+}
+
+async function onEstimatePartReturn(btn) {
+  const order = state.detail.order;
+  if (!order) return;
+  const returned = btn.dataset.returned !== "1";
+  const desc = btn.closest(".part-row").querySelector(".ei-desc").value.trim();
+  if (returned && !(await confirmAction({
+    eyebrow: "VENDOR RETURN",
+    title: `Mark "${desc}" as returned?`,
+    body: "Its cost stops counting toward this ticket and it moves onto the returns board.",
+    confirmLabel: "Mark Returned",
+  }))) return;
+  try {
+    await patch(`/api/orders/${order.id}/estimate/items/${btn.dataset.id}/part-return`, { returned, actor: currentActor() });
+    toast(returned ? "Marked returned" : "Return undone");
+    await loadVehicleDetail();
+  } catch (err) {
+    toast(err.message, true);
+  }
+}
+
+async function onJobTechnicianChange(sel) {
+  const order = state.detail.order;
+  const job = currentEstimateJob(sel.dataset.jobId);
+  if (!order || !job) return;
+  try {
+    await put(`/api/orders/${order.id}/jobs/${job.id}`, {
+      title: job.title,
+      technician_id: sel.value ? Number(sel.value) : null,
+      actor: currentActor(),
+    });
+    toast("Job technician updated");
+    await loadVehicleDetail();
+  } catch (err) {
+    toast(err.message, true);
+  }
+}
+
+function onJobEdit(btn) {
+  const job = currentEstimateJob(btn.dataset.jobId);
+  if (job) openJobDialog(job);
+}
+
+async function onJobDelete(btn) {
+  const order = state.detail.order;
+  if (!order) return;
+  const job = currentEstimateJob(btn.dataset.jobId);
+  if (!(await confirmAction({
+    eyebrow: "DELETE JOB",
+    title: `Delete "${job ? job.title : "this job"}"?`,
+    body: "Its parts and labor move back to General. No lines are deleted.",
+    confirmLabel: "Delete Job",
+    danger: true,
+  }))) return;
+  try {
+    await api(`/api/orders/${order.id}/jobs/${btn.dataset.jobId}`, { method: "DELETE" });
+    toast("Job deleted");
+    await loadVehicleDetail();
+  } catch (err) {
+    toast(err.message, true);
+  }
+}
+
+// Native HTML5 drag-and-drop: grabbing the row (the visible affordance is the
+// ⋮⋮ handle) reorders it among its siblings live as you drag; persistEstimate()
+// on drop saves whatever order the DOM ends up in, same as every other estimate
+// edit. Delegated from the grid container rather than bound per row, with the
+// same-parent check doing what per-group wiring used to do: a row can only be
+// dropped among its own group's siblings, because dragging a part into the
+// Labor section wouldn't change its kind and would just look wrong. Moving a
+// line to a different job or kind is the Job/Kind selects' job.
 function wireEstimateRowDragging(box) {
   let dragRow = null;
-  $$(".part-row:not(.head)", box).forEach((row) => {
-    row.addEventListener("dragstart", () => {
-      dragRow = row;
-      row.classList.add("dragging");
-    });
-    row.addEventListener("dragend", () => {
-      row.classList.remove("dragging");
-      dragRow = null;
-      persistEstimate();
-    });
-    row.addEventListener("dragover", (e) => {
-      e.preventDefault();
-      if (!dragRow || dragRow === row) return;
-      const rect = row.getBoundingClientRect();
-      const before = (e.clientY - rect.top) / rect.height < 0.5;
-      row.parentNode.insertBefore(dragRow, before ? row : row.nextSibling);
-    });
+  box.addEventListener("dragstart", (e) => {
+    const row = e.target instanceof Element ? e.target.closest(".part-row:not(.head)") : null;
+    if (!row || row.getAttribute("draggable") === "false") return;
+    dragRow = row;
+    row.classList.add("dragging");
+  });
+  box.addEventListener("dragend", () => {
+    if (!dragRow) return;
+    dragRow.classList.remove("dragging");
+    dragRow = null;
+    persistEstimate();
+  });
+  box.addEventListener("dragover", (e) => {
+    if (!dragRow) return;
+    e.preventDefault();
+    const row = e.target instanceof Element ? e.target.closest(".part-row:not(.head)") : null;
+    if (!row || row === dragRow || row.parentNode !== dragRow.parentNode) return;
+    const rect = row.getBoundingClientRect();
+    const before = rect.height > 0 && (e.clientY - rect.top) / rect.height < 0.5;
+    row.parentNode.insertBefore(dragRow, before ? row : row.nextSibling);
   });
 }
 
@@ -1211,18 +1512,38 @@ async function persistEstimate() {
   const items = collectEstimateItems();
   const token = ++estimateSaveToken;
   const expectedVersion = order.estimate ? order.estimate.edit_version : null;
+  setEstimateSaveState("saving");
   try {
     const estimate = await post(`/api/orders/${order.id}/estimate`, { labor_rate: 0, tax_rate: 0, actor: currentActor(), items, expected_version: expectedVersion });
     if (token !== estimateSaveToken) return; // a newer edit has already been sent; drop this stale response
     order.estimate = estimate;
-    renderEstimate(order);
+    applyEstimateResponse(order);
+    setEstimateSaveState("saved");
   } catch (err) {
+    if (token === estimateSaveToken) setEstimateSaveState("failed");
     if (String(err.message).includes("Someone else changed")) {
       toast(err.message, true);
       await loadVehicleDetail(); // pull the latest version instead of leaving stale data on screen
       return;
     }
     toast(err.message, true);
+  }
+}
+
+/* Autosave is invisible by design -- which also means there was no way to tell
+   whether the number you just typed actually reached the database, or whether
+   the app was simply ignoring you. This is the one bit of feedback: it says
+   Saving while a request is in flight, settles to "All changes saved" and
+   fades out, and stays put (in red) if the save failed. */
+let estimateSaveStateTimer = null;
+function setEstimateSaveState(kind) {
+  const el = $("#vd-estimate-save-state");
+  if (!el) return;
+  clearTimeout(estimateSaveStateTimer);
+  el.textContent = { saving: "Saving…", saved: "All changes saved", failed: "Not saved" }[kind] || "";
+  el.className = `save-state show ${kind}`;
+  if (kind === "saved") {
+    estimateSaveStateTimer = setTimeout(() => { el.className = "save-state saved"; }, 2200);
   }
 }
 
@@ -1261,10 +1582,8 @@ function addEstimateRow(kind, defaults = {}, jobId = null) {
     <div class="pr-cell pr-move pr-spacer"></div>
     <div class="pr-cell pr-remove"><button type="button" class="rm-btn" title="Remove line">×</button></div>
   `;
-  row.querySelector(".rm-btn").addEventListener("click", () => {
-    row.remove();
-    persistEstimate();
-  });
+  // No listener wiring: the delegated handler on #vd-estimate-items already
+  // covers this row's × button the moment it lands in the DOM.
   targetContainer.appendChild(row);
   // Persist immediately -- this is a real line on the RO from the moment it
   // appears, matching a one-click "add at cost" flow rather than a draft
@@ -1275,62 +1594,6 @@ function addEstimateRow(kind, defaults = {}, jobId = null) {
     const rows = $$(".part-row:not(.head) .ei-desc", box);
     rows[rows.length - 1]?.focus();
     rows[rows.length - 1]?.select();
-  });
-}
-
-// Wires the per-job controls rendered by renderEstimate: reassigning a job's
-// technician, renaming/deleting a job, and the mini add-part/add-labor links
-// scoped to that job. Re-wired every render since the job-group markup is
-// rebuilt from scratch each time, same as every other estimate-row listener.
-function wireJobControls(order) {
-  const box = $("#vd-estimate-items");
-  const jobs = order.estimate?.jobs ?? [];
-  $$(".ei-job-tech", box).forEach((sel) => {
-    sel.addEventListener("change", async () => {
-      const job = jobs.find((j) => String(j.id) === sel.dataset.jobId);
-      if (!job) return;
-      try {
-        await put(`/api/orders/${order.id}/jobs/${job.id}`, {
-          title: job.title,
-          technician_id: sel.value ? Number(sel.value) : null,
-          actor: currentActor(),
-        });
-        toast("Job technician updated");
-        await loadVehicleDetail();
-      } catch (err) {
-        toast(err.message, true);
-      }
-    });
-  });
-  $$(".job-edit", box).forEach((btn) => {
-    btn.addEventListener("click", () => {
-      const job = jobs.find((j) => String(j.id) === btn.dataset.jobId);
-      if (job) openJobDialog(job);
-    });
-  });
-  $$(".job-delete", box).forEach((btn) => {
-    btn.addEventListener("click", async () => {
-      const job = jobs.find((j) => String(j.id) === btn.dataset.jobId);
-      if (!(await confirmAction({
-        eyebrow: "DELETE JOB",
-        title: `Delete "${job ? job.title : "this job"}"?`,
-        body: "Its parts and labor move back to General. No lines are deleted.",
-        confirmLabel: "Delete Job",
-        danger: true,
-      }))) return;
-      try {
-        await api(`/api/orders/${order.id}/jobs/${btn.dataset.jobId}`, { method: "DELETE" });
-        toast("Job deleted");
-        await loadVehicleDetail();
-      } catch (err) {
-        toast(err.message, true);
-      }
-    });
-  });
-  $$(".job-mini-add", box).forEach((btn) => {
-    btn.addEventListener("click", () => {
-      addEstimateRow(btn.dataset.kind, {}, btn.dataset.jobId ? Number(btn.dataset.jobId) : null);
-    });
   });
 }
 
@@ -3206,12 +3469,14 @@ function wireSuggestionsView() {
    ================================================================== */
 document.addEventListener("DOMContentLoaded", () => {
   wireGlobalErrorReporting();
+  wireMessageLog();
   initTheme();
   initCurrentUser();
   wireConfirmDialog();
   wireViewRetry();
   wireVehiclesView();
   wireVehicleDetail();
+  wireEstimateGrid();
   wireReconDialog();
   wireWeOweDialog();
   wireReceiveDialog();
@@ -3267,18 +3532,41 @@ document.addEventListener("DOMContentLoaded", () => {
   // A single handle sits on the drawer's edge at all times -- its chevron
   // flips direction to show which way it'll swing, instead of a close-only
   // "x" that disappears once collapsed.
+  //
+  // The preference is remembered *per width bucket*, not globally. Below
+  // 1240px the drawer takes enough room out of the detail shell that the
+  // Parts & Labor grid drops into its stacked card layout -- so a window
+  // that was once maximised (drawer open, plenty of room) shouldn't drag
+  // that choice down with it when it's resized to sit beside another app.
+  // Wide defaults to open, narrow defaults to closed, and each remembers
+  // what you last did *at that size*; crossing the threshold re-applies the
+  // bucket you just entered rather than leaving the other one's choice on.
   const drawer = $("#vd-details-drawer");
   const handle = $("#vd-details-handle");
-  function setDrawerOpen(open) {
+  // matchMedia is missing in a couple of embedded WebViews (and in the test
+  // harness); falling back to "never narrow" keeps the old single-preference
+  // behaviour rather than throwing halfway through wiring the page.
+  const DRAWER_NARROW = typeof window.matchMedia === "function"
+    ? window.matchMedia("(max-width: 1240px)")
+    : { matches: false };
+  const drawerKey = () => (DRAWER_NARROW.matches ? "dao-details-open-narrow" : "dao-details-open");
+  function setDrawerOpen(open, remember = true) {
     if (!drawer || !handle) return;
     drawer.classList.toggle("closed", !open);
     handle.classList.toggle("closed", !open);
-    localStorage.setItem("dao-details-open", open ? "1" : "0");
+    if (remember) localStorage.setItem(drawerKey(), open ? "1" : "0");
+  }
+  function applyDrawerPreference() {
+    const saved = localStorage.getItem(drawerKey());
+    setDrawerOpen(saved === null ? !DRAWER_NARROW.matches : saved === "1", false);
   }
   if (drawer && handle) {
-    const saved = localStorage.getItem("dao-details-open");
-    setDrawerOpen(saved === null ? true : saved === "1");
+    applyDrawerPreference();
     handle.addEventListener("click", () => setDrawerOpen(drawer.classList.contains("closed")));
+    // addListener is the pre-2019 spelling; the app-mode window is whatever
+    // WebView the machine has, so keep the fallback.
+    if (DRAWER_NARROW.addEventListener) DRAWER_NARROW.addEventListener("change", applyDrawerPreference);
+    else if (DRAWER_NARROW.addListener) DRAWER_NARROW.addListener(applyDrawerPreference);
   }
 
   // Assign picker popover (technician/advisor) -- reveals the real

@@ -179,3 +179,108 @@ every command and the *next* git command refuses to start. If that happens,
 `mv .git/index.lock .git/stale-tmp/` (rather than rm) clears it. Stray
 .git/objects/*/tmp_obj_* files land in .git/stale-tmp/ for the same reason --
 that directory is safe to delete from Windows.
+
+================================================================================
+2026-07-25 -- Estimate grid: event delegation, non-destructive saves, message log
+================================================================================
+
+Headline: editing the Parts & Labor grid no longer fights you.
+
+The focus bug (top of last run's list):
+  * Every field on the grid autosaves on change; the save round-trips the whole
+    estimate and renderEstimate() redrew the entire grid from the response.
+    That meant tabbing Description -> Qty fired the Description save, and a few
+    hundred ms later its response blew away the DOM you were now standing in --
+    caret gone, and whatever you'd typed into Qty in the meantime with it.
+  * renderEstimate() now records a *shape* signature: item ids, kinds, job
+    assignment, status, returned flag, received-invoice, and whether the
+    receive checkbox should exist. Deliberately NOT in it: description, part #,
+    qty, cost, core -- the values that live inside the inputs being edited.
+  * applyEstimateResponse() is the single "the server gave us an estimate"
+    entry point. Same shape (the overwhelmingly common case) ->
+    syncEstimateInPlace() writes the server's values into the existing controls,
+    skipping document.activeElement, and recomputes job subtotals + the
+    Quoted/Actual lines. Nothing is destroyed, no flicker, focus untouched.
+  * Shape actually changed (line added/deleted, status flipped, job renamed,
+    rows reordered) -> full render, but wrapped in captureEstimateFocus() /
+    restoreEstimateFocus(), which re-finds the field by row id (falling back to
+    row position for a not-yet-saved row) and restores the caret offsets.
+
+Event delegation:
+  * renderEstimate() used to bind ~12 listeners per row plus 3 per job on every
+    render -- which is also why the redraw was so expensive. All of it now
+    lives in wireEstimateGrid(), one delegated change/click/drag set on
+    #vd-estimate-items, wired once at startup. The container is never replaced,
+    only its contents, so every row is live the instant it's painted (including
+    addEstimateRow's transient row, which had to hand-wire its own × button).
+  * wireJobControls() is gone; its three handlers became onJobTechnicianChange
+    / onJobEdit / onJobDelete, reading the job from state.detail.order rather
+    than from a closure captured at render time.
+  * Drag-and-drop is delegated too. The old code wired each .kind-subgroup
+    separately so a row could only be dropped among its own group's siblings;
+    the delegated version gets the same guarantee from a
+    row.parentNode !== dragRow.parentNode check.
+  * .ei-status carries data-prev so the delegated handler can put the select
+    back when the PATCH fails (it used to close over the pre-change value).
+
+Autosave indicator:
+  * #vd-estimate-save-state next to the "Parts & Labor" heading: "Saving…"
+    while a request is in flight, "All changes saved" that fades after 2.2s,
+    and a red "Not saved" that stays. Autosave being invisible also meant
+    there was no way to tell a successful save from the app ignoring you.
+
+Message log (topbar bell):
+  * Toasts died after 3.2s with no history -- an error that fired while the
+    advisor was looking at the keyboard was gone for good. Every toast now also
+    appends to a 50-entry log behind a bell in the topbar, with timestamps and
+    errors marked. The unread badge counts errors only; a wall of successful
+    saves shouldn't be what makes you go look. Opening the panel marks read.
+  * The topbar's right-hand controls are now actually right-aligned
+    (margin-left:auto on .notif) instead of floating mid-bar; dropped the
+    .topbar-right / .who-badge rules, which nothing had used in a while.
+
+Details drawer:
+  * Preference is remembered per width bucket now (dao-details-open /
+    dao-details-open-narrow, threshold 1240px, wide defaults open and narrow
+    defaults closed). A window that was maximised when you opened the drawer
+    no longer drags that choice down to a half-width window, where the drawer
+    squeezes the estimate grid into its stacked card layout. Crossing the
+    threshold re-applies that bucket's choice. matchMedia is feature-detected.
+
+Tests: 167 -> 169, and the DOM smoke test roughly doubled.
+  * test_static_assets.py: no .addEventListener may reappear inside
+    renderEstimate (that's the regression that reintroduces the focus loss),
+    and wireEstimateGrid() must exist and be called from init. Both
+    mutation-tested.
+  * tests/dom/estimate_smoke.mjs now drives the real autosave loop against a
+    scriptable fetch: it asserts estimateShape ignores editable values but
+    notices status/return/received changes; that a same-shape save keeps focus,
+    keeps the same DOM nodes, keeps the focused field's text, and still pushes
+    the server's value into an *unfocused* field; that a shape change redraws
+    and restores focus anyway; that the delegated × button works on rows that
+    never had a listener bound; and the message log's ordering, unread count,
+    open-to-read, click-outside and HTML escaping. All mutation-tested (killing
+    the in-place path, the focus restore, or the delegated click each fail it).
+  * Harness bug found and fixed: the smoke test dispatched its own
+    DOMContentLoaded, but jsdom fires the real one a tick after the constructor
+    returns -- so the app's entire init ran TWICE and every startup listener was
+    doubled. That's what made the new bell appear dead (two toggle handlers,
+    second one undoing the first). It now waits for jsdom's own event.
+
+Suite green with and without jsdom; server boots clean and /, /assets/*,
+/api/health, /api/dashboard, /api/vehicles-board all verified over real HTTP.
+
+Next time, in rough priority order:
+  1. Now that a save doesn't redraw, the change-event granularity is worth
+     revisiting: a debounced input listener on the money/qty fields would make
+     totals update as you type instead of only on blur.
+  2. Extend the jsdom harness to the vehicles board and A/P screens -- adding
+     a screen is ~20 lines now that the fetch mock is scriptable.
+  3. The message log is session-only. Persisting it (localStorage, capped)
+     would make "what was that error before I refreshed?" answerable, and gives
+     somewhere to put a Copy button for support.
+  4. The same shape/sync trick would help the vehicles table, which re-renders
+     wholesale on every filter chip and loses scroll position doing it.
+  5. Keyboard: Tab out of the last row's last field should add a new line
+     (every shop-management product does this); right now you have to reach
+     for ＋ Part with the mouse.

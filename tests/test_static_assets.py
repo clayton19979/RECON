@@ -144,6 +144,27 @@ def test_estimate_grid_tracks_match_the_number_of_cells(js: str, css: str) -> No
     )
 
 
+def test_estimate_rows_are_not_wired_one_by_one(js: str) -> None:
+    """renderEstimate() used to bind a dozen listeners per row on every render,
+    which is what made an autosave round-trip rip the DOM out from under the
+    field being edited. #vd-estimate-items now carries one delegated set,
+    wired once -- re-adding per-row binding here reintroduces the focus loss.
+    """
+    strays = re.findall(r"\.addEventListener\(", _render_estimate_source(js))
+    assert not strays, (
+        f"{len(strays)} addEventListener call(s) inside renderEstimate -- estimate row "
+        "events belong in the delegated handler set in wireEstimateGrid()"
+    )
+
+
+def test_estimate_grid_delegation_is_wired_at_startup(js: str) -> None:
+    """The delegated handlers are useless if nothing calls wireEstimateGrid();
+    the symptom would be a grid where no field saves at all."""
+    assert "function wireEstimateGrid(" in js, "wireEstimateGrid() is gone -- who owns the grid's events now?"
+    init = js[js.index("document.addEventListener(\"DOMContentLoaded\""):]
+    assert "wireEstimateGrid();" in init, "wireEstimateGrid() is never called from init"
+
+
 def test_every_estimate_cell_is_reachable_from_css(js: str, css: str) -> None:
     """Each cell's caption/width rules key off its .pr-<name> class; a renamed
     cell just loses its styling with no other symptom."""

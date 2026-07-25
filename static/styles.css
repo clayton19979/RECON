@@ -170,12 +170,6 @@ button { font-family: inherit; }
 .search svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; flex-shrink: 0; }
 .search input { border: none; background: none; outline: none; flex: 1; color: var(--ink); font-size: 13px; line-height: 1; height: 100%; }
 .search input::placeholder { color: var(--ink-faint); }
-.topbar-right { margin-left: auto; }
-.who-badge {
-  width: 34px; height: 34px; border-radius: 50%; background: var(--accent);
-  color: #fff; display: flex; align-items: center; justify-content: center;
-  font-weight: 600; font-size: 12px;
-}
 .whoami {
   display: flex; flex-direction: row; align-items: center; gap: 8px;
   font-size: 11.5px; font-weight: 600; color: var(--ink-faint);
@@ -334,6 +328,18 @@ td.age-crit { color: var(--crit); font-weight: 700; }
 }
 .section-eyebrow { font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--ink-faint); font-weight: 700; margin: 0 0 2px; }
 .section-title { font-size: 15px; }
+
+/* Autosave indicator. Sits inline after a section title, reserves no layout
+   space when idle (opacity, not display), so the heading never jumps as it
+   appears and fades. */
+.save-state {
+  font-size: 11px; font-weight: 600; letter-spacing: .02em;
+  color: var(--ink-faint); margin-left: 9px;
+  opacity: 0; transition: opacity .22s ease;
+}
+.save-state.show { opacity: 1; }
+.save-state.saved { color: var(--good); }
+.save-state.failed { color: var(--crit); opacity: 1; }
 
 /* ---------- forms ---------- */
 label { display: flex; flex-direction: column; gap: 5px; font-size: 12px; font-weight: 600; color: var(--ink-soft); margin-bottom: 12px; }
@@ -646,6 +652,52 @@ dialog::backdrop { background: rgba(20, 18, 14, .45); }
 }
 #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 #toast.error { background: var(--crit); }
+
+/* ---------- message log (topbar bell) ----------
+   Where toasts go after they fade. Anchored to the bell, right-aligned so it
+   can't push out past the window edge. */
+/* margin-left:auto pins this and everything after it (the "Working as"
+   picker) to the right edge. The search box is flex:1 with a max-width, so
+   without this the right-hand controls floated in the middle of a wide
+   topbar with dead space beside them. */
+.notif { position: relative; flex-shrink: 0; margin-left: auto; }
+.notif-toggle {
+  position: relative; width: 32px; height: 32px; border-radius: 8px;
+  background: var(--surface); border: 1px solid var(--line); color: var(--ink-soft);
+  display: flex; align-items: center; justify-content: center; cursor: pointer;
+}
+.notif-toggle svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.notif-toggle:hover { border-color: var(--accent); color: var(--accent); }
+.notif-dot {
+  position: absolute; top: -5px; right: -5px; min-width: 15px; height: 15px; padding: 0 3px;
+  border-radius: 999px; background: var(--crit); color: #fff;
+  font-size: 9.5px; font-weight: 700; line-height: 15px; text-align: center;
+  border: 2px solid var(--paper-raise);
+}
+.notif-dot[hidden] { display: none; }
+.notif-menu {
+  position: absolute; top: calc(100% + 9px); right: 0; width: 320px; max-width: 78vw;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+  box-shadow: var(--shadow); display: none; z-index: 60; overflow: hidden;
+}
+.notif-menu.open { display: block; }
+.notif-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 10px 12px; border-bottom: 1px solid var(--line);
+}
+.notif-title { font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em; font-weight: 700; color: var(--ink-faint); }
+.notif-list { max-height: 320px; overflow-y: auto; }
+.notif-item {
+  display: flex; align-items: baseline; gap: 10px; padding: 9px 12px;
+  border-bottom: 1px solid var(--line-soft); border-left: 3px solid transparent;
+  font-size: 12.5px; line-height: 1.4;
+}
+.notif-item:last-child { border-bottom: none; }
+.notif-item.error { border-left-color: var(--crit); background: var(--crit-tint); }
+.notif-item-text { flex: 1; min-width: 0; word-break: break-word; }
+.notif-item.error .notif-item-text { color: var(--ink); font-weight: 600; }
+.notif-item-time { flex-shrink: 0; font-size: 11px; color: var(--ink-faint); font-variant-numeric: tabular-nums; }
+.notif-empty { margin: 0; padding: 18px 14px; font-size: 12.5px; color: var(--ink-faint); text-align: center; line-height: 1.5; }
 
 /* ---------- print ---------- */
 .print-only { display: none; }

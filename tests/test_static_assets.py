@@ -86,3 +86,99 @@ def test_empty_states_go_through_the_shared_component(js: str) -> None:
     going through emptyState()/emptyRow() rather than reintroducing that."""
     strays = re.findall(r'color:var\(--ink-faint\);font-size:[^"]*"[^>]*>\s*No ', js)
     assert not strays, f"{len(strays)} inline-styled empty state(s) found -- use emptyState() or emptyRow() instead"
+# ---------------------------------------------------------------------------
+# Parts & Labor grid
+#
+# The estimate row is a CSS grid whose column tracks live in styles.css while
+# its cells are emitted from a template literal in app.js. Nothing connects
+# the two, so adding a cell without adding a track (or vice versa) silently
+# shifts every column on the densest screen in the app. These pin them
+# together, and pin the header row to the data rows it labels.
+# ---------------------------------------------------------------------------
+
+STYLES_CSS = STATIC / "styles.css"
+
+
+@pytest.fixture(scope="module")
+def css() -> str:
+    return STYLES_CSS.read_text(encoding="utf-8")
+
+
+def _render_estimate_source(js: str) -> str:
+    start = js.index("function renderEstimate(")
+    end = js.index("function updateReceiveButtonState(")
+    return js[start:end]
+
+
+def estimate_row_cells(js: str) -> list[str]:
+    """Cell names in the order rowHtml() emits them, job column included."""
+    return re.findall(r'\n\s+\$\{(?:jobs\.length \? )?cell\("([a-z]+)"', _render_estimate_source(js))
+
+
+def estimate_head_cells(js: str) -> list[str]:
+    head = _render_estimate_source(js)
+    head = head[head.index("const headRow"):]
+    head = head[: head.index("</div>`;")]
+    return re.findall(r'class="pr-cell pr-([a-z]+)"', head)
+
+
+def test_estimate_header_columns_match_the_data_row(js: str) -> None:
+    """A header that's a cell out of step with its rows mislabels every column
+    to its right -- and it's the header that tells you which unlabelled number
+    box is Qty and which is Cost."""
+    rows, head = estimate_row_cells(js), estimate_head_cells(js)
+    assert rows, "no cell() calls found in renderEstimate -- has rowHtml changed shape?"
+    assert rows == head, f"estimate row cells {rows} don't line up with the header row {head}"
+
+
+def test_estimate_grid_tracks_match_the_number_of_cells(js: str, css: str) -> None:
+    """--pr-cols has to declare exactly as many tracks as there are cells: one
+    too few and the extra cell wraps onto a phantom second row."""
+    cells = estimate_row_cells(js)
+    flat, with_jobs = len(cells) - 1, len(cells)  # the Job cell only renders once a ticket has jobs
+    declared = dict(re.findall(r'#vd-estimate-items(\.has-jobs)?\s*\{\s*--pr-cols:\s*([^;]+);', css))
+    assert declared, "no --pr-cols declaration found in styles.css"
+    assert len(declared[""].split()) == flat, f"--pr-cols declares {len(declared[''].split())} tracks for {flat} cells"
+    assert len(declared[".has-jobs"].split()) == with_jobs, (
+        f"--pr-cols (.has-jobs) declares {len(declared['.has-jobs'].split())} tracks for {with_jobs} cells"
+    )
+
+
+def test_every_estimate_cell_is_reachable_from_css(js: str, css: str) -> None:
+    """Each cell's caption/width rules key off its .pr-<name> class; a renamed
+    cell just loses its styling with no other symptom."""
+    missing = [name for name in set(estimate_row_cells(js)) if f".pr-{name}" not in css]
+    assert not missing, f"estimate cells with no .pr-<name> rule in styles.css: {sorted(missing)}"
+
+
+# ---------------------------------------------------------------------------
+# Destructive actions and the error boundary
+# ---------------------------------------------------------------------------
+
+def test_destructive_actions_use_the_in_app_confirm(js: str) -> None:
+    """window.confirm() renders OS chrome with no room for context and no way
+    to mark an action as destructive -- confirmAction() is the replacement."""
+    strays = re.findall(r'(?<![.\w])confirm\(', js)
+    # confirmAction(...) / settleConfirm(...) / wireConfirmDialog() don't match
+    # the pattern above; anything left is a bare window.confirm call.
+    assert not strays, f"{len(strays)} raw window.confirm() call(s) left -- use confirmAction() instead"
+
+
+def test_every_view_loader_can_report_its_own_failure(js: str) -> None:
+    """renderViewFailure() paints into VIEW_PLACEHOLDERS, so a loader with no
+    placeholder entry can only fall back to a toast that leaves the skeleton
+    rows on screen forever."""
+    loaders = set(re.findall(r'^\s{2}(\w+): \(\) => load', js[js.index("const VIEW_LOADERS"):js.index("/* ---------- render error boundary")], re.M))
+    placeholders = set(re.findall(r'^\s{2}(\w+):\s*\[', js[js.index("const VIEW_PLACEHOLDERS"):js.index("function showPlaceholders")], re.M))
+    assert loaders, "no VIEW_LOADERS entries found"
+    assert loaders <= placeholders, f"views with a loader but no placeholder/error target: {sorted(loaders - placeholders)}"
+
+
+def test_rail_views_all_have_a_loader_or_are_static(html: str, js: str) -> None:
+    """Clicking a rail button runs runViewLoader(); a view missing from
+    VIEW_LOADERS is either static on purpose or a screen that silently never
+    fetches anything."""
+    nav_targets = set(re.findall(r'class="rail-item[^"]*"\s+data-view="([^"]+)"', html))
+    loaders = set(re.findall(r'^\s{2}(\w+): \(\) => load', js[js.index("const VIEW_LOADERS"):js.index("/* ---------- render error boundary")], re.M))
+    STATIC_VIEWS = {"reports"}  # renders on demand from its own form, nothing to fetch on open
+    assert nav_targets - loaders <= STATIC_VIEWS, f"rail views with no loader: {sorted(nav_targets - loaders - STATIC_VIEWS)}"

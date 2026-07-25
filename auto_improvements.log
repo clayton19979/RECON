@@ -80,3 +80,102 @@ Next time, in rough priority order:
      better than window.confirm().
   5. Consider a real front-end smoke test (Playwright) — the static checks
      added this run catch dead selectors but nothing exercises a click path.
+
+================================================================================
+2026-07-25 -- Parts & Labor grid rebuild, in-app confirm dialog, error boundary,
+              and a real front-end smoke test
+================================================================================
+
+Picked up items 1, 3, 4 and 5 from last run's list.
+
+Parts & Labor grid (the densest screen in the app, and the least polished):
+  * The row was a hardcoded 11/12-column CSS grid of bare inputs whose header
+    row was display:none inside .parts-labor-shell. So Qty, Cost and Core were
+    unlabelled number boxes, and below ~1100px -- exactly where the rest of the
+    app now reflows -- the tracks squeezed to slivers.
+  * Every field now sits in a .pr-cell wrapper carrying a data-label. Wide, the
+    wrappers are grid tracks under a header row that's visible again; narrow,
+    the same markup reflows into a stacked card with the data-label as each
+    field's caption. No second template, no duplicated markup.
+  * The header row doubles as each section's caption: inside a job's Parts
+    block the first column reads "Parts" instead of "Kind", which let the
+    separate .kind-subgroup-label row go away entirely. In stacked mode the
+    header collapses to just that word; the flat list's header (which only ever
+    said "Kind") hides, since every field labels itself down there.
+  * Breakpoints are @container, not @media -- the width this grid actually gets
+    depends on whether the details drawer is open beside it, which a media
+    query can't see. Two tiers: tighten at 1040px, stack at 820px. There's an
+    @supports fallback on viewport width for engines without container queries.
+  * Qty/Cost/Core/Part# are monospace with tabular numerals and right-aligned,
+    so a column of costs actually lines up on the decimal.
+  * addEstimateRow()'s transient "Saving..." row emits the same cell scaffolding
+    (including empty spacers) -- it used to render 7 bare children into an
+    11-column grid and sat visibly misaligned until the save round-tripped.
+
+Confirm dialog:
+  * 15 destructive actions went through window.confirm(), which renders OS
+    chrome: no title/detail split, no way to mark an action as destructive, and
+    in the app-mode window it looks like it came from a different program.
+  * confirmAction({title, body, confirmLabel, danger}) is an async drop-in
+    backed by the same <dialog> element as every other modal. Destructive
+    variants get a red hairline, a red eyebrow, a .btn-danger confirm, and
+    default focus on Cancel so hammering Enter can't delete anything.
+  * Every call site was rewritten to say what will actually happen -- "Delete
+    R-1042?" now explains that History is the non-destructive option, the
+    restore prompts explain that the current DB is saved aside first, etc.
+
+Error boundary:
+  * showView()'s if-chain became VIEW_LOADERS + runViewLoader(), which catches
+    anything a loader throws and paints renderViewFailure() into that view's
+    own container (reusing the VIEW_PLACEHOLDERS map) with the message and a
+    Try Again button. Previously a throw mid-render left the loading skeletons
+    frozen on screen forever with only a console error.
+  * The loaders' own catch blocks were toasting and returning -- same frozen
+    skeletons. They now render the failure state too.
+  * window.onerror / unhandledrejection report to the console and a toast, so a
+    bug that escapes everything at least says the app is in a bad state instead
+    of looking merely slow.
+
+Tests: 160 -> 167.
+  * test_static_assets.py gained 5: the estimate header row must have the same
+    cells in the same order as its data rows; --pr-cols must declare exactly as
+    many tracks as there are cells (both the flat and .has-jobs variants); every
+    cell needs a .pr-<name> rule; no raw window.confirm() may come back; every
+    view with a loader needs a placeholder target so the boundary has somewhere
+    to draw. All mutation-tested.
+  * tests/dom/estimate_smoke.mjs + tests/test_dom_smoke.py: the front end now
+    actually *runs* in a test. jsdom boots the real index.html, evaluates the
+    real app.js, fires DOMContentLoaded, then drives renderEstimate() (flat and
+    job-grouped), addEstimateRow(), collectEstimateItems(), confirmAction()
+    (accept/cancel/Esc) and renderViewFailure(). Needs node + jsdom, neither of
+    which the app depends on, so it skips cleanly when they're absent
+    (`cd tests/dom && npm install jsdom` to turn it on).
+
+Suite green with and without jsdom; server boots clean and /, /assets/*,
+/api/health, /api/dashboard and /api/vehicles-board were all verified over real
+HTTP.
+
+Next time, in rough priority order:
+  1. Event delegation for estimate rows. renderEstimate() still re-binds every
+     row's listeners on every render, which is why editing a field and having
+     the save round-trip steals focus. One delegated listener on
+     #vd-estimate-items would fix the focus loss and cut a lot of work per
+     keystroke.
+  2. The confirm dialog is the pattern; now use it for the remaining
+     irreversible things that currently just do it (bulk status changes, the
+     archive/reopen toggle on a single row).
+  3. Extend the jsdom smoke test to the vehicles board and A/P screens -- the
+     harness exists now, adding a screen is ~20 lines.
+  4. The details drawer is remembered globally, but its right place is probably
+     per-screen-width: it should start closed on a narrow window instead of
+     forcing the estimate grid into stacked mode on a wide monitor.
+  5. Toasts still auto-dismiss at 3.2s with no history. An error toast that
+     scrolls past unread is gone for good; a small log behind the topbar would
+     make failures recoverable.
+
+Note for the next run: this session's sandbox can rename but not unlink files
+under .git/, so git leaves .git/index.lock and .git/HEAD.lock behind after
+every command and the *next* git command refuses to start. If that happens,
+`mv .git/index.lock .git/stale-tmp/` (rather than rm) clears it. Stray
+.git/objects/*/tmp_obj_* files land in .git/stale-tmp/ for the same reason --
+that directory is safe to delete from Windows.

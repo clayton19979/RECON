@@ -34,6 +34,58 @@ function toast(message, isError = false) {
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => el.classList.remove("show"), 3200);
 }
+/* ---------- confirm dialog ----------
+   Every destructive action used to call window.confirm(), which renders as
+   an OS-chrome alert: no title/detail split, no way to say how destructive
+   this particular action is, no styling, and (in the app-mode window) a
+   dialog that looks like it came from a different program. confirmAction()
+   is a drop-in async replacement -- `if (!(await confirmAction({...}))) return;`
+   -- backed by the same <dialog> element as every other modal.
+
+   Cancel is the default focus for destructive actions, so hammering Enter
+   can't blow something away. */
+let confirmResolve = null;
+
+function confirmAction({ title, body = "", confirmLabel = "Confirm", cancelLabel = "Cancel", eyebrow = "CONFIRM", danger = false }) {
+  const dlg = $("#confirm-dialog");
+  // No dialog in the DOM (a bare test harness, say) -- fail closed rather
+  // than silently performing the destructive action.
+  if (!dlg) return Promise.resolve(false);
+  $("#confirm-eyebrow").textContent = eyebrow;
+  $("#confirm-title").textContent = title;
+  const bodyEl = $("#confirm-body");
+  bodyEl.textContent = body;
+  bodyEl.style.display = body ? "" : "none";
+  const accept = $("#confirm-accept");
+  accept.textContent = confirmLabel;
+  accept.className = `btn ${danger ? "btn-danger" : "btn-primary"}`;
+  $("#confirm-cancel").textContent = cancelLabel;
+  dlg.classList.toggle("danger", danger);
+  return new Promise((resolve) => {
+    confirmResolve = resolve;
+    dlg.showModal();
+    (danger ? $("#confirm-cancel") : accept).focus();
+  });
+}
+
+function settleConfirm(result) {
+  const dlg = $("#confirm-dialog");
+  const resolve = confirmResolve;
+  confirmResolve = null;
+  if (dlg?.open) dlg.close();
+  if (resolve) resolve(result);
+}
+
+function wireConfirmDialog() {
+  const dlg = $("#confirm-dialog");
+  if (!dlg) return;
+  $("#confirm-accept").addEventListener("click", () => settleConfirm(true));
+  $("#confirm-cancel").addEventListener("click", () => settleConfirm(false));
+  // Esc / backdrop-dismiss fire `close` without going through either button.
+  dlg.addEventListener("close", () => settleConfirm(false));
+  dlg.addEventListener("click", (e) => { if (e.target === dlg) settleConfirm(false); });
+}
+
 function money(value) {
   // `value || 0` only catches falsy input (0, "", null, undefined) -- a
   // truthy but non-numeric value (e.g. a corrupted field coming back as a
@@ -236,19 +288,84 @@ const KIND_GROUP_ORDER = ["part", "labor", "fee"];
 const KIND_GROUP_LABEL = { part: "Parts", labor: "Labor", fee: "Fees" };
 
 /* ---------- nav / shell ---------- */
+// One place that knows how each view loads itself, so switching views can put
+// a boundary around it (below) instead of a chain of `if (name === ...)`.
+const VIEW_LOADERS = {
+  vehicles: () => loadVehiclesView(),
+  accounting: () => loadAccountingView(),
+  cores: () => loadCoresView(),
+  staff: () => loadStaffView(),
+  tasks: () => loadTasksView(),
+  suggestions: () => loadSuggestionsView(),
+  backup: () => loadBackupView(),
+};
+
+/* ---------- render error boundary ----------
+   A throw partway through a render used to leave the skeleton rows frozen on
+   screen with no message anywhere -- the view simply never finished, and the
+   only trace was a console error nobody on a shop floor is going to open. Any
+   view loader that throws now lands here and the view says so, with a way to
+   retry that doesn't involve reloading the whole app. */
+async function runViewLoader(name) {
+  const load = VIEW_LOADERS[name];
+  if (!load) return;
+  try {
+    await load();
+  } catch (err) {
+    renderViewFailure(name, err);
+  }
+}
+
+function renderViewFailure(name, err, targets = VIEW_PLACEHOLDERS[name]) {
+  console.error(`[${name}] failed to render`, err);
+  const message = String(err && err.message ? err.message : err || "Unknown error");
+  const opts = {
+    icon: "search",
+    title: "This screen didn't load",
+    hint: message,
+    tone: "error",
+    actions: `<button type="button" class="btn btn-ghost btn-sm" data-empty-action="retry-view" data-view="${name}">Try Again</button>`,
+  };
+  targets = targets || [];
+  if (!targets.length) {
+    toast(`Couldn't load this screen: ${message}`, true);
+    return;
+  }
+  for (const [selector, cols] of targets) {
+    const el = $(selector);
+    if (el) el.innerHTML = cols > 0 ? emptyRow(cols, opts) : emptyState(opts);
+  }
+}
+
+// Delegated so it survives the innerHTML above being replaced again on retry.
+function wireViewRetry() {
+  document.addEventListener("click", (e) => {
+    const btn = e.target.closest('[data-empty-action="retry-view"]');
+    if (!btn) return;
+    showPlaceholders(btn.dataset.view);
+    runViewLoader(btn.dataset.view);
+  });
+}
+
+// Anything that escapes every other handler -- a typo in a render function,
+// a promise nobody caught -- at least tells the user the app is in a bad
+// state rather than looking merely slow.
+function wireGlobalErrorReporting() {
+  const report = (label, detail) => {
+    console.error(label, detail);
+    if ($("#toast")) toast(`${label}: ${String(detail && detail.message ? detail.message : detail)}`, true);
+  };
+  window.addEventListener("error", (e) => report("Something went wrong", e.error || e.message));
+  window.addEventListener("unhandledrejection", (e) => report("Something went wrong", e.reason));
+}
+
 function showView(name) {
   $$(".view").forEach((v) => v.classList.toggle("active", v.id === `view-${name}`));
   $$(".rail-item").forEach((b) => b.classList.toggle("active", b.dataset.view === name));
   // Paint placeholders before kicking off the fetch -- otherwise the old
   // view's rows stay on screen until it resolves.
   showPlaceholders(name);
-  if (name === "vehicles") loadVehiclesView();
-  if (name === "accounting") loadAccountingView();
-  if (name === "cores") loadCoresView();
-  if (name === "staff") loadStaffView();
-  if (name === "tasks") loadTasksView();
-  if (name === "suggestions") loadSuggestionsView();
-  if (name === "backup") loadBackupView();
+  runViewLoader(name);
 }
 
 const THEMES = ["midnight", "carbon", "slate", "paper"];
@@ -285,7 +402,7 @@ async function loadVehiclesView() {
   try {
     state.vehicles = await get(state.filter === "history" ? "/api/vehicles-board?archived=true" : "/api/vehicles-board");
   } catch (err) {
-    toast(`Could not load vehicles: ${err.message}`, true);
+    renderViewFailure("vehicles", err);
     return;
   }
   state.vehicleSelection.clear();
@@ -503,7 +620,15 @@ function wireVehiclesView() {
       const [segment, id] = key.split(":");
       return { segment, id };
     });
-    if (!confirm(`${reopening ? "Reopen" : "Send to History"} ${targets.length} vehicle${targets.length === 1 ? "" : "s"}?`)) return;
+    const plural = `${targets.length} vehicle${targets.length === 1 ? "" : "s"}`;
+    if (!(await confirmAction({
+      eyebrow: reopening ? "REOPEN" : "ARCHIVE",
+      title: reopening ? `Reopen ${plural}?` : `Send ${plural} to History?`,
+      body: reopening
+        ? "They come back onto the active board and become editable again."
+        : "Archived vehicles are read-only until reopened. Nothing is deleted.",
+      confirmLabel: reopening ? "Reopen" : "Send to History",
+    }))) return;
     const results = await Promise.allSettled(targets.map(({ segment, id }) =>
       post(`/api/${segment === "recon" ? "recon/vehicles" : "we-owe"}/${id}/${reopening ? "reopen" : "archive"}`, {})
     ));
@@ -708,7 +833,13 @@ function renderPaymentDialogList() {
   `).join("") : emptyState({ icon: "invoice", title: "No deposits recorded", hint: "Money taken from the customer up front is recorded here and counted against what they owe.", compact: true });
   $$(".deposit-rm", $("#vd-deposits-list")).forEach((btn) => {
     btn.addEventListener("click", async () => {
-      if (!confirm("Remove this deposit?")) return;
+      if (!(await confirmAction({
+        eyebrow: "DEPOSIT",
+        title: "Remove this deposit?",
+        body: "The amount stops counting against what the customer owes.",
+        confirmLabel: "Remove",
+        danger: true,
+      }))) return;
       try {
         await api(`/api/we-owe/${item.id}/payments/${btn.dataset.id}`, { method: "DELETE" });
         toast("Deposit removed");
@@ -795,29 +926,39 @@ function renderEstimate(order) {
   const jobOptionsHtml = (selectedId) => `<option value="" ${!selectedId ? "selected" : ""}>General</option>` +
     jobs.map((j) => `<option value="${j.id}" ${selectedId === j.id ? "selected" : ""}>${esc(j.title)}</option>`).join("");
 
+  // Every field sits in its own .pr-cell wrapper carrying a data-label. Wide
+  // enough and the wrappers are just grid tracks under a column header; once
+  // the Parts & Labor container gets narrow (a small window, or the details
+  // drawer open beside it) the same markup reflows into a stacked card and
+  // the data-label becomes the field's visible caption. Before this, the row
+  // was a hardcoded 11-column grid whose header was display:none -- so Qty,
+  // Cost and Core were unlabelled boxes that squeezed to a few pixels wide.
+  const cell = (cls, label, inner) =>
+    `<div class="pr-cell pr-${cls}${inner ? "" : " pr-spacer"}"${label ? ` data-label="${label}"` : ""}>${inner}</div>`;
+
   const rowHtml = (item, i) => {
     const remaining = (item.quantity ?? 0) - (item.received_quantity ?? 0);
     const receivable = item.kind === "part" && item.id && remaining > 0.001;
     return `
     <div class="part-row" draggable="true" data-index="${i}" data-id="${item.id || ""}" data-source="${item.source || "manual"}" data-received-quantity="${item.received_quantity ?? 0}">
-      <span class="row-drag-handle" title="Drag to reorder">⋮⋮</span>
-      ${receivable ? `<input type="checkbox" class="ei-receive-check" data-id="${item.id}">` : `<span></span>`}
-      <select class="ei-kind">
+      ${cell("handle", "", `<span class="row-drag-handle" title="Drag to reorder">⋮⋮</span>`)}
+      ${cell("check", "", receivable ? `<input type="checkbox" class="ei-receive-check" data-id="${item.id}" title="Select to receive against a vendor invoice">` : "")}
+      ${cell("kind", "Kind", `<select class="ei-kind">
         <option value="part" ${item.kind === "part" ? "selected" : ""}>Part</option>
         <option value="labor" ${item.kind === "labor" ? "selected" : ""}>Labor</option>
         <option value="fee" ${item.kind === "fee" ? "selected" : ""}>Fee</option>
-      </select>
-      <input class="ei-desc" value="${esc(item.description || "")}" placeholder="Description">
-      <input class="ei-part" value="${esc(item.part_number || "")}" placeholder="Part #">
-      <input class="ei-qty" type="number" min="0.01" step="0.01" value="${item.quantity ?? 1}">
-      ${item.part_returned
+      </select>`)}
+      ${cell("desc", "Description", `<input class="ei-desc" value="${esc(item.description || "")}" placeholder="Description">`)}
+      ${cell("part", "Part #", `<input class="ei-part" value="${esc(item.part_number || "")}" placeholder="Part #">`)}
+      ${cell("qty", "Qty", `<input class="ei-qty" type="number" min="0.01" step="0.01" value="${item.quantity ?? 1}">`)}
+      ${cell("cost", "Cost", item.part_returned
         ? `<input class="ei-cost" type="number" value="0" disabled title="Returned to the vendor -- no longer counted" data-real-cost="${item.unit_cost ?? 0}">`
-        : `<input class="ei-cost" type="number" min="0" step="0.01" value="${item.unit_cost ?? 0}">`}
-      ${item.kind === "part"
-        ? `<input class="ei-core" type="number" min="0" step="0.01" placeholder="Core" title="Core deposit owed back from the vendor" value="${item.core_charge ?? 0}">`
-        : `<span></span>`}
-      ${jobs.length ? `<select class="ei-job">${jobOptionsHtml(item.job_id ?? null)}</select>` : ""}
-      ${item.id
+        : `<input class="ei-cost" type="number" min="0" step="0.01" value="${item.unit_cost ?? 0}">`)}
+      ${cell("core", "Core", item.kind === "part"
+        ? `<input class="ei-core" type="number" min="0" step="0.01" placeholder="0.00" title="Core deposit owed back from the vendor" value="${item.core_charge ?? 0}">`
+        : "")}
+      ${jobs.length ? cell("job", "Job", `<select class="ei-job">${jobOptionsHtml(item.job_id ?? null)}</select>`) : ""}
+      ${cell("status", "Status", item.id
         ? (item.status === "received"
             ? `<span class="status-cell">
                  <span class="status-pill ${item.part_returned ? "sp-returned" : "sp-received"}" ${item.received_invoice_number ? `title="Received via invoice ${esc(item.received_invoice_number)}"` : ""}>${item.part_returned ? "Returned" : (item.received_invoice_number ? `Received (${esc(item.received_invoice_number)})` : "Received")}</span>
@@ -827,28 +968,45 @@ function renderEstimate(order) {
                  <option value="quoted" ${item.status === "quoted" ? "selected" : ""}>Quoted</option>
                  <option value="ordered" ${item.status === "ordered" ? "selected" : ""}>Ordered</option>
                </select>`)
-        : `<span class="status-pill sp-quoted">Saving…</span>`}
-      ${item.id ? `<button type="button" class="row-move-btn" title="Move to a different ticket" data-id="${item.id}" data-desc="${esc(item.description || "")}">⇄</button>` : `<span></span>`}
-      <button type="button" class="rm-btn" title="Remove line">×</button>
+        : `<span class="status-pill sp-quoted">Saving…</span>`)}
+      ${cell("move", "", item.id ? `<button type="button" class="row-move-btn" title="Move to a different ticket" data-id="${item.id}" data-desc="${esc(item.description || "")}">⇄</button>` : "")}
+      ${cell("remove", "", `<button type="button" class="rm-btn" title="Remove line">×</button>`)}
     </div>
   `;
   };
 
-  const headRow = `<div class="part-row head"><span></span><span></span><span>Kind</span><span>Description</span><span>Part #</span><span>Qty</span><span>Cost</span><span>Core</span>${jobs.length ? "<span>Job</span>" : ""}<span>Status</span><span></span><span></span></div>`;
+  // The header row doubles as each section's caption: inside a job's Parts
+  // block the first column reads "Parts" instead of "Kind", so one thin row
+  // does the work that a separate section label plus a hidden header row
+  // used to do.
+  const headRow = (leadLabel = "Kind", extraClass = "") => `<div class="part-row head ${extraClass}">
+    <span class="pr-cell pr-handle"></span>
+    <span class="pr-cell pr-check"></span>
+    <span class="pr-cell pr-kind">${esc(leadLabel)}</span>
+    <span class="pr-cell pr-desc">Description</span>
+    <span class="pr-cell pr-part">Part #</span>
+    <span class="pr-cell pr-qty">Qty</span>
+    <span class="pr-cell pr-cost">Cost</span>
+    <span class="pr-cell pr-core">Core</span>
+    ${jobs.length ? `<span class="pr-cell pr-job">Job</span>` : ""}
+    <span class="pr-cell pr-status">Status</span>
+    <span class="pr-cell pr-move"></span>
+    <span class="pr-cell pr-remove"></span>
+  </div>`;
 
   if (!jobs.length) {
     // Unchanged flat list -- grouping only appears once a job exists, so the
     // common/simple ticket looks exactly as clean as it always has.
     // The .ei-empty wrapper is load-bearing -- adding a line looks for it by
     // that class and removes it rather than re-rendering the whole list.
-    box.innerHTML = headRow + (items.length ? items.map(rowHtml).join("") : `<div class="ei-empty">${emptyState({
+    box.innerHTML = (items.length ? headRow("Kind", "head-flat") : "") + (items.length ? items.map(rowHtml).join("") : `<div class="ei-empty">${emptyState({
       icon: "invoice",
       title: "No parts or labor yet",
       hint: "Add a part or labor line, or start with ＋ Add Job to group this ticket's work by repair.",
     })}</div>`);
   } else {
     const buckets = [...jobs, { id: null, title: "General" }];
-    box.innerHTML = headRow + buckets.map((bucket) => {
+    box.innerHTML = buckets.map((bucket) => {
       const bucketItems = items.filter((i) => (i.job_id ?? null) === bucket.id);
       const isGeneral = bucket.id === null;
       const jobSubtotal = bucketItems.filter(notReturned).reduce((s, i) => s + i.quantity * i.unit_cost, 0);
@@ -877,7 +1035,7 @@ function renderEstimate(order) {
           </div>
           ${kindGroups.length ? kindGroups.map((g) => `
             <div class="kind-subgroup" data-kind="${g.kind}">
-              <div class="kind-subgroup-label">${KIND_GROUP_LABEL[g.kind]}</div>
+              ${headRow(KIND_GROUP_LABEL[g.kind])}
               ${g.kindItems.map(rowHtml).join("")}
             </div>
           `).join("") : `<div class="ei-empty">${emptyState({ icon: "invoice", title: "No lines in this job yet", compact: true })}</div>`}
@@ -894,10 +1052,16 @@ function renderEstimate(order) {
     });
   });
   $$(".rm-btn", box).forEach((btn) => {
-    btn.addEventListener("click", (e) => {
+    btn.addEventListener("click", async (e) => {
       const row = e.target.closest(".part-row");
       const desc = row.querySelector(".ei-desc").value.trim();
-      if (desc && !confirm(`Remove "${desc}" from this repair order?`)) return;
+      if (desc && !(await confirmAction({
+        eyebrow: "REMOVE LINE",
+        title: `Remove "${desc}"?`,
+        body: "It comes off this repair order and stops counting toward its cost.",
+        confirmLabel: "Remove Line",
+        danger: true,
+      }))) return;
       row.remove();
       persistEstimate();
     });
@@ -925,7 +1089,12 @@ function renderEstimate(order) {
     btn.addEventListener("click", async () => {
       const returned = btn.dataset.returned !== "1";
       const desc = btn.closest(".part-row").querySelector(".ei-desc").value.trim();
-      if (returned && !confirm(`Mark "${desc}" as returned to the vendor?`)) return;
+      if (returned && !(await confirmAction({
+        eyebrow: "VENDOR RETURN",
+        title: `Mark "${desc}" as returned?`,
+        body: "Its cost stops counting toward this ticket and it moves onto the returns board.",
+        confirmLabel: "Mark Returned",
+      }))) return;
       try {
         await patch(`/api/orders/${order.id}/estimate/items/${btn.dataset.id}/part-return`, { returned, actor: currentActor() });
         toast(returned ? "Marked returned" : "Return undone");
@@ -1071,18 +1240,26 @@ function addEstimateRow(kind, defaults = {}, jobId = null) {
   row.dataset.source = source;
   row.dataset.jobId = jobId ?? "";
   const label = kind === "labor" ? "Labor" : kind === "fee" ? "Fee" : "Part";
+  // Same .pr-cell scaffolding renderEstimate() emits, including the empty
+  // spacers -- otherwise this row sits misaligned against the ones around it
+  // for the half-second before the save round-trips and re-renders.
   row.innerHTML = `
-    <select class="ei-kind">
+    <div class="pr-cell pr-handle pr-spacer"></div>
+    <div class="pr-cell pr-check pr-spacer"></div>
+    <div class="pr-cell pr-kind" data-label="Kind"><select class="ei-kind">
       <option value="part" ${kind === "part" ? "selected" : ""}>Part</option>
       <option value="labor" ${kind === "labor" ? "selected" : ""}>Labor</option>
       <option value="fee" ${kind === "fee" ? "selected" : ""}>Fee</option>
-    </select>
-    <input class="ei-desc" placeholder="Description" value="${esc(defaults.description || `New ${label.toLowerCase()}`)}">
-    <input class="ei-part" placeholder="Part #" value="${esc(defaults.part_number || "")}">
-    <input class="ei-qty" type="number" min="0.01" step="0.01" value="${defaults.quantity ?? 1}">
-    <input class="ei-cost" type="number" min="0" step="0.01" value="${defaults.unit_cost ?? 0}">
-    <span class="status-pill sp-quoted">Saving…</span>
-    <button type="button" class="rm-btn" title="Remove line">×</button>
+    </select></div>
+    <div class="pr-cell pr-desc" data-label="Description"><input class="ei-desc" placeholder="Description" value="${esc(defaults.description || `New ${label.toLowerCase()}`)}"></div>
+    <div class="pr-cell pr-part" data-label="Part #"><input class="ei-part" placeholder="Part #" value="${esc(defaults.part_number || "")}"></div>
+    <div class="pr-cell pr-qty" data-label="Qty"><input class="ei-qty" type="number" min="0.01" step="0.01" value="${defaults.quantity ?? 1}"></div>
+    <div class="pr-cell pr-cost" data-label="Cost"><input class="ei-cost" type="number" min="0" step="0.01" value="${defaults.unit_cost ?? 0}"></div>
+    <div class="pr-cell pr-core pr-spacer"></div>
+    ${box.classList.contains("has-jobs") ? `<div class="pr-cell pr-job pr-spacer"></div>` : ""}
+    <div class="pr-cell pr-status" data-label="Status"><span class="status-pill sp-quoted">Saving…</span></div>
+    <div class="pr-cell pr-move pr-spacer"></div>
+    <div class="pr-cell pr-remove"><button type="button" class="rm-btn" title="Remove line">×</button></div>
   `;
   row.querySelector(".rm-btn").addEventListener("click", () => {
     row.remove();
@@ -1134,7 +1311,13 @@ function wireJobControls(order) {
   $$(".job-delete", box).forEach((btn) => {
     btn.addEventListener("click", async () => {
       const job = jobs.find((j) => String(j.id) === btn.dataset.jobId);
-      if (!confirm(`Delete "${job ? job.title : "this job"}"? Its parts/labor move back to General -- nothing is deleted.`)) return;
+      if (!(await confirmAction({
+        eyebrow: "DELETE JOB",
+        title: `Delete "${job ? job.title : "this job"}"?`,
+        body: "Its parts and labor move back to General. No lines are deleted.",
+        confirmLabel: "Delete Job",
+        danger: true,
+      }))) return;
       try {
         await api(`/api/orders/${order.id}/jobs/${btn.dataset.jobId}`, { method: "DELETE" });
         toast("Job deleted");
@@ -1424,7 +1607,12 @@ function wireVehicleDetail() {
 
   $("#vd-archive-vehicle").addEventListener("click", async () => {
     const { segment, id, item } = state.detail;
-    if (!confirm("Send this vehicle to History? It becomes read-only until reopened -- nothing is deleted.")) return;
+    if (!(await confirmAction({
+      eyebrow: "ARCHIVE",
+      title: "Send this vehicle to History?",
+      body: "It becomes read-only until reopened. Nothing is deleted.",
+      confirmLabel: "Send to History",
+    }))) return;
     try {
       await post(segment === "recon" ? `/api/recon/vehicles/${id}/archive` : `/api/we-owe/${id}/archive`, { expected_version: item.edit_version });
       toast("Sent to History");
@@ -1448,7 +1636,13 @@ function wireVehicleDetail() {
   });
 
   $("#vd-void-order").addEventListener("click", async () => {
-    if (!confirm("Void this ticket? Its cost will stop counting toward the vehicle's total. This can't be undone.")) return;
+    if (!(await confirmAction({
+      eyebrow: "VOID TICKET",
+      title: "Void this repair order?",
+      body: "Its cost stops counting toward the vehicle's total. This can't be undone.",
+      confirmLabel: "Void Ticket",
+      danger: true,
+    }))) return;
     try {
       await post(`/api/orders/${state.detail.order.id}/void`, { actor: currentActor() });
       toast("Ticket voided");
@@ -1642,7 +1836,13 @@ function wireVehicleDetail() {
   $("#vd-delete").addEventListener("click", async () => {
     const { segment, id, item } = state.detail;
     const label = segment === "recon" ? item.stock_number : `${item.year} ${item.make} ${item.model}`;
-    if (!confirm(`Delete ${label}? This can't be undone.`)) return;
+    if (!(await confirmAction({
+      eyebrow: "DELETE",
+      title: `Delete ${label}?`,
+      body: "The vehicle, its repair order, and everything on it are removed permanently. This can't be undone -- send it to History instead if you only want it off the board.",
+      confirmLabel: "Delete Permanently",
+      danger: true,
+    }))) return;
     try {
       await api(segment === "recon" ? `/api/recon/vehicles/${id}` : `/api/we-owe/${id}`, { method: "DELETE" });
       toast("Deleted");
@@ -2083,7 +2283,8 @@ async function loadAccountingView() {
     renderAuditList(audits);
     if (!$("#ap-invoice-items").children.length) addApLine();
   } catch (err) {
-    toast(`Could not load accounting: ${err.message}`, true);
+    renderViewFailure("accounting", err);
+    return;
   }
   await loadApTable();
 }
@@ -2186,7 +2387,13 @@ function renderApTable(invoices) {
   $$(".ap-void", $("#ap-table")).forEach((btn) => {
     btn.addEventListener("click", async (e) => {
       e.stopPropagation(); // don't also trigger the row's open-vehicle click
-      if (!confirm(`Void invoice ${btn.dataset.number}? It's kept for the audit trail but won't block re-posting a corrected invoice under the same number. This does not un-mark any parts as received -- fix that on the ticket itself if needed.`)) return;
+      if (!(await confirmAction({
+        eyebrow: "ACCOUNTS PAYABLE",
+        title: `Void invoice ${btn.dataset.number}?`,
+        body: "It's kept for the audit trail, and a corrected invoice can be re-posted under the same number. Parts already marked received stay received -- fix those on the ticket itself.",
+        confirmLabel: "Void Invoice",
+        danger: true,
+      }))) return;
       try {
         await patch(`/api/ap/invoices/${btn.dataset.id}/void`, { actor: currentActor() });
         toast("Invoice voided");
@@ -2339,14 +2546,14 @@ async function loadCoresView() {
   try {
     state.cores = await get("/api/cores");
   } catch (err) {
-    toast(`Could not load cores: ${err.message}`, true);
+    renderViewFailure("cores", err, [["#cores-table", 6]]);
     return;
   }
   renderCoresTable();
   try {
     state.returns = await get("/api/returns");
   } catch (err) {
-    toast(`Could not load returned parts: ${err.message}`, true);
+    renderViewFailure("cores", err, [["#returns-table", 7]]);
     return;
   }
   renderReturnsTable();
@@ -2532,7 +2739,7 @@ async function loadStaffView() {
   try {
     state.staff = await get("/api/staff?include_inactive=true");
   } catch (err) {
-    return toast(`Could not load staff: ${err.message}`, true);
+    return renderViewFailure("staff", err);
   }
   refreshCurrentUserOptions();
   renderStaffTable();
@@ -2592,9 +2799,14 @@ function renderStaffTable() {
     const tr = btn.closest("tr");
     const person = state.staff.find((s) => s.id === Number(tr.dataset.id));
     // Deactivating pulls this person out of every technician/advisor
-    // dropdown app-wide -- a bigger consequence than most confirm()-guarded
-    // deletes elsewhere, so it gets the same guard.
-    if (person.active && !confirm(`Deactivate ${person.name}? They'll no longer be selectable as a technician/advisor anywhere.`)) return;
+    // dropdown app-wide -- a bigger consequence than most of the guarded
+    // deletes elsewhere, so it asks first too.
+    if (person.active && !(await confirmAction({
+      eyebrow: "STAFF",
+      title: `Deactivate ${person.name}?`,
+      body: "They stop appearing in every technician and advisor dropdown. Work already assigned to them keeps their name.",
+      confirmLabel: "Deactivate",
+    }))) return;
     try {
       await patch(`/api/staff/${tr.dataset.id}`, { active: !person.active });
       toast(person.active ? "Deactivated" : "Activated");
@@ -2744,7 +2956,13 @@ function wireTaskRowActions(container) {
   $$(".task-delete", container).forEach((btn) => {
     btn.addEventListener("click", async () => {
       const row = btn.closest(".task-row");
-      if (!confirm("Delete this task?")) return;
+      if (!(await confirmAction({
+        eyebrow: "TASK",
+        title: "Delete this task?",
+        body: (row?.querySelector(".task-title")?.textContent || "").trim(),
+        confirmLabel: "Delete Task",
+        danger: true,
+      }))) return;
       try {
         await api(`/api/tasks/${row.dataset.id}`, { method: "DELETE" });
         await loadTasksView();
@@ -2826,7 +3044,7 @@ async function loadTasksView() {
     renderTaskOrderSelect(orders);
     renderTasksList();
   } catch (err) {
-    toast(`Could not load tasks: ${err.message}`, true);
+    renderViewFailure("tasks", err);
   }
 }
 
@@ -2906,7 +3124,13 @@ function wireSuggestionCardActions(container) {
   $$(".suggestion-delete", container).forEach((btn) => {
     btn.addEventListener("click", async () => {
       const card = btn.closest(".suggestion-card");
-      if (!confirm("Delete this suggestion?")) return;
+      if (!(await confirmAction({
+        eyebrow: "SUGGESTION",
+        title: "Delete this suggestion?",
+        body: "This can't be undone. Resolve it instead if you want to keep the record.",
+        confirmLabel: "Delete",
+        danger: true,
+      }))) return;
       try {
         await api(`/api/suggestions/${card.dataset.id}`, { method: "DELETE" });
         await loadSuggestionsView();
@@ -2949,7 +3173,7 @@ async function loadSuggestionsView() {
     state.suggestions = await get("/api/suggestions");
     renderSuggestionsList();
   } catch (err) {
-    toast(`Could not load suggestions: ${err.message}`, true);
+    renderViewFailure("suggestions", err);
   }
 }
 
@@ -2981,8 +3205,11 @@ function wireSuggestionsView() {
    INIT
    ================================================================== */
 document.addEventListener("DOMContentLoaded", () => {
+  wireGlobalErrorReporting();
   initTheme();
   initCurrentUser();
+  wireConfirmDialog();
+  wireViewRetry();
   wireVehiclesView();
   wireVehicleDetail();
   wireReconDialog();
@@ -3082,7 +3309,7 @@ async function loadBackupView() {
   try {
     backups = await get("/api/backup");
   } catch (err) {
-    tbody.innerHTML = emptyRow(4, { icon: "backup", title: "Couldn't load backups", hint: err.message, tone: "error" });
+    renderViewFailure("backup", err);
     return;
   }
   tbody.innerHTML = backups.length ? backups.map((b) => `
@@ -3105,7 +3332,13 @@ async function loadBackupView() {
   $$(".backup-restore-btn", tbody).forEach((btn) => {
     btn.addEventListener("click", async () => {
       const name = btn.dataset.name;
-      if (!confirm(`Restore from "${name}"? The current database is saved aside first, but this replaces it.`)) return;
+      if (!(await confirmAction({
+        eyebrow: "RESTORE",
+        title: `Restore from "${name}"?`,
+        body: "This replaces the live database with the contents of that backup. The current database is saved aside first, so the swap can be undone by restoring it back.",
+        confirmLabel: "Restore",
+        danger: true,
+      }))) return;
       try {
         await post(`/api/backup/restore/${encodeURIComponent(name)}`);
         toast(`Restored from ${name}`);
@@ -3118,7 +3351,13 @@ async function loadBackupView() {
   $$(".backup-delete-btn", tbody).forEach((btn) => {
     btn.addEventListener("click", async () => {
       const name = btn.dataset.name;
-      if (!confirm(`Delete backup "${name}"? This can't be undone.`)) return;
+      if (!(await confirmAction({
+        eyebrow: "BACKUP",
+        title: `Delete backup "${name}"?`,
+        body: "The backup file is removed from disk. This can't be undone.",
+        confirmLabel: "Delete Backup",
+        danger: true,
+      }))) return;
       try {
         await api(`/api/backup/${encodeURIComponent(name)}`, { method: "DELETE" });
         toast("Backup deleted");
@@ -3151,7 +3390,13 @@ function wireBackupView() {
     const file = $("#backup-restore-file").files[0];
     if (!file) return toast("Choose a file first", true);
     if (!file.name.toLowerCase().endsWith(".db")) return toast("Choose a .db backup file", true);
-    if (!confirm(`Restore from "${file.name}"? The current database is saved aside first, but this replaces it.`)) return;
+    if (!(await confirmAction({
+      eyebrow: "RESTORE",
+      title: `Restore from "${file.name}"?`,
+      body: "This replaces the live database with the contents of that file. The current database is saved aside first, so the swap can be undone by restoring it back.",
+      confirmLabel: "Restore",
+      danger: true,
+    }))) return;
     try {
       const res = await fetch("/api/backup/restore-upload", {
         method: "POST",

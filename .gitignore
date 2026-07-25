@@ -12,3 +12,8 @@ dist/
 # ...but the automated improvement run's changelog is a tracked project
 # document, not a throwaway runtime log.
 !auto_improvements.log
+
+# jsdom for the optional front-end smoke test (tests/dom)
+tests/dom/node_modules/
+tests/dom/package-lock.json
+tests/dom/package.json

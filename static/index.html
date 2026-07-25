@@ -895,6 +895,26 @@
   </form>
 </dialog>
 
+<!-- Confirm Dialog
+     Destructive actions used to go through window.confirm(), which the OS
+     renders as a bare browser chrome alert -- no context about *what* is
+     being deleted, no way to distinguish "remove a line" from "restore the
+     whole database over the top of the live one", and no styling that says
+     danger. This is one dialog reused by every call site; see
+     confirmAction() in app.js. -->
+<dialog id="confirm-dialog">
+  <div class="modal confirm-modal">
+    <div class="modal-head">
+      <div><p class="eyebrow" id="confirm-eyebrow">CONFIRM</p><h2 id="confirm-title">Are you sure?</h2></div>
+    </div>
+    <div class="modal-body"><p id="confirm-body" class="confirm-body"></p></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" type="button" id="confirm-cancel">Cancel</button>
+      <button class="btn btn-primary" type="button" id="confirm-accept">Confirm</button>
+    </div>
+  </div>
+</dialog>
+
 <div id="toast"></div>
 <div id="print-report" class="print-only"></div>
 <script src="/assets/app.js"></script>

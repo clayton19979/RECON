@@ -212,6 +212,8 @@ button { font-family: inherit; }
 .btn-primary:hover { background: var(--accent-strong); }
 .btn-ghost { background: var(--surface); border-color: var(--line); color: var(--ink); }
 .btn-ghost:hover { border-color: var(--accent); color: var(--accent); }
+.btn-danger { background: var(--crit); color: #fff; border-color: var(--crit); }
+.btn-danger:hover { filter: brightness(1.08); }
 .btn-sm { padding: 6px 12px; font-size: 12px; }
 .btn-xs { padding: 3px 8px; font-size: 10.5px; gap: 4px; }
 .btn[disabled] { opacity: .5; cursor: not-allowed; }
@@ -357,11 +359,37 @@ textarea { min-height: 70px; resize: vertical; font-family: inherit; }
 .pill-status-progress { background: var(--accent); color: #fff; }
 .pill-status-complete { background: var(--good); color: #fff; }
 
-/* ---------- estimate / parts rows ---------- */
+/* ---------- estimate / parts rows ----------
+   The row is a grid of .pr-cell wrappers rather than bare inputs, which buys
+   two things the bare-input version couldn't have: a header row that lines up
+   with the fields, and a second, stacked layout the same markup can reflow
+   into when the container is narrow (see the @container rules below). */
 .part-row {
-  display: grid; grid-template-columns: 16px 20px .8fr 2.1fr 1fr .6fr .9fr .7fr 1.6fr 22px 26px;
+  display: grid; grid-template-columns: var(--pr-cols);
   gap: 8px; align-items: center; padding: 9px 16px; border-bottom: 1px solid var(--line-soft); font-size: 12.5px;
 }
+#vd-estimate-items { --pr-cols: 16px 20px .8fr 2.1fr 1fr .6fr .9fr .7fr 1.6fr 22px 26px; }
+/* One extra column (Job) only appears once a ticket actually has jobs --
+   the plain flat list (the common case) keeps its original column count. */
+#vd-estimate-items.has-jobs { --pr-cols: 16px 20px .8fr 2.1fr 1fr .6fr .9fr .7fr .9fr 1.6fr 22px 26px; }
+.part-row:last-child { border-bottom: none; }
+.pr-cell { min-width: 0; display: flex; align-items: center; }
+.pr-cell > input, .pr-cell > select { width: 100%; }
+.pr-cell > .status-cell { min-width: 0; }
+/* The caption only materialises in the stacked layout. */
+.pr-cell::before { content: attr(data-label); display: none; }
+.pr-handle, .pr-check, .pr-move, .pr-remove { justify-content: center; }
+/* Numbers line up on the decimal and read as numbers -- these three columns
+   are the ones anyone actually scans down when checking a ticket's cost. */
+.pr-qty > input, .pr-cost > input, .pr-core > input, .pr-part > input {
+  font-family: "IBM Plex Mono", "Cascadia Mono", Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
+.pr-qty > input, .pr-cost > input, .pr-core > input { text-align: right; }
+.part-row.head .pr-qty, .part-row.head .pr-cost, .part-row.head .pr-core { justify-content: flex-end; }
+.pr-job > select { color: var(--ink-soft); }
+.pr-cost > input:disabled { text-decoration: line-through; }
+
 .row-move-btn {
   background: none; border: none; color: var(--ink-faint); cursor: pointer; font-size: 14px; padding: 2px 4px;
 }
@@ -370,16 +398,76 @@ textarea { min-height: 70px; resize: vertical; font-family: inherit; }
 .row-drag-handle { cursor: grab; color: var(--ink-faint); font-size: 12px; letter-spacing: -2px; user-select: none; }
 .part-row.dragging { opacity: .4; }
 .part-row.head {
-  font-size: 10.5px; text-transform: uppercase; letter-spacing: .04em; color: var(--ink-faint); font-weight: 700;
-  background: var(--paper-raise);
+  font-size: 10px; text-transform: uppercase; letter-spacing: .05em; color: var(--ink-faint); font-weight: 700;
+  background: var(--paper-raise); padding-top: 7px; padding-bottom: 7px;
 }
+.part-row.head .pr-kind { color: var(--ink-soft); }
 .part-row input, .part-row select { padding: 5px 7px; font-size: 12.5px; }
 .part-row .rm-btn { background: none; border: none; color: var(--crit); cursor: pointer; font-size: 15px; padding: 2px 6px; }
 
-/* One extra column (Job) only appears once a ticket actually has jobs --
-   the plain flat list (the common case) keeps its original column count. */
-#vd-estimate-items.has-jobs .part-row {
-  grid-template-columns: 16px 20px .8fr 2.1fr 1fr .6fr .9fr .7fr .9fr 1.6fr 22px 26px;
+/* ---------- estimate rows: narrow container ----------
+   Container queries, not viewport ones, because the width this grid actually
+   gets depends on whether the details drawer is open next to it -- something
+   a media query can't see. Chrome/Edge (what the tray launches in app mode)
+   have supported these since 2022; the @supports fallback below keeps older
+   engines from being stuck with the squashed 12-column grid. */
+.parts-labor-shell { container-type: inline-size; container-name: estimate; }
+
+@container estimate (max-width: 1040px) {
+  .part-row { gap: 6px; padding: 8px 12px; }
+  .part-row input, .part-row select { padding: 4px 5px; font-size: 12px; }
+}
+
+/* Below this a 12-column grid stops being a table and starts being twelve
+   slivers, so each line becomes its own small card: description on top, the
+   numeric fields captioned underneath, actions on the right. */
+@container estimate (max-width: 820px) {
+  /* The header row can't label columns that no longer exist, but a job's
+     Parts/Labor header is also that section's only caption -- so it collapses
+     to just that word. The flat list's header only ever said "Kind", which
+     labels nothing once every field carries its own caption, so it goes. */
+  .part-row.head {
+    display: block; padding: 10px 14px 2px; border-bottom: none; background: transparent;
+  }
+  .part-row.head.head-flat { display: none; }
+  .part-row.head .pr-cell { display: none; }
+  .part-row.head .pr-kind { display: block; font-size: 10.5px; letter-spacing: .06em; }
+  .part-row {
+    display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px 12px; padding: 12px 14px;
+    border-bottom: 1px solid var(--line);
+  }
+  .part-row .pr-cell { flex: 1 1 120px; flex-direction: column; align-items: stretch; gap: 3px; }
+  .part-row .pr-cell::before {
+    display: block; font-size: 9.5px; text-transform: uppercase; letter-spacing: .05em;
+    color: var(--ink-faint); font-weight: 700; line-height: 1;
+  }
+  .part-row .pr-desc { flex: 1 1 100%; order: -1; }
+  .part-row .pr-status { flex: 1 1 160px; }
+  /* An action cell (drag handle, receive checkbox, move, remove) has no
+     caption -- don't reserve caption space for it. */
+  .part-row .pr-cell:not([data-label])::before { display: none; }
+  .part-row .pr-handle, .part-row .pr-check, .part-row .pr-move, .part-row .pr-remove {
+    flex: 0 0 auto; align-self: center; justify-content: center;
+  }
+  .part-row .pr-move { margin-left: auto; }
+  /* A cell with nothing in it (no core on a labor line, no move button on an
+     unsaved row) has no caption worth the vertical space down here. */
+  .part-row .pr-spacer { display: none; }
+}
+
+@supports not (container-type: inline-size) {
+  @media (max-width: 1180px) {
+    .part-row.head { display: block; padding: 10px 14px 2px; border-bottom: none; background: transparent; }
+    .part-row.head.head-flat { display: none; }
+    .part-row.head .pr-cell { display: none; }
+    .part-row.head .pr-kind { display: block; }
+    .part-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px 12px; padding: 12px 14px; }
+    .part-row .pr-cell:not([data-label])::before { display: none; }
+    .part-row .pr-cell { flex: 1 1 120px; flex-direction: column; align-items: stretch; gap: 3px; }
+    .part-row .pr-cell::before { display: block; font-size: 9.5px; text-transform: uppercase; letter-spacing: .05em; color: var(--ink-faint); font-weight: 700; }
+    .part-row .pr-desc { flex: 1 1 100%; order: -1; }
+    .part-row .pr-spacer { display: none; }
+  }
 }
 
 /* ---------- job groups ---------- */
@@ -398,11 +486,7 @@ textarea { min-height: 70px; resize: vertical; font-family: inherit; }
 
 /* Parts and labor each get their own mini-section within a job -- not one
    interleaved list -- so it's obvious at a glance which lines are which. */
-.kind-subgroup + .kind-subgroup { border-top: 1px dashed var(--line-soft); }
-.kind-subgroup-label {
-  padding: 6px 16px 2px; font-size: 10px; text-transform: uppercase; letter-spacing: .05em;
-  font-weight: 700; color: var(--ink-faint);
-}
+.kind-subgroup + .kind-subgroup { border-top: 1px solid var(--line); }
 .job-icon-btn {
   background: none; border: none; color: var(--ink-faint); cursor: pointer; font-size: 14px; padding: 2px 5px; line-height: 1;
 }
@@ -541,6 +625,18 @@ dialog::backdrop { background: rgba(20, 18, 14, .45); }
 .modal-body { padding: 18px 20px; overflow-y: auto; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 10px; padding: 14px 20px; border-top: 1px solid var(--line); }
 
+/* ---------- confirm dialog ----------
+   Narrower than a form modal (it's one question), and when the action is
+   destructive the whole dialog gets a red hairline + red eyebrow so it
+   never reads as a routine "click OK to continue". */
+#confirm-dialog { max-width: 440px; }
+.confirm-modal .modal-head { padding-bottom: 12px; border-bottom: none; }
+.confirm-modal .modal-body { padding-top: 0; }
+.confirm-modal .modal-actions { border-top: none; padding-top: 4px; }
+.confirm-body { margin: 0; font-size: 13px; line-height: 1.55; color: var(--ink-soft); }
+#confirm-dialog.danger { border-top: 3px solid var(--crit); }
+#confirm-dialog.danger #confirm-eyebrow { color: var(--crit); }
+
 /* ---------- toast ---------- */
 #toast {
   position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%) translateY(12px);
@@ -609,7 +705,7 @@ dialog::backdrop { background: rgba(20, 18, 14, .45); }
     background: #eee !important; border-bottom: 1px solid #000;
   }
   /* Parts/Labor sub-header within a printed job -- lighter than the job
-     header itself, matching the on-screen kind-subgroup label. */
+     header itself, mirroring the on-screen kind-subgroup header row. */
   .print-kind-head td {
     font-weight: 700; text-transform: uppercase; font-size: 9px; letter-spacing: .04em;
     color: #555; padding: 4px 8px 2px; border-bottom: none;
@@ -635,7 +731,6 @@ dialog::backdrop { background: rgba(20, 18, 14, .45); }
 .parts-labor-shell #vd-estimate-items:not(.has-jobs) {
   background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden;
 }
-.parts-labor-shell #vd-estimate-items .part-row.head { display: none; }
 .job-group {
   background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
   overflow: hidden; border-bottom: 1px solid var(--line) !important;

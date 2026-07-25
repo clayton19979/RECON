@@ -583,10 +583,14 @@ async function loadVehiclesView() {
   // segment's rows never sit under the new segment's chips.
   showPlaceholders("vehicles");
   // VIEW_PLACEHOLDERS only lists the table (same reasoning as Reports): the
-  // five summary cards and the chart need their own shape-matched skeleton,
-  // or a refetch shows the *previous* segment's numbers above a blank table
-  // for the duration of the request.
-  $("#vehicles-stats").innerHTML = skeletonCards(5);
+  // five summary cards and the chart otherwise keep showing the *previous*
+  // segment's numbers above a blank table for the duration of the request.
+  // Unlike Reports' cards, these five live as fixed-id children written once
+  // in index.html and mutated in place by renderStats() -- replacing the
+  // container's innerHTML here would delete those ids out from under it, so
+  // this blanks their text instead of swapping in skeleton markup.
+  $$("#vehicles-stats .stat-value").forEach((el) => { el.textContent = "…"; });
+  $$("#vehicles-stats .stat-sub").forEach((el) => { el.textContent = ""; });
   $("#vehicles-scope").textContent = "";
   $("#vehicles-chart").innerHTML = "";
   try {

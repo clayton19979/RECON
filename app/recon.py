@@ -25,6 +25,37 @@ def age_days(created_at: str) -> int:
         created = created.replace(tzinfo=timezone.utc)
     return (datetime.now(timezone.utc) - created).days
 
+
+def last_activity(db: sqlite3.Connection, column: str, ref_id: int, fallback: str) -> str:
+    """When anything last actually happened to this vehicle.
+
+    The newest last_activity_at across the vehicle's tickets (bumped by every
+    mutating route -- see workflow.touch_order), falling back to when the
+    vehicle landed on the lot for a car with no ticket started yet.
+
+    Deliberately *not* the vehicle's updated_at, in either position. Patching
+    the vehicle record is a data correction, not work on the car, so using it
+    would let a VIN fix reset the idle clock and hide exactly the cars this
+    column exists to surface -- and for a car with no ticket at all, updated_at
+    is the *only* thing there is, which made every never-started car report as
+    touched today. A car nobody has written a ticket for is the most idle thing
+    in the shop, and now says so.
+
+    Voided tickets are excluded for the same reason cost_rollup excludes them:
+    voiding one means the work never happened."""
+    row = db.execute(
+        f"SELECT max(last_activity_at) FROM orders WHERE {column}=? AND voided=0 AND last_activity_at!=''",
+        (ref_id,),
+    ).fetchone()
+    return (row[0] if row and row[0] else None) or fallback
+
+
+def idle_days(last_activity_at: str) -> int:
+    """Whole days since anything happened. Same shape as age_days, and the same
+    reason for tolerating garbage: one unparseable timestamp shouldn't take
+    the board down."""
+    return age_days(last_activity_at)
+
 RECON_STATUSES = {"acquired", "in_repair", "ready", "sold", "retained"}
 WE_OWE_STATUSES = {"open", "fulfilled", "waived"}
 
@@ -224,6 +255,7 @@ def vehicle_board_rows(db: sqlite3.Connection, start: str | None = None, end: st
             latest_order = rollup["orders"][-1] if rollup["orders"] else None
             has_closed_order = any(o["status"] == "complete" for o in rollup["orders"])
             display_status = (active_order or latest_order)["status"] if (active_order or latest_order) else "acquired"
+            activity_at = last_activity(db, "recon_vehicle_id", row["id"], row["created_at"])
             result.append({
                 "segment": "recon",
                 "recon_id": row["id"],
@@ -241,6 +273,8 @@ def vehicle_board_rows(db: sqlite3.Connection, start: str | None = None, end: st
                 "technicians": technician_names(db, order_ids),
                 "updated_at": row["updated_at"],
                 "age_days": age_days(row["created_at"]),
+                "last_activity_at": activity_at,
+                "idle_days": idle_days(activity_at),
             })
     if segment in (None, "we_owe"):
         rows = db.execute(
@@ -267,6 +301,7 @@ def vehicle_board_rows(db: sqlite3.Connection, start: str | None = None, end: st
             customer_paid = round(db.execute(
                 "SELECT coalesce(sum(amount),0) FROM we_owe_payments WHERE we_owe_id=?", (row["id"],)
             ).fetchone()[0], 2)
+            activity_at = last_activity(db, "we_owe_id", row["id"], row["created_at"])
             result.append({
                 "segment": "we_owe",
                 "recon_id": None,
@@ -287,6 +322,8 @@ def vehicle_board_rows(db: sqlite3.Connection, start: str | None = None, end: st
                 "technicians": technician_names(db, order_ids),
                 "updated_at": row["updated_at"],
                 "age_days": age_days(row["created_at"]),
+                "last_activity_at": activity_at,
+                "idle_days": idle_days(activity_at),
             })
     return result
 

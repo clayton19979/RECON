@@ -159,8 +159,16 @@
                   title="Show only vehicles with parts ordered but not yet received">Waiting on parts</button>
           <button type="button" class="btn btn-ghost btn-sm" id="vehicles-reset-view" hidden>Reset view</button>
           <div class="filters-gap"></div>
+          <button type="button" class="btn btn-ghost btn-sm btn-quiet" id="vehicles-chart-toggle"
+                  aria-controls="vehicles-chart" aria-expanded="true">Hide activity chart</button>
           <span class="filters-note" id="vehicles-count">0 vehicles</span>
         </div>
+
+        <!-- Every bar is a filter (see renderIdleChart). Kept above the table
+             rather than beside the cards so selecting a bucket and reading the
+             resulting rows is one vertical glance, and collapsible because on
+             a 60-car lot the table itself is what people came for. -->
+        <div id="vehicles-chart" class="board-chart"></div>
 
         <div class="bulk-bar" id="vehicles-bulk-bar" style="display:none">
           <span id="vehicles-bulk-count"></span>
@@ -181,7 +189,9 @@
                   <th class="sortable" data-sort-key="status" aria-sort="none">Status <span class="sort-arrow"></span></th>
                   <th class="sortable" data-sort-key="tech" aria-sort="none">Technician <span class="sort-arrow"></span></th>
                   <th class="sortable col-parts" data-sort-key="parts" aria-sort="none">Parts <span class="sort-arrow"></span></th>
-                  <th class="num-col sortable" data-sort-key="age" aria-sort="none">Age <span class="sort-arrow"></span></th>
+                  <th class="num-col age-col sortable" data-sort-key="age" aria-sort="none">Age <span class="sort-arrow"></span></th>
+                  <th class="num-col idle-col sortable" data-sort-key="idle" aria-sort="none"
+                      title="Time since anything last happened on this vehicle's repair order">Idle <span class="sort-arrow"></span></th>
                   <th class="num-col quoted-col sortable" data-sort-key="quoted" aria-sort="none">Quoted <span class="sort-arrow"></span></th>
                   <th class="num-col sortable" data-sort-key="cost" aria-sort="none">Cost <span class="sort-arrow"></span></th>
                 </tr>

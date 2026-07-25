@@ -28,6 +28,7 @@ from .workflow import (
     build_workflow_router,
     get_or_create_estimate,
     initialize_order_workflow,
+    touch_order,
     workflow_detail,
 )
 
@@ -461,6 +462,12 @@ def create_app(db_path: Path = DEFAULT_DB, backups_dir: Path = DEFAULT_BACKUPS_D
             tax = round(taxable * estimate.tax_rate, 2)
             total = round(subtotal + tax, 2)
             db.execute("UPDATE estimates SET subtotal=?,tax=?,total=? WHERE id=?", (subtotal, tax, total, estimate_id))
+            # Writing the estimate grid is the single most common thing anyone
+            # does to a ticket, and it's the one mutation that deliberately
+            # doesn't log an activity event (it autosaves; the log would be
+            # nothing but estimate saves). Without this the board would call a
+            # car idle for a week while a tech was pricing it out all morning.
+            touch_order(db, order_id, now)
             result = dict(db.execute("SELECT * FROM estimates WHERE id=?", (estimate_id,)).fetchone())
             result["items"] = [dict(row) for row in db.execute("SELECT * FROM estimate_items WHERE estimate_id=? ORDER BY sort_order, id", (estimate_id,))]
             result["jobs"] = estimate_jobs_list(db, estimate_id)

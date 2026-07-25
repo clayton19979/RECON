@@ -405,3 +405,80 @@ def test_board_view_preferences_round_trip_every_filter(js: str) -> None:
         assert key in save, f"{key} isn't persisted with the board's view preferences"
     assert "partsOnly" in load, "the parts toggle is saved but never restored"
     assert "state.vehiclePartsOnly" in save, "Reset view won't appear for a board filtered to parts-only"
+
+
+def test_idle_column_is_wired_end_to_end(js: str, html: str) -> None:
+    """The Idle column is a header, a sort comparator and a cell renderer that
+    have to agree, and it must read idle_days rather than age_days -- they're
+    different questions and the two columns sit next to each other."""
+    header = re.search(r'<th[^>]*data-sort-key="idle"[^>]*>', html)
+    assert header, "the board has no Idle column header"
+    assert "sortable" in header.group(0), "the Idle column isn't sortable"
+    assert re.search(r'idle:\s*\{[^}]*value:\s*\(v\)\s*=>\s*v\.idle_days', js), (
+        "the Idle sort comparator doesn't read idle_days"
+    )
+    assert "idleCellHtml(v)" in _function_source(js, "vehicleRowHtml"), "the Idle cell isn't rendered"
+    assert "v.idle_days" in _function_source(js, "idleCellHtml"), "the Idle cell doesn't read idle_days"
+    assert "idle_days" in _function_source(js, "vehicleRowSignature"), (
+        "idle_days isn't in the row signature, so a row whose idle time changed won't re-render"
+    )
+
+
+def test_idle_severity_and_buckets_share_one_set_of_thresholds(js: str) -> None:
+    """A row's color and the bar it lands in are two renderings of one rule. If
+    idleClass carried its own numbers they would drift, and the chart's count
+    would stop matching the coloured cells under it -- the same trap the
+    over-quote card already has a test for."""
+    idle_class = _function_source(js, "idleClass")
+    assert "idleBucket(days)" in idle_class, "idleClass has its own thresholds instead of using the buckets"
+    assert not re.search(r"days\s*>=\s*\d+", idle_class), (
+        "idleClass compares day counts directly -- that's a second copy of the bucket boundaries"
+    )
+    buckets = re.search(r"const IDLE_BUCKETS = \[(.*?)\];", js, re.S)
+    assert buckets, "IDLE_BUCKETS is gone"
+    keys = re.findall(r'key:\s*"([a-z]+)"', buckets.group(1))
+    assert keys == ["today", "recent", "stale", "cold", "frozen"], f"the idle buckets changed shape: {keys}"
+
+
+def test_board_chart_bars_are_filters(js: str, html: str) -> None:
+    """A chart that reports "6 cars idle 14+ days" and gives you no way to see
+    which six is decoration. Every bar carries the bucket it stands for, and
+    the chart is counted over the board *minus* the idle filter so selecting a
+    bucket doesn't collapse the chart that selected it."""
+    assert 'id="vehicles-chart"' in html, "the board's chart container is gone"
+    assert 'id="vehicles-chart-toggle"' in html, "the chart has no show/hide control"
+    chart = _function_source(js, "renderIdleChart")
+    assert "data-idle-bucket=" in chart, "the chart's bars don't carry their bucket"
+    assert 'role="button"' in chart and "tabindex=" in chart, "the bars aren't reachable or announced as buttons"
+    assert "visibleVehicles({ ignoreIdle: true })" in chart, (
+        "the chart counts over the idle-filtered rows, so picking a bucket collapses it to one bar"
+    )
+    assert "ignoreIdle" in _function_source(js, "visibleVehicles"), (
+        "visibleVehicles no longer honours ignoreIdle"
+    )
+
+
+def test_hiding_the_board_chart_clears_its_filter(js: str) -> None:
+    """The bucket filter can only be seen and cleared from the chart, so
+    collapsing the chart while one is applied would leave rows missing with
+    nothing on screen explaining why."""
+    wiring = _function_source(js, "wireVehiclesView")
+    assert re.search(r"state\.vehicleChartOpen = !state\.vehicleChartOpen;\s*(?://[^\n]*\n\s*)*"
+                     r"if \(!state\.vehicleChartOpen\) state\.vehicleIdleBucket = \"\";", wiring), (
+        "hiding the activity chart doesn't clear the idle filter it owns"
+    )
+
+
+def test_idle_bucket_filter_round_trips_with_the_other_preferences(js: str) -> None:
+    save = _function_source(js, "saveVehicleViewPrefs")
+    load = _function_source(js, "loadVehicleViewPrefs")
+    for key in ("idleBucket", "chartOpen"):
+        assert key in save, f"{key} isn't persisted with the board's view preferences"
+        assert key in load, f"{key} is saved but never restored"
+    assert "state.vehicleIdleBucket" in save, "Reset view won't appear for a board filtered to one idle bucket"
+    assert "chartOpen" not in re.search(r"const dirty = [^;]+;", save).group(0), (
+        "showing or hiding the chart counts as a dirty view -- it hides no rows"
+    )
+    assert "state.vehicleIdleBucket = \"\";" in _function_source(js, "resetVehicleView"), (
+        "Reset view leaves the idle bucket filter applied"
+    )

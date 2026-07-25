@@ -13,13 +13,14 @@ from __future__ import annotations
 
 import shutil
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from fastapi.testclient import TestClient
 
-from app.db import init_db
+from app.db import connect, init_db
 from app.main import DEFAULT_DB, app
 
 
@@ -88,6 +89,69 @@ def authorize(client: TestClient, order_id: int, status: str, approved_by: str, 
 
 def set_status(client: TestClient, order_id: int, status: str) -> None:
     patch(client, f"/api/orders/{order_id}/status", {"status": status, "actor": "advisor"})
+
+
+# How long each seeded car has been on the lot, and how long since anyone
+# touched it. Everything above is created through the API, which timestamps it
+# "now" -- so without this pass every Age reads 0d, every Idle reads "today",
+# and the board's whole time dimension (the Age colors, the Idle colors, the
+# activity chart's five buckets) demos as a single flat bar. Keyed by stock
+# number for recon and customer name for we-owe, both of which are unique in
+# the data above.
+#
+# Chosen so every idle bucket has at least one car and so age and idle
+# disagree: R-1002 is the second-oldest car on the lot and was worked on this
+# week, while R-0981 has been here six weeks with no ticket ever written.
+#
+# Idle is only listed for the three cars that actually have a repair order. A
+# car with no ticket has no activity to date, so its idle time *is* its age --
+# stating a different number here would be a fiction the board would correctly
+# ignore.
+BOARD_AGES = {
+    "R-1001": 12,
+    "R-1002": 27,
+    "R-0997": 6,
+    "R-0981": 41,
+    "Renata Silva": 9,
+    "Marcus Doyle": 21,
+    "Iris Chandler": 34,
+    "Jordan Whitfield": 3,
+}
+BOARD_IDLE = {"R-1002": 4, "R-0997": 1, "Jordan Whitfield": 0}
+
+
+def age_the_board() -> None:
+    """Backdate the seeded vehicles so the board's time columns have something
+    to show. Written through the app's own connect(), and only against the mock
+    database this script just built."""
+    def days_ago(n: int) -> str:
+        return (datetime.now(timezone.utc) - timedelta(days=n, hours=1)).isoformat(timespec="seconds")
+
+    with connect(DEFAULT_DB) as db:
+        for key, age in BOARD_AGES.items():
+            recon = db.execute("SELECT id FROM recon_vehicles WHERE stock_number=?", (key,)).fetchone()
+            if recon:
+                column, ref = "recon_vehicle_id", recon["id"]
+                db.execute("UPDATE recon_vehicles SET created_at=? WHERE id=?", (days_ago(age), recon["id"]))
+            else:
+                owed = db.execute(
+                    """SELECT w.id FROM we_owe_items w JOIN customers c ON c.id=w.customer_id
+                       WHERE c.name=? ORDER BY w.id LIMIT 1""",
+                    (key,),
+                ).fetchone()
+                if not owed:
+                    continue
+                column, ref = "we_owe_id", owed["id"]
+                db.execute("UPDATE we_owe_items SET created_at=? WHERE id=?", (days_ago(age), owed["id"]))
+            if key in BOARD_IDLE:
+                # Idle is the *newest* activity across the car's tickets, so
+                # every one of them has to move back or the freshest ticket
+                # wins and the car still reads as touched today.
+                db.execute(
+                    f"UPDATE orders SET last_activity_at=? WHERE {column}=?",
+                    (days_ago(BOARD_IDLE[key]), ref),
+                )
+        db.commit()
 
 
 def main() -> None:
@@ -334,6 +398,8 @@ def main() -> None:
     post(client, "/api/suggestions", {"text": "Add a text-message reminder the day before a promised pickup date.", "author": "Dana Whitfield"})
     resolved = post(client, "/api/suggestions", {"text": "Let us print a work order without pricing for the technician copy.", "author": "Ray Ortiz"})
     patch(client, f"/api/suggestions/{resolved['id']}", {"resolved": True})
+
+    age_the_board()
 
     print("\nDone. Seeded:")
     print("  7 retail repair orders across every status (estimate, pending approval,")

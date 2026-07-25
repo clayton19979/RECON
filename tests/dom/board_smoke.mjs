@@ -14,7 +14,8 @@ const veh = (over) => ({
   segment: "recon", recon_id: null, we_owe_id: null, stock_number: "", vehicle: "",
   vin: "", customer_name: "", status: "in_progress", status_bucket: "in_progress",
   purchase_price: 0, actual_cost: 0, quoted_cost: 0, technicians: [], updated_at: "2026-07-01T09:00:00",
-  age_days: 1, parts_pending: 0, parts_pending_value: 0, ...over,
+  age_days: 1, parts_pending: 0, parts_pending_value: 0,
+  idle_days: 0, last_activity_at: "2026-07-25T08:00:00", ...over,
 });
 
 /* Deliberately not in any column's sorted order, so "did it sort?" can't pass
@@ -31,19 +32,28 @@ const veh = (over) => ({
    The Camry is the over-quote slack case on purpose: $310 against a $300
    quote is past the estimate but inside the 10% band, so a card that counted
    "actual > quoted" rather than the band would report 2 instead of 1 and
-   disagree with the one red cell in the table. */
+   disagree with the one red cell in the table.
+
+   Idle is set so each of the five buckets holds exactly one car -- which makes
+   every bar in the activity chart a 1, so a chart that miscounted or that fed
+   itself the wrong list can't produce a plausible-looking result. Note idle is
+   deliberately unrelated to age: the F-150 is the oldest car on the lot at 22
+   days and was worked on today, the Civic is 3 days old and has been idle
+   nearly as long. A column that quietly read age_days would still pass a
+   same-order fixture, and fails this one. */
 let board = [
-  veh({ recon_id: 1, stock_number: "B204", vehicle: "2019 Ford F-150", vin: "1FTEW1E5XKF", status: "in_progress", technicians: ["Dana"], age_days: 22, quoted_cost: 900, actual_cost: 1450, parts_pending: 2, parts_pending_value: 340 }),
-  veh({ recon_id: 2, stock_number: "A118", vehicle: "2021 Honda Civic", vin: "2HGFC2F69MH", status: "estimate", technicians: [], age_days: 3, quoted_cost: 600, actual_cost: 0 }),
-  veh({ segment: "we_owe", we_owe_id: 5, stock_number: "", vehicle: "2017 Toyota Camry", customer_name: "R. Alvarez", status: "pending_approval", status_bucket: "in_progress", technicians: ["Chris", "Dana"], age_days: 41, quoted_cost: 300, actual_cost: 310, parts_pending: 1, parts_pending_value: 85 }),
-  veh({ recon_id: 3, stock_number: "C007", vehicle: "2015 Chevy Silverado", vin: "3GCUKREC0FG", status: "complete", status_bucket: "finished", technicians: ["Bo"], age_days: 9, quoted_cost: 1200, actual_cost: 1180 }),
-  veh({ segment: "we_owe", we_owe_id: 6, stock_number: "D451", vehicle: "2020 Subaru Outback", customer_name: "T. Nguyen", status: "fulfilled", status_bucket: "finished", technicians: [], age_days: 15, quoted_cost: 0, actual_cost: 0 }),
+  veh({ recon_id: 1, stock_number: "B204", vehicle: "2019 Ford F-150", vin: "1FTEW1E5XKF", status: "in_progress", technicians: ["Dana"], age_days: 22, quoted_cost: 900, actual_cost: 1450, parts_pending: 2, parts_pending_value: 340, idle_days: 0, last_activity_at: "2026-07-25T08:15:00" }),
+  veh({ recon_id: 2, stock_number: "A118", vehicle: "2021 Honda Civic", vin: "2HGFC2F69MH", status: "estimate", technicians: [], age_days: 3, quoted_cost: 600, actual_cost: 0, idle_days: 2, last_activity_at: "2026-07-23T11:00:00" }),
+  veh({ segment: "we_owe", we_owe_id: 5, stock_number: "", vehicle: "2017 Toyota Camry", customer_name: "R. Alvarez", status: "pending_approval", status_bucket: "in_progress", technicians: ["Chris", "Dana"], age_days: 41, quoted_cost: 300, actual_cost: 310, parts_pending: 1, parts_pending_value: 85, idle_days: 4, last_activity_at: "2026-07-21T09:30:00" }),
+  veh({ recon_id: 3, stock_number: "C007", vehicle: "2015 Chevy Silverado", vin: "3GCUKREC0FG", status: "complete", status_bucket: "finished", technicians: ["Bo"], age_days: 9, quoted_cost: 1200, actual_cost: 1180, idle_days: 9, last_activity_at: "2026-07-16T14:00:00" }),
+  veh({ segment: "we_owe", we_owe_id: 6, stock_number: "D451", vehicle: "2020 Subaru Outback", customer_name: "T. Nguyen", status: "fulfilled", status_bucket: "finished", technicians: [], age_days: 15, quoted_cost: 0, actual_cost: 0, idle_days: 21, last_activity_at: "2026-07-04T10:00:00" }),
 ];
 
 const { w, doc, fetchLog, settle, ok, finish, rejections } = await boot({
   expose: ["state", "renderVehiclesTable", "loadVehiclesView", "visibleVehicles", "sortVehicleRows",
            "vehicleKey", "loadVehicleViewPrefs", "renderVehicleStatusOptions", "VEHICLE_SORTS",
-           "VEHICLE_PREFS_KEY", "resetVehicleView", "boardStats", "isOverQuote", "BOARD_COLUMNS"],
+           "VEHICLE_PREFS_KEY", "resetVehicleView", "boardStats", "isOverQuote", "BOARD_COLUMNS",
+           "IDLE_BUCKETS", "idleBucket"],
   fetch: async (url) => {
     if (url.startsWith("/api/vehicles-board")) return url.includes("archived=true") ? [] : board;
     if (/^\/api\/(recon\/vehicles|we-owe)\/\d+$/.test(url)) return { id: 1, archived_at: "", stock_number: "B204", vehicle: "2019 Ford F-150" };
@@ -302,6 +312,157 @@ w.resetVehicleView();
 await settle();
 ok(!w.state.vehiclePartsOnly && !partsChip.classList.contains("active"), "Reset view left the parts toggle on");
 ok(dataRows().length === 5, `after reset the whole board should be back, got ${dataRows().length}`);
+
+/* ---------- Idle column ----------
+   Idle is "days since anything happened on this car's ticket", which is a
+   different number from Age and comes from a different place (the server's
+   orders.last_activity_at, not the vehicle row). The fixture's idle values are
+   deliberately in a different order from its ages, so a cell or comparator
+   reading age_days by mistake shows up here rather than looking right. */
+const rowByKey = (key) => dataRows().find((tr) => tr.dataset.key === key);
+const idleCell = (key) => rowByKey(key).querySelector("td.idle-col .idle-cell");
+
+ok(th("idle"), "the board has no sortable Idle column");
+ok(idleCell("recon:1").textContent.trim() === "today",
+   `a car worked on today reads "${idleCell("recon:1").textContent.trim()}", expected "today" rather than "0d"`);
+ok(idleCell("recon:3").textContent.trim() === "9d", `9 days idle reads "${idleCell("recon:3").textContent.trim()}"`);
+ok(/Last activity 2026-07-16/.test(idleCell("recon:3").title),
+   `the Idle tooltip should name the date work last happened, got "${idleCell("recon:3").title}"`);
+ok(/9 days ago/.test(idleCell("recon:3").title), `the Idle tooltip reads "${idleCell("recon:3").title}"`);
+ok(/today/.test(idleCell("recon:1").title), `a same-day tooltip reads "${idleCell("recon:1").title}"`);
+
+// Severity has to match the bucket boundaries, since the row color and the bar
+// a car lands in are two renderings of one rule.
+ok(idleCell("recon:1").classList.contains("age-ok"), "a car touched today is flagged as stale");
+ok(idleCell("recon:2").classList.contains("age-ok"), "2 days idle is flagged");
+ok(idleCell("we_owe:5").classList.contains("age-warn"), "4 days idle isn't flagged as a warning");
+ok(idleCell("recon:3").classList.contains("age-crit"), "9 days idle isn't flagged as critical");
+ok(idleCell("we_owe:6").classList.contains("age-crit"), "21 days idle isn't flagged as critical");
+
+click(w, th("idle"));
+ok(dataRows()[0].dataset.key === "we_owe:6",
+   `sorting by Idle descending should put the 21-day-idle car first, got ${dataRows().map((tr) => tr.dataset.key).join(",")}`);
+ok(dataRows().at(-1).dataset.key === "recon:1",
+   "sorting by Idle descending should put the car worked on today last -- Age would have ordered these differently");
+click(w, th("idle")); // ascending
+ok(dataRows()[0].dataset.key === "recon:1", "sorting by Idle ascending should lead with the freshest car");
+click(w, th("idle")); // clear
+
+/* ---------- the activity chart ----------
+   Five buckets, one car each, so every bar is a 1 and a chart fed the wrong
+   list (the whole board instead of the visible rows, or the idle-filtered rows
+   instead of the pool) reports something visibly different.
+
+   The bars are the board's only chart *and* a filter, which is the part worth
+   testing hard: a chart that shows "1 car idle 14+ days" and gives you no way
+   to find which car is decoration. */
+const chartEl = doc.querySelector("#vehicles-chart");
+const bars = () => [...chartEl.querySelectorAll("[data-idle-bucket]")];
+const barFor = (key) => bars().find((b) => b.dataset.idleBucket === key);
+const barCount = (key) => barFor(key).querySelector(".bar-value").textContent.trim();
+
+ok(chartEl && !chartEl.hidden, "the activity chart isn't rendered on a fresh board");
+ok(bars().length === 5, `expected one bar per idle bucket, got ${bars().length}`);
+ok(bars().map((b) => b.dataset.idleBucket).join(",") === w.IDLE_BUCKETS.map((b) => b.key).join(","),
+   "the chart's bars aren't in bucket order");
+ok(bars().every((b) => barCount(b.dataset.idleBucket) === "1"),
+   `every bucket holds exactly one car in this fixture, got ${bars().map((b) => barCount(b.dataset.idleBucket)).join(",")}`);
+ok(/5 vehicles in view/.test(chartEl.querySelector(".chart-note").textContent),
+   `chart note reads "${chartEl.querySelector(".chart-note").textContent}"`);
+// Tone follows the same thresholds as the rows: 3+ days warns, 7+ is critical.
+ok(!barFor("recent").querySelector(".bar-fill").classList.contains("warn"), "the 1–2 day bucket is coloured as a problem");
+ok(barFor("stale").querySelector(".bar-fill").classList.contains("warn"), "the 3–6 day bucket isn't flagged");
+ok(barFor("frozen").querySelector(".bar-fill").classList.contains("over"), "the 14+ day bucket isn't flagged critical");
+
+// clicking a bar filters the board to that bucket
+barFor("frozen").click();
+ok(dataRows().length === 1 && dataRows()[0].dataset.key === "we_owe:6",
+   `clicking the 14+ day bar should leave the one 21-day car, got ${dataRows().map((tr) => tr.dataset.key).join(",")}`);
+ok(barFor("frozen").getAttribute("aria-pressed") === "true", "the selected bar isn't marked pressed");
+ok(cards().scope === "Showing vehicles: idle 14+ days.", `scope line reads "${cards().scope}"`);
+ok(cards().count === "1", `the cards should follow the bucket filter, Vehicles reads "${cards().count}"`);
+// The chart counts over the board *minus* the idle filter, so selecting a
+// bucket must not collapse the chart down to the bar you just clicked --
+// there'd be nothing left to compare against and no way back.
+ok(bars().length === 5, `selecting a bucket collapsed the chart to ${bars().length} bar(s)`);
+ok(bars().every((b) => barCount(b.dataset.idleBucket) === "1"),
+   "selecting a bucket changed the other buckets' counts");
+ok(!doc.querySelector("#vehicles-reset-view").hidden, "Reset view stayed hidden with a bucket filter on");
+
+// clicking the same bar again clears it -- the only affordance a one-of-five
+// filter needs, and the only one the chart offers
+barFor("frozen").click();
+ok(dataRows().length === 5 && !w.state.vehicleIdleBucket, "clicking the selected bar again didn't clear the filter");
+
+/* keyboard: role="button" without Enter/Space is a lie to a screen reader.
+   The board also binds Enter (open the cursor row) and Space (select it) on
+   *document*, so a keystroke on a bar bubbles into both -- with a row under
+   the cursor, activating a filter would open a car at the same time. Park a
+   cursor first, or this passes whether the bar stops the event or not. It has
+   to be a row that survives the filter the bar applies (the Silverado is the
+   7–13 day bucket), otherwise the re-render removes it before the document
+   handler looks for it and the bug hides itself. */
+w.state.vehicleCursor = "recon:3";
+const fetchesBeforeBarKeys = fetchLog.length;
+press(w, "Enter", { target: barFor("cold") });
+ok(w.state.vehicleIdleBucket === "cold" && dataRows().length === 1,
+   `Enter on a bar didn't apply it (bucket is "${w.state.vehicleIdleBucket}")`);
+ok(fetchLog.length === fetchesBeforeBarKeys,
+   "Enter on a chart bar also opened the cursor row -- the bar isn't stopping the board's own key handler");
+press(w, " ", { target: barFor("cold") });
+ok(!w.state.vehicleIdleBucket, "Space on the selected bar didn't clear it");
+ok(w.state.vehicleSelection.size === 0, "Space on a chart bar also selected the cursor row");
+w.state.vehicleCursor = null;
+
+// composes with the segment chips, and the counts follow them
+chip("recon").click();
+ok(bars().length === 3, `Recon has cars in 3 buckets, chart drew ${bars().length} bars`);
+ok(bars().map((b) => b.dataset.idleBucket).join(",") === "today,recent,cold",
+   `empty buckets should be dropped, got ${bars().map((b) => b.dataset.idleBucket).join(",")}`);
+barFor("cold").click();
+ok(dataRows().length === 1 && dataRows()[0].dataset.key === "recon:3",
+   "Recon + the 7–13 day bucket should compose to the Silverado");
+ok(cards().scope === "Showing vehicles: recon · idle 7–13 days.", `scope line reads "${cards().scope}"`);
+// With a bucket selected the empty buckets come back (greyed) rather than
+// vanishing -- otherwise the chart reflows out from under the next click.
+ok(bars().length === 5, `with a bucket selected all five bars should stay, got ${bars().length}`);
+ok(barFor("frozen").classList.contains("bar-row-muted"), "an empty bucket isn't greyed out");
+
+// persisted and restored
+const savedIdle = JSON.parse(w.localStorage.getItem("dao-vehicle-view"));
+ok(savedIdle.idleBucket === "cold" && savedIdle.chartOpen === true,
+   `the bucket filter wasn't persisted: ${JSON.stringify(savedIdle)}`);
+w.state.vehicleIdleBucket = "";
+w.loadVehicleViewPrefs();
+ok(w.state.vehicleIdleBucket === "cold", "the bucket filter wasn't restored from preferences");
+
+// its own empty state, phrased as the good news it usually is
+w.state.vehicleIdleBucket = "frozen";
+w.renderVehiclesTable();
+const idleEmpty = body.querySelector("tr");
+ok(idleEmpty.textContent.includes("Nothing has been sitting 14+ days"),
+   `bucket empty state reads "${idleEmpty.textContent.trim().slice(0, 70)}"`);
+ok(Number(idleEmpty.querySelector("td").getAttribute("colspan")) === w.BOARD_COLUMNS,
+   "the idle empty row doesn't span the table");
+idleEmpty.querySelector('[data-empty-action="clear-idle"]').click();
+ok(!w.state.vehicleIdleBucket && dataRows().length === 3, "the empty state's Show all vehicles button didn't clear the bucket");
+
+// hiding the chart must also drop the filter only the chart can see or clear
+barFor("today").click();
+const chartToggle = doc.querySelector("#vehicles-chart-toggle");
+chartToggle.click();
+ok(chartEl.hidden, "the chart toggle didn't hide the chart");
+ok(chartToggle.getAttribute("aria-expanded") === "false", "the toggle didn't update aria-expanded");
+ok(/Show activity chart/.test(chartToggle.textContent), `toggle reads "${chartToggle.textContent.trim()}" while collapsed`);
+ok(!w.state.vehicleIdleBucket && dataRows().length === 3,
+   "hiding the chart left its filter applied with nothing on screen able to clear it");
+ok(JSON.parse(w.localStorage.getItem("dao-vehicle-view")).chartOpen === false, "the collapsed chart wasn't persisted");
+chartToggle.click();
+ok(!chartEl.hidden && bars().length === 3, "showing the chart again didn't re-render it");
+
+w.resetVehicleView();
+await settle();
+ok(!w.state.vehicleIdleBucket && dataRows().length === 5, "Reset view left a bucket filter on");
 
 /* ---------- row clicks: open, toggle, shift-range ---------- */
 const rowFor = (key) => dataRows().find((tr) => tr.dataset.key === key);

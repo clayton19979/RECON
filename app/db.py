@@ -95,7 +95,8 @@ CREATE TABLE IF NOT EXISTS orders (
   status TEXT NOT NULL DEFAULT 'estimate',
   voided INTEGER NOT NULL DEFAULT 0,
   ai_summary TEXT NOT NULL DEFAULT '',
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  last_activity_at TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS estimates (
@@ -360,6 +361,28 @@ def _migrate(db: sqlite3.Connection) -> None:
     order_columns = {row[1] for row in db.execute("PRAGMA table_info(orders)")}
     if "voided" not in order_columns:
         db.execute("ALTER TABLE orders ADD COLUMN voided INTEGER NOT NULL DEFAULT 0")
+
+    # "How long has this car been sitting doing nothing" needs a timestamp that
+    # moves when *work* happens. The board previously only had age (time since
+    # acquisition, which never stops growing) and the vehicle row's own
+    # updated_at, which only moves when someone patches the vehicle record
+    # itself -- so a car a tech ordered parts for this morning still reported
+    # weeks of nothing. orders.last_activity_at is bumped by every mutation
+    # that touches a ticket (see workflow.touch_order), and a vehicle's idle
+    # time is the newest one across its tickets.
+    if "last_activity_at" not in order_columns:
+        db.execute("ALTER TABLE orders ADD COLUMN last_activity_at TEXT NOT NULL DEFAULT ''")
+    # Backfill, and keep backfilling: any row still blank (pre-existing tickets
+    # on first upgrade, and rows restored from an older backup afterwards) gets
+    # the newest thing we can honestly point at -- its last logged activity
+    # event, else its own creation. Scoped to '' so it never overwrites a live
+    # value, which makes it a no-op on every subsequent start.
+    db.execute(
+        """UPDATE orders SET last_activity_at = coalesce(
+               (SELECT max(a.created_at) FROM activity_events a WHERE a.order_id=orders.id),
+               created_at)
+           WHERE last_activity_at = ''"""
+    )
 
     estimate_item_columns = {row[1] for row in db.execute("PRAGMA table_info(estimate_items)")}
     if "sort_order" not in estimate_item_columns:

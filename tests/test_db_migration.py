@@ -125,3 +125,60 @@ def test_task_assigned_to_migrates_plain_string_to_json_list_and_is_idempotent(t
     with connect(db_path) as db:
         rows_again = {row["id"]: dict(row) for row in db.execute("SELECT * FROM tasks")}
     assert rows_again == rows
+
+
+def test_last_activity_backfills_from_the_activity_log_and_is_idempotent(tmp_path):
+    """Tickets that existed before the column did -- and rows restored from an
+    older backup afterwards -- need a last-activity timestamp, or the board
+    would report every one of them as never touched. The honest answer is the
+    newest thing already on record: its last logged activity event, else its
+    own creation."""
+    db_path = tmp_path / "legacy-activity.db"
+    init_db(db_path)
+
+    with connect(db_path) as db:
+        customer_id = db.execute(
+            "INSERT INTO customers(name,phone,email,is_shop_owned,created_at) VALUES(?,?,?,?,?)",
+            ("Retail Customer", "", "", 0, "2026-01-01T00:00:00"),
+        ).lastrowid
+        vehicle_id = db.execute(
+            "INSERT INTO vehicles(customer_id,year,make,model,created_at) VALUES(?,?,?,?,?)",
+            (customer_id, 2020, "Kia", "Soul", "2026-01-01T00:00:00"),
+        ).lastrowid
+
+        def legacy_order(number: str, created_at: str) -> int:
+            order_id = db.execute(
+                """INSERT INTO orders(number,customer_id,vehicle_id,concern,segment,status,created_at,last_activity_at)
+                   VALUES(?,?,?,?,?,?,?,'')""",
+                (number, customer_id, vehicle_id, "Legacy row", "retail", "estimate", created_at),
+            ).lastrowid
+            assert order_id is not None
+            return order_id
+
+        worked = legacy_order("RO-ACT-0001", "2026-01-05T08:00:00")
+        untouched = legacy_order("RO-ACT-0002", "2026-02-09T08:00:00")
+        for when in ("2026-01-06T10:00:00", "2026-03-11T16:30:00", "2026-02-02T09:00:00"):
+            db.execute(
+                "INSERT INTO activity_events(order_id,action,actor,created_at) VALUES(?,?,?,?)",
+                (worked, "status_changed", "Clay", when),
+            )
+        db.commit()
+
+    init_db(db_path)  # every app start runs the migration
+
+    with connect(db_path) as db:
+        rows = {r["number"]: r["last_activity_at"] for r in db.execute("SELECT number, last_activity_at FROM orders")}
+    # The newest event, not the first or the last one inserted.
+    assert rows["RO-ACT-0001"] == "2026-03-11T16:30:00"
+    assert rows["RO-ACT-0002"] == "2026-02-09T08:00:00", "a ticket with no logged activity falls back to its creation"
+
+    # A later real mutation must win, and the backfill must not stomp it on the
+    # next start -- it's scoped to rows that are still blank.
+    with connect(db_path) as db:
+        db.execute("UPDATE orders SET last_activity_at=? WHERE number=?", ("2026-06-01T12:00:00", "RO-ACT-0001"))
+        db.commit()
+    init_db(db_path)
+    with connect(db_path) as db:
+        again = {r["number"]: r["last_activity_at"] for r in db.execute("SELECT number, last_activity_at FROM orders")}
+    assert again["RO-ACT-0001"] == "2026-06-01T12:00:00", "the backfill overwrote a live timestamp"
+    assert again["RO-ACT-0002"] == "2026-02-09T08:00:00"

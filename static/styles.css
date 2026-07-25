@@ -311,6 +311,12 @@ th.sortable.sorted:hover .sort-arrow::after { content: ""; }
 td.age-ok { color: var(--ink-soft); }
 td.age-warn { color: var(--warn); font-weight: 700; }
 td.age-crit { color: var(--crit); font-weight: 700; }
+/* Idle carries its severity on an inner span (it needs a tooltip of its own),
+   so the same three tones have to reach one level deeper. */
+.idle-cell.age-ok { color: var(--ink-soft); }
+.idle-cell.age-warn { color: var(--warn); font-weight: 700; }
+.idle-cell.age-crit { color: var(--crit); font-weight: 700; }
+.idle-cell { cursor: help; }
 td.over-quote { color: var(--crit); font-weight: 700; }
 .muted-dash { color: var(--ink-faint); }
 
@@ -319,6 +325,13 @@ td.over-quote { color: var(--crit); font-weight: 700; }
    dozens of rows, so it gets a scroll container with a pinned header rather
    than making the whole page scroll away from the column labels. */
 .table-scroll { max-height: calc(100vh - 340px); min-height: 220px; overflow-y: auto; }
+/* The activity chart sits between the cards and the table, so with it open the
+   table's own scroller has to give up that height or the page grows a second
+   scrollbar and the sticky header stops being reachable. min-height keeps it
+   from collapsing to a couple of rows on a short laptop screen. */
+#view-vehicles:has(#vehicles-chart:not([hidden])) .table-scroll {
+  max-height: calc(100vh - 530px); min-height: 200px;
+}
 table.sticky-head thead th { position: sticky; top: 0; z-index: 2; }
 .board-table th.col-select, .board-table td.col-select { width: 34px; padding-right: 0; }
 .board-table .veh-name { font-weight: 600; }
@@ -1065,6 +1078,7 @@ tbody tr.skeleton-row:hover { background: none; }
   transition: width .18s ease-out;
 }
 .bar-fill.over { background: var(--crit); }
+.bar-fill.warn { background: var(--warn); }
 /* Where the estimate was. A hairline on the bar answers "how far past quote"
    without a second bar or a second column. */
 .bar-marker {
@@ -1076,6 +1090,35 @@ tbody tr.skeleton-row:hover { background: none; }
   font-size: 12.5px; font-variant-numeric: tabular-nums; text-align: right; color: var(--ink);
 }
 .chart-panel.chart-empty { padding: 18px; text-align: center; font-size: 12.5px; color: var(--ink-faint); }
+
+/* ---------- the board's clickable chart ----------
+   Same bar chart, but every row is a filter button. The affordance has to be
+   obvious enough that people try clicking and clear enough afterwards that
+   they know a filter is on -- hence a hover lift plus a hard outline and a
+   full-strength label on the selected bucket, rather than relying on the
+   scope line under the cards to be read. */
+.board-chart .chart-panel { margin-bottom: 16px; }
+.board-chart .bar-row {
+  padding: 3px 8px; margin: 0 -8px; border-radius: 6px;
+  cursor: pointer; border: 1px solid transparent;
+}
+.board-chart .bar-row:hover { background: var(--accent-tint); }
+.board-chart .bar-row:focus-visible { outline: 2px solid var(--accent-strong); outline-offset: 1px; }
+.board-chart .bar-row[aria-pressed="true"] {
+  background: var(--accent-tint); border-color: var(--accent);
+}
+.board-chart .bar-row[aria-pressed="true"] .bar-label { color: var(--ink); font-weight: 700; }
+.board-chart .bar-fill.selected { box-shadow: inset 0 0 0 1px var(--ink); }
+/* An empty bucket is kept on screen while a filter is on -- dropping it would
+   reflow the chart out from under the click that emptied it -- but it isn't
+   worth drawing attention to. */
+.board-chart .bar-row-muted { opacity: .5; }
+.board-chart .bar-row-muted:hover { background: none; }
+
+/* A toolbar button that's a view preference rather than an action: present,
+   but not competing with the filter chips beside it. */
+.btn-quiet { color: var(--ink-faint); border-color: transparent; background: none; }
+.btn-quiet:hover { color: var(--accent); border-color: var(--line); background: var(--surface); }
 .chart-legend { display: flex; gap: 16px; margin-top: 12px; font-size: 11.5px; color: var(--ink-faint); }
 .legend-item { display: inline-flex; align-items: center; gap: 6px; }
 .legend-swatch { width: 12px; height: 8px; border-radius: 2px; background: var(--accent); }
@@ -1158,6 +1201,13 @@ input:focus-visible, select:focus-visible, textarea:focus-visible { outline: non
      of it silently moved position 8 onto Quoted's neighbour, and a
      position-based rule breaks again on the next column anyone adds. */
   .board-table th.quoted-col, .board-table td.quoted-col { display: none; }
+}
+@media (max-width: 900px) {
+  /* Age goes next, and Idle stays: both are day counts, but "how long since
+     anyone touched it" is the one you act on, and Age is still on the
+     vehicle's own page. Same class-based targeting as Quoted above, for the
+     same reason. */
+  .board-table th.age-col, .board-table td.age-col { display: none; }
 }
 @media (max-width: 1100px) {
   /* The toolbar's two halves stop fitting on one line well before the chart

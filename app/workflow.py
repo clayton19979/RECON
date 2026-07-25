@@ -111,11 +111,29 @@ def dollars(value: int) -> float:
     return float(Decimal(value) / 100)
 
 
+def touch_order(db: sqlite3.Connection, order_id: int, now_fn: Callable[[], str]) -> None:
+    """Mark a ticket as having just been worked on.
+
+    The board's Idle column answers "when did anything last happen to this
+    car", which is a different question from age (time since acquisition,
+    which grows whether anyone touches the car or not) and from the vehicle
+    row's updated_at (which only moves when the vehicle record itself is
+    patched -- correcting a VIN, not ordering a part).
+
+    Every mutating route funnels through here. Almost all of them get it for
+    free because record_activity() calls it, which is deliberate: an action
+    worth writing to the activity log is by definition activity. The few
+    writes that don't log an event -- notably saving the estimate grid, which
+    autosaves and would bury the log in noise -- call this directly."""
+    db.execute("UPDATE orders SET last_activity_at=? WHERE id=?", (now_fn(), order_id))
+
+
 def record_activity(db: sqlite3.Connection, order_id: int, action: str, actor: str, details: dict, now_fn: Callable[[], str]) -> None:
     db.execute(
         "INSERT INTO activity_events(order_id,action,actor,details,created_at) VALUES(?,?,?,?,?)",
         (order_id, action, actor.strip() or "unknown", json.dumps(details, sort_keys=True), now_fn()),
     )
+    touch_order(db, order_id, now_fn)
 
 
 def initialize_order_workflow(db: sqlite3.Connection, order_id: int, now_fn: Callable[[], str], actor: str = "ui") -> None:

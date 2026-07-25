@@ -282,7 +282,7 @@ function skeletonCards(count = 3) {
 // "no vehicles" panel to part of the table). Both were separate literals and
 // both were wrong the moment the Parts column went in, so they share one
 // constant now. tests/test_static_assets.py holds it to the real <th> count.
-const BOARD_COLUMNS = 10;
+const BOARD_COLUMNS = 11;
 
 // Which containers to fill with a placeholder when a view is opened, and how
 // many columns each table has (so the skeleton lines up with its header).
@@ -319,6 +319,8 @@ const state = {
   vehicleSort: { key: "", dir: "desc" }, // key "" == the server's own order (newest first)
   vehicleStatus: "",                      // "" == any status
   vehiclePartsOnly: false,                // "Waiting on parts" toggle
+  vehicleIdleBucket: "",                  // "" == any; else an IDLE_BUCKETS key, set by clicking a chart bar
+  vehicleChartOpen: true,                 // the idle-bucket chart above the table
   vehicleCursor: null,                    // key of the keyboard-focused row
   vehicleAnchor: null,                    // key of the last row clicked, for Shift+click ranges
   staff: [],
@@ -538,6 +540,10 @@ function loadVehicleViewPrefs() {
     state.vehicleSort = { key: saved.sort.key, dir: saved.sort.dir === "asc" ? "asc" : "desc" };
   }
   if (typeof saved.partsOnly === "boolean") state.vehiclePartsOnly = saved.partsOnly;
+  if (typeof saved.idleBucket === "string" && (saved.idleBucket === "" || IDLE_BY_KEY[saved.idleBucket])) {
+    state.vehicleIdleBucket = saved.idleBucket;
+  }
+  if (typeof saved.chartOpen === "boolean") state.vehicleChartOpen = saved.chartOpen;
   const chips = $$("#view-vehicles .filters .chip[data-filter]");
   chips.forEach((c) => c.classList.toggle("active", (c.dataset.filter || "") === state.filter));
   $("#vehicles-status-filter").value = state.vehicleStatus;
@@ -558,10 +564,15 @@ function saveVehicleViewPrefs() {
   try {
     localStorage.setItem(VEHICLE_PREFS_KEY, JSON.stringify({
       filter: state.filter, status: state.vehicleStatus, sort: state.vehicleSort,
-      partsOnly: state.vehiclePartsOnly,
+      partsOnly: state.vehiclePartsOnly, idleBucket: state.vehicleIdleBucket,
+      chartOpen: state.vehicleChartOpen,
     }));
   } catch {}
-  const dirty = !!(state.filter || state.vehicleStatus || state.vehicleSort.key || state.search || state.vehiclePartsOnly);
+  // chartOpen is deliberately not part of "dirty": showing or hiding the chart
+  // doesn't hide any rows, so offering to reset the view over it would be
+  // noise. Every other pref here changes which cars you can see.
+  const dirty = !!(state.filter || state.vehicleStatus || state.vehicleSort.key || state.search
+    || state.vehiclePartsOnly || state.vehicleIdleBucket);
   $("#vehicles-reset-view").hidden = !dirty;
 }
 
@@ -569,6 +580,7 @@ function resetVehicleView() {
   state.filter = "";
   state.vehicleStatus = "";
   state.vehiclePartsOnly = false;
+  state.vehicleIdleBucket = "";
   state.vehicleSort = { key: "", dir: "desc" };
   state.search = "";
   $("#global-search").value = "";
@@ -668,6 +680,10 @@ function boardScopeLabel() {
   else if (state.filter === "we_owe") parts.push("we-owe");
   if (state.vehicleStatus) parts.push(STATUS_LABEL[state.vehicleStatus] || state.vehicleStatus);
   if (state.vehiclePartsOnly) parts.push("waiting on parts");
+  if (state.vehicleIdleBucket) {
+    const b = IDLE_BY_KEY[state.vehicleIdleBucket];
+    if (b) parts.push(b.key === "today" ? "active today" : `idle ${b.short}`);
+  }
   if (state.search) parts.push(`matching “${state.search}”`);
   if (!parts.length) return "Every vehicle on the board.";
   return `Showing vehicles: ${parts.join(" · ")}.`;
@@ -680,6 +696,100 @@ function ageClass(days) {
   if (days >= 30) return "age-crit";
   if (days >= 14) return "age-warn";
   return "age-ok";
+}
+
+/* ---------- idle time ----------
+
+   Age says how long the shop has had the car. Idle says when anyone last did
+   anything to it, which is the question that actually costs money: a car 40
+   days old that a tech touched this morning is fine, and a car 6 days old
+   that nobody has opened since day one is not. The server derives it from
+   orders.last_activity_at (bumped by every mutating route) rather than from
+   the vehicle row's updated_at, which only moves when the vehicle record
+   itself is patched.
+
+   The thresholds are tighter than Age's on purpose. Two weeks of no work on a
+   recon car is a crisis, not a warning, so "stale" starts at 3 days (past a
+   weekend) and goes critical at a week. */
+const IDLE_BUCKETS = [
+  { key: "today",  label: "Today",       short: "today",     min: 0,  max: 0,  tone: "" },
+  { key: "recent", label: "1–2 days",    short: "1–2 days",  min: 1,  max: 2,  tone: "" },
+  { key: "stale",  label: "3–6 days",    short: "3–6 days",  min: 3,  max: 6,  tone: "warn" },
+  { key: "cold",   label: "7–13 days",   short: "7–13 days", min: 7,  max: 13, tone: "over" },
+  { key: "frozen", label: "14+ days",    short: "14+ days",  min: 14, max: Infinity, tone: "over" },
+];
+
+const IDLE_BY_KEY = Object.fromEntries(IDLE_BUCKETS.map((b) => [b.key, b]));
+
+function idleBucket(days) {
+  const n = Math.max(0, days || 0);
+  return IDLE_BUCKETS.find((b) => n >= b.min && n <= b.max) || IDLE_BUCKETS[0];
+}
+
+// Matches the bucket boundaries above, so a row's color and the bar it lands
+// in can never disagree -- one function, two callers.
+function idleClass(days) {
+  const tone = idleBucket(days).tone;
+  return tone === "over" ? "age-crit" : tone === "warn" ? "age-warn" : "age-ok";
+}
+
+// "0d" reads like a broken cell; the day something happened is the one case
+// worth spelling out. Everything else is the same compact Nd as Age.
+function idleCellHtml(v) {
+  const days = v.idle_days || 0;
+  const when = v.last_activity_at ? String(v.last_activity_at).slice(0, 10) : "";
+  const title = when
+    ? `Last activity ${when} — ${days === 0 ? "today" : `${days} day${days === 1 ? "" : "s"} ago`}`
+    : "No activity recorded";
+  return `<span class="idle-cell ${idleClass(days)}" title="${esc(title)}">${days === 0 ? "today" : `${days}d`}</span>`;
+}
+
+/* The board's one chart. Cost-by-vehicle already exists on Reports and would
+   just be a worse copy of it here; what the board can show that Reports
+   can't is the shape of the whole list at a glance -- how much of it is
+   moving and how much is sitting.
+
+   Every bar is a filter. Seeing "6 cars idle 14+ days" and then having to
+   hunt for which six down a 60-row table is the kind of half-feature that
+   makes a dashboard decorative, so clicking a bar filters the board to it and
+   clicking it again clears it. Empty buckets are dropped rather than drawn as
+   zero-width bars nobody can click. */
+function renderIdleChart(rows) {
+  const target = $("#vehicles-chart");
+  if (!target) return;
+  target.hidden = !state.vehicleChartOpen;
+  const toggle = $("#vehicles-chart-toggle");
+  if (toggle) {
+    toggle.textContent = state.vehicleChartOpen ? "Hide activity chart" : "Show activity chart";
+    toggle.setAttribute("aria-expanded", state.vehicleChartOpen ? "true" : "false");
+  }
+  if (!state.vehicleChartOpen) return;
+
+  // Counted over the board minus the idle filter itself, so the bars stay put
+  // when you click one -- a chart that collapses to the single bar you just
+  // selected gives you no way back and nothing to compare against.
+  const pool = visibleVehicles({ ignoreIdle: true });
+  const items = IDLE_BUCKETS.map((b) => {
+    const count = pool.filter((v) => idleBucket(v.idle_days).key === b.key).length;
+    const selected = state.vehicleIdleBucket === b.key;
+    return {
+      label: b.label,
+      value: count,
+      display: String(count),
+      tone: [b.tone, selected ? "selected" : ""].filter(Boolean).join(" "),
+      attrs: `data-idle-bucket="${b.key}" role="button" tabindex="0" aria-pressed="${selected}"` +
+             ` title="${esc(`${count} vehicle${count === 1 ? "" : "s"} with no activity ${b.short === "today" ? "logged today" : `for ${b.short}`}${count ? " — click to filter" : ""}`)}"`,
+      muted: count === 0,
+    };
+  }).filter((i) => i.value > 0 || state.vehicleIdleBucket);
+
+  target.innerHTML = barChart({
+    title: "Time since anything happened",
+    note: pool.length ? `${pool.length} vehicle${pool.length === 1 ? "" : "s"} in view` : "",
+    items,
+    rowAttrs: (i) => i.attrs,
+    rowClass: (i) => (i.muted ? "bar-row-muted" : ""),
+  }) || `<div class="panel chart-panel chart-empty">No vehicles in view to chart.</div>`;
 }
 
 // Recon rows always carry the linked repair order's status (one of the 4
@@ -713,6 +823,21 @@ function vehiclesEmptyState() {
       title: "Nothing is waiting on parts",
       hint: "No vehicle in this view has a part that's been ordered from a vendor but hasn't arrived yet.",
       actions: `<button type="button" class="btn btn-ghost btn-sm" data-empty-action="clear-parts">Show all vehicles</button>`,
+    };
+  }
+  // Same reasoning as the parts toggle: the bucket is a filter the advisor
+  // clicked, and an empty one is usually the answer they wanted ("nothing has
+  // gone a week untouched"), not an empty lot.
+  if (state.vehicleIdleBucket) {
+    const b = IDLE_BY_KEY[state.vehicleIdleBucket];
+    const cold = b && b.min >= 3;
+    return {
+      icon: cold ? "check" : "search",
+      title: cold ? `Nothing has been sitting ${b.short}` : "No vehicles in that bucket",
+      hint: cold
+        ? "Every vehicle in this view has been worked on more recently than that."
+        : `No vehicle in this view was last touched ${b ? b.short : "then"}.`,
+      actions: `<button type="button" class="btn btn-ghost btn-sm" data-empty-action="clear-idle">Show all vehicles</button>`,
     };
   }
   if (state.filter === "history") {
@@ -763,6 +888,7 @@ const VEHICLE_SORTS = {
   tech: { label: "Technician", type: "text", value: (v) => v.technicians.join(", ") },
   parts: { label: "Parts", type: "number", value: (v) => v.parts_pending || 0 },
   age: { label: "Age", type: "number", value: (v) => v.age_days },
+  idle: { label: "Idle", type: "number", value: (v) => v.idle_days || 0 },
   quoted: { label: "Quoted", type: "number", value: (v) => v.quoted_cost },
   cost: { label: "Cost", type: "number", value: (v) => v.actual_cost },
 };
@@ -782,11 +908,17 @@ function sortVehicleRows(rows, { key, dir }) {
   });
 }
 
-function visibleVehicles() {
+// ignoreIdle skips the idle-bucket filter only: it's what the chart counts
+// over, so selecting a bucket narrows the table without collapsing the chart
+// that selected it. Every other caller gets the fully filtered list.
+function visibleVehicles({ ignoreIdle = false } = {}) {
   let rows = state.vehicles;
   if (state.filter && state.filter !== "history") rows = rows.filter((v) => v.segment === state.filter);
   if (state.vehicleStatus) rows = rows.filter((v) => v.status === state.vehicleStatus);
   if (state.vehiclePartsOnly) rows = rows.filter((v) => (v.parts_pending || 0) > 0);
+  if (state.vehicleIdleBucket && !ignoreIdle) {
+    rows = rows.filter((v) => idleBucket(v.idle_days).key === state.vehicleIdleBucket);
+  }
   if (state.search) {
     const q = state.search.toLowerCase();
     rows = rows.filter((v) =>
@@ -863,7 +995,8 @@ function vehicleRowHtml(v) {
       <td><span class="pill ${vehicleStatusPillClass(v)}">${esc(STATUS_LABEL[v.status] || v.status)}</span></td>
       <td>${v.technicians.length ? `<span class="tech"><span class="tech-dot"></span>${esc(v.technicians.join(", "))}</span>` : `<span class="muted-dash">—</span>`}</td>
       <td class="col-parts">${partsCellHtml(v)}</td>
-      <td class="num-col ${ageClass(v.age_days)}">${v.age_days}d</td>
+      <td class="num-col age-col ${ageClass(v.age_days)}">${v.age_days}d</td>
+      <td class="num-col idle-col">${idleCellHtml(v)}</td>
       <td class="num-col quoted-col">${v.quoted_cost ? money(v.quoted_cost) : `<span class="muted-dash">—</span>`}</td>
       <td class="num-col ${over}"${over ? ` title="Over the estimate by ${money(v.actual_cost - v.quoted_cost)}"` : ""}>${money(v.actual_cost)}</td>`;
 }
@@ -874,8 +1007,8 @@ function vehicleRowHtml(v) {
 function vehicleRowSignature(v) {
   return [
     v.stock_number, v.vehicle, v.vin, v.customer_name, v.segment, v.status, v.status_bucket,
-    v.technicians.join("|"), v.age_days, v.quoted_cost, v.actual_cost,
-    v.parts_pending, v.parts_pending_value,
+    v.technicians.join("|"), v.age_days, v.idle_days, v.last_activity_at,
+    v.quoted_cost, v.actual_cost, v.parts_pending, v.parts_pending_value,
     state.vehicleSelection.has(vehicleKey(v)) ? 1 : 0,
   ].join("");
 }
@@ -899,6 +1032,7 @@ function renderVehiclesTable() {
 
   $("#vehicles-count").textContent = `${rows.length} vehicle${rows.length === 1 ? "" : "s"}`;
   renderStats(rows);
+  renderIdleChart(rows);
   renderVehicleSortHeaders();
   saveVehicleViewPrefs();
 
@@ -1054,6 +1188,51 @@ function wireVehiclesView() {
     renderVehiclesTable();
   });
   $("#vehicles-reset-view").addEventListener("click", () => resetVehicleView());
+
+  // The chart's bars are filters. Delegated from the container because the
+  // whole chart is re-rendered on every filter change, so per-bar listeners
+  // would be re-bound (or lost) constantly. Clicking the selected bucket
+  // clears it, which is the only affordance a one-of-five filter needs.
+  const chart = $("#vehicles-chart");
+  if (chart) {
+    const pickBucket = (bar) => {
+      const key = bar.dataset.idleBucket;
+      state.vehicleIdleBucket = state.vehicleIdleBucket === key ? "" : key;
+      // The cursor is deliberately left alone: renderVehiclesTable already
+      // drops it when the filter hides the row it was on, so a cursor that
+      // survives into the new view should keep its place rather than sending
+      // you back to the top of the list.
+      renderVehiclesTable();
+    };
+    chart.addEventListener("click", (e) => {
+      const bar = e.target.closest("[data-idle-bucket]");
+      if (bar) pickBucket(bar);
+    });
+    // role="button" without keyboard activation is a lie to a screen reader,
+    // and the rest of this board is fully keyboard-drivable.
+    chart.addEventListener("keydown", (e) => {
+      if (e.key !== "Enter" && e.key !== " ") return;
+      const bar = e.target.closest("[data-idle-bucket]");
+      if (!bar) return;
+      e.preventDefault();
+      // The board's document-level keydown handler owns Enter (open the cursor
+      // row) and Space (select it). Both would also fire on the way up from a
+      // bar, so activating a filter would open a car at the same time.
+      e.stopPropagation();
+      pickBucket(bar);
+    });
+  }
+  const chartToggle = $("#vehicles-chart-toggle");
+  if (chartToggle) {
+    chartToggle.addEventListener("click", () => {
+      state.vehicleChartOpen = !state.vehicleChartOpen;
+      // Hiding the chart must not silently leave a filter on that only the
+      // chart could show or clear -- that's how a board ends up "missing" cars
+      // with no visible reason why.
+      if (!state.vehicleChartOpen) state.vehicleIdleBucket = "";
+      renderVehiclesTable();
+    });
+  }
   $("#global-search").addEventListener("input", (e) => {
     state.search = e.target.value.trim();
     if (!$("#view-vehicles").classList.contains("active")) showView("vehicles");
@@ -1079,6 +1258,10 @@ function wireVehiclesView() {
       if (trigger.dataset.emptyAction === "clear-parts") {
         state.vehiclePartsOnly = false;
         syncPartsFilterChip();
+        renderVehiclesTable();
+      }
+      if (trigger.dataset.emptyAction === "clear-idle") {
+        state.vehicleIdleBucket = "";
         renderVehiclesTable();
       }
       return;
@@ -3113,12 +3296,15 @@ function chartNothingToPlot(hasRows, what) {
   return `<div class="panel chart-panel chart-empty">${esc(`No ${what} to chart in this range yet.`)}</div>`;
 }
 
-function barChart({ title, note, legend = "", items }) {
+// rowAttrs/rowClass let a caller make the bars interactive (the board's idle
+// chart turns each one into a filter button) without every other chart having
+// to know about it -- both default to nothing, so Reports is unchanged.
+function barChart({ title, note, legend = "", items, rowAttrs = null, rowClass = null }) {
   if (!items.length) return "";
   const max = Math.max(...items.map((i) => Math.max(i.value || 0, i.marker || 0)));
   const pct = (n) => (max > 0 ? Math.min((n / max) * 100, 100) : 0);
   const bars = items.map((i) => `
-    <li class="bar-row">
+    <li class="bar-row ${rowClass ? rowClass(i) : ""}" ${rowAttrs ? rowAttrs(i) : ""}>
       <span class="bar-label" title="${esc(i.label)}">${esc(i.label)}</span>
       <span class="bar-track">
         <span class="bar-fill${i.tone ? ` ${i.tone}` : ""}" style="width:${pct(i.value).toFixed(2)}%"></span>

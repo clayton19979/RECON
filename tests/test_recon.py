@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from app.db import connect
 from app.recon import age_days
 from tests.helpers import make_recon_order, make_recon_vehicle, make_we_owe, save_estimate
 
@@ -452,3 +453,157 @@ def test_we_owe_board_row_carries_parts_pending(client):
     row = next(r for r in board if r["we_owe_id"] == item["id"])
     assert row["parts_pending"] == 1
     assert row["parts_pending_value"] == 85
+
+
+# ---------------------------------------------------------------------------
+# Idle time: how long since anything actually happened on a car.
+#
+# This is the number a manager reads the board for, and it is not age (which
+# grows whether anyone touches the car or not) and not the vehicle row's
+# updated_at (which only moves when the vehicle *record* is edited). It comes
+# from orders.last_activity_at, bumped by every mutating route.
+# ---------------------------------------------------------------------------
+
+
+def board_row(client, recon_id):
+    return next(r for r in client.get("/api/vehicles-board").json() if r["recon_id"] == recon_id)
+
+
+def backdate_activity(db_path, order_id: int, when: str) -> None:
+    """Push a ticket's last activity back in time. There's no API for "pretend
+    nobody has touched this for a month" and freezing the clock would only
+    prove the arithmetic, not that the column is wired to the right source."""
+    with connect(db_path) as db:
+        db.execute("UPDATE orders SET last_activity_at=? WHERE id=?", (when, order_id))
+        db.commit()
+
+
+def test_board_row_reports_idle_time_from_ticket_activity(client, db_path):
+    """A car with no ticket falls back to its own timestamp; starting a ticket
+    and then working on it is what moves the clock."""
+    vehicle = make_recon_vehicle(client, stock_number="R-IDLE-1")
+    row = board_row(client, vehicle["id"])
+    assert row["last_activity_at"], "a vehicle with no ticket still needs a last-activity timestamp"
+    assert row["idle_days"] == 0, "a vehicle created just now is not idle"
+
+    order = make_recon_order(client, vehicle["id"])
+    # Creating the ticket logs order_created, which is itself activity.
+    assert board_row(client, vehicle["id"])["idle_days"] == 0
+
+    # Backdate the ticket's activity to simulate a car nobody has touched.
+    backdate_activity(db_path, order["id"], "2026-01-01T09:00:00")
+    stale = board_row(client, vehicle["id"])
+    assert stale["last_activity_at"] == "2026-01-01T09:00:00"
+    assert stale["idle_days"] > 100, f"a ticket last touched in January should read as long idle, got {stale['idle_days']}"
+
+    # ...and any real work on the ticket resets it. A status change is the
+    # cheapest mutation that goes through record_activity.
+    assert client.patch(
+        f"/api/orders/{order['id']}/status", json={"status": "in_progress", "actor": "tester"}
+    ).status_code == 200
+    assert board_row(client, vehicle["id"])["idle_days"] == 0, "working the ticket didn't reset the idle clock"
+
+
+def test_a_car_with_no_ticket_is_idle_since_it_landed_on_the_lot(client, db_path):
+    """The worst case, and the one that used to report as freshly worked on: a
+    car that's been sitting for weeks with no repair order ever written. Its
+    only timestamps are its own, and updated_at moves on any record edit -- so
+    reading that made every never-started car look touched today, hiding
+    exactly the cars this column exists to surface."""
+    vehicle = make_recon_vehicle(client, stock_number="R-IDLE-6")
+    with connect(db_path) as db:
+        db.execute(
+            "UPDATE recon_vehicles SET created_at=? WHERE id=?",
+            ("2026-06-01T09:00:00", vehicle["id"]),
+        )
+        db.commit()
+
+    row = board_row(client, vehicle["id"])
+    assert row["last_activity_at"] == "2026-06-01T09:00:00", (
+        "a car with no ticket should be idle since it landed on the lot"
+    )
+    assert row["idle_days"] == row["age_days"], "with no ticket, idle time is the car's age"
+
+    # ...and tidying up the record must not make it look worked on.
+    assert client.patch(f"/api/recon/vehicles/{vehicle['id']}", json={"mileage": 71000}).status_code == 200
+    assert board_row(client, vehicle["id"])["last_activity_at"] == "2026-06-01T09:00:00"
+
+
+def test_patching_the_vehicle_record_does_not_reset_idle(client, db_path):
+    """Fixing a VIN is a data correction, not work on the car. If it reset the
+    clock, tidying up records would hide exactly the cars this column exists
+    to surface."""
+    vehicle = make_recon_vehicle(client, stock_number="R-IDLE-2", vin="OLDVIN")
+    order = make_recon_order(client, vehicle["id"])
+    backdate_activity(db_path, order["id"], "2026-02-01T09:00:00")
+    before = board_row(client, vehicle["id"])["idle_days"]
+
+    assert client.patch(f"/api/recon/vehicles/{vehicle['id']}", json={"vin": "1HGCM82633A004352"}).status_code == 200
+
+    after = board_row(client, vehicle["id"])
+    assert after["idle_days"] == before, "patching the vehicle record reset the idle clock"
+    assert after["last_activity_at"] == "2026-02-01T09:00:00"
+
+
+def test_saving_the_estimate_counts_as_activity(client, db_path):
+    """Writing the parts/labor grid is the most common thing anyone does to a
+    ticket and the one mutation that deliberately logs no activity event (it
+    autosaves), so it has to bump the timestamp directly or a tech pricing a
+    car out all morning would still show as idle."""
+    vehicle = make_recon_vehicle(client, stock_number="R-IDLE-3")
+    order = make_recon_order(client, vehicle["id"])
+    backdate_activity(db_path, order["id"], "2026-03-01T09:00:00")
+    assert board_row(client, vehicle["id"])["idle_days"] > 30
+
+    save_estimate(client, order["id"], [
+        {"kind": "labor", "description": "Diagnose", "quantity": 1, "unit_price": 120, "unit_cost": 60},
+    ])
+    row = board_row(client, vehicle["id"])
+    assert row["idle_days"] == 0, "saving the estimate grid didn't count as activity"
+    assert row["last_activity_at"] > "2026-03-01T09:00:00"
+
+
+def test_voided_tickets_do_not_keep_a_car_looking_active(client, db_path):
+    """Voiding means the work never happened, which is the same reason a
+    voided RO's cost never counts. A car whose only recent 'activity' was
+    cancelling its ticket is idle."""
+    vehicle = make_recon_vehicle(client, stock_number="R-IDLE-4")
+    stale_order = make_recon_order(client, vehicle["id"], concern="Real work")
+    voided = make_recon_order(client, vehicle["id"], concern="Started by mistake")
+    backdate_activity(db_path, stale_order["id"], "2026-04-01T09:00:00")
+
+    # Voiding is itself an activity event, so the voided ticket now has the
+    # newest timestamp of the two -- and must be ignored anyway.
+    assert client.post(f"/api/orders/{voided['id']}/void", json={"actor": "tester"}).status_code == 200
+
+    row = board_row(client, vehicle["id"])
+    assert row["last_activity_at"] == "2026-04-01T09:00:00", (
+        "a voided ticket's activity is keeping the car off the idle list"
+    )
+
+
+def test_we_owe_rows_carry_idle_time_too(client, db_path):
+    """Both halves of the board are one list on screen, so a field only recon
+    rows had would leave a blank column down every we-owe car."""
+    item = make_we_owe(client, description="Replace mirror")
+    order = client.post(
+        "/api/orders", json={"concern": "Mirror", "segment": "we_owe", "we_owe_id": item["id"]}
+    ).json()
+    backdate_activity(db_path, order["id"], "2026-05-01T09:00:00")
+
+    row = next(r for r in client.get("/api/vehicles-board").json() if r["we_owe_id"] == item["id"])
+    assert row["last_activity_at"] == "2026-05-01T09:00:00"
+    assert row["idle_days"] > 30
+
+
+def test_idle_days_survives_a_garbage_timestamp(client, db_path):
+    """One hand-edited row or a restore from an older format must not 500 the
+    whole board -- every other car's idle time is computed in the same loop."""
+    vehicle = make_recon_vehicle(client, stock_number="R-IDLE-5")
+    order = make_recon_order(client, vehicle["id"])
+    backdate_activity(db_path, order["id"], "not-a-date")
+
+    res = client.get("/api/vehicles-board")
+    assert res.status_code == 200, res.text
+    row = next(r for r in res.json() if r["recon_id"] == vehicle["id"])
+    assert row["idle_days"] == 0

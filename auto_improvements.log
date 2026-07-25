@@ -640,3 +640,145 @@ Next time, in rough priority order:
   4. Debounced input on the estimate's money/qty fields. (Carried.)
   5. Tab out of the last estimate row should add a new line. (Carried.)
   6. Persist the message log to localStorage, capped. (Carried.)
+
+================================================================================
+2026-07-25 -- Idle time: a real last-activity clock, and the board's first chart
+================================================================================
+
+Started by committing last hour's work, which was finished but uncommitted (a
+stale .git/index.lock -- see the sandbox notes -- had blocked the commit). Ran
+the suite against it first: green at 192, committed as 145f228, then started
+this run's work on top.
+
+Took carried items 1 and 2 together, because item 1 (the board has no chart)
+had no honest thing to chart until item 2 (aging is measured from acquisition,
+so it says nothing about whether anyone is working on the car) was fixed.
+
+Backend -- orders.last_activity_at.
+  * New column, migrated in place and backfilled from coalesce(max(activity
+    event), created_at). The backfill is scoped to rows still '' so it re-runs
+    harmlessly forever, which also covers a restore from a pre-column backup.
+  * workflow.touch_order() bumps it; record_activity() calls touch_order, so
+    every route that writes to the activity log gets it for free (status,
+    notes, assignment, inspection, findings, void, authorization, invoice,
+    payment, jobs, all of parts.py). save_estimate calls it directly -- writing
+    the grid is the most common thing anyone does to a ticket and the one
+    mutation that deliberately logs nothing, because it autosaves and would
+    bury the log.
+  * recon.last_activity() = newest last_activity_at across the vehicle's
+    non-voided tickets. Voided is excluded for the same reason cost_rollup
+    excludes it: voiding means the work never happened, and voiding is itself
+    an activity event, so a cancelled ticket would otherwise be the newest
+    thing on the car.
+  * Board rows carry last_activity_at + idle_days.
+
+The fallback for a car with no ticket was the interesting bug, and I only found
+it by pointing the thing at real seeded data. First cut used
+`updated_at or created_at`. updated_at moves on any record patch, and for a car
+with no ticket it's the *only* timestamp there is -- so all four seeded we-owe
+promises and two recon cars, none of which have a ticket, reported idle=0. The
+worst cars on the lot were the ones the column hid. It's created_at now: a car
+nobody has written a ticket for is idle since it landed, and correcting its VIN
+doesn't reset that.
+
+Front end -- Idle column + the activity chart.
+  * Idle column beside Age, sortable, "today" rather than "0d", tooltip naming
+    the date. Tighter thresholds than Age (warn at 3 days, past a weekend;
+    crit at 7) because two weeks of nothing on a recon car is a crisis, not a
+    warning. idleClass() derives its colors from IDLE_BUCKETS instead of
+    carrying its own numbers, so a row's color and the bar it lands in can't
+    drift -- same discipline as isOverQuote and the Over Quote card.
+  * The board's first chart: five idle buckets, collapsible, persisted. Every
+    bar is a filter (click or Enter/Space, click again to clear). barChart()
+    grew optional rowAttrs/rowClass hooks so Reports is untouched.
+  * The two traps I aimed at deliberately: the chart counts over
+    visibleVehicles({ignoreIdle:true}), so picking a bucket narrows the table
+    without collapsing the chart that picked it (and empty buckets stay,
+    greyed, so it doesn't reflow under your cursor); and hiding the chart
+    clears the bucket, because that filter can only be seen or cleared from
+    the chart and would otherwise leave rows missing with no visible cause.
+  * Bars stopPropagation on Enter/Space -- the board binds both on document
+    (open the cursor row / select it), so activating a filter would also open
+    a car. Related: picking a bucket no longer nulls the cursor, so a cursor
+    that survives the filter keeps its place.
+  * Age hides under 900px, Idle stays: both are day counts, but idle is the
+    one you act on. The table's scroll container gives up height while the
+    chart is open, or the page grows a second scrollbar and the sticky header
+    becomes unreachable.
+
+seed_mock_data.py now ages the board. Every record is created through the API,
+so everything was timestamped "now" -- every Age read 0d and the whole time
+dimension of the board demoed as one flat bar. A final pass backdates the eight
+live vehicles (6-41 days) and the three that have tickets (0-4 days idle), which
+puts at least one car in every bucket. Idle is only stated for cars with a
+ticket; for the rest it correctly follows age, which is what caught the
+fallback bug above.
+
+Tests: 192 -> 201, everything new mutation-tested (17 mutations, 17 killed
+after two rounds -- notes below on the two that first survived).
+  * test_recon.py -- seven cases: idle from ticket activity and reset by
+    working it, a car with no ticket idle since acquisition, patching the
+    vehicle record not resetting it, estimate saves counting, voided tickets
+    excluded, we-owe rows carrying it, garbage timestamps not 500ing the board.
+    conftest grew a db_path fixture so a test can backdate a timestamp instead
+    of faking the clock.
+  * test_db_migration.py -- backfill picks the newest event (not the first or
+    last inserted), falls back to created_at, and never overwrites a live value.
+  * board_smoke.mjs -- fixture's idle values are deliberately in a different
+    order from its ages (a column quietly reading age_days passes a
+    same-order fixture and fails this one), and one car per bucket so every
+    bar is a 1. ~40 new assertions over the column, the tooltip, severity,
+    sorting, the bars, bucket filtering, composition with the segment chips,
+    persistence, the empty state and the collapse-clears-filter rule.
+  * test_static_assets.py -- five checks pinning the column end to end, the
+    single set of thresholds, the bars' filter wiring, collapse-clears-filter,
+    and the prefs round-trip.
+
+Two mutations survived their first attempt and are worth remembering, because
+both were the test being wrong rather than the code:
+  * Removing save_estimate's touch_order survived -- I'd run the file with
+    `-k idle` and the test is named ..._counts_as_activity. Run the whole file.
+  * Removing the bars' stopPropagation survived because pickBucket used to null
+    the cursor, so the document handler had nothing to act on -- the guard was
+    real but unobservable. Fixed by not nulling the cursor (better behaviour
+    anyway) and parking it on a row that survives the filter the bar applies.
+
+Suite green (201; the 3 jsdom cases run via node), server boots, and the board
+was rendered in jsdom against the real seeded database -- 8 rows, all five bars
+scaling correctly, tones on the right rows, and clicking 14+ narrowing to 3
+rows with the chart intact.
+
+Sandbox notes for next run (updated):
+  * Deletes fail on the mount ("Operation not permitted"), which breaks git:
+    every ref update leaves HEAD.lock/index.lock behind and the *next* command
+    then refuses to run. Renames work, so sweep the locks aside instead of
+    deleting them. There's a wrapper at ~/g.sh that does this around any git
+    command; without it you'll hit "Unable to create '.git/index.lock'".
+    Same reason `git checkout -- <file>` can't restore a file: mutation
+    testing has to keep its own copy (~/pymutate.sh).
+  * /tmp persists between runs but the previous run's files are owned by
+    `nobody` and unwritable -- don't reuse a path a previous run created
+    (/tmp/proj, /tmp/domrun.sh). ~/ is writable.
+  * jsdom: `npm install jsdom` into /tmp, then run the smokes from a scratch
+    tree with NODE_PATH set. Running them in place hangs -- node resolves
+    tests/dom/node_modules first and reads on it never return over the mount,
+    which also hangs `pytest tests/test_dom_smoke.py` and even `ls -la` in
+    that directory. ~/domrun.sh handles the copy.
+  * pip install --break-system-packages fastapi uvicorn httpx pytest; uv can't
+    reach its Python build host. Bash calls cap at 45s, so the suite needs
+    splitting across two calls and background servers don't survive between
+    calls (start and curl in the same call).
+
+Next time, in rough priority order:
+  1. Now that idle exists, the obvious follow-on is making it actionable: a
+     "Stalled" summary card (count of 7+ day cars) would put it in the four
+     numbers people read first, and the Tasks screen could offer "create a
+     task for this car" straight off a stalled row.
+  2. A/P and Cores/Returns still have no jsdom coverage; ~20 lines of fixture
+     each now that harness.mjs is doing the work. (Carried, 3rd run.)
+  3. Debounced input on the estimate's money/qty fields. (Carried.)
+  4. Tab out of the last estimate row should add a new line. (Carried.)
+  5. Persist the message log to localStorage, capped. (Carried.)
+  6. The vehicle detail page shows the activity log but nothing summarises it
+     -- "last worked on, by whom" at the top of the page is now one field away
+     and would close the loop from the board's Idle column.

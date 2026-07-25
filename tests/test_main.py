@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+import httpx
+
 from tests.helpers import make_recon_order, make_recon_vehicle, make_retail_order, save_estimate
 
 
@@ -34,6 +36,84 @@ def test_customer_patch_updates_fields(client):
     assert body["name"] == "Jamie Lee"
     assert body["phone"] == "219-555-9999"
     assert body["email"] == "jamie@example.com"
+
+
+def test_customer_address_create_and_patch_round_trip(client):
+    customer = client.post("/api/customers", json={
+        "name": "Address Tester",
+        "phone": "219-555-0111",
+        "address_line1": "123 Broadway",
+        "address_line2": "Apt 4",
+        "city": "Merrillville",
+        "state": "IN",
+        "postal_code": "46410",
+    }).json()
+    assert customer["address_line1"] == "123 Broadway"
+    assert customer["address_line2"] == "Apt 4"
+    assert customer["city"] == "Merrillville"
+    assert customer["state"] == "IN"
+    assert customer["postal_code"] == "46410"
+
+    # Partial patch touches only the sent fields, leaving the rest intact.
+    res = client.patch(f"/api/customers/{customer['id']}", json={"address_line1": "500 Main St", "postal_code": "46411"})
+    assert res.status_code == 200
+    body = res.json()
+    assert body["address_line1"] == "500 Main St"
+    assert body["postal_code"] == "46411"
+    assert body["city"] == "Merrillville"  # untouched
+    assert body["address_line2"] == "Apt 4"  # untouched
+
+
+def test_we_owe_detail_exposes_customer_address(client):
+    from tests.helpers import make_we_owe
+
+    we_owe = make_we_owe(client)
+    client.patch(f"/api/customers/{we_owe['customer_id']}", json={
+        "address_line1": "77 Sunset Blvd", "city": "Gary", "state": "IN", "postal_code": "46402",
+    })
+    detail = client.get(f"/api/we-owe/{we_owe['id']}").json()
+    assert detail["customer_address_line1"] == "77 Sunset Blvd"
+    assert detail["customer_city"] == "Gary"
+    assert detail["customer_state"] == "IN"
+    assert detail["customer_postal_code"] == "46402"
+
+
+def test_address_suggest_parses_provider_results(client):
+    fake_response = MagicMock()
+    fake_response.raise_for_status.return_value = None
+    fake_response.json.return_value = {"features": [
+        {"properties": {"housenumber": "1600", "street": "Amphitheatre Parkway",
+                        "city": "Mountain View", "state": "California",
+                        "postcode": "94043", "countrycode": "US"}},
+        {"properties": {"housenumber": "10", "street": "Downing Street",
+                        "city": "London", "countrycode": "GB"}},  # non-US, filtered out
+    ]}
+    with patch("app.main.httpx.get", return_value=fake_response):
+        res = client.get("/api/address-suggest", params={"q": "1600 Amphitheatre"})
+    assert res.status_code == 200
+    body = res.json()
+    assert len(body) == 1  # GB result dropped
+    assert body[0]["line1"] == "1600 Amphitheatre Parkway"
+    assert body[0]["city"] == "Mountain View"
+    assert body[0]["state"] == "CA"  # full name folded to abbreviation
+    assert body[0]["postal_code"] == "94043"
+
+
+def test_address_suggest_degrades_to_empty_when_provider_unreachable(client):
+    import httpx as _httpx
+
+    with patch("app.main.httpx.get", side_effect=_httpx.ConnectError("offline")):
+        res = client.get("/api/address-suggest", params={"q": "123 Main St"})
+    assert res.status_code == 200
+    assert res.json() == []
+
+
+def test_address_suggest_ignores_short_queries(client):
+    # No provider call at all for <3 chars -- if httpx.get were hit it would blow up.
+    with patch("app.main.httpx.get", side_effect=AssertionError("should not call provider")):
+        res = client.get("/api/address-suggest", params={"q": "12"})
+    assert res.status_code == 200
+    assert res.json() == []
 
 
 def test_customer_patch_rejects_shop_owned_sentinel(client):
@@ -264,3 +344,58 @@ def test_decode_plate_without_api_key(client, monkeypatch):
     monkeypatch.delenv("PLATETOVIN_API_KEY", raising=False)
     res = client.post("/api/vehicles/decode-plate", json={"plate": "ABC123", "state": "IN"})
     assert res.status_code == 503
+
+
+# --- address autocomplete ----------------------------------------------
+#
+# A typeahead that can 500 is worse than no typeahead: it turns a helper into
+# an error the advisor has to think about while they're mid-address.
+
+
+def test_address_suggest_ignores_short_queries(client):
+    """Two characters match half the country; the request isn't worth making."""
+    assert client.get("/api/address-suggest?q=16").json() == []
+
+
+def test_address_suggest_maps_a_result_into_the_form_fields(client):
+    fake_response = MagicMock()
+    fake_response.raise_for_status.return_value = None
+    fake_response.json.return_value = {"features": [{"properties": {
+        "countrycode": "US", "housenumber": "1600", "street": "Pennsylvania Ave NW",
+        "city": "Washington", "state": "District of Columbia", "postcode": "20500",
+    }}]}
+    with patch("app.main.httpx.get", return_value=fake_response):
+        body = client.get("/api/address-suggest?q=1600 Pennsylvania").json()
+    assert len(body) == 1
+    # The form field holds a two-letter code; the geocoder returns the full
+    # name, so an unmapped state would land in the box as unusable text.
+    assert body[0] == {
+        "label": "1600 Pennsylvania Ave NW, Washington, DC 20500",
+        "line1": "1600 Pennsylvania Ave NW", "city": "Washington",
+        "state": "DC", "postal_code": "20500",
+    }
+
+
+def test_address_suggest_skips_non_us_results(client):
+    fake_response = MagicMock()
+    fake_response.raise_for_status.return_value = None
+    fake_response.json.return_value = {"features": [
+        {"properties": {"countrycode": "CA", "street": "Yonge St", "city": "Toronto"}},
+        {"properties": {"countrycode": "US", "street": "Broadway", "city": "Gary", "state": "Indiana"}},
+    ]}
+    with patch("app.main.httpx.get", return_value=fake_response):
+        body = client.get("/api/address-suggest?q=street").json()
+    assert [s["city"] for s in body] == ["Gary"]
+
+
+def test_address_suggest_degrades_to_empty_on_any_provider_failure(client):
+    """Not just connection errors. This ran as a 500 in a sandbox behind a
+    SOCKS proxy, where httpx raises ImportError for a missing optional extra
+    -- neither an HTTPError nor a ValueError, which is what the handler used
+    to catch. The promise this endpoint makes is that nothing it touches can
+    break the form, so the failure it swallows has to be just as broad."""
+    for boom in (httpx.ConnectError("offline"), ValueError("not json"), ImportError("no socksio"), RuntimeError("?")):
+        with patch("app.main.httpx.get", side_effect=boom):
+            res = client.get("/api/address-suggest?q=1600 Pennsylvania")
+        assert res.status_code == 200, f"{type(boom).__name__} escaped as {res.status_code}"
+        assert res.json() == []

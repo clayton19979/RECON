@@ -361,6 +361,8 @@ table.sticky-head thead th { position: sticky; top: 0; z-index: 2; }
 .board-table th.col-select, .board-table td.col-select { width: 34px; padding-right: 0; }
 .board-table .veh-name { font-weight: 600; }
 .board-table .veh-sub { font-size: 11.5px; color: var(--ink-faint); }
+.board-table .veh-customer { display: inline-flex; align-items: center; gap: 4px; color: var(--ink-soft); font-weight: 500; }
+.board-table .veh-customer svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 2; opacity: .8; }
 .board-table td.quoted-col { color: var(--ink-soft); }
 .board-table tbody tr.selected { background: var(--accent-tint); }
 .board-table tbody tr.selected td { border-bottom-color: var(--accent); }
@@ -442,6 +444,8 @@ table.sticky-head thead th { position: sticky; top: 0; z-index: 2; }
 .detail-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 20px; margin-bottom: 20px; }
 .detail-title { font-family: Bahnschrift, sans-serif; font-size: 22px; font-weight: 600; }
 .detail-sub { font-size: 12.5px; color: var(--ink-faint); margin-top: 4px; }
+.detail-customer { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; color: var(--accent-strong); margin-top: 6px; }
+.detail-customer[hidden] { display: none; }
 /* "Last worked on" sits above "Record updated" and outranks it: bigger, in
    body ink rather than faint, because it's the fact the board sent you here
    with. A stalled car turns the whole line red and grows a button. */
@@ -868,6 +872,22 @@ dialog::backdrop { background: rgba(20, 18, 14, .45); }
 .icon-btn:hover { color: var(--ink); }
 .modal-body { padding: 18px 20px; overflow-y: auto; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 10px; padding: 14px 20px; border-top: 1px solid var(--line); }
+
+/* ---------- address autocomplete ---------- */
+.addr-autocomplete { position: relative; }
+.addr-suggestions {
+  position: absolute; top: 100%; left: 0; right: 0; z-index: 5;
+  margin-top: 2px; background: var(--surface); border: 1px solid var(--line);
+  border-radius: 8px; box-shadow: var(--shadow); overflow: hidden;
+}
+.addr-suggestions[hidden] { display: none; }
+.addr-suggestion {
+  display: block; width: 100%; text-align: left; border: none; background: none;
+  padding: 9px 12px; font: inherit; font-size: 12.5px; color: var(--ink-soft); cursor: pointer;
+  border-bottom: 1px solid var(--line-soft);
+}
+.addr-suggestion:last-child { border-bottom: none; }
+.addr-suggestion:hover { background: var(--accent-tint); color: var(--accent); }
 
 /* ---------- confirm dialog ----------
    Narrower than a form modal (it's one question), and when the action is

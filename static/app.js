@@ -1112,7 +1112,9 @@ function vehicleRowHtml(v) {
       <td class="num">${esc(v.stock_number || "—")}</td>
       <td>
         <div class="veh-name">${esc(v.vehicle)}</div>
-        <div class="veh-sub">${v.segment === "we_owe" ? esc(v.customer_name || "") : esc(v.vin || "")}</div>
+        <div class="veh-sub">${v.segment === "we_owe"
+          ? `<span class="veh-customer"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-7 8-7s8 3 8 7"/></svg>${esc(v.customer_name || "—")}</span>`
+          : esc(v.vin || "")}</div>
       </td>
       <td><span class="pill ${v.segment === "recon" ? "pill-recon" : "pill-weowe"}">${v.segment === "recon" ? "Recon" : "We-Owe"}</span></td>
       <td><span class="pill ${vehicleStatusPillClass(v)}">${esc(STATUS_LABEL[v.status] || v.status)}</span></td>
@@ -1894,6 +1896,69 @@ function renderCustomerInfoSummary() {
     ["Address", esc(address || "—")],
   ];
   $("#vd-customer-info-summary").innerHTML = rows.map(([label, value]) => `<div class="kv-row"><span class="kv-label">${label}</span><span class="kv-value">${value}</span></div>`).join("");
+}
+
+/* ---------- address autocomplete (customer editor) ---------- */
+// As-you-type suggestions from /api/address-suggest (a server-side proxy to a
+// keyless geocoder). Picking a suggestion fills Street/City/State/ZIP. Every
+// failure path -- offline, empty result, request outraced by more typing --
+// just hides the dropdown, leaving the fields as plain manual entry.
+let addressSuggestTimer = null;
+let addressAutocompleteReady = false;
+
+function hideAddressSuggestions() {
+  const box = $("#customer-edit-address-suggestions");
+  if (box) { box.hidden = true; box.innerHTML = ""; }
+}
+
+function setupAddressAutocomplete() {
+  if (addressAutocompleteReady) return;
+  addressAutocompleteReady = true;
+  const input = $("#customer-edit-address1");
+  const box = $("#customer-edit-address-suggestions");
+  if (!input || !box) return;
+  let results = [];
+
+  const runSearch = async () => {
+    const q = input.value.trim();
+    if (q.length < 3) return hideAddressSuggestions();
+    let found;
+    try {
+      found = await get(`/api/address-suggest?q=${encodeURIComponent(q)}`);
+    } catch {
+      return hideAddressSuggestions();
+    }
+    // The user may have cleared the field or tabbed away while the request
+    // was in flight -- don't pop a stale dropdown back open.
+    if (!Array.isArray(found) || !found.length || document.activeElement !== input) {
+      return hideAddressSuggestions();
+    }
+    results = found;
+    box.innerHTML = results.map((r, i) => `<button type="button" class="addr-suggestion" data-i="${i}">${esc(r.label)}</button>`).join("");
+    box.hidden = false;
+  };
+
+  input.addEventListener("input", () => {
+    clearTimeout(addressSuggestTimer);
+    addressSuggestTimer = setTimeout(runSearch, 250);
+  });
+  input.addEventListener("keydown", (e) => { if (e.key === "Escape") hideAddressSuggestions(); });
+  box.addEventListener("click", (e) => {
+    const btn = e.target.closest(".addr-suggestion");
+    if (!btn) return;
+    const r = results[Number(btn.dataset.i)];
+    if (!r) return;
+    input.value = r.line1 || input.value;
+    if (r.city) $("#customer-edit-city").value = r.city;
+    if (r.state) $("#customer-edit-state").value = r.state;
+    if (r.postal_code) $("#customer-edit-postal").value = r.postal_code;
+    hideAddressSuggestions();
+    $("#customer-edit-address2").focus();
+  });
+  // A click anywhere outside the street field + list dismisses it.
+  document.addEventListener("click", (e) => {
+    if (!e.target.closest(".addr-autocomplete")) hideAddressSuggestions();
+  });
 }
 
 function renderDepositsSummary() {
@@ -3068,10 +3133,17 @@ function wireVehicleDetail() {
     $("#customer-edit-name").value = item.customer_name || "";
     $("#customer-edit-phone").value = item.customer_phone || "";
     $("#customer-edit-email").value = item.customer_email || "";
+    $("#customer-edit-address1").value = item.customer_address_line1 || "";
+    $("#customer-edit-address2").value = item.customer_address_line2 || "";
+    $("#customer-edit-city").value = item.customer_city || "";
+    $("#customer-edit-state").value = item.customer_state || "";
+    $("#customer-edit-postal").value = item.customer_postal_code || "";
+    hideAddressSuggestions();
     $("#customer-edit-dialog").showModal();
   });
   $("#customer-edit-cancel").addEventListener("click", () => $("#customer-edit-dialog").close());
   $("#customer-edit-cancel-2").addEventListener("click", () => $("#customer-edit-dialog").close());
+  setupAddressAutocomplete();
   $("#customer-edit-form").addEventListener("submit", async (e) => {
     e.preventDefault();
     const { item } = state.detail;
@@ -3080,6 +3152,11 @@ function wireVehicleDetail() {
         name: $("#customer-edit-name").value.trim(),
         phone: $("#customer-edit-phone").value.trim(),
         email: $("#customer-edit-email").value.trim(),
+        address_line1: $("#customer-edit-address1").value.trim(),
+        address_line2: $("#customer-edit-address2").value.trim(),
+        city: $("#customer-edit-city").value.trim(),
+        state: $("#customer-edit-state").value.trim().toUpperCase(),
+        postal_code: $("#customer-edit-postal").value.trim(),
       });
       $("#customer-edit-dialog").close();
       toast("Customer updated");

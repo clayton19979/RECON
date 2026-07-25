@@ -313,11 +313,20 @@ def create_app(db_path: Path = DEFAULT_DB, backups_dir: Path = DEFAULT_BACKUPS_D
             resp = httpx.get(
                 "https://photon.komoot.io/api/",
                 params={"q": query, "limit": 5, "lang": "en", "lat": 41.4931, "lon": -87.3328},
+                headers={"User-Agent": "DiscountAutoOps/0.1 (shop management app)"},
                 timeout=3.0,
             )
             resp.raise_for_status()
             features = resp.json().get("features", [])
-        except (httpx.HTTPError, ValueError):
+        except Exception:
+            # Deliberately bare. This endpoint's entire contract is "a nice-to-
+            # have that never gets in the way", and the narrower
+            # (httpx.HTTPError, ValueError) still let a 500 through: on a
+            # machine behind a SOCKS proxy httpx raises ImportError for a
+            # missing optional extra, which is neither. Anything that reaches
+            # here means we have no suggestions to offer, and the caller's
+            # answer to "no suggestions" is the same however we got there --
+            # hide the dropdown and let them type the address themselves.
             return []
         suggestions = []
         for feature in features:
@@ -330,12 +339,17 @@ def create_app(db_path: Path = DEFAULT_DB, backups_dir: Path = DEFAULT_BACKUPS_D
             postal = p.get("postcode") or ""
             if not line1 and not city:
                 continue
-            label = ", ".join(part for part in (line1, city, " ".join(x for x in (state, postal) if x)) if part)
+            # The label is abbreviated too, not just the field it fills. A row
+            # reading "...Washington, District of Columbia 20500" that drops
+            # "DC" into the box looks like it picked something else, and the
+            # full name pushes the ZIP out of a narrow dropdown besides.
+            abbrev = _state_abbrev(state)
+            label = ", ".join(part for part in (line1, city, " ".join(x for x in (abbrev, postal) if x)) if part)
             suggestions.append({
                 "label": label,
                 "line1": line1,
                 "city": city,
-                "state": _state_abbrev(state),
+                "state": abbrev,
                 "postal_code": postal,
             })
         return suggestions

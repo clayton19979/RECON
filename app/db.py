@@ -140,7 +140,10 @@ CREATE TABLE IF NOT EXISTS estimate_items (
   core_returned_at TEXT NOT NULL DEFAULT '',
   part_returned INTEGER NOT NULL DEFAULT 0,
   part_returned_at TEXT NOT NULL DEFAULT '',
-  return_invoice_number TEXT NOT NULL DEFAULT ''
+  return_invoice_number TEXT NOT NULL DEFAULT '',
+  core_return_invoice_number TEXT NOT NULL DEFAULT '',
+  part_return_reference TEXT NOT NULL DEFAULT '',
+  part_picked_up_at TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS estimate_jobs (
@@ -394,15 +397,29 @@ def _migrate(db: sqlite3.Connection) -> None:
         db.execute("ALTER TABLE estimate_items ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0")
         db.execute("UPDATE estimate_items SET sort_order = id")
 
-    if "core_charge" not in estimate_item_columns:
-        db.execute("ALTER TABLE estimate_items ADD COLUMN core_charge REAL NOT NULL DEFAULT 0")
-        db.execute("ALTER TABLE estimate_items ADD COLUMN core_returned INTEGER NOT NULL DEFAULT 0")
-        db.execute("ALTER TABLE estimate_items ADD COLUMN core_returned_at TEXT NOT NULL DEFAULT ''")
-
-    if "part_returned" not in estimate_item_columns:
-        db.execute("ALTER TABLE estimate_items ADD COLUMN part_returned INTEGER NOT NULL DEFAULT 0")
-        db.execute("ALTER TABLE estimate_items ADD COLUMN part_returned_at TEXT NOT NULL DEFAULT ''")
-        db.execute("ALTER TABLE estimate_items ADD COLUMN return_invoice_number TEXT NOT NULL DEFAULT ''")
+    # Guarded per column, not per feature-block: a database restored from a
+    # backup can sit at ANY point in this file's history, including one where
+    # a block's guard column exists but a column added to that same block
+    # later does not -- a grouped guard then skips the missing column and the
+    # first query that names it 500s.
+    for column, ddl in (
+        ("core_charge", "core_charge REAL NOT NULL DEFAULT 0"),
+        ("core_returned", "core_returned INTEGER NOT NULL DEFAULT 0"),
+        ("core_returned_at", "core_returned_at TEXT NOT NULL DEFAULT ''"),
+        ("part_returned", "part_returned INTEGER NOT NULL DEFAULT 0"),
+        ("part_returned_at", "part_returned_at TEXT NOT NULL DEFAULT ''"),
+        ("return_invoice_number", "return_invoice_number TEXT NOT NULL DEFAULT ''"),
+        # The vendor's credit paperwork for a returned core, recorded when it
+        # arrives (a non-empty value is what marks the core Credited).
+        ("core_return_invoice_number", "core_return_invoice_number TEXT NOT NULL DEFAULT ''"),
+        ("part_return_reference", "part_return_reference TEXT NOT NULL DEFAULT ''"),
+        # When the vendor actually collected the part. Empty means it's still
+        # sitting at the shop waiting to go back -- the difference between
+        # "I still have this" and "it's gone, waiting on their credit".
+        ("part_picked_up_at", "part_picked_up_at TEXT NOT NULL DEFAULT ''"),
+    ):
+        if column not in estimate_item_columns:
+            db.execute(f"ALTER TABLE estimate_items ADD COLUMN {ddl}")
 
     task_columns = {row[1] for row in db.execute("PRAGMA table_info(tasks)")}
     if "order_id" not in task_columns:

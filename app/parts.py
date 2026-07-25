@@ -27,12 +27,31 @@ class ReceivePartsIn(BaseModel):
 
 
 class CoreReturnIn(BaseModel):
+    # No invoice number here: the core physically goes back to the vendor
+    # first, and the credit/invoice paperwork arrives later -- that number is
+    # captured by the separate core-credit step.
     returned: bool = True
     actor: str = "ui"
 
 
+class CoreCreditIn(BaseModel):
+    # The vendor's credit/invoice number, received after they've taken the
+    # core back. Recording it is what moves the core into Credited.
+    invoice_number: str = Field(min_length=1)
+    actor: str = "ui"
+
+
 class PartReturnIn(BaseModel):
+    # Same shape as CoreReturnIn: parts go back first, the credit invoice
+    # comes later and is captured by post-return-credit.
     returned: bool = True
+    actor: str = "ui"
+
+
+class PartPickupIn(BaseModel):
+    # Whether the vendor has physically collected the returned part. False
+    # puts it back on the shelf ("I still have this").
+    picked_up: bool = True
     actor: str = "ui"
 
 
@@ -216,14 +235,21 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
             assert_vehicle_editable(db, order_row(db, order_id))
             estimate = estimate_for_order(db, order_id)
             row = db.execute(
-                "SELECT id, core_charge FROM estimate_items WHERE id=? AND estimate_id=?", (item_id, estimate["id"])
+                "SELECT id, core_charge, part_returned FROM estimate_items WHERE id=? AND estimate_id=?",
+                (item_id, estimate["id"]),
             ).fetchone()
             if not row:
                 raise HTTPException(404, "Estimate item not found on this repair order")
             if float(row["core_charge"]) <= 0:
                 raise HTTPException(400, "This line has no core charge to return")
+            # Sending the new part back reverses the whole line -- there is no
+            # old unit owed to anyone, so there's no core to send with it.
+            if item.returned and row["part_returned"]:
+                raise HTTPException(400, "This part is going back to the vendor, so its core charge reverses with it — there's no core to return")
+            # A fresh return has no credit yet, and undoing a return can't
+            # leave a stale credit number behind -- cleared either way.
             db.execute(
-                "UPDATE estimate_items SET core_returned=?,core_returned_at=? WHERE id=?",
+                "UPDATE estimate_items SET core_returned=?,core_returned_at=?,core_return_invoice_number='' WHERE id=?",
                 (1 if item.returned else 0, now_fn() if item.returned else "", item_id),
             )
             record_activity(
@@ -231,6 +257,38 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
                 {"item_id": item_id}, now_fn,
             )
         return {"id": item_id, "core_returned": item.returned}
+
+    @router.post("/orders/{order_id}/estimate/items/{item_id}/core-credit")
+    def post_core_credit(order_id: int, item_id: int, item: CoreCreditIn):
+        """Records the vendor's credit/invoice number for a core that already
+        went back -- the paperwork arrives after the vendor receives the old
+        unit, so this is a separate step from marking it returned. A non-empty
+        core_return_invoice_number is what moves the core into Credited."""
+        with connect() as db:
+            current_order = order_row(db, order_id)
+            assert_vehicle_editable(db, current_order)
+            estimate = db.execute("SELECT * FROM estimates WHERE order_id=?", (order_id,)).fetchone()
+            if not estimate:
+                raise HTTPException(404, "No estimate on this repair order")
+            row = db.execute(
+                "SELECT * FROM estimate_items WHERE id=? AND estimate_id=?", (item_id, estimate["id"])
+            ).fetchone()
+            if not row:
+                raise HTTPException(404, "Estimate item not found on this repair order")
+            if not row["core_returned"]:
+                raise HTTPException(400, "Only a core already marked returned can have its credit recorded")
+            if row["core_return_invoice_number"]:
+                raise HTTPException(409, "A credit has already been recorded for this core")
+            invoice_number = item.invoice_number.strip()
+            db.execute(
+                "UPDATE estimate_items SET core_return_invoice_number=? WHERE id=?",
+                (invoice_number, item_id),
+            )
+            record_activity(
+                db, order_id, "core_credit_recorded", item.actor,
+                {"item_id": item_id, "invoice_number": invoice_number}, now_fn,
+            )
+        return {"id": item_id, "core_return_invoice_number": invoice_number}
 
     @router.patch("/orders/{order_id}/estimate/items/{item_id}/part-return")
     def set_part_return(order_id: int, item_id: int, item: PartReturnIn):
@@ -253,8 +311,10 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
                 raise HTTPException(404, "Estimate item not found on this repair order")
             if row["kind"] != "part" or row["status"] != "received":
                 raise HTTPException(400, "Only a received part can be marked returned")
+            # A freshly flagged return is still physically at the shop, and
+            # undoing a return can't leave a stale pickup stamp behind.
             db.execute(
-                "UPDATE estimate_items SET part_returned=?,part_returned_at=? WHERE id=?",
+                "UPDATE estimate_items SET part_returned=?,part_returned_at=?,part_picked_up_at='' WHERE id=?",
                 (1 if item.returned else 0, now_fn() if item.returned else "", item_id),
             )
             record_activity(
@@ -262,6 +322,33 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
                 {"item_id": item_id}, now_fn,
             )
         return {"id": item_id, "part_returned": item.returned}
+
+    @router.patch("/orders/{order_id}/estimate/items/{item_id}/part-pickup")
+    def set_part_pickup(order_id: int, item_id: int, item: PartPickupIn):
+        """Records that the vendor has actually collected a part flagged for
+        return -- the difference between "it's still on my shelf" and "it's
+        gone, waiting on their credit". Same no-assert_estimate_editable
+        reasoning as part-return: pickups happen long after a ticket locks."""
+        with connect() as db:
+            assert_vehicle_editable(db, order_row(db, order_id))
+            estimate = estimate_for_order(db, order_id)
+            row = db.execute(
+                "SELECT id, part_returned, return_invoice_number FROM estimate_items WHERE id=? AND estimate_id=?",
+                (item_id, estimate["id"]),
+            ).fetchone()
+            if not row:
+                raise HTTPException(404, "Estimate item not found on this repair order")
+            if not row["part_returned"]:
+                raise HTTPException(400, "Only a part marked returned can be picked up")
+            if not item.picked_up and row["return_invoice_number"]:
+                raise HTTPException(400, "This return has already been credited -- it can't go back on the shelf")
+            stamp = now_fn() if item.picked_up else ""
+            db.execute("UPDATE estimate_items SET part_picked_up_at=? WHERE id=?", (stamp, item_id))
+            record_activity(
+                db, order_id, "part_picked_up" if item.picked_up else "part_pickup_undone", item.actor,
+                {"item_id": item_id}, now_fn,
+            )
+        return {"id": item_id, "part_picked_up_at": stamp}
 
     @router.post("/orders/{order_id}/estimate/items/{item_id}/post-return-credit")
     def post_return_credit(order_id: int, item_id: int, item: PostReturnCreditIn):
@@ -310,9 +397,15 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
             if result["status"] == "duplicate":
                 raise HTTPException(409, "This credit/RMA number is already posted for this vendor")
 
+            # A credit that has arrived is proof the vendor took the part, so
+            # a line still sitting in Pending gets its pickup stamped here
+            # rather than being left in a state its own paperwork contradicts.
             db.execute(
-                "UPDATE estimate_items SET return_invoice_number=? WHERE id=?",
-                (item.credit_number.strip(), item_id),
+                """UPDATE estimate_items
+                   SET return_invoice_number=?,
+                       part_picked_up_at=CASE WHEN part_picked_up_at='' THEN ? ELSE part_picked_up_at END
+                   WHERE id=?""",
+                (item.credit_number.strip(), now_fn(), item_id),
             )
             record_activity(
                 db, order_id, "part_return_credited", item.actor,
@@ -332,6 +425,7 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
             rows = db.execute(
                 """SELECT ei.id, ei.description, ei.part_number, ei.received_quantity, ei.unit_cost,
                        ei.part_returned_at, ei.received_invoice_number, ei.return_invoice_number,
+                       ei.part_return_reference, ei.part_picked_up_at,
                        o.id order_id, o.number ro_number, o.voided, o.segment,
                        o.recon_vehicle_id, o.we_owe_id,
                        rv.stock_number, wc.name we_owe_customer_name
@@ -342,7 +436,9 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
                    LEFT JOIN we_owe_items wi ON wi.id=o.we_owe_id
                    LEFT JOIN customers wc ON wc.id=wi.customer_id
                    WHERE ei.part_returned=1
-                   ORDER BY (ei.return_invoice_number!='') ASC, ei.part_returned_at DESC""",
+                   ORDER BY (ei.return_invoice_number!='') ASC,
+                            (ei.part_picked_up_at!='') ASC,
+                            ei.part_returned_at DESC""",
             )
             result = []
             for row in rows:
@@ -369,10 +465,19 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
 
     @router.get("/cores")
     def list_cores():
+        """A core deposit only exists because a new part was bought and the
+        old unit is owed back. If the new part itself goes back to the vendor
+        instead of onto the car, there is no old unit to return -- the whole
+        line reverses, core charge included -- so a still-pending core on a
+        returned part is dropped rather than left on the board as work that
+        will never happen. A core that had already gone back before the part
+        was returned stays visible: that one physically moved and may carry a
+        credit, so it's a record, not a chore. Filtered rather than deleted,
+        so undoing the part return brings the core obligation straight back."""
         with connect() as db:
             rows = db.execute(
                 """SELECT ei.id, ei.description, ei.part_number, ei.core_charge,
-                       ei.core_returned, ei.core_returned_at,
+                       ei.core_returned, ei.core_returned_at, ei.core_return_invoice_number,
                        o.id order_id, o.number ro_number, o.voided, o.segment,
                        o.recon_vehicle_id, o.we_owe_id,
                        rv.stock_number, wc.name we_owe_customer_name
@@ -383,7 +488,8 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
                    LEFT JOIN we_owe_items wi ON wi.id=o.we_owe_id
                    LEFT JOIN customers wc ON wc.id=wi.customer_id
                    WHERE ei.core_charge > 0
-                   ORDER BY ei.core_returned ASC, ei.id DESC""",
+                     AND NOT (ei.part_returned=1 AND ei.core_returned=0)
+                   ORDER BY (ei.core_return_invoice_number!='') ASC, ei.core_returned ASC, ei.id DESC""",
             )
             result = []
             for row in rows:

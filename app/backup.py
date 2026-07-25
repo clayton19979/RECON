@@ -119,6 +119,18 @@ def prune_backups(destination_dir: Path, keep: int = 14) -> list[Path]:
     return removed
 
 
+# Set by whichever process actually runs the 24-hour auto-backup loop
+# (tray_app). The Backup page asks /api/backup/status so it can stop
+# promising automatic backups when nothing is running them -- e.g. a bare
+# uvicorn dev run, where the loop doesn't exist.
+AUTO_BACKUP_RUNNING = False
+
+
+def set_auto_backup_running(value: bool = True) -> None:
+    global AUTO_BACKUP_RUNNING
+    AUTO_BACKUP_RUNNING = bool(value)
+
+
 def most_recent_backup_age_hours(destination_dir: Path) -> float | None:
     """Hours since the last backup, or None if there isn't one yet."""
     if not destination_dir.is_dir():

@@ -159,6 +159,55 @@ function wireConfirmDialog() {
   dlg.addEventListener("click", (e) => { if (e.target === dlg) settleConfirm(false); });
 }
 
+/* A confirm with one required text field. Returning a core or a part always
+   comes with vendor paperwork (an invoice, credit slip or RMA), so the
+   number is captured at the moment of the return -- resolves to the trimmed
+   string, or null on cancel. */
+let invoicePromptResolve = null;
+
+function promptInvoiceNumber({ title, body = "", label = "Invoice / credit #", placeholder = "e.g. CR-10442", confirmLabel = "Save", eyebrow = "RETURN", value = "" }) {
+  const dlg = $("#invoice-prompt-dialog");
+  if (!dlg) return Promise.resolve(null); // bare test harness -- fail closed
+  $("#invoice-prompt-eyebrow").textContent = eyebrow;
+  $("#invoice-prompt-title").textContent = title;
+  const bodyEl = $("#invoice-prompt-body");
+  bodyEl.textContent = body;
+  bodyEl.style.display = body ? "" : "none";
+  $("#invoice-prompt-label-wrap").firstChild.textContent = label;
+  const input = $("#invoice-prompt-input");
+  input.placeholder = placeholder;
+  input.value = value;
+  $("#invoice-prompt-accept").textContent = confirmLabel;
+  return new Promise((resolve) => {
+    invoicePromptResolve = resolve;
+    dlg.showModal();
+    input.focus();
+  });
+}
+
+function settleInvoicePrompt(result) {
+  const dlg = $("#invoice-prompt-dialog");
+  const resolve = invoicePromptResolve;
+  invoicePromptResolve = null;
+  if (dlg?.open) dlg.close();
+  if (resolve) resolve(result);
+}
+
+function wireInvoicePromptDialog() {
+  const dlg = $("#invoice-prompt-dialog");
+  if (!dlg) return;
+  $("#invoice-prompt-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const value = $("#invoice-prompt-input").value.trim();
+    if (!value) return; // required -- the field's own validation copy handles it
+    settleInvoicePrompt(value);
+  });
+  $("#invoice-prompt-cancel").addEventListener("click", () => settleInvoicePrompt(null));
+  $("#invoice-prompt-cancel-2").addEventListener("click", () => settleInvoicePrompt(null));
+  dlg.addEventListener("close", () => settleInvoicePrompt(null));
+  dlg.addEventListener("click", (e) => { if (e.target === dlg) settleInvoicePrompt(null); });
+}
+
 function money(value) {
   // `value || 0` only catches falsy input (0, "", null, undefined) -- a
   // truthy but non-numeric value (e.g. a corrupted field coming back as a
@@ -176,6 +225,11 @@ function currentActor() {
 // flight, so a slow save doesn't look like nothing happened (and can't be
 // double-submitted by an impatient extra click).
 async function withLoading(button, label, fn) {
+  // A form submitted by the Enter key (or requestSubmit() with no argument)
+  // reports submitter === null, so every `withLoading(e.submitter, …)` call
+  // site would throw on the keyboard path. The work still has to run -- the
+  // busy state is a nicety, the save is not.
+  if (!button) return fn();
   const original = button.textContent;
   button.disabled = true;
   button.textContent = label;
@@ -292,9 +346,9 @@ const VIEW_PLACEHOLDERS = {
   // shape-matched skeleton of their own (showReportPlaceholders), and a
   // failed load should say so once rather than three times down the page.
   reports:     [["#report-output", 0]],
-  accounting:  [["#ap-table", 7]],
+  accounting:  [["#ap-table", 8]],
   cores:       [["#cores-table", 6], ["#returns-table", 7]],
-  staff:       [["#staff-table", 4]],
+  staff:       [["#staff-table", 5]],
   backup:      [["#backup-table", 4]],
   tasks:       [["#tasks-list", 0]],
   suggestions: [["#suggestions-list", 0]],
@@ -324,21 +378,27 @@ const state = {
   vehicleChartOpen: true,                 // the idle-bucket chart above the table
   vehicleCursor: null,                    // key of the keyboard-focused row
   vehicleAnchor: null,                    // key of the last row clicked, for Shift+click ranges
-  staff: [],
+  staff: [],            // active staff only -- what every assignment picker reads
+  allStaff: [],         // includes inactive; only the Staff page reads this
+  staffTasks: [],       // open-task counts for the Staff page's workload column
   vendors: [],
   orders: [],
   currentUser: localStorage.getItem("dao-current-user") || "",
   detail: { segment: null, id: null, item: null, order: null },
   apFilter: { start: "", end: "" },
   apSearch: "",
+  apAudits: [],
   staffSearch: "",
+  staffFilter: "active",
   suggestionSearch: "",
   showResolvedSuggestions: false,
   apInvoices: [],
   cores: [],
   coresFilter: "pending",
+  coresSearch: "",
   returns: [],
   returnsFilter: "pending",
+  returnsSearch: "",
   postReturnItem: null,
   vehicleSelection: new Set(), // "segment:id" strings, cleared on filter change/reload
   // Reports: which of the four reports, over what window, sorted how. Like
@@ -357,11 +417,13 @@ const state = {
   // The three filtering stat cards are mutually exclusive (a task can't be
   // both overdue and due today), so one slot holds whichever is lit.
   taskCard: "",                 // "" | "overdue" | "today" | "unassigned"
+  taskAssignee: "",             // "" == anyone; else a staff name
   taskUrgentOnly: false,
   taskSelection: new Set(),     // task ids, cleared whenever the visible set changes
   taskAnchor: null,             // last row clicked, for shift+click ranges
   newTaskAssignees: [],
   showCompletedTasks: false,
+  showAllCompleted: false,
   suggestions: [],
 };
 
@@ -513,6 +575,10 @@ function initTheme() {
    VEHICLES LIST
    ================================================================== */
 async function loadVehiclesView() {
+  // In-view refetches (switching to/from History) don't come through
+  // showView's placeholder pass -- paint skeletons here too so the old
+  // segment's rows never sit under the new segment's chips.
+  showPlaceholders("vehicles");
   try {
     state.vehicles = await get(state.filter === "history" ? "/api/vehicles-board?archived=true" : "/api/vehicles-board");
   } catch (err) {
@@ -561,6 +627,31 @@ function loadVehicleViewPrefs() {
 // The toggle's pressed state lives in two places the DOM cares about --
 // .active for the paint, aria-pressed for screen readers -- and is set from
 // state on load, on reset, and on click, so there's one writer for all three.
+/* One writer for everything the global search bar's chrome reflects -- the
+   clear button and the "/" badge -- so a value set by typing, by Escape, by
+   the clear button, by Reset view or by the board's empty state can't drift
+   out of step with what the field actually holds. */
+function syncSearchChrome() {
+  const bar = $("#global-search-bar");
+  const input = $("#global-search");
+  const clear = $("#global-search-clear");
+  if (!bar || !input || !clear) return;
+  const has = input.value.length > 0;
+  bar.classList.toggle("has-text", has);
+  clear.hidden = !has;
+}
+
+// Clears the search from anywhere: keeps state, the field and its chrome in
+// agreement, then repaints the board.
+function clearGlobalSearch({ focus = false } = {}) {
+  const input = $("#global-search");
+  state.search = "";
+  if (input) input.value = "";
+  syncSearchChrome();
+  renderVehiclesTable();
+  if (focus && input) input.focus();
+}
+
 function syncPartsFilterChip() {
   const chip = $("#vehicles-parts-filter");
   if (!chip) return;
@@ -594,6 +685,7 @@ function resetVehicleView() {
   state.vehicleSort = { key: "", dir: "desc" };
   state.search = "";
   $("#global-search").value = "";
+  syncSearchChrome();
   $("#vehicles-status-filter").value = "";
   $$("#view-vehicles .filters .chip[data-filter]").forEach((c) => c.classList.toggle("active", !c.dataset.filter));
   syncPartsFilterChip();
@@ -682,9 +774,21 @@ function renderStats(rows) {
     : "nothing on order";
 
   setValue("#stat-actual-total", money(s.cost));
-  $("#stat-quoted-sub").textContent = s.quoted
-    ? `of ${money(s.quoted)} quoted`
-    : "received parts + labor";
+  // The delta against quote is the number the manager opens the board for --
+  // toned, not neutral, so over/under reads at a glance.
+  const costSub = $("#stat-quoted-sub");
+  if (s.quoted) {
+    const diff = s.cost - s.quoted;
+    costSub.textContent = Math.abs(diff) < 0.005
+      ? `of ${money(s.quoted)} quoted`
+      : diff > 0
+        ? `${money(diff)} over the ${money(s.quoted)} quoted`
+        : `${money(-diff)} under the ${money(s.quoted)} quoted`;
+    costSub.style.color = Math.abs(diff) < 0.005 ? "" : (diff > 0 ? "var(--crit)" : "var(--good)");
+  } else {
+    costSub.textContent = "received parts + labor";
+    costSub.style.color = "";
+  }
 
   setValue("#stat-over-quote", s.overCount, s.overCount ? "crit" : null);
   $("#stat-over-quote-sub").textContent = s.overCount
@@ -861,7 +965,9 @@ function renderIdleChart(rows) {
   target.hidden = !state.vehicleChartOpen;
   const toggle = $("#vehicles-chart-toggle");
   if (toggle) {
+    // Fixed-width label either way, so toggling doesn't shift the toolbar.
     toggle.textContent = state.vehicleChartOpen ? "Hide activity chart" : "Show activity chart";
+    toggle.style.minWidth = "148px";
     toggle.setAttribute("aria-expanded", state.vehicleChartOpen ? "true" : "false");
   }
   if (!state.vehicleChartOpen) return;
@@ -893,9 +999,17 @@ function renderIdleChart(rows) {
     };
   }).filter((i) => i.value > 0 || state.vehicleIdleBucket);
 
+  // The span markers were unexplained red rules until this legend -- and
+  // the click-to-filter affordance shouldn't live only in a hover title
+  // touch users never see.
+  const legendBits = [`<span class="legend-item">Click a bar to filter</span>`];
+  if (sel && sel.span) {
+    legendBits.unshift(`<span class="legend-item"><span class="legend-swatch marker" style="background:var(--crit);opacity:1"></span>Counted as stalled</span>`);
+  }
   target.innerHTML = barChart({
     title: "Time since anything happened",
     note: pool.length ? `${pool.length} vehicle${pool.length === 1 ? "" : "s"} in view` : "",
+    legend: legendBits.join(""),
     items,
     rowAttrs: (i) => i.attrs,
     rowClass: (i) => [i.muted ? "bar-row-muted" : "", i.inSpan ? "bar-row-in-span" : ""].filter(Boolean).join(" "),
@@ -1114,13 +1228,17 @@ function vehicleRowHtml(v) {
         <div class="veh-name">${esc(v.vehicle)}</div>
         <div class="veh-sub">${v.segment === "we_owe"
           ? `<span class="veh-customer"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-7 8-7s8 3 8 7"/></svg>${esc(v.customer_name || "—")}</span>`
-          : esc(v.vin || "")}</div>
+          : (v.vin
+            // Nobody scans a full 17-character VIN -- the last 8 identify
+            // the car; the full value stays one hover away.
+            ? `<span title="${esc(v.vin)}">VIN …${esc(String(v.vin).slice(-8))}</span>`
+            : `<span class="muted-dash">—</span>`)}</div>
       </td>
       <td><span class="pill ${v.segment === "recon" ? "pill-recon" : "pill-weowe"}">${v.segment === "recon" ? "Recon" : "We-Owe"}</span></td>
       <td><span class="pill ${vehicleStatusPillClass(v)}">${esc(STATUS_LABEL[v.status] || v.status)}</span></td>
       <td>${v.technicians.length ? `<span class="tech"><span class="tech-dot"></span>${esc(v.technicians.join(", "))}</span>` : `<span class="muted-dash">—</span>`}</td>
       <td class="col-parts">${partsCellHtml(v)}</td>
-      <td class="num-col age-col ${ageClass(v.age_days)}">${v.age_days}d</td>
+      <td class="num-col age-col ${ageClass(v.age_days)}">${v.age_days ?? "—"}${v.age_days == null ? "" : "d"}</td>
       <td class="num-col idle-col">${idleCellHtml(v)}</td>
       <td class="num-col quoted-col">${v.quoted_cost ? money(v.quoted_cost) : `<span class="muted-dash">—</span>`}</td>
       <td class="num-col ${over}"${over ? ` title="Over the estimate by ${money(v.actual_cost - v.quoted_cost)}"` : ""}>${money(v.actual_cost)}</td>`;
@@ -1238,7 +1356,7 @@ function vehicleKey(v) {
 // transaction to preserve since archiving one has zero effect on another.
 function renderVehicleBulkBar() {
   const n = state.vehicleSelection.size;
-  $("#vehicles-bulk-bar").style.display = n ? "" : "none";
+  $("#vehicles-bulk-bar").hidden = !n;
   if (!n) return;
   $("#vehicles-bulk-count").textContent = `${n} selected`;
   $("#vehicles-bulk-archive").textContent = state.filter === "history" ? "Reopen Selected" : "Send Selected to History";
@@ -1407,10 +1525,28 @@ function wireVehiclesView() {
       renderVehiclesTable();
     });
   }
-  $("#global-search").addEventListener("input", (e) => {
+  const searchBar = $("#global-search-bar");
+  const searchInput = $("#global-search");
+  const searchClear = $("#global-search-clear");
+
+  searchInput.addEventListener("input", (e) => {
     state.search = e.target.value.trim();
+    syncSearchChrome();
     if (!$("#view-vehicles").classList.contains("active")) showView("vehicles");
     renderVehiclesTable();
+    // Nothing in the render path may steal the caret mid-word -- if anything
+    // did, put it straight back where the user is typing.
+    if (document.activeElement !== e.target) e.target.focus();
+  });
+
+  searchClear.addEventListener("click", () => clearGlobalSearch({ focus: true }));
+
+  // Clicking the pill's padding focuses the field, the way wrapping it in a
+  // <label> used to -- without a label owning two controls.
+  searchBar.addEventListener("mousedown", (e) => {
+    if (e.target === searchInput || e.target.closest(".search-clear")) return;
+    e.preventDefault();
+    searchInput.focus();
   });
   $("#add-recon-btn").addEventListener("click", () => openReconDialog());
   $("#add-we-owe-btn").addEventListener("click", () => openWeOweDialog());
@@ -1424,11 +1560,7 @@ function wireVehiclesView() {
     if (trigger) {
       if (trigger.dataset.emptyAction === "add-recon") openReconDialog();
       if (trigger.dataset.emptyAction === "add-we-owe") openWeOweDialog();
-      if (trigger.dataset.emptyAction === "clear-search") {
-        state.search = "";
-        $("#global-search").value = "";
-        renderVehiclesTable();
-      }
+      if (trigger.dataset.emptyAction === "clear-search") clearGlobalSearch();
       if (trigger.dataset.emptyAction === "clear-parts") {
         state.vehiclePartsOnly = false;
         syncPartsFilterChip();
@@ -1447,11 +1579,16 @@ function wireVehiclesView() {
     const row = e.target.closest("tr.clickable");
     if (!row) return;
     const key = row.dataset.key;
-    const box = e.target.closest(".veh-select");
+    // The whole select cell is the hit target, not just the ~13px native
+    // box inside it -- clicking the cell's padding used to fall through to
+    // the row handler and navigate away mid-bulk-selection.
+    const selectCell = e.target.closest("td.col-select");
+    const box = e.target.closest(".veh-select") || (selectCell ? $(".veh-select", selectCell) : null);
     if (box) {
       // the checkbox owns the click; opening the vehicle would be a surprise
+      const isDirect = e.target.closest(".veh-select");
       if (e.shiftKey && state.vehicleAnchor && state.vehicleAnchor !== key) selectVehicleRange(state.vehicleAnchor, key);
-      else setVehicleSelected(key, box.checked);
+      else setVehicleSelected(key, isDirect ? box.checked : !state.vehicleSelection.has(key));
       state.vehicleAnchor = key;
       state.vehicleCursor = key;
       renderVehiclesTable();
@@ -1472,7 +1609,12 @@ function wireVehiclesView() {
 
   // Keyboard: the board is a work list, and a work list you can only drive
   // with a mouse is slow to triage. Arrows move a cursor row, Enter opens it,
-  // Space selects it, "/" jumps to search.
+  // Space selects it, "/" jumps to search -- and any plain letter or digit
+  // typed while nothing has focus goes straight into the search box, so
+  // starting to type before clicking it can never "type outside the box"
+  // (single-letter shortcuts like j/k are gone for the same reason: a
+  // keystroke either navigates or searches, never both depending on the
+  // letter).
   document.addEventListener("keydown", (e) => {
     if (!$("#view-vehicles").classList.contains("active")) return;
     const tag = (e.target.tagName || "").toLowerCase();
@@ -1484,15 +1626,11 @@ function wireVehiclesView() {
       return;
     }
     if (typing) {
-      if (e.key === "Escape" && e.target.id === "global-search") {
-        state.search = "";
-        e.target.value = "";
-        renderVehiclesTable();
-      }
+      if (e.key === "Escape" && e.target.id === "global-search") clearGlobalSearch();
       return;
     }
-    if (e.key === "ArrowDown" || e.key === "j") { e.preventDefault(); moveVehicleCursor(1); }
-    else if (e.key === "ArrowUp" || e.key === "k") { e.preventDefault(); moveVehicleCursor(-1); }
+    if (e.key === "ArrowDown") { e.preventDefault(); moveVehicleCursor(1); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); moveVehicleCursor(-1); }
     else if (e.key === "Home") { e.preventDefault(); moveVehicleCursor("first"); }
     else if (e.key === "End") { e.preventDefault(); moveVehicleCursor("last"); }
     else if (e.key === "Enter" && state.vehicleCursor) {
@@ -1506,6 +1644,10 @@ function wireVehiclesView() {
     } else if (e.key === "Escape" && state.vehicleSelection.size) {
       state.vehicleSelection.clear();
       renderVehiclesTable();
+    } else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey && e.key !== " ") {
+      // Type-to-search: focus the box mid-keydown and let the browser's
+      // default action put this same character into it.
+      $("#global-search").focus();
     }
   });
 
@@ -1668,6 +1810,17 @@ async function loadVehicleDetail() {
     $("#vd-void-order").style.display = "none";
     $("#vd-print-ticket").style.display = "none";
     $("#vd-add-task").style.display = "none";
+    // The order-scoped header chrome is otherwise only reset by the wrapped
+    // renderStatusCard, which never runs on this branch -- navigating from a
+    // ticketed vehicle to one with no RO left the previous car's status
+    // pill, assign picker, concern preview and save-state on screen.
+    ["#vd-status-picker", "#vd-assign-picker", "#vd-status-pill", "#vd-concern-preview"].forEach((sel) => {
+      const el = $(sel);
+      if (el) el.style.display = "none";
+    });
+    $("#vd-concern-preview-text").textContent = "";
+    const saveState = $("#vd-estimate-save-state");
+    if (saveState) { saveState.className = "save-state"; saveState.textContent = ""; }
     $("#vd-no-order").style.display = "";
     $("#vd-order-content").style.display = "none";
     applyArchivedLockUI(!!item.archived_at);
@@ -2205,7 +2358,11 @@ function renderEstimate(order) {
 
 function updateReceiveButtonState() {
   const checked = $$(".ei-receive-check:checked", $("#vd-estimate-items"));
-  $("#vd-receive-parts").disabled = checked.length === 0;
+  const btn = $("#vd-receive-parts");
+  btn.disabled = checked.length === 0;
+  // Say how many -- on a 20-line estimate you should know what you're about
+  // to post before the dialog opens.
+  btn.textContent = checked.length ? `Receive ${checked.length} Line${checked.length === 1 ? "" : "s"}` : "Receive Selected";
 }
 
 // Quoted = every line at its full quantity, whether or not it's landed yet
@@ -2221,8 +2378,25 @@ function renderEstimateTotals(order) {
   const quotedTotal = items.filter(notReturned).reduce((s, i) => s + i.quantity * i.unit_cost, 0);
   const actualParts = items.filter((i) => i.kind === "part" && !i.part_returned).reduce((s, i) => s + i.received_quantity * i.unit_cost, 0);
   const actualOther = items.filter((i) => i.kind !== "part").reduce((s, i) => s + i.quantity * i.unit_cost, 0);
+  const actual = actualParts + actualOther;
   $("#vd-quoted-cost").textContent = money(quotedTotal);
-  $("#vd-actual-cost").textContent = money(actualParts + actualOther);
+  $("#vd-actual-cost").textContent = money(actual);
+  // The single most decision-relevant number on a recon ticket -- are we
+  // over the quote -- shouldn't have to be computed mentally from two
+  // adjacent figures.
+  const delta = $("#vd-cost-delta");
+  if (delta) {
+    if (!quotedTotal) {
+      delta.hidden = true;
+    } else {
+      const diff = actual - quotedTotal;
+      delta.hidden = false;
+      delta.className = `cost-delta ${diff > 0.005 ? "over" : Math.abs(diff) <= 0.005 ? "zero" : ""}`;
+      delta.textContent = Math.abs(diff) <= 0.005 ? "On quote"
+        : diff > 0 ? `${money(diff)} over quote`
+        : `${money(-diff)} under quote`;
+    }
+  }
 }
 
 /* ---------- estimate grid: applying a save without redrawing ----------
@@ -2450,15 +2624,26 @@ async function onEstimatePartReturn(btn) {
   if (!order) return;
   const returned = btn.dataset.returned !== "1";
   const desc = btn.closest(".part-row").querySelector(".ei-desc").value.trim();
+  // Sending the new part back reverses the line's core charge too: there's
+  // no old unit owed to anyone, so its pending core drops off the cores
+  // board. Say so, because that board is where someone would otherwise go
+  // looking for it.
+  const line = (order.estimate?.items || []).find((i) => String(i.id) === String(btn.dataset.id));
+  const coreNote = returned && line && (line.core_charge || 0) > 0 && !line.core_returned
+    ? ` Its ${money(line.core_charge)} core charge reverses with it, so the core drops off the cores board — there's no old unit to send back.`
+    : "";
+  // No paperwork at this step: the part goes back to the vendor first, and
+  // the credit invoice arrives later -- it's recorded on the Cores & Returns
+  // page once it shows up.
   if (returned && !(await confirmAction({
     eyebrow: "VENDOR RETURN",
     title: `Mark "${desc}" as returned?`,
-    body: "Its cost stops counting toward this ticket and it moves onto the returns board.",
+    body: `Its cost stops counting toward this ticket and it lands on the returns board as Pending — mark it picked up there once the vendor collects it, then record their credit when the paperwork arrives.${coreNote}`,
     confirmLabel: "Mark Returned",
   }))) return;
   try {
     await patch(`/api/orders/${order.id}/estimate/items/${btn.dataset.id}/part-return`, { returned, actor: currentActor() });
-    toast(returned ? "Marked returned" : "Return undone");
+    toast(returned ? "Marked returned — it's waiting for pickup in Cores & Returns" : "Return undone");
     await loadVehicleDetail();
   } catch (err) {
     toast(err.message, true);
@@ -2806,8 +2991,11 @@ const ACTIVITY_LABEL = {
   part_returned: "Part returned",
   part_return_undone: "Part return undone",
   part_return_credited: "Return credited",
-  core_returned: "Core returned",
+  core_returned: "Core picked up",
   core_return_undone: "Core return undone",
+  core_credit_recorded: "Core credit recorded",
+  part_picked_up: "Return picked up",
+  part_pickup_undone: "Return pickup undone",
   invoice_created: "Invoice created",
   payment_recorded: "Payment recorded",
   ap_invoice_voided: "Vendor invoice voided",
@@ -2834,7 +3022,12 @@ function renderAssignment(order) {
   $("#vd-advisor").innerHTML = `<option value="">Unassigned</option>` + advisors.map((t) => `<option value="${t.id}" ${a && a.advisor_id === t.id ? "selected" : ""}>${esc(t.name)}</option>`).join("");
   $("#vd-date-in").value = (a && a.date_in) || "";
   $("#vd-odometer").value = (a && a.odometer_in) || "";
-  $("#vd-promised").value = (a && a.promised_at) || "";
+  const promised = $("#vd-promised");
+  promised.value = (a && a.promised_at) || "";
+  // A promised date in the past is the single most actionable field in the
+  // drawer -- it turns red instead of sitting there looking routine.
+  promised.classList.toggle("overdue",
+    !!(a && a.promised_at) && new Date(a.promised_at) < new Date() && order.status !== "complete");
 }
 
 /* ---------- print a single ticket ---------- */
@@ -2966,6 +3159,22 @@ function wireVehicleDetail() {
       }
     });
   });
+  // Everything else on this page autosaves; the concern shouldn't silently
+  // lose an edit because the Save button never got clicked before navigating
+  // away. Blur commits quietly when the text actually changed.
+  $("#vd-concern").addEventListener("blur", async () => {
+    const order = state.detail.order;
+    if (!order) return;
+    const concern = $("#vd-concern").value.trim();
+    if (!concern || concern === (order.concern || "").trim()) return;
+    try {
+      await patch(`/api/orders/${order.id}/concern`, { concern, actor: currentActor() });
+      order.concern = concern;
+      toast("Concern updated");
+    } catch (err) {
+      toast(err.message, true);
+    }
+  });
 
   $("#vd-print-ticket").addEventListener("click", () => {
     renderPrintTicket();
@@ -3025,6 +3234,18 @@ function wireVehicleDetail() {
   $("#vd-add-labor").addEventListener("click", () => addEstimateRow("labor"));
 
   $("#vd-order-parts").addEventListener("click", async () => {
+    // One click flips every quoted part on the ticket -- worth a question,
+    // and the "doesn't place a real purchase order" caveat that used to hide
+    // in a hover-only title belongs in it.
+    const quoted = (state.detail.order?.estimate?.items || [])
+      .filter((i) => i.kind === "part" && i.id && (i.status || "quoted") === "quoted").length;
+    if (!quoted) return toast("No quoted parts to order");
+    if (!(await confirmAction({
+      eyebrow: "ORDER PARTS",
+      title: `Mark ${quoted} quoted part line${quoted === 1 ? "" : "s"} as ordered?`,
+      body: "This only changes their status on this ticket — it does not place a purchase order with any vendor.",
+      confirmLabel: "Mark Ordered",
+    }))) return;
     try {
       const res = await patch(`/api/orders/${state.detail.order.id}/estimate/order-parts`);
       toast(res.updated ? `${res.updated} part line(s) marked ordered` : "No quoted parts to order");
@@ -3065,6 +3286,9 @@ function wireVehicleDetail() {
           actor: currentActor(),
         });
         toast("Saved");
+        // Close the popover so the save visibly took -- it used to stay
+        // open looking like nothing happened.
+        $("#vd-assign-picker-menu")?.classList.remove("open");
         await loadVehicleDetail();
       } catch (err) {
         toast(err.message, true);
@@ -3123,6 +3347,12 @@ function wireVehicleDetail() {
   });
   $("#payment-cancel").addEventListener("click", () => $("#payment-dialog").close());
   $("#payment-cancel-2").addEventListener("click", () => $("#payment-dialog").close());
+  // Enter in the Amount field used to fall through the form with no submit
+  // handler -- record the deposit instead of doing nothing.
+  $("#payment-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    $("#vd-deposit-add").click();
+  });
 
   $("#vd-edit-vehicle").addEventListener("click", () => $("#vehicle-edit-dialog").showModal());
   $("#vehicle-edit-cancel").addEventListener("click", () => $("#vehicle-edit-dialog").close());
@@ -3508,7 +3738,10 @@ function wireReceiveDialog() {
 // same thing everywhere in the app.
 function computeQuickRange(kind) {
   const now = new Date();
-  const iso = (d) => d.toISOString().slice(0, 10);
+  // Local date, not toISOString(): that converts to UTC first, so any click
+  // after ~7 PM in Merrillville computed *tomorrow's* date and "Today"
+  // reported on a day that hadn't started.
+  const iso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
   let start, end = iso(now);
   if (kind === "today") start = iso(now);
   else if (kind === "yesterday") { const d = new Date(now); d.setDate(d.getDate() - 1); start = iso(d); end = iso(d); }
@@ -3595,13 +3828,18 @@ function syncReportControls() {
   $$("#report-type-seg .seg-btn").forEach((btn) => {
     const on = btn.dataset.reportType === state.reportType;
     btn.classList.toggle("active", on);
-    btn.setAttribute("aria-selected", on ? "true" : "false");
+    btn.setAttribute("aria-checked", on ? "true" : "false");
+    btn.tabIndex = on ? 0 : -1;
   });
   $$("#view-reports .chip[data-report-range]").forEach((chip) => {
     chip.classList.toggle("active", chip.dataset.reportRange === state.reportRange);
   });
   $("#report-start").value = state.reportStart;
   $("#report-end").value = state.reportEnd;
+  // Hand-edited dates light the inputs themselves, so the toolbar never
+  // looks like nothing is selected.
+  const custom = !state.reportRange && (state.reportStart || state.reportEnd);
+  $$("#view-reports .report-date").forEach((el) => el.classList.toggle("custom", !!custom));
 }
 
 function reportParams() {
@@ -3715,7 +3953,9 @@ function vehicleSpendStatCards(rows) {
     { label: "Total Cost", value: money(total), sub: "received parts + labor" },
     { label: "Average Per Vehicle", value: money(rows.length ? total / rows.length : 0), sub: quoted ? `${money(quoted)} quoted overall` : "nothing quoted in this range" },
     {
-      label: "Over Quote", value: String(over.length), tone: over.length ? "warn" : "",
+      // Zero over quote is the good news a manager opens this screen hoping
+      // to read -- it earns the green, not a neutral grey.
+      label: "Over Quote", value: String(over.length), tone: over.length ? "warn" : (quoted ? "good" : ""),
       sub: over.length ? `${money(overBy)} past estimate` : "every quoted car came in on budget",
     },
   ];
@@ -3779,13 +4019,17 @@ const CHART_LIMIT = 12;
 function renderReportChart(rows, shape) {
   const target = $("#report-chart");
   if (shape === "technicians") {
-    const items = rows.filter((r) => r.labor_cost > 0)
-      .sort((a, b) => b.labor_cost - a.labor_cost)
-      .slice(0, CHART_LIMIT)
+    // Hours with $0 unit cost are still work -- don't drop the tech from
+    // the chart the table shows.
+    const withLabor = rows.filter((r) => r.labor_cost > 0 || r.labor_hours > 0)
+      .sort((a, b) => b.labor_cost - a.labor_cost);
+    const items = withLabor.slice(0, CHART_LIMIT)
       .map((r) => ({ label: r.technician, value: r.labor_cost, display: money(r.labor_cost) }));
     target.innerHTML = barChart({
       title: "Labor cost by technician",
-      note: items.length ? `${items.length} technician${items.length === 1 ? "" : "s"} with logged labor` : "",
+      note: withLabor.length > CHART_LIMIT
+        ? `Top ${CHART_LIMIT} of ${withLabor.length} technicians with logged labor`
+        : (items.length ? `${items.length} technician${items.length === 1 ? "" : "s"} with logged labor` : ""),
       items,
     }) || chartNothingToPlot(rows.length, "labor cost");
     return;
@@ -3798,24 +4042,40 @@ function renderReportChart(rows, shape) {
     marker: r.quoted_cost || 0,
     markerLabel: r.quoted_cost ? `Quoted ${money(r.quoted_cost)}` : "",
     tone: overQuote(r) ? "over" : "",
+    seg: r.segment,
+    refId: r.segment === "recon" ? r.recon_id : r.we_owe_id,
   }));
-  target.innerHTML = barChart({
+  // The tallest bar is the car you want to open -- every bar is a link to
+  // its vehicle, same interaction language as the board's idle chart.
+  target.innerHTML = `<div class="board-chart">${barChart({
     title: "What we have in it",
-    note: priced.length > CHART_LIMIT ? `Top ${CHART_LIMIT} of ${priced.length} vehicles with cost` : "",
+    note: priced.length > CHART_LIMIT ? `Top ${CHART_LIMIT} of ${priced.length} vehicles with cost` : "Click a bar to open the vehicle",
     legend: `<span class="legend-item"><span class="legend-swatch"></span>Cost</span>
              <span class="legend-item"><span class="legend-swatch over"></span>Over quote</span>
              <span class="legend-item"><span class="legend-swatch marker"></span>Quoted</span>`,
     items,
-  }) || chartNothingToPlot(rows.length, "cost");
+    rowAttrs: (i) => (i.refId != null ? `role="button" tabindex="0" data-seg="${esc(i.seg)}" data-ref-id="${i.refId}"` : ""),
+  }) || chartNothingToPlot(rows.length, "cost")}</div>`;
 }
 
 /* ---------- table ---------- */
 
 function reportEmptyState(shape) {
+  // The technicians endpoint returns one row per tech on staff regardless of
+  // activity, so an empty result can only mean the roster itself is empty --
+  // "try a wider range" would send the user in a circle.
+  if (shape === "technicians") {
+    return `<div class="panel">${emptyState({
+      icon: "staff",
+      title: "No technicians on staff",
+      hint: "Add your technicians in Staff and their repair orders, hours and labor cost will roll up here.",
+      actions: `<button type="button" class="btn btn-ghost btn-sm" data-nav="staff">Go to Staff</button>`,
+    })}</div>`;
+  }
   const ranged = state.reportStart || state.reportEnd;
   return `<div class="panel">${emptyState({
-    icon: shape === "technicians" ? "staff" : "vehicle",
-    title: shape === "technicians" ? "No technician activity in this range" : "No vehicles in this range",
+    icon: "vehicle",
+    title: "No vehicles in this range",
     hint: ranged
       ? "Nothing was worked on between those dates. Try a wider range, or one of the quick ranges above."
       : "Nothing to report yet — this covers all time, so the shop has no activity of this kind recorded at all.",
@@ -3826,19 +4086,28 @@ function reportEmptyState(shape) {
 function renderReportTable(rows, shape) {
   if (!rows.length) return reportEmptyState(shape);
   if (shape === "technicians") {
-    return `<div class="panel"><div class="table-wrap"><table><thead><tr>
+    const working = rows.filter((r) => r.ro_count > 0).length;
+    const totRos = rows.reduce((s, r) => s + r.ro_count, 0);
+    const totDone = rows.reduce((s, r) => s + r.completed_count, 0);
+    const totHours = Math.round(rows.reduce((s, r) => s + r.labor_hours, 0) * 100) / 100;
+    const totCost = rows.reduce((s, r) => s + r.labor_cost, 0);
+    return `<div class="panel"><div class="table-wrap table-scroll"><table class="sticky-head"><thead><tr>
       ${reportSortHeader("technicians", "technician")}
       ${reportSortHeader("technicians", "ros", "num-col")}
       ${reportSortHeader("technicians", "completed", "num-col")}
       ${reportSortHeader("technicians", "hours", "num-col")}
       ${reportSortHeader("technicians", "cost", "num-col")}
       </tr></thead>
-      <tbody>${rows.map((r) => `<tr${r.ro_count ? "" : ' class="row-muted"'}><td>${esc(r.technician)}</td><td class="num-col">${r.ro_count}</td><td class="num-col">${r.completed_count}</td><td class="num-col">${r.labor_hours}</td><td class="num-col">${money(r.labor_cost)}</td></tr>`).join("")}</tbody></table></div></div>`;
+      <tbody>${rows.map((r) => `<tr${r.ro_count ? "" : ' class="row-muted"'}><td>${esc(r.technician)}</td><td class="num-col">${r.ro_count}</td><td class="num-col">${r.completed_count}</td><td class="num-col">${r.labor_hours}</td><td class="num-col">${money(r.labor_cost)}</td></tr>`).join("")}</tbody>
+      <tfoot><tr><td>Total (${working} working)</td><td class="num-col">${totRos}</td><td class="num-col">${totDone}</td><td class="num-col">${totHours}</td><td class="num-col">${money(totCost)}</td></tr></tfoot>
+      </table></div></div>`;
   }
   const totalActual = rows.reduce((s, r) => s + r.actual_cost, 0);
   const totalPaid = rows.reduce((s, r) => s + (r.customer_paid || 0), 0);
   const hasDeposits = totalPaid > 0;
-  return `<div class="panel"><div class="table-wrap"><table><thead><tr>
+  // Rows navigate to the vehicle -- Reports is where you find the problem
+  // car, so it shouldn't make you memorize a stock number to go act on it.
+  return `<div class="panel"><div class="table-wrap table-scroll"><table class="sticky-head"><thead><tr>
     ${reportSortHeader("vehicle-spend", "stock")}
     ${reportSortHeader("vehicle-spend", "vehicle")}
     ${reportSortHeader("vehicle-spend", "segment")}
@@ -3847,9 +4116,13 @@ function renderReportTable(rows, shape) {
     ${reportSortHeader("vehicle-spend", "cost", "num-col")}
     ${hasDeposits ? reportSortHeader("vehicle-spend", "paid", "num-col") + reportSortHeader("vehicle-spend", "net", "num-col") : ""}
     </tr></thead>
-    <tbody>${rows.map((r) => `<tr><td class="num">${esc(r.stock_number || "—")}</td><td>${esc(r.vehicle)}${r.customer_name ? ` <span style="color:var(--ink-faint)">(${esc(r.customer_name)})</span>` : ""}</td>
+    <tbody>${rows.map((r) => {
+      const refId = r.segment === "recon" ? r.recon_id : r.we_owe_id;
+      const clickable = refId != null;
+      return `<tr${clickable ? ` class="clickable" data-seg="${esc(r.segment)}" data-ref-id="${refId}" tabindex="0" title="Open this vehicle"` : ""}><td class="num">${esc(r.stock_number || "—")}</td><td>${esc(r.vehicle)}${r.customer_name ? ` <span style="color:var(--ink-faint)">(${esc(r.customer_name)})</span>` : ""}</td>
     <td>${r.segment === "recon" ? "Recon" : "We-Owe"}</td><td><span class="pill ${vehicleStatusPillClass(r)}">${esc(STATUS_LABEL[r.status] || r.status)}</span></td>
-    <td>${esc((r.technicians || []).join(", ")) || "—"}</td><td class="num-col${overQuote(r) ? " over-quote" : ""}">${money(r.actual_cost)}</td>${hasDeposits ? `<td class="num-col">${r.customer_paid ? money(r.customer_paid) : "—"}</td><td class="num-col">${r.customer_paid ? money(r.net_cost) : "—"}</td>` : ""}</tr>`).join("")}</tbody>
+    <td>${esc((r.technicians || []).join(", ")) || "—"}</td><td class="num-col${overQuote(r) ? " over-quote" : ""}" ${overQuote(r) ? `title="${money(r.actual_cost - r.quoted_cost)} over the ${money(r.quoted_cost)} quote"` : ""}>${money(r.actual_cost)}</td>${hasDeposits ? `<td class="num-col">${r.customer_paid ? money(r.customer_paid) : "—"}</td><td class="num-col">${r.customer_paid ? money(r.net_cost) : "—"}</td>` : ""}</tr>`;
+    }).join("")}</tbody>
     <tfoot><tr><td colspan="5">Total (${rows.length} vehicle${rows.length === 1 ? "" : "s"})</td><td class="num-col">${money(totalActual)}</td>${hasDeposits ? `<td class="num-col">${money(totalPaid)}</td><td class="num-col">${money(totalActual - totalPaid)}</td>` : ""}</tr></tfoot>
     </table></div></div>`;
 }
@@ -3868,6 +4141,12 @@ function reportDateRangeLabel(start, end) {
 function renderPrintReport(rows, type, start, end) {
   const generated = new Date().toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" });
   const rangeLabel = reportDateRangeLabel(start, end);
+  // The printout keeps the screen's reading order: summary numbers first,
+  // then the table -- a spend report with no total line is a worse artifact
+  // than the screen it came from.
+  const cards = reportShape(type) === "technicians" ? technicianStatCards(rows) : vehicleSpendStatCards(rows);
+  const summary = `<div class="print-summary">${cards.map((c) => `
+    <div><div class="ps-label">${esc(c.label)}</div><div class="ps-value">${esc(c.value)}</div><div class="ps-sub">${esc(c.sub)}</div></div>`).join("")}</div>`;
   let body;
   if (reportShape(type) === "technicians") {
     const totalHours = rows.reduce((s, r) => s + r.labor_hours, 0);
@@ -3903,6 +4182,7 @@ function renderPrintReport(rows, type, start, end) {
         <div class="print-generated">Generated ${esc(generated)}</div>
       </div>
     </header>
+    ${summary}
     ${body}
   `;
 }
@@ -3940,10 +4220,20 @@ function renderReport() {
   renderReportStats(rows, shape);
   renderReportChart(rows, shape);
   $("#report-output").innerHTML = renderReportTable(rows, shape);
+  // The scope line states in words what the cards are counting -- report,
+  // range, row count -- so the numbers can't be misread.
+  $("#report-scope").textContent =
+    `${REPORT_TITLES[state.report.type]} · ${reportDateRangeLabel(state.report.start, state.report.end)} · ${rows.length} row${rows.length === 1 ? "" : "s"}`;
+  $("#report-print").disabled = !rows.length;
   $("#print-report").innerHTML = renderPrintReport(rows, state.report.type, state.report.start, state.report.end);
 }
 
+// Rapid chip/segment clicks race their fetches; only the newest request may
+// paint, or "Today" can end up captioning last year's rows.
+let reportSeq = 0;
+
 async function generateReport() {
+  const seq = ++reportSeq;
   const type = state.reportType;
   const shape = reportShape(type);
   // A sort key from the other shape (Cost exists on both, "hours" doesn't)
@@ -3955,6 +4245,7 @@ async function generateReport() {
   showReportPlaceholders();
   const path = shape === "technicians" ? "technicians" : "vehicle-spend";
   const rows = await get(`/api/reports/${path}?${reportParams()}`);
+  if (seq !== reportSeq) return; // superseded by a newer request
   state.report = { rows, type, start, end };
   renderReport();
   saveReportPrefs();
@@ -3966,11 +4257,20 @@ async function generateReport() {
 // error boundary doesn't reach them, and leaving their skeletons shimmering
 // above the error message reads as "still loading" forever.
 async function refreshReport() {
+  const seq = reportSeq + 1; // what generateReport will claim
   try {
     await generateReport();
   } catch (err) {
+    if (seq !== reportSeq) return; // a newer request owns the screen now
+    // Stale data must not survive a failed refresh: the print path reads
+    // state.report, and printing last report's numbers under a fresh-looking
+    // range label is worse than printing nothing.
+    state.report = null;
+    $("#print-report").innerHTML = "";
     $("#report-stats").innerHTML = "";
     $("#report-chart").innerHTML = "";
+    $("#report-scope").textContent = "";
+    $("#report-print").disabled = true;
     renderViewFailure("reports", err);
   }
 }
@@ -3987,11 +4287,54 @@ function wireReportsView() {
   // Delegated on the view, so the "Show all time" button inside an empty
   // state works the same as the chips in the toolbar.
   $("#view-reports").addEventListener("click", (e) => {
+    const nav = e.target.closest("[data-nav]");
+    if (nav) {
+      const railItem = $(`.rail-item[data-view="${nav.dataset.nav}"]`);
+      if (railItem) railItem.click();
+      return;
+    }
     const chip = e.target.closest("[data-report-range]");
     if (!chip) return;
     setReportRange(chip.dataset.reportRange);
     syncReportControls();
     refreshReport();
+  });
+
+  // Arrow keys move between the four report radios, matching the announced
+  // radiogroup semantics.
+  $("#report-type-seg").addEventListener("keydown", (e) => {
+    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+    const btns = $$("#report-type-seg .seg-btn");
+    const idx = btns.findIndex((b) => b.dataset.reportType === state.reportType);
+    const next = btns[(idx + (e.key === "ArrowRight" ? 1 : btns.length - 1)) % btns.length];
+    e.preventDefault();
+    next.focus();
+    next.click();
+  });
+
+  // Bars and rows navigate to their vehicle.
+  const openFromDataset = (el) => {
+    if (!el || el.dataset.refId == null) return false;
+    openVehicleDetail(el.dataset.seg, Number(el.dataset.refId));
+    return true;
+  };
+  $("#report-chart").addEventListener("click", (e) => openFromDataset(e.target.closest("[data-ref-id]")));
+  $("#report-chart").addEventListener("keydown", (e) => {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    if (openFromDataset(e.target.closest("[data-ref-id]"))) e.preventDefault();
+  });
+  $("#report-output").addEventListener("keydown", (e) => {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    if (e.target.closest("th")) return;
+    if (openFromDataset(e.target.closest("tr[data-ref-id]"))) e.preventDefault();
+  });
+
+  // Rebuild the print markup at print time (Ctrl+P included), so the paper
+  // always matches the current rows, sort, and clock.
+  window.addEventListener("beforeprint", () => {
+    if (state.report) {
+      $("#print-report").innerHTML = renderPrintReport(visibleReportRows(), state.report.type, state.report.start, state.report.end);
+    }
   });
 
   for (const id of ["#report-start", "#report-end"]) {
@@ -4004,7 +4347,10 @@ function wireReportsView() {
 
   $("#report-output").addEventListener("click", (e) => {
     const th = e.target.closest("th[data-report-sort]");
-    if (!th || !state.report) return;
+    if (!th || !state.report) {
+      if (!th) openFromDataset(e.target.closest("tr[data-ref-id]"));
+      return;
+    }
     const key = th.dataset.reportSort;
     state.reportSort = state.reportSort.key === key
       ? { key, dir: state.reportSort.dir === "desc" ? "asc" : "desc" }
@@ -4030,9 +4376,17 @@ async function loadAccountingView() {
     ]);
     state.vendors = vendors;
     state.orders = orders;
+    state.apAudits = audits;
+    // Rebuilding the selects snaps them back to their first option -- keep
+    // whatever the user had picked (a held-for-review invoice must not be
+    // silently re-pointed at the wrong vendor or RO).
+    const keepVendor = $("#ap-vendor").value;
+    const keepPo = $("#ap-po").value;
     renderVendorSelect();
     renderVendorChips();
     renderPoSelect();
+    if (keepVendor && [...$("#ap-vendor").options].some((o) => o.value === keepVendor)) $("#ap-vendor").value = keepVendor;
+    if (keepPo && [...$("#ap-po").options].some((o) => o.value === keepPo)) $("#ap-po").value = keepPo;
     renderAuditList(audits);
     if (!$("#ap-invoice-items").children.length) addApLine();
   } catch (err) {
@@ -4050,9 +4404,40 @@ async function loadApTable() {
   try {
     state.apInvoices = await get(`/api/ap/invoices?${params}`);
     renderApTable(filterApInvoices(state.apInvoices));
+    renderApStats();
   } catch (err) {
-    toast(`Could not load A/P invoices: ${err.message}`, true);
+    renderViewFailure("accounting", err, [["#ap-table", 8]]);
   }
+}
+
+// The money screen opens with the money: what the visible range spent, and
+// what needs a human decision.
+function renderApStats() {
+  const live = state.apInvoices.filter((a) => a.status !== "voided");
+  const total = live.reduce((s, a) => s + (a.total || 0), 0);
+  const held = state.apAudits.filter((a) => a.status === "review_required").length;
+  const voided = state.apInvoices.length - live.length;
+  $("#ap-stats").innerHTML = `
+    <div class="stat">
+      <div class="stat-label">Invoices</div>
+      <div class="stat-value">${live.length}</div>
+      <div class="stat-sub">${voided ? `plus ${voided} voided` : "in the selected range"}</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Total Posted</div>
+      <div class="stat-value num">${money(total)}</div>
+      <div class="stat-sub">excluding voided</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Held for Review</div>
+      <div class="stat-value${held ? " warn" : ""}">${held}</div>
+      <div class="stat-sub">${held ? "see the Control Log" : "nothing waiting on approval"}</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Vendors</div>
+      <div class="stat-value">${state.vendors.length}</div>
+      <div class="stat-sub">${state.vendors.length ? "on file" : "add one to post invoices"}</div>
+    </div>`;
 }
 
 function filterApInvoices(invoices) {
@@ -4108,7 +4493,8 @@ function renderPoSelect() {
   }).join("") || `<option value="">No open repair orders</option>`;
 }
 function renderApTable(invoices) {
-  $("#ap-count").textContent = `${invoices.length} invoice${invoices.length === 1 ? "" : "s"}`;
+  const liveTotal = invoices.filter((a) => a.status !== "voided").reduce((s, a) => s + (a.total || 0), 0);
+  $("#ap-count").textContent = `${invoices.length} invoice${invoices.length === 1 ? "" : "s"} · ${money(liveTotal)}`;
   // Only recon/we-owe rows can jump anywhere -- retail ROs have no
   // vehicle-detail view, so they render as a plain (non-clickable) row.
   $("#ap-table").innerHTML = invoices.length ? invoices.map((a) => {
@@ -4116,14 +4502,16 @@ function renderApTable(invoices) {
     const clickable = refId != null && (a.segment === "recon" || a.segment === "we_owe");
     const voided = a.status === "voided";
     return `
-    <tr class="${clickable ? "clickable" : ""} ${voided ? "voided-row" : ""}" ${clickable ? `data-segment="${a.segment}" data-ref-id="${refId}" title="Open this vehicle"` : ""}>
-      <td>${esc(a.invoice_number)}</td><td>${esc(a.vendor_name)}</td><td>${esc(a.po_number)}</td>
+    <tr class="${clickable ? "clickable" : ""} ${voided ? "voided-row" : ""}" ${clickable ? `data-segment="${a.segment}" data-ref-id="${refId}" title="Open this vehicle"` : `title="Retail ticket — no vehicle page"`}>
+      <td>${esc(a.invoice_number)}</td>
+      <td>${esc(fmtDate(a.posted_at))}</td>
+      <td>${esc(a.vendor_name)}</td><td>${esc(a.po_number)}</td>
       <td>${esc(a.vehicle_label)}</td><td class="num-col">${money(a.total)}</td>
-      <td><span class="pill ${voided ? "pill-progress" : "pill-done"}">${esc(a.status)}</span></td>
-      <td>${voided ? "" : `<button type="button" class="btn btn-ghost btn-sm ap-void" data-id="${a.id}" data-number="${esc(a.invoice_number)}">Void</button>`}</td>
+      <td><span class="pill ${voided ? "pill-void" : "pill-done"}">${voided ? "Voided" : "Posted"}</span></td>
+      <td class="actions-col">${voided ? "" : `<button type="button" class="btn btn-ghost btn-xs btn-danger-ghost ap-void" data-id="${a.id}" data-number="${esc(a.invoice_number)}">Void</button>`}</td>
     </tr>
   `;
-  }).join("") : emptyRow(7, state.apSearch
+  }).join("") : emptyRow(8, state.apSearch
     ? {
         icon: "search",
         title: "No invoices match that search",
@@ -4157,27 +4545,55 @@ function renderApTable(invoices) {
     });
   });
 }
+const AP_AUDIT_PILL = { posted: "pill-done", review_required: "pill-progress", duplicate: "pill-void", voided: "pill-void" };
+
 function renderAuditList(audits) {
+  // The log is the only place a failed post is recorded -- severity has to
+  // be legible at a glance, not buried in a capitalized enum string.
   $("#audit-list").innerHTML = audits.length ? audits.slice(0, 20).map((a) => `
-    <div class="mini-item"><div>${esc(a.invoice_number)} — <span style="text-transform:capitalize">${esc(a.status)}</span></div>
-    ${a.issues.length ? `<div class="mi-meta" style="color:var(--warn)">${a.issues.map(esc).join("; ")}</div>` : ""}
-    <div class="mi-meta">${fmtDate(a.created_at)}</div></div>
-  `).join("") : emptyState({ icon: "invoice", title: "No activity yet", hint: "Posting or voiding a vendor invoice is recorded here.", compact: true });
+    <div class="mini-item${a.status === "review_required" ? " is-review" : ""}${a.status === "duplicate" ? " is-duplicate" : ""}">
+    <div class="mi-title"><span>${esc(a.invoice_number)}</span><span class="pill ${AP_AUDIT_PILL[a.status] || "pill-void"}">${esc(a.status.replace(/_/g, " "))}</span></div>
+    ${a.issues.length ? `<div class="mi-meta issues">${a.issues.map(esc).join("; ")}</div>` : ""}
+    <div class="mi-meta" title="${esc(fmtDate(a.created_at))}">${esc(relativeTime(a.created_at))}</div></div>
+  `).join("") + (audits.length > 20 ? `<div class="mi-meta">Showing 20 of ${audits.length}</div>` : "")
+    : emptyState({ icon: "invoice", title: "No activity yet", hint: "Posting or voiding a vendor invoice is recorded here.", compact: true });
 }
 
-// Subtotal is always exactly the sum of the line items, and Total is always
-// exactly Subtotal + Tax -- both fields are read-only precisely so this can
-// never drift out of sync and trip process_invoice's mismatch check, which
-// previously required hand-adding every line in your head.
+// One definition of "blank" shared by the subtotal, the validator and the
+// submit payload: a line with no description, no part number and no money.
+// Anything else is either a real line or an error the user must fix -- it
+// can never be counted on screen and then silently dropped from the POST,
+// which is exactly the drift process_invoice's mismatch check would flag.
+function apLineState(tr) {
+  const desc = tr.querySelector(".apl-desc").value.trim();
+  const part = tr.querySelector(".apl-part").value.trim();
+  const qty = parseFloat(tr.querySelector(".apl-qty").value || "0");
+  const cost = parseFloat(tr.querySelector(".apl-cost").value || "0");
+  const hasMoney = qty > 0 && cost !== 0;
+  if (!desc && !part && !hasMoney) return "blank";
+  if (!desc || qty <= 0) return "invalid";
+  return "valid";
+}
+
+// Subtotal is always exactly the sum of the countable lines, and Total is
+// always exactly Subtotal + Tax -- both are computed outputs precisely so
+// they can never drift from what gets posted.
 function recalcApTotals() {
-  const subtotal = $$("#ap-invoice-items tr").reduce((sum, tr) => {
+  let subtotal = 0;
+  $$("#ap-invoice-items tr").forEach((tr) => {
     const qty = parseFloat(tr.querySelector(".apl-qty").value || "0");
     const cost = parseFloat(tr.querySelector(".apl-cost").value || "0");
-    return sum + qty * cost;
-  }, 0);
+    const line = apLineState(tr) === "blank" ? 0 : qty * cost;
+    tr.querySelector(".apl-line-total").textContent = line ? money(line) : "";
+    subtotal += line;
+  });
   const tax = parseFloat($("#ap-tax").value || "0");
-  $("#ap-subtotal").value = subtotal.toFixed(2);
-  $("#ap-total").value = (subtotal + tax).toFixed(2);
+  const total = subtotal + tax;
+  $("#ap-subtotal").textContent = money(subtotal);
+  $("#ap-total").textContent = money(total);
+  // Matches LARGE_INVOICE_THRESHOLD server-side -- say it before the post,
+  // not after.
+  $("#ap-over-threshold").hidden = total <= 500;
 }
 
 function addApLine() {
@@ -4189,18 +4605,53 @@ function addApLine() {
     <td><input class="apl-desc" placeholder="Description"></td>
     <td><input class="apl-qty" type="number" min="0.01" step="0.01" value="1" style="width:70px"></td>
     <td><input class="apl-cost" type="number" min="0" step="0.01" value="0" style="width:90px"></td>
-    <td><button type="button" class="rm-btn">×</button></td>
+    <td class="apl-line-total"></td>
+    <td><button type="button" class="rm-btn" aria-label="Remove line">×</button></td>
   `;
   tr.querySelector(".rm-btn").addEventListener("click", () => { tr.remove(); recalcApTotals(); });
-  tr.querySelector(".apl-qty").addEventListener("input", recalcApTotals);
-  tr.querySelector(".apl-cost").addEventListener("input", recalcApTotals);
+  ["input", "change"].forEach((evt) => {
+    tr.querySelector(".apl-qty").addEventListener(evt, recalcApTotals);
+    tr.querySelector(".apl-cost").addEventListener(evt, recalcApTotals);
+  });
+  tr.querySelector(".apl-desc").addEventListener("input", () => {
+    tr.classList.remove("apl-invalid");
+    recalcApTotals();
+  });
   box.appendChild(tr);
   recalcApTotals();
+}
+
+// Structured post-result feedback in place of the old grey run-on hint line.
+function renderApAlert(res) {
+  const box = $("#ap-invoice-note");
+  if (!res) { box.hidden = true; box.innerHTML = ""; return; }
+  const issues = res.issues || [];
+  const duplicate = res.status === "duplicate";
+  box.className = `ap-alert${duplicate ? " is-duplicate" : ""}`;
+  box.innerHTML = `
+    <div class="ap-alert-head">
+      <svg viewBox="0 0 24 24" style="width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:2"><path d="M12 9v4M12 17h.01M10.3 3.8L2.6 17a2 2 0 001.7 3h15.4a2 2 0 001.7-3L13.7 3.8a2 2 0 00-3.4 0z"/></svg>
+      <span>${duplicate ? "Duplicate invoice number" : `Held for review — ${issues.length} issue${issues.length === 1 ? "" : "s"}`}</span>
+    </div>
+    ${issues.length ? `<ul>${issues.map((i) => `<li>${esc(i)}</li>`).join("")}</ul>` : ""}`;
+  box.hidden = false;
+}
+
+function clearApInvoiceForm() {
+  $("#ap-invoice-form").reset();
+  $("#ap-invoice-items").innerHTML = "";
+  addApLine();
+  renderApAlert(null);
 }
 
 function wireAccountingView() {
   $("#ap-add-line").addEventListener("click", addApLine);
   $("#ap-tax").addEventListener("input", recalcApTotals);
+  $("#ap-clear-invoice").addEventListener("click", clearApInvoiceForm);
+  // A stale warning must never sit under a corrected invoice.
+  $("#ap-invoice-form").addEventListener("input", () => {
+    if (!$("#ap-invoice-note").hidden) renderApAlert(null);
+  });
 
   $$('#view-accounting [data-ap-range]').forEach((chip) => {
     chip.addEventListener("click", () => {
@@ -4239,13 +4690,16 @@ function wireAccountingView() {
     try {
       if (editingVendorId) {
         await patch(`/api/vendors/${editingVendorId}`, payload);
-        toast("Vendor updated");
+        toast(`${payload.name} updated`);
       } else {
         await post("/api/vendors", payload);
-        toast("Vendor saved");
+        toast(`${payload.name} saved`);
       }
       cancelVendorEdit();
-      loadAccountingView();
+      await loadAccountingView();
+      // The near-certain next action is posting an invoice from the vendor
+      // that was just added -- select it.
+      if ([...$("#ap-vendor").options].some((o) => o.value === payload.name)) $("#ap-vendor").value = payload.name;
     } catch (err) {
       toast(err.message, true);
     }
@@ -4254,37 +4708,54 @@ function wireAccountingView() {
 
   $("#ap-invoice-form").addEventListener("submit", async (e) => {
     e.preventDefault();
-    const items = $$("#ap-invoice-items tr").map((tr) => ({
+    const rows = $$("#ap-invoice-items tr");
+    // A line with money on it but no description used to be counted in the
+    // on-screen subtotal and then silently dropped from the payload -- the
+    // server then held the invoice for a mismatch the user couldn't see.
+    // Now it's an error on the field itself.
+    const invalid = rows.filter((tr) => apLineState(tr) === "invalid");
+    if (invalid.length) {
+      invalid.forEach((tr) => tr.classList.add("apl-invalid"));
+      invalid[0].querySelector(".apl-desc").focus();
+      return toast("Every line with a cost needs a description", true);
+    }
+    const items = rows.filter((tr) => apLineState(tr) === "valid").map((tr) => ({
       part_number: tr.querySelector(".apl-part").value.trim() || "N/A",
       description: tr.querySelector(".apl-desc").value.trim(),
       quantity: parseFloat(tr.querySelector(".apl-qty").value || "0"),
       unit_cost: parseFloat(tr.querySelector(".apl-cost").value || "0"),
       kind: tr.querySelector(".apl-kind").value,
-    })).filter((i) => i.description && i.quantity > 0);
+    }));
     if (!items.length) return toast("Add at least one line item", true);
+    const subtotal = items.reduce((s, i) => s + i.quantity * i.unit_cost, 0);
+    const tax = parseFloat($("#ap-tax").value || "0");
     await withLoading(e.submitter, "Posting…", async () => {
       try {
         const res = await post("/api/agent/invoices/process", {
           vendor_name: $("#ap-vendor").value,
           invoice_number: $("#ap-invoice-number").value.trim(),
           po_number: $("#ap-po").value,
-          subtotal: parseFloat($("#ap-subtotal").value || "0"),
-          tax: parseFloat($("#ap-tax").value || "0"),
-          total: parseFloat($("#ap-total").value || "0"),
+          subtotal: Math.round(subtotal * 100) / 100,
+          tax,
+          total: Math.round((subtotal + tax) * 100) / 100,
           items,
           source: "ui",
         });
         if (res.status === "posted") {
           toast("Invoice posted — parts marked received");
-          $("#ap-invoice-form").reset();
-          $("#ap-invoice-items").innerHTML = "";
-          addApLine();
-          $("#ap-invoice-note").textContent = "";
+          clearApInvoiceForm();
+          await loadAccountingView();
         } else {
-          $("#ap-invoice-note").textContent = (res.issues || []).join(" · ");
+          renderApAlert(res);
           toast(`Invoice ${res.status.replace("_", " ")}`, true);
+          // Refresh the log and table without loadAccountingView, which
+          // would rebuild (and blank) the vendor/PO the user just picked.
+          try {
+            state.apAudits = await get("/api/accounting/audits");
+            renderAuditList(state.apAudits);
+            await loadApTable();
+          } catch { /* the alert is already on screen */ }
         }
-        loadAccountingView();
       } catch (err) {
         toast(err.message, true);
       }
@@ -4296,71 +4767,147 @@ function wireAccountingView() {
    CORES & RETURNS
    ================================================================== */
 async function loadCoresView() {
-  try {
-    state.cores = await get("/api/cores");
-  } catch (err) {
-    renderViewFailure("cores", err, [["#cores-table", 6]]);
-    return;
+  // Fetched independently: one dead endpoint should degrade one panel, not
+  // freeze the other half of the screen on skeleton rows forever.
+  const [coresRes, returnsRes] = await Promise.allSettled([get("/api/cores"), get("/api/returns")]);
+  if (coresRes.status === "fulfilled") {
+    state.cores = coresRes.value;
+    renderCoresTable();
+  } else {
+    renderViewFailure("cores", coresRes.reason, [["#cores-table", 6]]);
   }
-  renderCoresTable();
-  try {
-    state.returns = await get("/api/returns");
-  } catch (err) {
-    renderViewFailure("cores", err, [["#returns-table", 7]]);
-    return;
+  if (returnsRes.status === "fulfilled") {
+    state.returns = returnsRes.value;
+    renderReturnsTable();
+  } else if (coresRes.status === "fulfilled") {
+    renderViewFailure("cores", returnsRes.reason, [["#returns-table", 7]]);
   }
-  renderReturnsTable();
+}
+
+// Rows carry their own segment/vehicle ids from the API -- resolving through
+// state.orders (only loaded by the Accounting view) made every row click a
+// silent no-op unless you'd visited A/P first.
+function openVehicleFromRow(row) {
+  const refId = row.recon_vehicle_id ?? row.we_owe_id;
+  if (refId != null && (row.segment === "recon" || row.segment === "we_owe")) {
+    openVehicleDetail(row.segment, refId);
+  }
+}
+
+function coresMatchesSearch(c, query) {
+  if (!query) return true;
+  return [c.description, c.part_number, c.ro_number, c.vehicle_label, c.vendor_name]
+    .some((f) => (f || "").toLowerCase().includes(query));
+}
+
+// One vocabulary for both tables on this page: Pending (still at the shop,
+// cores only), Awaiting Credit (sent back to the vendor, paperwork not here
+// yet), Credited (the vendor's credit/invoice number is recorded).
+function coreStatus(c) {
+  if (!c.core_returned) return "pending";
+  return c.core_return_invoice_number ? "credited" : "awaiting";
 }
 
 function renderCoresTable() {
   const filter = state.coresFilter;
+  const query = (state.coresSearch || "").toLowerCase();
   const rows = state.cores.filter((c) => {
-    if (filter === "pending") return !c.core_returned;
-    if (filter === "returned") return !!c.core_returned;
-    return true;
+    if (!coresMatchesSearch(c, query)) return false;
+    if (filter === "all") return true;
+    return coreStatus(c) === filter;
   });
   $("#cores-count").textContent = `${rows.length} core${rows.length === 1 ? "" : "s"}`;
-  const pendingTotal = state.cores.filter((c) => !c.core_returned).reduce((s, c) => s + c.core_charge, 0);
-  $("#cores-total").textContent = pendingTotal > 0 ? `${money(pendingTotal)} pending` : "";
+  // Voided tickets aren't money owed back -- keep them out of the headline
+  // figure. A deposit stays outstanding until the credit is recorded, not
+  // merely until the core leaves the shop.
+  const outstanding = state.cores.filter((c) => coreStatus(c) !== "credited" && !c.voided).reduce((s, c) => s + c.core_charge, 0);
+  $("#cores-total").textContent = state.cores.length
+    ? (outstanding > 0 ? `${money(outstanding)} outstanding` : "all deposits recovered")
+    : "";
+
+  const CORE_PILL = { pending: "pill-progress", awaiting: "pill-credit-pending", credited: "pill-done" };
+  const CORE_LABEL = { pending: "Pending", awaiting: "Awaiting Credit", credited: "Credited" };
 
   $("#cores-table").innerHTML = rows.length ? rows.map((c) => {
     const clickable = c.stock_number || c.we_owe_customer_name;
     const voided = !!c.voided;
+    const status = coreStatus(c);
+    const actions = voided ? "" : status === "pending"
+      ? `<button type="button" class="btn btn-ghost btn-xs cores-toggle" data-order-id="${c.order_id}" data-item-id="${c.id}" data-returned="0">Mark Picked Up</button>`
+      : status === "awaiting"
+      ? `<button type="button" class="btn btn-primary btn-xs cores-credit" data-order-id="${c.order_id}" data-item-id="${c.id}">Credit Received</button>
+         <button type="button" class="btn btn-ghost btn-xs cores-toggle" data-order-id="${c.order_id}" data-item-id="${c.id}" data-returned="1">Undo</button>`
+      : "";
     return `
-    <tr class="${clickable ? "clickable" : ""} ${voided ? "voided-row" : ""}" ${clickable ? `data-order-id="${c.order_id}" title="Open this vehicle"` : ""}>
-      <td>${esc(c.description)}</td><td>${esc(c.part_number || "")}</td>
+    <tr class="${clickable ? "clickable" : ""} ${voided ? "voided-row" : ""}" data-id="${c.id}" ${clickable ? `title="Open ${esc(c.vehicle_label)}"` : `title="Not linked to a vehicle record"`}>
+      <td>${esc(c.description)}${status === "credited" ? `<div class="veh-sub num">Inv ${esc(c.core_return_invoice_number)}</div>` : ""}</td>
+      <td>${c.part_number ? esc(c.part_number) : '<span class="muted-dash">—</span>'}</td>
       <td>${esc(c.ro_number)} · ${esc(c.vehicle_label)}</td>
       <td class="num-col">${money(c.core_charge)}</td>
-      <td><span class="pill ${c.core_returned ? "pill-done" : "pill-progress"}">${c.core_returned ? "Returned" : "Pending"}</span></td>
-      <td><button type="button" class="btn btn-ghost btn-sm cores-toggle" data-order-id="${c.order_id}" data-item-id="${c.id}" data-returned="${c.core_returned ? 1 : 0}">${c.core_returned ? "Undo" : "Mark Returned"}</button></td>
+      <td><span class="pill ${CORE_PILL[status]}">${CORE_LABEL[status]}</span></td>
+      <td class="actions-col"><div class="row-actions">${actions}</div></td>
     </tr>
   `;
-  }).join("") : emptyRow(6, {
-    icon: filter === "returned" ? "check" : "core",
-    title: filter === "pending" ? "No cores waiting to go back"
-      : filter === "returned" ? "No cores returned yet"
+  }).join("") : emptyRow(6, query ? {
+    icon: "search",
+    title: "No cores match that search",
+    hint: `Nothing matched "${state.coresSearch}".`,
+  } : {
+    icon: filter === "credited" ? "check" : "core",
+    title: filter === "pending" ? "Nothing waiting to go back"
+      : filter === "awaiting" ? "No cores awaiting credit"
+      : filter === "credited" ? "No credited cores yet"
       : "No core charges tracked yet",
-    hint: filter === "returned"
-      ? "Cores you mark returned move here, so you can confirm what's already gone back to the vendor."
+    hint: filter === "pending"
+      ? "Cores with a deposit wait here until the vendor's driver collects the old unit."
+      : filter === "awaiting"
+      ? "Cores you mark picked up wait here until the vendor's credit paperwork arrives and you record its number."
+      : filter === "credited"
+      ? "Once you record the vendor's credit/invoice number against a returned core it moves here."
       : "Put a core charge on a part line and it shows up here until the old unit goes back to the vendor and the deposit is recovered.",
   });
 
   $$(".clickable", $("#cores-table")).forEach((row) => {
     row.addEventListener("click", (e) => {
-      if (e.target.closest(".cores-toggle")) return;
-      const order = state.orders.find((o) => o.id === Number(row.dataset.orderId));
-      const refId = order ? (order.recon_vehicle_id ?? order.we_owe_id) : null;
-      const segment = order ? order.segment : null;
-      if (refId != null && (segment === "recon" || segment === "we_owe")) openVehicleDetail(segment, refId);
+      if (e.target.closest(".cores-toggle, .cores-credit")) return;
+      const item = state.cores.find((c) => c.id === Number(row.dataset.id));
+      if (item) openVehicleFromRow(item);
     });
   });
+  // Mark Returned / Undo: no paperwork at this step -- the core goes back to
+  // the vendor first, the credit arrives later.
   $$(".cores-toggle", $("#cores-table")).forEach((btn) => {
     btn.addEventListener("click", async (e) => {
       e.stopPropagation();
       const returned = btn.dataset.returned !== "1";
       try {
-        await patch(`/api/orders/${btn.dataset.orderId}/estimate/items/${btn.dataset.itemId}/core-return`, { returned, actor: currentActor() });
-        toast(returned ? "Core marked returned" : "Core return undone");
+        await patch(`/api/orders/${btn.dataset.orderId}/estimate/items/${btn.dataset.itemId}/core-return`,
+          { returned, actor: currentActor() });
+        toast(returned ? "Core marked picked up — record the credit when the vendor's paperwork arrives" : "Back on the shelf");
+        await loadCoresView();
+      } catch (err) {
+        toast(err.message, true);
+      }
+    });
+  });
+  // Credit Received: the vendor's paperwork is here -- its number is what
+  // moves the core into Credited.
+  $$(".cores-credit", $("#cores-table")).forEach((btn) => {
+    btn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const item = state.cores.find((c) => c.id === Number(btn.dataset.itemId));
+      const answer = await promptInvoiceNumber({
+        eyebrow: "CORE CREDIT",
+        title: "Record the vendor's credit",
+        body: item ? `${item.description}${item.part_number ? ` (${item.part_number})` : ""} — ${money(item.core_charge)} deposit coming back.` : "",
+        label: "Credit / invoice #",
+        confirmLabel: "Record Credit",
+      });
+      if (answer === null) return;
+      try {
+        await post(`/api/orders/${btn.dataset.orderId}/estimate/items/${btn.dataset.itemId}/core-credit`,
+          { invoice_number: answer, actor: currentActor() });
+        toast("Core credit recorded");
         await loadCoresView();
       } catch (err) {
         toast(err.message, true);
@@ -4378,57 +4925,111 @@ function wireCoresView() {
       renderCoresTable();
     });
   });
+  $("#cores-search").addEventListener("input", (e) => {
+    state.coresSearch = e.target.value.trim();
+    renderCoresTable();
+  });
+}
+
+// Same three states as cores, on the same words: Pending (flagged to go
+// back but still physically here), Awaiting Credit (the vendor collected
+// it), Credited (their paperwork is recorded).
+function returnStatus(r) {
+  if (r.return_invoice_number) return "credited";
+  return r.part_picked_up_at ? "awaiting" : "pending";
 }
 
 function renderReturnsTable() {
   const filter = state.returnsFilter;
+  const query = (state.returnsSearch || "").toLowerCase();
   const rows = state.returns.filter((r) => {
-    if (filter === "pending") return !r.return_invoice_number;
-    if (filter === "credited") return !!r.return_invoice_number;
-    return true;
+    if (!coresMatchesSearch(r, query)) return false;
+    if (filter === "all") return true;
+    return returnStatus(r) === filter;
   });
   $("#returns-count").textContent = `${rows.length} return${rows.length === 1 ? "" : "s"}`;
-  const pendingTotal = state.returns.filter((r) => !r.return_invoice_number).reduce((s, r) => s + Math.abs(r.credit_total), 0);
-  $("#returns-total").textContent = pendingTotal > 0 ? `${money(pendingTotal)} pending` : "";
+  // Outstanding is anything not yet credited, whether or not it's left the
+  // building -- that's the money the vendor still owes back.
+  const outstanding = state.returns.filter((r) => returnStatus(r) !== "credited" && !r.voided).reduce((s, r) => s + Math.abs(r.credit_total), 0);
+  const onShelf = state.returns.filter((r) => returnStatus(r) === "pending" && !r.voided).length;
+  $("#returns-total").textContent = state.returns.length
+    ? (outstanding > 0
+        ? `${money(outstanding)} outstanding${onShelf ? ` · ${onShelf} still here` : ""}`
+        : "all credits posted")
+    : "";
+
+  const RETURN_PILL = { pending: "pill-progress", awaiting: "pill-credit-pending", credited: "pill-done" };
+  const RETURN_LABEL = { pending: "Pending", awaiting: "Awaiting Credit", credited: "Credited" };
 
   $("#returns-table").innerHTML = rows.length ? rows.map((r) => {
     const clickable = r.stock_number || r.we_owe_customer_name;
     const voided = !!r.voided;
-    const credited = !!r.return_invoice_number;
+    const status = returnStatus(r);
+    const actions = voided ? "" : status === "pending"
+      ? `<button type="button" class="btn btn-ghost btn-xs returns-pickup" data-id="${r.id}" data-picked-up="0">Mark Picked Up</button>`
+      : status === "awaiting"
+      ? `<button type="button" class="btn btn-primary btn-xs returns-post" data-id="${r.id}">Credit Received</button>
+         <button type="button" class="btn btn-ghost btn-xs returns-pickup" data-id="${r.id}" data-picked-up="1">Undo</button>`
+      : "";
     return `
-    <tr class="${clickable ? "clickable" : ""} ${voided ? "voided-row" : ""}" ${clickable ? `data-order-id="${r.order_id}" title="Open this vehicle"` : ""}>
-      <td>${esc(r.description)}</td><td>${esc(r.part_number || "")}</td>
+    <tr class="${clickable ? "clickable" : ""} ${voided ? "voided-row" : ""}" data-id="${r.id}" ${clickable ? `title="Open ${esc(r.vehicle_label)}"` : `title="Not linked to a vehicle record"`}>
+      <td>${esc(r.description)}${status === "credited" ? `<div class="veh-sub num">Inv ${esc(r.return_invoice_number)}</div>` : ""}</td>
+      <td>${r.part_number ? esc(r.part_number) : '<span class="muted-dash">—</span>'}</td>
       <td>${esc(r.ro_number)} · ${esc(r.vehicle_label)}</td>
       <td>${esc(r.vendor_name || "—")}</td>
       <td class="num-col">${money(Math.abs(r.credit_total))}</td>
-      <td><span class="pill ${credited ? "pill-done" : "pill-progress"}">${credited ? `Credited (${esc(r.return_invoice_number)})` : "Pending Credit"}</span></td>
-      <td>${credited ? "" : `<button type="button" class="btn btn-ghost btn-sm returns-post" data-id="${r.id}">Post Credit</button>`}</td>
+      <td><span class="pill ${RETURN_PILL[status]}">${RETURN_LABEL[status]}</span></td>
+      <td class="actions-col"><div class="row-actions">${actions}</div></td>
     </tr>
   `;
-  }).join("") : emptyRow(7, {
+  }).join("") : emptyRow(7, query ? {
+    icon: "search",
+    title: "No returns match that search",
+    hint: `Nothing matched "${state.returnsSearch}".`,
+  } : {
     icon: filter === "credited" ? "check" : "core",
-    title: filter === "pending" ? "No returns waiting on credit"
+    title: filter === "pending" ? "Nothing waiting to go back"
+      : filter === "awaiting" ? "No returns awaiting credit"
       : filter === "credited" ? "No credited returns yet"
       : "No parts returned yet",
-    hint: filter === "credited"
-      ? "Once you post a vendor credit against a return it moves here with its RMA number."
-      : "Mark a received part as returned on its ticket and it lands here until the vendor's credit is posted against it.",
+    hint: filter === "pending"
+      ? "Parts you mark returned on a ticket wait here until the vendor's driver collects them."
+      : filter === "awaiting"
+      ? "Once a part is picked up it waits here until the vendor's credit arrives and you record it."
+      : filter === "credited"
+      ? "Once you record the vendor's credit against a return it moves here with its invoice number."
+      : "Mark a received part as returned on its ticket and it lands here until it goes back and the credit is recorded.",
   });
 
   $$(".clickable", $("#returns-table")).forEach((row) => {
     row.addEventListener("click", (e) => {
-      if (e.target.closest(".returns-post")) return;
-      const order = state.orders.find((o) => o.id === Number(row.dataset.orderId));
-      const refId = order ? (order.recon_vehicle_id ?? order.we_owe_id) : null;
-      const segment = order ? order.segment : null;
-      if (refId != null && (segment === "recon" || segment === "we_owe")) openVehicleDetail(segment, refId);
+      if (e.target.closest(".returns-post, .returns-pickup")) return;
+      const item = state.returns.find((r) => r.id === Number(row.dataset.id));
+      if (item) openVehicleFromRow(item);
+    });
+  });
+  // Mark Picked Up / Undo -- purely physical, no paperwork involved.
+  $$(".returns-pickup", $("#returns-table")).forEach((btn) => {
+    btn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const item = state.returns.find((r) => r.id === Number(btn.dataset.id));
+      if (!item) return;
+      const pickedUp = btn.dataset.pickedUp !== "1";
+      try {
+        await patch(`/api/orders/${item.order_id}/estimate/items/${item.id}/part-pickup`,
+          { picked_up: pickedUp, actor: currentActor() });
+        toast(pickedUp ? "Marked picked up — record the credit when it arrives" : "Back on the shelf");
+        await loadCoresView();
+      } catch (err) {
+        toast(err.message, true);
+      }
     });
   });
   $$(".returns-post", $("#returns-table")).forEach((btn) => {
-    btn.addEventListener("click", (e) => {
+    btn.addEventListener("click", async (e) => {
       e.stopPropagation();
       const item = state.returns.find((r) => r.id === Number(btn.dataset.id));
-      if (item) openPostReturnDialog(item);
+      if (item) await withLoading(btn, "Opening…", () => openPostReturnDialog(item));
     });
   });
 }
@@ -4442,6 +5043,10 @@ function wireReturnsView() {
       renderReturnsTable();
     });
   });
+  $("#returns-search").addEventListener("input", (e) => {
+    state.returnsSearch = e.target.value.trim();
+    renderReturnsTable();
+  });
 }
 
 async function openPostReturnDialog(item) {
@@ -4449,33 +5054,56 @@ async function openPostReturnDialog(item) {
   $("#post-return-desc").textContent = `${item.description}${item.part_number ? ` (${item.part_number})` : ""} — ${item.ro_number} · ${item.vehicle_label}`;
   const vendors = await get("/api/vendors").catch(() => []);
   state.vendors = vendors;
-  $("#post-return-vendor").innerHTML = vendors.map((v) => `<option value="${v.id}" ${v.id === item.vendor_id ? "selected" : ""}>${esc(v.name)}</option>`).join("");
+  // When the part was never received against an invoice the vendor can't be
+  // resolved -- defaulting to the first vendor alphabetically posts a real
+  // credit against an innocent vendor one silent click later. Force a choice.
+  const resolved = vendors.some((v) => v.id === item.vendor_id);
+  $("#post-return-vendor").innerHTML =
+    (resolved ? "" : `<option value="" selected disabled>Select the vendor…</option>`) +
+    vendors.map((v) => `<option value="${v.id}" ${v.id === item.vendor_id ? "selected" : ""}>${esc(v.name)}</option>`).join("");
+  $("#post-return-vendor-warning").hidden = resolved;
   $("#post-return-credit-number").value = "";
+  const qty = item.received_quantity || item.quantity;
   $("#post-return-total-summary").innerHTML = `
+    ${qty && item.unit_cost != null ? `<div class="cost-line"><span>Qty ${esc(String(qty))} × ${money(item.unit_cost)}</span><span></span></div>` : ""}
     <div class="cost-line total"><span>Credit Due</span><span class="num">${money(Math.abs(item.credit_total))}</span></div>
   `;
   $("#post-return-dialog").showModal();
+  $("#post-return-credit-number").focus();
 }
 
 function wirePostReturnDialog() {
-  $("#post-return-cancel").addEventListener("click", () => $("#post-return-dialog").close());
-  $("#post-return-cancel-2").addEventListener("click", () => $("#post-return-dialog").close());
+  const dialog = $("#post-return-dialog");
+  ["#post-return-cancel", "#post-return-cancel-2"].forEach((id) => {
+    $(id).addEventListener("click", () => dialog.close());
+  });
+  // A stale item must not linger for the next open.
+  dialog.addEventListener("close", () => { state.postReturnItem = null; });
   $("#post-return-form").addEventListener("submit", async (e) => {
     e.preventDefault();
+    const item = state.postReturnItem;
+    if (!item) return;
+    const vendorId = Number($("#post-return-vendor").value);
+    const creditNumber = $("#post-return-credit-number").value.trim();
+    if (!vendorId) return toast("Select the vendor", true);
+    if (!creditNumber) return toast("Enter the credit/RMA number", true);
+    const vendorName = state.vendors.find((v) => v.id === vendorId)?.name || "the vendor";
+    // Posting writes a real credit invoice into A/P and can only be undone
+    // by voiding that invoice -- worth one explicit question.
+    if (!(await confirmAction({
+      eyebrow: "RETURN",
+      title: `Post this credit to A/P?`,
+      body: `Creates a ${money(Math.abs(item.credit_total))} credit invoice against ${vendorName}. It can only be reversed by voiding that invoice.`,
+      confirmLabel: "Post Credit",
+    }))) return;
     await withLoading(e.submitter, "Posting…", async () => {
-      const item = state.postReturnItem;
-      if (!item) return;
-      const vendorId = Number($("#post-return-vendor").value);
-      const creditNumber = $("#post-return-credit-number").value.trim();
-      if (!vendorId) return toast("Select the vendor", true);
-      if (!creditNumber) return toast("Enter the credit/RMA number", true);
       try {
         await post(`/api/orders/${item.order_id}/estimate/items/${item.id}/post-return-credit`, {
           vendor_id: vendorId,
           credit_number: creditNumber,
           actor: currentActor(),
         });
-        $("#post-return-dialog").close();
+        dialog.close();
         toast("Credit posted to A/P");
         await loadCoresView();
       } catch (err) {
@@ -4488,81 +5116,188 @@ function wirePostReturnDialog() {
 /* ==================================================================
    STAFF
    ================================================================== */
+const STAFF_ROLE_LABEL = { technician: "Technician", advisor: "Advisor", manager: "Manager" };
+const STAFF_ROLE_ORDER = { technician: 0, advisor: 1, manager: 2 };
+
 async function loadStaffView() {
   try {
-    state.staff = await get("/api/staff?include_inactive=true");
+    // Two slots on purpose: state.staff (active only) feeds every assignment
+    // dropdown in the app. Overwriting it with the include_inactive list --
+    // as this loader used to -- made deactivated people reappear in every
+    // technician/advisor/task picker until the next reload, where the server
+    // then rejected the pick.
+    const [allStaff, tasks] = await Promise.all([
+      get("/api/staff?include_inactive=true"),
+      get("/api/tasks").catch(() => []),
+    ]);
+    state.allStaff = allStaff;
+    state.staff = allStaff.filter((s) => s.active);
+    state.staffTasks = tasks;
   } catch (err) {
     return renderViewFailure("staff", err);
   }
   refreshCurrentUserOptions();
+  renderStaffStats();
   renderStaffTable();
+}
+
+function openTasksPerson(s) {
+  return state.staffTasks.filter((t) => !t.done && !t.completed_at && (t.assigned_to || []).includes(s.name)).length;
+}
+
+function renderStaffStats() {
+  const active = state.allStaff.filter((s) => s.active);
+  const techs = active.filter((s) => s.role === "technician").length;
+  const advisors = active.filter((s) => s.role === "advisor" || s.role === "manager").length;
+  const inactive = state.allStaff.length - active.length;
+  const openTasks = state.staffTasks.filter((t) => !t.done && !t.completed_at && (t.assigned_to || []).length).length;
+  $("#staff-stats").innerHTML = `
+    <div class="stat">
+      <div class="stat-label">Technicians</div>
+      <div class="stat-value">${techs}</div>
+      <div class="stat-sub">${techs ? "assignable on repair orders" : "add one to assign work"}</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Advisors &amp; Managers</div>
+      <div class="stat-value">${advisors}</div>
+      <div class="stat-sub">write and advise tickets</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Assigned Tasks</div>
+      <div class="stat-value">${openTasks}</div>
+      <div class="stat-sub">open tasks with an owner</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Inactive</div>
+      <div class="stat-value">${inactive}</div>
+      <div class="stat-sub">${inactive ? "hidden from all dropdowns" : "nobody deactivated"}</div>
+    </div>`;
+}
+
+function staffRowHtml(s) {
+  const openTasks = openTasksPerson(s);
+  return `
+    <tr data-id="${s.id}" class="${s.active ? "" : "staff-inactive"}">
+      <td><input class="stf-name" value="${esc(s.name)}" title="Click to rename" aria-label="Name of ${esc(s.name)}"></td>
+      <td><button type="button" class="role-badge role-${esc(s.role)} stf-role-badge" title="Click to change role">${STAFF_ROLE_LABEL[s.role] || esc(s.role)}</button></td>
+      <td class="num-col">${openTasks || '<span class="muted-dash">—</span>'}</td>
+      <td><span class="pill ${s.active ? "pill-done" : "pill-inactive"}">${s.active ? "Active" : "Inactive"}</span></td>
+      <td class="actions-col"><button type="button" class="btn btn-ghost btn-xs stf-toggle" aria-label="${s.active ? "Deactivate" : "Activate"} ${esc(s.name)}">${s.active ? "Deactivate" : "Activate"}</button></td>
+    </tr>`;
 }
 
 function renderStaffTable() {
   const query = (state.staffSearch || "").toLowerCase();
-  const rows = query ? state.staff.filter((s) => s.name.toLowerCase().includes(query)) : state.staff;
-  $("#staff-count").textContent = `${rows.length} staff member${rows.length === 1 ? "" : "s"}`;
-  $("#staff-table").innerHTML = rows.length ? rows.map((s) => `
-    <tr data-id="${s.id}">
-      <td><input class="stf-name" value="${esc(s.name)}" style="border:none;background:none;padding:2px"></td>
-      <td><select class="stf-role" style="border:none;background:none;padding:2px">
-        <option value="technician" ${s.role === "technician" ? "selected" : ""}>Technician</option>
-        <option value="advisor" ${s.role === "advisor" ? "selected" : ""}>Advisor / Service Writer</option>
-        <option value="manager" ${s.role === "manager" ? "selected" : ""}>Manager</option>
-      </select></td>
-      <td><span class="pill ${s.active ? "pill-done" : "pill-progress"}">${s.active ? "Active" : "Inactive"}</span></td>
-      <td><button type="button" class="btn btn-ghost btn-sm stf-toggle">${s.active ? "Deactivate" : "Activate"}</button></td>
-    </tr>
-  `).join("") : emptyRow(4, query
-    ? { icon: "search", title: "No staff match that search", hint: `Nothing matched "${state.staffSearch}".` }
-    : { icon: "staff", title: "No staff added yet", hint: "Add your technicians and advisors above so work can be assigned and productivity reported." });
+  let rows = state.allStaff.filter((s) => {
+    if (state.staffFilter === "active" && !s.active) return false;
+    return !query || s.name.toLowerCase().includes(query) || s.role.toLowerCase().includes(query);
+  });
+  // Active first, then in role order, then by name -- the org structure of
+  // the shop instead of a flat alphabet that interleaves retired employees.
+  rows = [...rows].sort((a, b) =>
+    (b.active - a.active) || (STAFF_ROLE_ORDER[a.role] - STAFF_ROLE_ORDER[b.role]) || a.name.localeCompare(b.name));
+  const activeCount = state.allStaff.filter((s) => s.active).length;
+  const inactiveCount = state.allStaff.length - activeCount;
+  $("#staff-count").textContent = query
+    ? `${rows.length} of ${state.allStaff.length} staff members`
+    : `${rows.length} staff member${rows.length === 1 ? "" : "s"}${inactiveCount && state.staffFilter !== "active" ? ` · ${activeCount} active, ${inactiveCount} inactive` : ""}`;
 
-  // Name/role auto-save like everywhere else in the app -- editing then
-  // navigating away (or clicking Deactivate) used to silently discard an
-  // unsaved edit since this table required an explicit Save click.
+  if (!rows.length) {
+    $("#staff-table").innerHTML = emptyRow(5, query
+      ? { icon: "search", title: "No staff match that search", hint: `Nothing matched "${state.staffSearch}".`,
+          actions: `<button type="button" class="btn btn-ghost btn-sm" id="staff-empty-clear">Clear search</button>` }
+      : { icon: "staff", title: "No staff added yet", hint: "Add your technicians and advisors above so work can be assigned and productivity reported.",
+          actions: `<button type="button" class="btn btn-primary btn-sm" id="staff-empty-add">Add your first staff member</button>` });
+    $("#staff-empty-add")?.addEventListener("click", () => $("#staff-form").name.focus());
+    $("#staff-empty-clear")?.addEventListener("click", () => {
+      state.staffSearch = "";
+      $("#staff-search").value = "";
+      renderStaffTable();
+    });
+    return;
+  }
+
+  // Group header rows by role while browsing; search results stay flat.
+  let html = "";
+  if (query) {
+    html = rows.map(staffRowHtml).join("");
+  } else {
+    for (const role of ["technician", "advisor", "manager"]) {
+      const group = rows.filter((s) => s.role === role);
+      if (!group.length) continue;
+      html += `<tr class="group-row"><td colspan="5">${STAFF_ROLE_LABEL[role]}s<span class="group-count">${group.length}</span></td></tr>`;
+      html += group.map(staffRowHtml).join("");
+    }
+  }
+  $("#staff-table").innerHTML = html;
+
+  // Name auto-saves on blur like everywhere else in the app -- editing then
+  // navigating away used to silently discard the edit.
   $$(".stf-name", $("#staff-table")).forEach((input) => {
     input.addEventListener("blur", async () => {
       const tr = input.closest("tr");
-      const person = state.staff.find((s) => s.id === Number(tr.dataset.id));
+      const person = state.allStaff.find((s) => s.id === Number(tr.dataset.id));
       const name = input.value.trim();
-      if (!name || name === person.name) return;
+      if (!name || name === person.name) { input.value = person.name; return; }
       try {
         await patch(`/api/staff/${tr.dataset.id}`, { name });
-        toast("Staff updated");
+        toast(`Renamed to ${name}`);
         await loadStaffView();
       } catch (err) {
         toast(err.message, true);
         input.value = person.name;
       }
     });
+    input.addEventListener("keydown", (e) => { if (e.key === "Enter") input.blur(); });
   });
-  $$(".stf-role", $("#staff-table")).forEach((select) => {
-    select.addEventListener("change", async () => {
-      const tr = select.closest("tr");
-      try {
-        await patch(`/api/staff/${tr.dataset.id}`, { role: select.value });
-        toast("Staff updated");
-        await loadStaffView();
-      } catch (err) {
-        toast(err.message, true);
-      }
+
+  // Role renders as a badge; clicking it swaps in the select, so the column
+  // reads as data, not a grid of live dropdowns one slip from re-roling
+  // someone.
+  $$(".stf-role-badge", $("#staff-table")).forEach((badge) => {
+    badge.addEventListener("click", () => {
+      const tr = badge.closest("tr");
+      const person = state.allStaff.find((s) => s.id === Number(tr.dataset.id));
+      const select = document.createElement("select");
+      select.className = "stf-role-select";
+      select.innerHTML = `
+        <option value="technician" ${person.role === "technician" ? "selected" : ""}>Technician</option>
+        <option value="advisor" ${person.role === "advisor" ? "selected" : ""}>Advisor / Service Writer</option>
+        <option value="manager" ${person.role === "manager" ? "selected" : ""}>Manager</option>`;
+      badge.replaceWith(select);
+      select.focus();
+      const restore = () => renderStaffTable();
+      select.addEventListener("blur", restore);
+      select.addEventListener("change", async () => {
+        select.removeEventListener("blur", restore);
+        try {
+          await patch(`/api/staff/${tr.dataset.id}`, { role: select.value });
+          toast(`${person.name} is now ${STAFF_ROLE_LABEL[select.value] === "Advisor" ? "an" : "a"} ${STAFF_ROLE_LABEL[select.value]}`);
+          await loadStaffView();
+        } catch (err) {
+          toast(err.message, true);
+          renderStaffTable();
+        }
+      });
     });
   });
+
   $$(".stf-toggle", $("#staff-table")).forEach((btn) => btn.addEventListener("click", async () => {
     const tr = btn.closest("tr");
-    const person = state.staff.find((s) => s.id === Number(tr.dataset.id));
+    const person = state.allStaff.find((s) => s.id === Number(tr.dataset.id));
+    const openTasks = openTasksPerson(person);
     // Deactivating pulls this person out of every technician/advisor
     // dropdown app-wide -- a bigger consequence than most of the guarded
     // deletes elsewhere, so it asks first too.
     if (person.active && !(await confirmAction({
       eyebrow: "STAFF",
       title: `Deactivate ${person.name}?`,
-      body: "They stop appearing in every technician and advisor dropdown. Work already assigned to them keeps their name.",
+      body: `They stop appearing in every technician and advisor dropdown. Work already assigned to them keeps their name.${openTasks ? ` They currently have ${openTasks} open task${openTasks === 1 ? "" : "s"}.` : ""}`,
       confirmLabel: "Deactivate",
     }))) return;
     try {
       await patch(`/api/staff/${tr.dataset.id}`, { active: !person.active });
-      toast(person.active ? "Deactivated" : "Activated");
+      toast(person.active ? `${person.name} deactivated` : `${person.name} activated`);
       loadStaffView();
     } catch (err) {
       toast(err.message, true);
@@ -4574,11 +5309,18 @@ function wireStaffView() {
   $("#staff-form").addEventListener("submit", async (e) => {
     e.preventDefault();
     const form = e.target;
+    const name = form.name.value.trim();
+    // Assignment pickers show names only, so two "Ray Ortiz" rows would be
+    // indistinguishable forever -- catch it before the POST.
+    if (state.allStaff.some((s) => s.name.toLowerCase() === name.toLowerCase())) {
+      return toast("Someone with that name is already on staff", true);
+    }
     try {
-      await post("/api/staff", { name: form.name.value.trim(), role: form.role.value });
+      await post("/api/staff", { name, role: form.role.value });
       form.reset();
-      toast("Staff member added");
-      loadStaffView();
+      toast(`${name} added`);
+      await loadStaffView();
+      form.name.focus();
     } catch (err) {
       toast(err.message, true);
     }
@@ -4586,6 +5328,27 @@ function wireStaffView() {
   $("#staff-search").addEventListener("input", (e) => {
     state.staffSearch = e.target.value.trim();
     renderStaffTable();
+  });
+  $("#staff-search").addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      state.staffSearch = "";
+      e.target.value = "";
+      renderStaffTable();
+    }
+  });
+  $$('#view-staff [data-staff-filter]').forEach((chip) => {
+    chip.addEventListener("click", () => {
+      state.staffFilter = chip.dataset.staffFilter;
+      $$('#view-staff [data-staff-filter]').forEach((c) => c.classList.remove("active"));
+      chip.classList.add("active");
+      renderStaffTable();
+    });
+  });
+  $("#staff-report-link").addEventListener("click", () => {
+    state.reportType = "technicians";
+    saveReportPrefs();
+    const railItem = $('.rail-item[data-view="reports"]');
+    if (railItem) railItem.click();
   });
 }
 
@@ -4608,11 +5371,22 @@ function renderAssigneeMenu(menuEl, toggleEl, selectedNames, onChange) {
   menuEl.innerHTML = state.staff.length
     ? state.staff.map((s) => `<label class="ms-option"><input type="checkbox" value="${esc(s.name)}" ${selectedNames.includes(s.name) ? "checked" : ""}> ${esc(s.name)}</label>`).join("")
     : `<div class="ms-empty">No staff yet</div>`;
-  toggleEl.textContent = assigneeSummaryLabel(selectedNames);
+  // Task-row toggles speak the row's "open slot" dashed language ("+ assign")
+  // when empty; the quick-add form keeps the plain "Unassigned" word.
+  const isRowToggle = toggleEl.classList.contains("task-assignee-toggle");
+  const setLabel = (names) => {
+    if (isRowToggle) {
+      toggleEl.classList.toggle("ms-toggle-empty", !names.length);
+      toggleEl.textContent = names.length ? assigneeSummaryLabel(names) : "+ assign";
+    } else {
+      toggleEl.textContent = assigneeSummaryLabel(names);
+    }
+  };
+  setLabel(selectedNames);
   $$("input[type=checkbox]", menuEl).forEach((cb) => {
     cb.addEventListener("change", () => {
       const names = $$("input[type=checkbox]:checked", menuEl).map((c) => c.value);
-      toggleEl.textContent = assigneeSummaryLabel(names);
+      setLabel(names);
       onChange(names);
     });
   });
@@ -4621,29 +5395,58 @@ function renderAssigneeMenu(menuEl, toggleEl, selectedNames, onChange) {
 // Only one picker menu open at a time; clicking anywhere outside the open
 // picker closes it, same as the pattern browsers use for native <select>.
 let openAssigneeMenuEl = null;
+function syncAssigneeToggleExpanded(menuEl, open) {
+  const toggle = menuEl?.parentElement?.querySelector(".ms-toggle");
+  if (toggle) toggle.setAttribute("aria-expanded", open ? "true" : "false");
+}
 function toggleAssigneeMenu(menuEl) {
   // A row can be deleted (e.g. a task removed) while its popover is open,
   // detaching the old menu node from the document -- drop the dangling
   // reference instead of touching a node nothing can see anymore.
   if (openAssigneeMenuEl && !document.contains(openAssigneeMenuEl)) openAssigneeMenuEl = null;
-  if (openAssigneeMenuEl && openAssigneeMenuEl !== menuEl) openAssigneeMenuEl.style.display = "none";
+  if (openAssigneeMenuEl && openAssigneeMenuEl !== menuEl) {
+    openAssigneeMenuEl.style.display = "none";
+    syncAssigneeToggleExpanded(openAssigneeMenuEl, false);
+  }
   const opening = menuEl.style.display !== "block";
   menuEl.style.display = opening ? "block" : "none";
+  syncAssigneeToggleExpanded(menuEl, opening);
+  // Open upward when there's no room below -- a picker on the last row of a
+  // long list otherwise opens off-screen.
+  if (opening) {
+    menuEl.classList.remove("ms-menu-up");
+    const rect = menuEl.getBoundingClientRect();
+    if (rect.bottom > window.innerHeight - 8) menuEl.classList.add("ms-menu-up");
+  }
   openAssigneeMenuEl = opening ? menuEl : null;
+}
+function closeOpenAssigneeMenu() {
+  if (!openAssigneeMenuEl) return;
+  if (document.contains(openAssigneeMenuEl)) {
+    openAssigneeMenuEl.style.display = "none";
+    syncAssigneeToggleExpanded(openAssigneeMenuEl, false);
+  }
+  openAssigneeMenuEl = null;
 }
 document.addEventListener("click", (e) => {
   if (openAssigneeMenuEl && !document.contains(openAssigneeMenuEl)) {
     openAssigneeMenuEl = null;
     return;
   }
-  if (openAssigneeMenuEl && !e.target.closest(".ms-picker")) {
-    openAssigneeMenuEl.style.display = "none";
-    openAssigneeMenuEl = null;
-  }
+  if (openAssigneeMenuEl && !e.target.closest(".ms-picker")) closeOpenAssigneeMenu();
+});
+// Escape closes the popover like any menu; focus goes back to its toggle.
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape" || !openAssigneeMenuEl) return;
+  const toggle = openAssigneeMenuEl.parentElement?.querySelector(".ms-toggle");
+  closeOpenAssigneeMenu();
+  toggle?.focus();
 });
 // Wired once per toggle button (the quick-add one lives for the app's whole
 // life; each row's is rewired on every render since the row itself is new).
 function wireAssigneeToggle(toggleEl, menuEl) {
+  toggleEl.setAttribute("aria-haspopup", "true");
+  toggleEl.setAttribute("aria-expanded", "false");
   toggleEl.addEventListener("click", (e) => {
     e.preventDefault();
     e.stopPropagation();
@@ -4695,22 +5498,27 @@ function taskBucket(t) {
   return "later";
 }
 
+// The one emoji in an otherwise all-SVG icon system rendered differently on
+// every platform -- the board's own vehicle glyph replaces it.
+const TASK_VEHICLE_SVG = `<svg viewBox="0 0 24 24">${EMPTY_ICONS.vehicle}</svg>`;
+
 function taskRowHtml(t) {
   const due = taskDueInfo(t.due_date);
   const refId = t.order_recon_vehicle_id ?? t.order_we_owe_id;
   const linkable = t.order_id && refId != null && (t.order_segment === "recon" || t.order_segment === "we_owe");
   const selected = state.taskSelection.has(t.id);
+  const unassigned = !(t.assigned_to || []).length;
   return `
     <div class="task-row ${t.urgent ? "urgent" : ""} ${t.done ? "done" : ""} ${selected ? "selected" : ""}" data-id="${t.id}">
-      ${t.done ? "" : `<input type="checkbox" class="task-select" ${selected ? "checked" : ""} title="Select for bulk edit">`}
-      <button type="button" class="task-check" title="${t.done ? "Mark not done" : "Mark done"}">
+      ${t.done ? "" : `<input type="checkbox" class="task-select" ${selected ? "checked" : ""} title="Select for bulk edit" aria-label="Select ${esc(t.title)}">`}
+      <button type="button" class="task-check" title="${t.done ? "Mark not done" : "Mark done"}" aria-pressed="${t.done ? "true" : "false"}" aria-label="Mark ${esc(t.title)} ${t.done ? "not done" : "done"}">
         <svg viewBox="0 0 24 24"><path d="M5 13l4 4L19 7"/></svg>
       </button>
       <div class="task-body">
         <button type="button" class="task-title" title="Click to rename">${esc(t.title)}</button>
         <div class="task-meta">
           <div class="ms-picker" data-id="${t.id}">
-            <button type="button" class="ms-toggle task-assignee-toggle">${esc(assigneeSummaryLabel(t.assigned_to))}</button>
+            <button type="button" class="ms-toggle task-assignee-toggle${unassigned ? " ms-toggle-empty" : ""}">${unassigned ? "+ assign" : esc(assigneeSummaryLabel(t.assigned_to))}</button>
             <div class="ms-menu task-assignee-menu"></div>
           </div>
           ${due
@@ -4718,12 +5526,12 @@ function taskRowHtml(t) {
             : `<button type="button" class="task-due task-due-empty" data-due="" title="Set a due date">+ due date</button>`}
           <button type="button" class="task-flag ${t.urgent ? "on" : ""}" title="${t.urgent ? "Clear the urgent flag" : "Flag this urgent"}">${t.urgent ? "Urgent" : "Flag urgent"}</button>
           ${t.notes ? "" : `<button type="button" class="task-notes-add" title="Add a note">+ note</button>`}
-          ${linkable ? `<button type="button" class="task-order-link" data-segment="${t.order_segment}" data-ref-id="${refId}">🚗 ${esc(t.order_label || t.order_number)}</button>` : ""}
+          ${linkable ? `<button type="button" class="task-order-link" data-segment="${t.order_segment}" data-ref-id="${refId}">${TASK_VEHICLE_SVG}${esc(t.order_label || t.order_number)}</button>` : ""}
           <span>by ${esc(t.created_by || "Unspecified")} · ${relativeTime(t.created_at)}</span>
         </div>
         ${t.notes ? `<button type="button" class="task-notes" title="Click to edit this note">${esc(t.notes)}</button>` : ""}
       </div>
-      <button type="button" class="task-delete" title="Delete">×</button>
+      <button type="button" class="task-delete" title="Delete" aria-label="Delete ${esc(t.title)}">×</button>
     </div>
   `;
 }
@@ -4786,7 +5594,7 @@ function wireTaskRowActions(container) {
   const patchField = async (taskId, body, fallback) => {
     try {
       await patch(`/api/tasks/${taskId}`, body);
-      await loadTasksView();
+      await loadTasks();
     } catch (err) {
       toast(err.message, true);
       fallback();
@@ -4830,7 +5638,7 @@ function wireTaskRowActions(container) {
       const row = btn.closest(".task-row");
       try {
         await patch(`/api/tasks/${row.dataset.id}`, { done: !row.classList.contains("done") });
-        await loadTasksView();
+        await loadTasks();
       } catch (err) {
         toast(err.message, true);
       }
@@ -4848,7 +5656,7 @@ function wireTaskRowActions(container) {
       }))) return;
       try {
         await api(`/api/tasks/${row.dataset.id}`, { method: "DELETE" });
-        await loadTasksView();
+        await loadTasks();
       } catch (err) {
         toast(err.message, true);
       }
@@ -4881,7 +5689,7 @@ function wireTaskRowActions(container) {
         if (input.value === (btn.dataset.due || "")) return renderTasksList();
         try {
           await patch(`/api/tasks/${row.dataset.id}`, { due_date: input.value });
-          await loadTasksView();
+          await loadTasks();
         } catch (err) {
           toast(err.message, true);
           renderTasksList();
@@ -4901,7 +5709,7 @@ function wireTaskRowActions(container) {
       const row = btn.closest(".task-row");
       try {
         await patch(`/api/tasks/${row.dataset.id}`, { urgent: !row.classList.contains("urgent") });
-        await loadTasksView();
+        await loadTasks();
       } catch (err) {
         toast(err.message, true);
       }
@@ -4962,6 +5770,7 @@ function taskBaseList() {
   const query = (state.taskSearch || "").toLowerCase();
   return state.tasks.filter((t) => !t.done
     && (state.taskFilter !== "mine" || t.assigned_to.includes(actor))
+    && (!state.taskAssignee || t.assigned_to.includes(state.taskAssignee))
     && (!state.taskUrgentOnly || !!t.urgent)
     && taskMatchesSearch(t, query));
 }
@@ -5004,7 +5813,8 @@ function syncTaskStatCards() {
   setValue("#stat-tasks-open", counts.open, null);
   setValue("#stat-tasks-overdue", counts.overdue, counts.overdue ? "crit" : null);
   setValue("#stat-tasks-today", counts.today, counts.today ? "warn" : null);
-  setValue("#stat-tasks-unassigned", counts.unassigned, null);
+  // The card exists because unassigned tasks are a problem -- tone it.
+  setValue("#stat-tasks-unassigned", counts.unassigned, counts.unassigned ? "warn" : null);
 
   const urgent = base.filter((t) => t.urgent).length;
   $("#stat-tasks-open-sub").textContent = counts.open
@@ -5034,6 +5844,7 @@ function syncTaskStatCards() {
 function taskScopeLabel() {
   const parts = [];
   if (state.taskFilter === "mine") parts.push(`assigned to ${currentActor() || "you"}`);
+  if (state.taskAssignee) parts.push(`assigned to ${state.taskAssignee}`);
   if (state.taskCard === "overdue") parts.push("past due");
   if (state.taskCard === "today") parts.push("due today");
   if (state.taskCard === "unassigned") parts.push("with nobody assigned");
@@ -5043,7 +5854,7 @@ function taskScopeLabel() {
 }
 
 function taskFiltersActive() {
-  return !!(state.taskFilter || state.taskCard || state.taskUrgentOnly || state.taskSearch);
+  return !!(state.taskFilter || state.taskCard || state.taskAssignee || state.taskUrgentOnly || state.taskSearch);
 }
 
 function resetTaskView() {
@@ -5051,8 +5862,11 @@ function resetTaskView() {
   state.taskCard = "";
   state.taskUrgentOnly = false;
   state.taskSearch = "";
+  state.taskAssignee = "";
   const search = $("#task-search");
   if (search) search.value = "";
+  const assignee = $("#tasks-assignee-filter");
+  if (assignee) assignee.value = "";
   $$('#view-tasks [data-task-filter]').forEach((c) => c.classList.toggle("active", c.dataset.taskFilter === ""));
   state.taskSelection.clear();
   saveTaskPrefs();
@@ -5070,7 +5884,10 @@ function renderTasksList() {
   let done = state.tasks.filter((t) => t.done);
   if (query) done = done.filter((t) => taskMatchesSearch(t, query));
 
-  $("#tasks-count").textContent = `${rows.length} open`;
+  const totalOpen = state.tasks.filter((t) => !t.done).length;
+  $("#tasks-count").textContent = taskFiltersActive() && rows.length !== totalOpen
+    ? `${rows.length} of ${totalOpen} open`
+    : `${rows.length} open`;
   $("#tasks-scope").textContent = taskScopeLabel();
   const reset = $("#tasks-reset-view");
   if (reset) reset.hidden = !taskFiltersActive();
@@ -5083,18 +5900,32 @@ function renderTasksList() {
   $("#tasks-list").innerHTML = rows.length
     ? renderTaskGroups(rows)
     : emptyState(query
-        ? { icon: "search", title: "No tasks match that search", hint: `Nothing open matched "${state.taskSearch}". Completed tasks are searched too -- check the list below.` }
+        ? { icon: "search", title: "No tasks match that search", hint: `Nothing open matched "${state.taskSearch}". Completed tasks are searched too — check the list below.` }
         : state.taskCard
         ? { icon: "check", title: `Nothing ${state.taskCard === "unassigned" ? "unassigned" : state.taskCard === "today" ? "due today" : "overdue"}`, hint: "Click the card again to see everything else." }
+        : state.taskAssignee
+        ? { icon: "check", title: `Nothing assigned to ${state.taskAssignee}`, hint: "Switch the assignee filter back to Anyone to see the rest." }
         : state.taskFilter === "mine"
-        ? { icon: "check", title: "Nothing assigned to you", hint: `No open tasks are assigned to ${currentActor()}. Switch to All to see everyone else's.` }
+        ? { icon: "check", title: "Nothing assigned to you", hint: `No open tasks are assigned to ${currentActor() || "you"}. Switch to All to see everyone else's.` }
         : state.taskUrgentOnly
         ? { icon: "check", title: "Nothing flagged urgent", hint: "Turn off the Urgent filter to see the rest." }
         : { icon: "task", title: "No open tasks", hint: "Add one above and it syncs to everyone the moment they open RECON." });
 
+  // The completed list is unbounded over the shop's whole history -- cap the
+  // DOM at the recent tail unless asked for everything.
+  const DONE_LIMIT = 25;
+  const doneShown = (state.showAllCompleted || query) ? done : done.slice(0, DONE_LIMIT);
   $("#tasks-toggle-completed").textContent = `${state.showCompletedTasks ? "Hide" : "Show"} completed (${done.length})`;
   $("#tasks-completed-list").style.display = state.showCompletedTasks ? "" : "none";
-  $("#tasks-completed-list").innerHTML = done.map(taskRowHtml).join("");
+  $("#tasks-completed-list").innerHTML = state.showCompletedTasks && !done.length
+    ? emptyState({ icon: "check", title: "Nothing completed yet", compact: true })
+    : doneShown.map(taskRowHtml).join("") + (done.length > doneShown.length
+        ? `<button type="button" class="btn btn-ghost btn-sm" id="tasks-show-all-completed" style="align-self:flex-start">Show all ${done.length}</button>`
+        : "");
+  $("#tasks-show-all-completed")?.addEventListener("click", () => {
+    state.showAllCompleted = true;
+    renderTasksList();
+  });
 
   wireTaskRowActions($("#tasks-list"));
   wireTaskRowActions($("#tasks-completed-list"));
@@ -5152,7 +5983,7 @@ function renderTaskBulkBar() {
   const n = state.taskSelection.size;
   const bar = $("#tasks-bulk-bar");
   if (!bar) return;
-  bar.style.display = n ? "" : "none";
+  bar.hidden = !n;
   if (!n) return;
   $("#tasks-bulk-count").textContent = `${n} selected`;
   const chosen = state.tasks.filter((t) => state.taskSelection.has(t.id));
@@ -5203,7 +6034,7 @@ async function applyTaskBulk(patchBody, successMessage) {
   if (!ids.length) return;
   try {
     const res = await post("/api/tasks/bulk", { ids, ...patchBody });
-    await loadTasksView();
+    await loadTasks();
     toast(`${successMessage} · ${res.updated} task${res.updated === 1 ? "" : "s"}`);
   } catch (err) {
     toast(err.message, true);
@@ -5231,6 +6062,11 @@ function wireTaskBulkActions() {
     if (!value) return;
     e.target.value = "";
     await applyTaskBulk({ due_date: value }, `Due ${value}`);
+  });
+
+  // Setting a date could always be done in bulk; clearing one couldn't.
+  $("#tasks-bulk-due-clear").addEventListener("click", async () => {
+    await applyTaskBulk({ due_date: "" }, "Due date cleared");
   });
 
   $("#tasks-bulk-urgent").addEventListener("click", async (e) => {
@@ -5265,7 +6101,7 @@ function wireTaskBulkActions() {
     try {
       const res = await post("/api/tasks/bulk-delete", { ids });
       state.taskSelection.clear();
-      await loadTasksView();
+      await loadTasks();
       toast(`Deleted ${res.deleted} task${res.deleted === 1 ? "" : "s"}`);
     } catch (err) {
       toast(err.message, true);
@@ -5286,6 +6122,7 @@ function loadTaskPrefs() {
   if (!saved) return;
   if (typeof saved.filter === "string") state.taskFilter = saved.filter;
   if (["", "overdue", "today", "unassigned"].includes(saved.card)) state.taskCard = saved.card;
+  if (typeof saved.assignee === "string") state.taskAssignee = saved.assignee;
   state.taskUrgentOnly = !!saved.urgentOnly;
   state.showCompletedTasks = !!saved.showCompleted;
   $$('#view-tasks [data-task-filter]').forEach((c) => c.classList.toggle("active", c.dataset.taskFilter === state.taskFilter));
@@ -5296,6 +6133,7 @@ function saveTaskPrefs() {
     localStorage.setItem(TASK_PREFS_KEY, JSON.stringify({
       filter: state.taskFilter,
       card: state.taskCard,
+      assignee: state.taskAssignee,
       urgentOnly: state.taskUrgentOnly,
       showCompleted: state.showCompletedTasks,
     }));
@@ -5312,12 +6150,26 @@ function renderTaskOrderSelect(orders) {
   }).join("");
 }
 
+// Tasks only -- what a checkbox tick, a rename or a bulk edit needs.
+// Refetching (and re-rendering) the entire orders list on every one of those
+// was most of this screen's latency, and it stomped the vehicle select while
+// a user might be mid-pick.
+async function loadTasks() {
+  try {
+    state.tasks = await get("/api/tasks");
+    renderTasksList();
+  } catch (err) {
+    renderViewFailure("tasks", err);
+  }
+}
+
 async function loadTasksView() {
   try {
     if (!state.staff.length) state.staff = await get("/api/staff");
     renderAssigneeMenu($("#task-assignee-menu"), $("#task-assignee-toggle"), state.newTaskAssignees, (names) => {
       state.newTaskAssignees = names;
     });
+    renderTaskAssigneeFilter();
     const [tasks, orders] = await Promise.all([get("/api/tasks"), get("/api/orders")]);
     state.tasks = tasks;
     renderTaskOrderSelect(orders);
@@ -5327,6 +6179,16 @@ async function loadTasksView() {
   }
 }
 
+// The per-person filter select -- "what does Antonio have?" without hoping
+// his name isn't also in a task title.
+function renderTaskAssigneeFilter() {
+  const sel = $("#tasks-assignee-filter");
+  if (!sel) return;
+  sel.innerHTML = `<option value="">Anyone</option>` +
+    state.staff.map((s) => `<option value="${esc(s.name)}" ${state.taskAssignee === s.name ? "selected" : ""}>${esc(s.name)}</option>`).join("");
+  sel.value = state.taskAssignee || "";
+}
+
 function wireTasksView() {
   wireAssigneeToggle($("#task-assignee-toggle"), $("#task-assignee-menu"));
 
@@ -5334,19 +6196,31 @@ function wireTasksView() {
     e.preventDefault();
     const title = $("#task-title-input").value.trim();
     if (!title) return;
+    // Entering four tasks for the same car on the same day shouldn't mean
+    // re-picking the vehicle and date four times: only the title, urgency
+    // and assignees reset, and focus goes straight back to the title box.
+    const keepOrder = $("#task-order-input").value;
+    const keepDue = $("#task-due-input").value;
     try {
       await post("/api/tasks", {
         title,
         assigned_to: state.newTaskAssignees,
-        due_date: $("#task-due-input").value,
+        due_date: keepDue,
         urgent: $("#task-urgent-input").checked,
-        order_id: $("#task-order-input").value ? Number($("#task-order-input").value) : null,
+        order_id: keepOrder ? Number(keepOrder) : null,
         actor: currentActor(),
       });
-      $("#task-quick-add").reset();
+      $("#task-title-input").value = "";
+      $("#task-urgent-input").checked = false;
       state.newTaskAssignees = [];
+      renderAssigneeMenu($("#task-assignee-menu"), $("#task-assignee-toggle"), [], (names) => {
+        state.newTaskAssignees = names;
+      });
       toast("Task added");
-      await loadTasksView();
+      await loadTasks();
+      $("#task-order-input").value = keepOrder;
+      $("#task-due-input").value = keepDue;
+      $("#task-title-input").focus();
     } catch (err) {
       toast(err.message, true);
     }
@@ -5385,9 +6259,22 @@ function wireTasksView() {
 
   $("#tasks-reset-view").addEventListener("click", resetTaskView);
 
-  $("#task-search").addEventListener("input", (e) => {
-    state.taskSearch = e.target.value.trim();
+  $("#tasks-assignee-filter").addEventListener("change", (e) => {
+    state.taskAssignee = e.target.value;
+    state.taskSelection.clear();
+    saveTaskPrefs();
     renderTasksList();
+  });
+
+  // Debounced: every keystroke used to rebuild the full open + completed
+  // lists (and rebind every row's listeners) synchronously.
+  let taskSearchTimer = null;
+  $("#task-search").addEventListener("input", (e) => {
+    clearTimeout(taskSearchTimer);
+    taskSearchTimer = setTimeout(() => {
+      state.taskSearch = e.target.value.trim();
+      renderTasksList();
+    }, 120);
   });
 
   $("#tasks-toggle-completed").addEventListener("click", () => {
@@ -5415,19 +6302,46 @@ function wireTasksView() {
    SUGGESTIONS / IDEAS
    ================================================================== */
 function suggestionCardHtml(s) {
+  const author = !s.author ? "" : (s.author === currentActor() ? "You" : s.author);
   return `
     <div class="suggestion-card ${s.resolved ? "resolved" : ""}" data-id="${s.id}">
-      <div class="suggestion-text">${esc(s.text)}</div>
+      <button type="button" class="suggestion-text" title="Click to edit">${esc(s.text)}</button>
       <div class="suggestion-meta">
-        <span>${esc(s.author || "Unspecified")} · ${fmtDate(s.created_at)}</span>
-        <button type="button" class="btn btn-ghost btn-sm suggestion-toggle">${s.resolved ? "Reopen" : "Mark Done"}</button>
-        <button type="button" class="rm-btn suggestion-delete" title="Delete">×</button>
+        <span title="${esc(fmtDate(s.created_at))}">${author ? `${esc(author)} · ` : ""}${esc(relativeTime(s.created_at))}</span>
+        ${s.resolved ? `<span class="pill pill-done">Done</span>${s.updated_at && s.updated_at !== s.created_at ? `<span title="${esc(fmtDate(s.updated_at))}">done ${esc(relativeTime(s.updated_at))}</span>` : ""}` : ""}
+        <div class="suggestion-actions">
+          <button type="button" class="btn btn-ghost btn-sm suggestion-toggle">${s.resolved ? "Reopen" : "Mark Done"}</button>
+          <button type="button" class="rm-btn suggestion-delete" title="Delete" aria-label="Delete idea">×</button>
+        </div>
       </div>
     </div>
   `;
 }
 
 function wireSuggestionCardActions(container) {
+  // Ideas are editable after posting -- same invisible-button-until-hover
+  // treatment as a task's title, same Ctrl+Enter/Esc contract.
+  $$(".suggestion-text", container).forEach((el) => {
+    el.addEventListener("click", () => {
+      const id = el.closest(".suggestion-card").dataset.id;
+      inlineEdit(el, {
+        value: el.textContent.trim(),
+        multiline: true,
+        placeholder: "Idea — Ctrl+Enter to save, Esc to cancel",
+        cancel: renderSuggestionsList,
+        commit: async (text) => {
+          if (!text) { toast("An idea needs some words", true); return renderSuggestionsList(); }
+          try {
+            await patch(`/api/suggestions/${id}`, { text });
+            await loadSuggestionsView();
+          } catch (err) {
+            toast(err.message, true);
+            renderSuggestionsList();
+          }
+        },
+      });
+    });
+  });
   $$(".suggestion-toggle", container).forEach((btn) => {
     btn.addEventListener("click", async () => {
       const card = btn.closest(".suggestion-card");
@@ -5443,9 +6357,9 @@ function wireSuggestionCardActions(container) {
     btn.addEventListener("click", async () => {
       const card = btn.closest(".suggestion-card");
       if (!(await confirmAction({
-        eyebrow: "SUGGESTION",
-        title: "Delete this suggestion?",
-        body: "This can't be undone. Resolve it instead if you want to keep the record.",
+        eyebrow: "IDEA",
+        title: "Delete this idea?",
+        body: "This can't be undone. Mark it done instead if you want to keep the record.",
         confirmLabel: "Delete",
         danger: true,
       }))) return;
@@ -5464,6 +6378,7 @@ function wireSuggestionCardActions(container) {
 function renderSuggestionsList() {
   const query = (state.suggestionSearch || "").toLowerCase();
   const matches = (s) => s.text.toLowerCase().includes(query) || (s.author || "").toLowerCase().includes(query);
+  const totalOpen = state.suggestions.filter((s) => !s.resolved).length;
   let open = state.suggestions.filter((s) => !s.resolved);
   let resolved = state.suggestions.filter((s) => s.resolved);
   if (query) {
@@ -5471,16 +6386,33 @@ function renderSuggestionsList() {
     resolved = resolved.filter(matches);
   }
 
-  $("#suggestions-count").textContent = `${open.length} open`;
+  // A search that only hits resolved ideas used to show "no matches" while
+  // the matches sat in a collapsed list -- the user concluded the idea was
+  // deleted and re-posted it. Searching forces the resolved section open.
+  const showResolved = state.showResolvedSuggestions || (query && resolved.length > 0);
+
+  $("#suggestions-count").textContent = query && open.length !== totalOpen
+    ? `${open.length} of ${totalOpen} open`
+    : `${open.length} open`;
   $("#suggestions-list").innerHTML = open.length
     ? open.map(suggestionCardHtml).join("")
     : emptyState(query
-        ? { icon: "search", title: "No suggestions match that search", hint: `Nothing open matched "${state.suggestionSearch}".` }
-        : { icon: "idea", title: "No open suggestions", hint: "Write down anything the system should add or fix while it's fresh -- mark it done once it's handled." });
+        ? {
+            icon: "search",
+            title: "No open ideas match that search",
+            hint: resolved.length
+              ? `No open ideas matched "${state.suggestionSearch}" — ${resolved.length} resolved match${resolved.length === 1 ? "" : "es"} shown below.`
+              : `Nothing matched "${state.suggestionSearch}".`,
+          }
+        : { icon: "idea", title: "No open ideas", hint: "Write down anything the system should add or fix while it's fresh — mark it done once it's handled." });
 
-  $("#suggestions-toggle-resolved").textContent = `${state.showResolvedSuggestions ? "Hide" : "Show"} resolved (${resolved.length})`;
-  $("#suggestions-resolved-list").style.display = state.showResolvedSuggestions ? "" : "none";
-  $("#suggestions-resolved-list").innerHTML = resolved.map(suggestionCardHtml).join("");
+  const toggle = $("#suggestions-toggle-resolved");
+  toggle.textContent = `${showResolved ? "Hide" : "Show"} done (${resolved.length})`;
+  toggle.setAttribute("aria-expanded", showResolved ? "true" : "false");
+  $("#suggestions-resolved-list").style.display = showResolved ? "" : "none";
+  $("#suggestions-resolved-list").innerHTML = resolved.length
+    ? resolved.map(suggestionCardHtml).join("")
+    : (showResolved ? emptyState({ icon: "check", title: "Nothing resolved yet", hint: "Ideas you mark done collect here.", compact: true }) : "");
 
   wireSuggestionCardActions($("#suggestions-list"));
   wireSuggestionCardActions($("#suggestions-resolved-list"));
@@ -5496,18 +6428,35 @@ async function loadSuggestionsView() {
 }
 
 function wireSuggestionsView() {
+  const input = $("#suggestion-text-input");
+  const submitBtn = $("#suggestion-submit");
+  // The disabled button is the empty-state affordance -- no un-themed
+  // native validation bubble.
+  input.addEventListener("input", () => { submitBtn.disabled = !input.value.trim(); });
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      $("#suggestion-add").requestSubmit();
+    }
+  });
   $("#suggestion-add").addEventListener("submit", async (e) => {
     e.preventDefault();
-    const text = $("#suggestion-text-input").value.trim();
+    const text = input.value.trim();
     if (!text) return;
-    try {
-      await post("/api/suggestions", { text, author: currentActor() });
-      $("#suggestion-add").reset();
-      toast("Suggestion posted");
-      await loadSuggestionsView();
-    } catch (err) {
-      toast(err.message, true);
-    }
+    await withLoading(submitBtn, "Posting…", async () => {
+      try {
+        await post("/api/suggestions", { text, author: currentActor() });
+        $("#suggestion-add").reset();
+        toast("Idea posted");
+        await loadSuggestionsView();
+        input.focus();
+      } catch (err) {
+        toast(err.message, true);
+      }
+    });
+    // withLoading restores the button's pre-call disabled state; re-derive
+    // it from the (now empty) textarea.
+    submitBtn.disabled = !input.value.trim();
   });
   $("#suggestion-search").addEventListener("input", (e) => {
     state.suggestionSearch = e.target.value.trim();
@@ -5528,6 +6477,7 @@ document.addEventListener("DOMContentLoaded", () => {
   initTheme();
   initCurrentUser();
   wireConfirmDialog();
+  wireInvoicePromptDialog();
   wireViewRetry();
   wireVehiclesView();
   wireVehicleDetail();
@@ -5558,7 +6508,18 @@ document.addEventListener("DOMContentLoaded", () => {
   // the default month and the saved one only appears on the second.
   loadReportPrefs();
   if (!state.reportStart && !state.reportEnd && state.reportRange) setReportRange(state.reportRange);
-  showView("vehicles");
+
+  // Replay a one-shot flash stashed before a deliberate reload (a database
+  // restore) -- the toast fired before location.reload() died with the page,
+  // leaving the most consequential action in the app with no confirmation.
+  let flash = null;
+  try {
+    flash = JSON.parse(sessionStorage.getItem("dao-flash") || "null");
+    sessionStorage.removeItem("dao-flash");
+  } catch {}
+  const startView = flash?.view && $(`.rail-item[data-view="${flash.view}"]`) ? flash.view : "vehicles";
+  showView(startView);
+  if (flash?.message) toast(flash.message);
 });
 
 
@@ -5569,6 +6530,13 @@ document.addEventListener("DOMContentLoaded", () => {
    data flow above this line needs to change.
    ================================================================== */
 const _origRenderStatusCard = renderStatusCard;
+// Class-driven dot color: reading getComputedStyle off the display:none pill
+// forced a style recalc on every render and broke the moment the pill's
+// classes changed.
+const STATUS_DOT_COLOR = {
+  "pill-status-estimate": "var(--ink-faint)", "pill-status-pending": "var(--warn)",
+  "pill-status-progress": "var(--accent)", "pill-status-complete": "var(--good)",
+};
 renderStatusCard = function (order) {
   _origRenderStatusCard(order);
   const pillEl = $("#vd-status-pill");
@@ -5579,7 +6547,7 @@ renderStatusCard = function (order) {
     const text = pillEl.textContent.trim();
     picker.style.display = text ? "" : "none";
     if (assignPicker) assignPicker.style.display = text ? "" : "none";
-    if (dot) dot.style.background = getComputedStyle(pillEl).backgroundColor;
+    if (dot) dot.style.background = STATUS_DOT_COLOR[STATUS_PILL_CLASS[order.status]] || "var(--accent)";
   }
   const concernBox = $("#vd-concern");
   const previewWrap = $("#vd-concern-preview");
@@ -5638,20 +6606,107 @@ document.addEventListener("DOMContentLoaded", () => {
   const assignToggle = $("#vd-assign-picker-toggle");
   const assignMenu = $("#vd-assign-picker-menu");
   if (assignToggle && assignMenu) {
+    assignToggle.setAttribute("aria-haspopup", "true");
+    assignToggle.setAttribute("aria-expanded", "false");
     assignToggle.addEventListener("click", (e) => {
       e.stopPropagation();
-      assignMenu.classList.toggle("open");
+      const open = assignMenu.classList.toggle("open");
+      assignToggle.setAttribute("aria-expanded", open ? "true" : "false");
     });
     document.addEventListener("click", (e) => {
-      if (!e.target.closest(".status-picker")) assignMenu.classList.remove("open");
+      if (!e.target.closest(".status-picker")) {
+        assignMenu.classList.remove("open");
+        assignToggle.setAttribute("aria-expanded", "false");
+      }
+    });
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && assignMenu.classList.contains("open")) {
+        assignMenu.classList.remove("open");
+        assignToggle.setAttribute("aria-expanded", "false");
+        assignToggle.focus();
+      }
     });
   }
 
+  // Every dialog closes on backdrop click -- the .modal child is the click
+  // surface, so a click landing on the <dialog> itself is the backdrop.
+  $$("dialog").forEach((d) => d.addEventListener("click", (e) => {
+    if (e.target === d) d.close();
+  }));
 });
 
 function fmtBackupSize(bytes) {
   if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  // 0 stays 0 -- rounding a truncated backup up to "1 KB" hides exactly the
+  // corruption this column exists to reveal.
+  return `${Math.round(bytes / 1024)} KB`;
+}
+
+// A toast fired right before location.reload() dies with the page. Stash a
+// one-shot flash (and which view to land on) for the boot code to replay.
+function flashAfterReload(message, view) {
+  try {
+    sessionStorage.setItem("dao-flash", JSON.stringify({ message, view }));
+  } catch {}
+}
+
+function backupFriendlyLabel(b) {
+  const stamp = b.modified_at * 1000;
+  const d = new Date(stamp);
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const day = new Date(d); day.setHours(0, 0, 0, 0);
+  const diff = Math.round((today - day) / 86400000);
+  const time = d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+  if (diff === 0) return `Today, ${time}`;
+  if (diff === 1) return `Yesterday, ${time}`;
+  return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) + `, ${time}`;
+}
+
+// The page's first job is answering "am I actually protected right now?" --
+// four tiles derived from the same payload as the table, plus the status
+// endpoint's word on whether anything is running the auto-backup loop.
+function renderBackupStats(backups, status) {
+  const box = $("#backup-stats");
+  if (!box) return;
+  const newest = backups[0];
+  const ageHours = newest ? (Date.now() / 1000 - newest.modified_at) / 3600 : null;
+  const ageTone = ageHours == null ? "crit" : ageHours > 48 ? "crit" : ageHours > 26 ? "warn" : "";
+  const health = ageHours == null ? "None" : ageHours > 48 ? "Stale" : ageHours > 26 ? "Aging" : "Healthy";
+  const totalBytes = backups.reduce((s, b) => s + b.size_bytes, 0);
+  const retention = status?.retention ?? 14;
+  box.innerHTML = `
+    <div class="stat">
+      <div class="stat-label">Last Backup</div>
+      <div class="stat-value${ageTone ? ` ${ageTone}` : ""}">${newest ? esc(relativeTime(newest.modified_at * 1000)) : "never"}</div>
+      <div class="stat-sub">${newest ? esc(fmtDate(newest.modified_at * 1000)) : "no backup exists yet"}</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Protection</div>
+      <div class="stat-value${ageTone ? ` ${ageTone}` : ""}">${health}</div>
+      <div class="stat-sub">${ageHours == null ? "take one now" : ageTone ? "older than the 24-hour policy" : "within the 24-hour policy"}</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Backups Kept</div>
+      <div class="stat-value">${backups.length}</div>
+      <div class="stat-sub">of ${retention} before pruning</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Total Size</div>
+      <div class="stat-value num">${fmtBackupSize(totalBytes)}</div>
+      <div class="stat-sub">${status?.backups_dir ? `in ${esc(status.backups_dir)}` : "on this machine"}</div>
+    </div>`;
+
+  // The header copy promises automatic backups; if nothing in this process
+  // is running the loop, that promise is false -- say so where it matters.
+  const warning = $("#backup-auto-warning");
+  if (warning) {
+    if (status && !status.auto_enabled) {
+      warning.textContent = "Automatic backups are not running in this session — backups only happen when you click Create Backup Now.";
+      warning.hidden = false;
+    } else {
+      warning.hidden = true;
+    }
+  }
 }
 
 async function loadBackupView() {
@@ -5664,105 +6719,187 @@ async function loadBackupView() {
     renderViewFailure("backup", err);
     return;
   }
-  tbody.innerHTML = backups.length ? backups.map((b) => `
+  const status = await get("/api/backup/status").catch(() => null);
+  renderBackupStats(backups, status);
+  tbody.innerHTML = backups.length ? backups.map((b, i) => `
     <tr>
-      <td>${esc(b.name)}</td>
-      <td>${fmtBackupSize(b.size_bytes)}</td>
-      <td>${fmtDate(b.modified_at * 1000)}</td>
-      <td style="display:flex;gap:8px;justify-content:flex-end">
-        <a class="btn btn-ghost btn-sm" href="/api/backup/download/${encodeURIComponent(b.name)}" download>Download</a>
-        <button type="button" class="btn btn-ghost btn-sm backup-restore-btn" data-name="${esc(b.name)}">Restore</button>
-        <button type="button" class="btn btn-ghost btn-sm backup-delete-btn" data-name="${esc(b.name)}" style="color:var(--crit)">Delete</button>
+      <td>
+        <div class="backup-name-main">${esc(backupFriendlyLabel(b))} ${i === 0 ? `<span class="pill pill-done">Newest</span>` : ""}</div>
+        <div class="backup-name-file">${esc(b.name)}</div>
       </td>
+      <td class="num-col${b.size_bytes === 0 ? " backup-size-zero" : ""}" ${b.size_bytes === 0 ? 'title="Zero bytes — this backup may be corrupt"' : ""}>${fmtBackupSize(b.size_bytes)}</td>
+      <td>${fmtDate(b.modified_at * 1000)}</td>
+      <td class="actions-col"><div class="row-actions">
+        <a class="btn btn-ghost btn-sm" href="/api/backup/download/${encodeURIComponent(b.name)}" download aria-label="Download ${esc(b.name)}">Download</a>
+        <button type="button" class="btn btn-ghost btn-sm btn-warn-ghost backup-restore-btn" data-name="${esc(b.name)}" aria-label="Restore from ${esc(b.name)}">Restore</button>
+        <button type="button" class="btn btn-ghost btn-sm btn-danger-ghost backup-delete-btn" data-name="${esc(b.name)}" aria-label="Delete ${esc(b.name)}">Delete</button>
+      </div></td>
     </tr>
   `).join("") : emptyRow(4, {
     icon: "backup",
-    title: "No backups yet",
-    hint: "One is taken automatically every 24 hours and the last 14 are kept. You can also take one right now.",
+    title: "No backup has been taken yet",
+    hint: "Take one now — it only takes a moment.",
     actions: `<button type="button" class="btn btn-primary btn-sm" data-empty-action="run-backup">Create Backup Now</button>`,
   });
   $$(".backup-restore-btn", tbody).forEach((btn) => {
     btn.addEventListener("click", async () => {
       const name = btn.dataset.name;
+      const entry = backups.find((b) => b.name === name);
       if (!(await confirmAction({
         eyebrow: "RESTORE",
         title: `Restore from "${name}"?`,
-        body: "This replaces the live database with the contents of that backup. The current database is saved aside first, so the swap can be undone by restoring it back.",
+        body: `${entry ? `${backupFriendlyLabel(entry)} · ${fmtBackupSize(entry.size_bytes)}. ` : ""}This replaces the live database with the contents of that backup. The current database is saved aside first (as a pre-restore snapshot next to the live file), so the swap can be undone.`,
         confirmLabel: "Restore",
         danger: true,
       }))) return;
-      try {
-        await post(`/api/backup/restore/${encodeURIComponent(name)}`);
-        toast(`Restored from ${name}`);
-        location.reload();
-      } catch (err) {
-        toast(err.message, true);
-      }
+      await withLoading(btn, "Restoring…", async () => {
+        try {
+          await post(`/api/backup/restore/${encodeURIComponent(name)}`);
+          flashAfterReload(`Restored from ${name}`, "backup");
+          location.reload();
+        } catch (err) {
+          toast(err.message, true);
+        }
+      });
     });
   });
   $$(".backup-delete-btn", tbody).forEach((btn) => {
     btn.addEventListener("click", async () => {
       const name = btn.dataset.name;
+      const isLast = backups.length === 1;
       if (!(await confirmAction({
         eyebrow: "BACKUP",
         title: `Delete backup "${name}"?`,
-        body: "The backup file is removed from disk. This can't be undone.",
+        body: isLast
+          ? "This is your ONLY backup. Deleting it leaves the shop with no recovery point at all."
+          : "The backup file is removed from disk. This can't be undone.",
         confirmLabel: "Delete Backup",
         danger: true,
       }))) return;
-      try {
-        await api(`/api/backup/${encodeURIComponent(name)}`, { method: "DELETE" });
-        toast("Backup deleted");
-        loadBackupView();
-      } catch (err) {
-        toast(err.message, true);
-      }
+      await withLoading(btn, "Deleting…", async () => {
+        try {
+          await api(`/api/backup/${encodeURIComponent(name)}`, { method: "DELETE" });
+          toast("Backup deleted");
+          await loadBackupView();
+        } catch (err) {
+          toast(err.message, true);
+        }
+      });
     });
   });
 }
 
 function wireBackupView() {
-  const runBackup = async () => {
-    try {
-      const created = await post("/api/backup/run");
-      toast(`Backup created: ${created.name}`);
-      loadBackupView();
-    } catch (err) {
-      toast(err.message, true);
-    }
+  const runBackup = async (btn) => {
+    const exec = async () => {
+      try {
+        const created = await post("/api/backup/run");
+        toast(`Backup created: ${created.name}`);
+        await loadBackupView();
+      } catch (err) {
+        toast(err.message, true);
+      }
+    };
+    // A second impatient click would create a redundant backup and prune a
+    // real one out of retention -- the busy state prevents it.
+    if (btn) await withLoading(btn, "Backing up…", exec);
+    else await exec();
   };
-  $("#backup-run-btn")?.addEventListener("click", runBackup);
+  $("#backup-run-btn")?.addEventListener("click", (e) => runBackup(e.currentTarget));
   // Same action offered from the empty state, which is re-rendered on every
   // load and so has to be delegated.
   $("#backup-table")?.addEventListener("click", (e) => {
-    if (e.target.closest('[data-empty-action="run-backup"]')) runBackup();
+    const btn = e.target.closest('[data-empty-action="run-backup"]');
+    if (btn) runBackup(btn);
   });
 
-  $("#backup-restore-submit")?.addEventListener("click", async () => {
-    const file = $("#backup-restore-file").files[0];
+  // Dropzone: the raw file input is visually hidden; the zone is the
+  // affordance -- click to browse, or drop a file from a USB stick.
+  const input = $("#backup-restore-file");
+  const zone = $("#backup-dropzone");
+  const submit = $("#backup-restore-submit");
+  const showFile = () => {
+    const file = input.files[0];
+    if (!zone || !submit) return;
+    if (file) {
+      zone.classList.add("has-file");
+      zone.innerHTML = `<span class="dropzone-file"><span>${esc(file.name)}</span><span class="dz-size">${fmtBackupSize(file.size)}</span></span>`;
+      submit.disabled = false;
+    } else {
+      zone.classList.remove("has-file");
+      zone.innerHTML = `<strong>Drop a .db backup here</strong> or click to choose a file`;
+      submit.disabled = true;
+    }
+  };
+  if (zone && input) {
+    zone.addEventListener("click", () => input.click());
+    zone.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); input.click(); }
+    });
+    ["dragover", "dragenter"].forEach((evt) => zone.addEventListener(evt, (e) => {
+      e.preventDefault();
+      zone.classList.add("dragover");
+    }));
+    ["dragleave", "drop"].forEach((evt) => zone.addEventListener(evt, (e) => {
+      e.preventDefault();
+      zone.classList.remove("dragover");
+    }));
+    zone.addEventListener("drop", (e) => {
+      if (e.dataTransfer?.files?.length) {
+        input.files = e.dataTransfer.files;
+        showFile();
+      }
+    });
+    input.addEventListener("change", showFile);
+  }
+
+  submit?.addEventListener("click", async () => {
+    const file = input.files[0];
     if (!file) return toast("Choose a file first", true);
     if (!file.name.toLowerCase().endsWith(".db")) return toast("Choose a .db backup file", true);
+    // Read the first 16 bytes and check SQLite's magic header -- an instant,
+    // honest rejection beats uploading a renamed JPEG and learning from a
+    // red toast after the server's integrity check.
+    try {
+      const head = new Uint8Array(await file.slice(0, 16).arrayBuffer());
+      const magic = "SQLite format 3";
+      const looksSqlite = magic.split("").every((ch, i) => head[i] === ch.charCodeAt(0));
+      if (!looksSqlite) {
+        input.value = "";
+        showFile();
+        return toast("That file isn't a SQLite database — pick a real .db backup", true);
+      }
+    } catch { /* unreadable -> let the server's check decide */ }
     if (!(await confirmAction({
       eyebrow: "RESTORE",
       title: `Restore from "${file.name}"?`,
-      body: "This replaces the live database with the contents of that file. The current database is saved aside first, so the swap can be undone by restoring it back.",
+      body: `${fmtBackupSize(file.size)}. This replaces the live database with the contents of that file. The current database is saved aside first, so the swap can be undone.`,
       confirmLabel: "Restore",
       danger: true,
     }))) return;
-    try {
-      const res = await fetch("/api/backup/restore-upload", {
-        method: "POST",
-        headers: { "x-backup-filename": file.name },
-        body: await file.arrayBuffer(),
-      });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.detail || res.statusText);
+    await withLoading(submit, "Restoring…", async () => {
+      input.disabled = true;
+      try {
+        const res = await fetch("/api/backup/restore-upload", {
+          method: "POST",
+          headers: { "x-backup-filename": file.name },
+          body: await file.arrayBuffer(),
+        });
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          throw new Error(body.detail || res.statusText);
+        }
+        flashAfterReload(`Restored from ${file.name}`, "backup");
+        location.reload();
+      } catch (err) {
+        toast(err.message, true);
+        input.value = "";
+      } finally {
+        input.disabled = false;
       }
-      toast(`Restored from ${file.name}`);
-      location.reload();
-    } catch (err) {
-      toast(err.message, true);
-    }
+    });
+    // withLoading re-enables the button unconditionally; re-derive the real
+    // state from whether a file is still selected.
+    showFile();
   });
 }

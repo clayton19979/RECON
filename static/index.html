@@ -67,10 +67,19 @@
         <div class="shop-name">Discount Auto Repair</div>
         <div class="shop-sub">Merrillville, IN</div>
       </div>
-      <label class="search">
-        <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
-        <input id="global-search" placeholder="Search stock #, VIN, customer…" autocomplete="off">
-      </label>
+      <!-- A div, not a <label>: a label may only own one labelable control,
+           and this bar carries a clear button beside the input. Clicking any
+           dead space in the pill still focuses the field (wired in app.js),
+           so it behaves exactly like a label without the invalid nesting. -->
+      <div class="search" role="search" id="global-search-bar">
+        <svg class="search-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+        <input id="global-search" type="search" placeholder="Search stock #, VIN, customer…"
+               aria-label="Search vehicles by stock number, VIN, or customer" autocomplete="off" spellcheck="false">
+        <kbd class="search-kbd" id="global-search-kbd" aria-hidden="true">/</kbd>
+        <button type="button" class="search-clear" id="global-search-clear" aria-label="Clear search" title="Clear search (Esc)" hidden>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
+      </div>
       <!-- Toasts are on screen for three seconds and then gone forever, which
            is fine for "Saved" and useless for "Could not reach the server"
            when it fired while you were looking at the keyboard. Every toast
@@ -103,7 +112,7 @@
             <h1>Vehicles</h1>
             <p class="page-desc">Every recon car and we-owe promise, one list. Click a row for the full picture — cost, parts, technician, linked repair order.</p>
           </div>
-          <div style="display:flex;gap:10px">
+          <div class="page-head-actions">
             <button class="btn btn-ghost" id="add-we-owe-btn">
               <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
               We-Owe Promise
@@ -154,7 +163,7 @@
             <div class="stat-sub" id="stat-over-quote-sub">none past estimate</div>
           </button>
         </div>
-        <p class="stats-scope" id="vehicles-scope">Every vehicle on the board.</p>
+        <p class="stats-scope" id="vehicles-scope" role="status" aria-live="polite" aria-atomic="true">Every vehicle on the board.</p>
 
         <div class="filters">
           <button class="chip active" data-filter="">All</button>
@@ -182,15 +191,16 @@
              a 60-car lot the table itself is what people came for. -->
         <div id="vehicles-chart" class="board-chart"></div>
 
-        <div class="bulk-bar" id="vehicles-bulk-bar" style="display:none">
+        <div class="bulk-bar" id="vehicles-bulk-bar" hidden>
           <span id="vehicles-bulk-count"></span>
+          <span class="bulk-hint">Esc clears · Shift+click for a range</span>
           <div class="filters-gap"></div>
           <button type="button" class="btn btn-ghost btn-sm" id="vehicles-bulk-clear">Clear selection</button>
           <!-- The action the Stalled card leads to: filter to stalled, select
                the ones you can't deal with right now, write down what needs to
                happen. One task per vehicle, each linked to its ticket. -->
           <button type="button" class="btn btn-ghost btn-sm" id="vehicles-bulk-task">Make Tasks</button>
-          <button type="button" class="btn btn-primary btn-sm" id="vehicles-bulk-archive">Send to History</button>
+          <button type="button" class="btn btn-primary btn-sm" id="vehicles-bulk-archive">Send Selected to History</button>
         </div>
 
         <div class="panel" style="margin-bottom:0">
@@ -198,7 +208,7 @@
             <table class="board-table sticky-head">
               <thead>
                 <tr>
-                  <th class="col-select"><input type="checkbox" id="vehicles-select-all" title="Select all"></th>
+                  <th class="col-select" scope="col"><input type="checkbox" id="vehicles-select-all" title="Select all" aria-label="Select all vehicles in view"></th>
                   <th class="sortable" data-sort-key="stock" aria-sort="none">Stock # <span class="sort-arrow"></span></th>
                   <th class="sortable" data-sort-key="vehicle" aria-sort="none">Vehicle <span class="sort-arrow"></span></th>
                   <th class="sortable" data-sort-key="segment" aria-sort="none">Type <span class="sort-arrow"></span></th>
@@ -217,18 +227,18 @@
           </div>
         </div>
         <p class="board-hint">
-          <kbd>↑</kbd><kbd>↓</kbd> move · <kbd>Enter</kbd> open · <kbd>Space</kbd> select · <kbd>Shift</kbd>+click for a range · <kbd>/</kbd> search
+          <kbd>↑</kbd><kbd>↓</kbd> move · <kbd>Enter</kbd> open · <kbd>Space</kbd> select · <kbd>Shift</kbd>+click for a range · <kbd>Ctrl</kbd>+click toggle · <kbd>/</kbd> search · <kbd>Esc</kbd> clear
         </p>
       </section>
 
       <!-- VEHICLE DETAIL -->
       <section class="view" id="view-vehicle-detail">
-        <a class="back-link" id="back-to-vehicles">
+        <button type="button" class="back-link" id="back-to-vehicles" style="background:none;border:none;font:inherit;padding:0">
           <svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg>
           Back to Vehicles
-        </a>
+        </button>
 
-        <div id="vd-archived-banner" class="archived-banner" style="display:none">
+        <div id="vd-archived-banner" class="archived-banner" role="status" style="display:none">
           This vehicle is archived to History — read-only until reopened.
         </div>
 
@@ -268,8 +278,8 @@
             <button class="btn btn-ghost btn-sm" id="vd-add-task" style="display:none">+ Task</button>
             <button class="btn btn-ghost btn-sm" id="vd-archive-vehicle" style="display:none">Send to History</button>
             <button class="btn btn-primary btn-sm" id="vd-reopen-vehicle" style="display:none">Reopen</button>
-            <button class="btn btn-ghost btn-sm" id="vd-void-order" style="display:none;color:var(--crit)">Void Ticket</button>
-            <button class="btn btn-ghost btn-sm" id="vd-delete" style="display:none;color:var(--crit)">Delete</button>
+            <button class="btn btn-ghost btn-sm btn-danger-ghost" id="vd-void-order" style="display:none">Void Ticket</button>
+            <button class="btn btn-ghost btn-sm btn-danger-ghost" id="vd-delete" style="display:none">Delete</button>
           </div>
         </div>
 
@@ -319,9 +329,15 @@
                 <div id="vd-estimate-items"></div>
               </div>
               <div class="card">
+                <div class="card-head">
+                  <p class="section-eyebrow" style="margin:0">This Ticket</p>
+                  <!-- The number a recon manager actually opens the page for:
+                       are we over the quote, and by how much. -->
+                  <span class="cost-delta" id="vd-cost-delta" hidden></span>
+                </div>
                 <div class="cost-summary">
-                  <div class="cost-line"><span>Total Quote</span><span id="vd-quoted-cost">$0.00</span></div>
-                  <div class="cost-line total"><span>Actual Cost</span><span id="vd-actual-cost">$0.00</span></div>
+                  <div class="cost-line"><span>Quoted on this ticket</span><span id="vd-quoted-cost">$0.00</span></div>
+                  <div class="cost-line total"><span>Actual cost so far</span><span id="vd-actual-cost">$0.00</span></div>
                 </div>
               </div>
 
@@ -337,8 +353,31 @@
               <span class="details-drawer-title">Details</span>
             </div>
             <div class="details-drawer-body">
+            <!-- Who the car belongs to leads the drawer: on a we-owe ticket
+                 the customer's name, phone and address are the first thing
+                 an advisor reaches for, so they sit above everything else,
+                 with the vehicle's own record directly under them. -->
+            <div class="card" id="vd-customer-info-card" style="display:none">
+              <div class="card-head">
+                <p class="section-eyebrow" style="margin:0">Customer Info</p>
+                <button class="btn btn-ghost btn-sm" id="vd-edit-customer">Edit Customer</button>
+              </div>
+              <div class="kv-list" id="vd-customer-info-summary"></div>
+            </div>
+
+            <div class="card" id="vd-vehicle-info-card">
+              <div class="card-head">
+                <p class="section-eyebrow" style="margin:0">Vehicle Info</p>
+                <button class="btn btn-ghost btn-sm" id="vd-edit-vehicle">Edit Vehicle</button>
+              </div>
+              <div class="kv-list" id="vd-vehicle-info-summary"></div>
+            </div>
+
+            <!-- Whole-vehicle totals across every RO it has ever had -- a
+                 different number from the ticket card in the main column,
+                 so the label has to say so. -->
             <div class="card" id="vd-cost-card">
-              <div class="card-head"><p class="section-eyebrow" style="margin:0">Cost Summary</p></div>
+              <div class="card-head"><p class="section-eyebrow" style="margin:0">Vehicle Total — All Tickets</p></div>
               <div class="cost-summary" id="vd-cost-summary"></div>
             </div>
 
@@ -355,22 +394,6 @@
             <div class="card" id="vd-order-history-card" style="display:none">
               <div class="card-head"><p class="section-eyebrow" style="margin:0">Order History</p></div>
               <div id="vd-order-history" class="mini-list"></div>
-            </div>
-
-            <div class="card" id="vd-vehicle-info-card">
-              <div class="card-head">
-                <p class="section-eyebrow" style="margin:0">Vehicle Info</p>
-                <button class="btn btn-ghost btn-sm" id="vd-edit-vehicle">Edit Vehicle</button>
-              </div>
-              <div class="kv-list" id="vd-vehicle-info-summary"></div>
-            </div>
-
-            <div class="card" id="vd-customer-info-card" style="display:none">
-              <div class="card-head">
-                <p class="section-eyebrow" style="margin:0">Customer Info</p>
-                <button class="btn btn-ghost btn-sm" id="vd-edit-customer">Edit Customer</button>
-              </div>
-              <div class="kv-list" id="vd-customer-info-summary"></div>
             </div>
 
             <div class="card" id="vd-we-owe-status-card" style="display:none">
@@ -432,12 +455,12 @@
             <h1>Reports</h1>
             <p class="page-desc">What the shop spent, what it produced, and who did the work — over any stretch of time.</p>
           </div>
-          <div style="display:flex;gap:10px">
-            <a class="btn btn-ghost" id="report-csv" href="/api/export/report/vehicle-spend.csv" download>
+          <div class="page-head-actions">
+            <a class="btn btn-ghost" id="report-csv" href="/api/export/report/vehicle-spend.csv" download title="Download these rows as a spreadsheet">
               <svg viewBox="0 0 24 24"><path d="M12 4v11m0 0l-4-4m4 4l4-4M4 20h16"/></svg>
               Download CSV
             </a>
-            <button type="button" class="btn btn-primary" id="report-print">
+            <button type="button" class="btn btn-primary" id="report-print" title="Print this report with a letterhead">
               <svg viewBox="0 0 24 24"><path d="M7 9V3h10v6M7 19H5a1 1 0 01-1-1v-5a2 2 0 012-2h12a2 2 0 012 2v5a1 1 0 01-1 1h-2M7 15h10v6H7z"/></svg>
               Print
             </button>
@@ -445,11 +468,13 @@
         </div>
 
         <div class="report-bar">
-          <div class="seg" id="report-type-seg" role="tablist" aria-label="Report">
-            <button type="button" class="seg-btn active" data-report-type="vehicle-spend" role="tab" aria-selected="true">All Vehicles</button>
-            <button type="button" class="seg-btn" data-report-type="vehicle-spend-recon" role="tab" aria-selected="false">Recon</button>
-            <button type="button" class="seg-btn" data-report-type="vehicle-spend-we_owe" role="tab" aria-selected="false">We-Owe</button>
-            <button type="button" class="seg-btn" data-report-type="technicians" role="tab" aria-selected="false">Technicians</button>
+          <!-- Radiogroup, not tablist: four mutually exclusive filters over
+               one result region, with no per-tab panels to point at. -->
+          <div class="seg" id="report-type-seg" role="radiogroup" aria-label="Report">
+            <button type="button" class="seg-btn active" data-report-type="vehicle-spend" role="radio" aria-checked="true">All Vehicles</button>
+            <button type="button" class="seg-btn" data-report-type="vehicle-spend-recon" role="radio" aria-checked="false">Recon</button>
+            <button type="button" class="seg-btn" data-report-type="vehicle-spend-we_owe" role="radio" aria-checked="false">We-Owe</button>
+            <button type="button" class="seg-btn" data-report-type="technicians" role="radio" aria-checked="false">Technicians</button>
           </div>
           <div class="report-bar-gap"></div>
           <div class="report-range">
@@ -463,9 +488,14 @@
           </div>
         </div>
 
-        <div class="stats stats-report" id="report-stats"></div>
-        <div id="report-chart"></div>
-        <div id="report-output"></div>
+        <div role="region" aria-label="Report results" aria-live="polite">
+          <div class="stats stats-report" id="report-stats"></div>
+          <!-- States in words what the cards above are counting -- report,
+               range, row count -- mirroring the board's scope line. -->
+          <p class="stats-scope" id="report-scope"></p>
+          <div id="report-chart"></div>
+          <div id="report-output"></div>
+        </div>
       </section>
 
       <!-- ACCOUNTING / A-P -->
@@ -477,6 +507,10 @@
           </div>
         </div>
 
+        <!-- The one screen that is literally about money opens with the
+             money: what the visible range spent, what's held for review. -->
+        <div class="stats stats-ap" id="ap-stats"></div>
+
         <div class="grid-2">
           <div>
             <div class="card">
@@ -487,22 +521,30 @@
                   <label>Invoice #<input id="ap-invoice-number" required placeholder="INV-1234"></label>
                 </div>
                 <label>PO # (Repair Order)<select id="ap-po" required></select></label>
-                <div class="form-row">
-                  <label>Subtotal<input id="ap-subtotal" type="number" min="0" step="0.01" readonly></label>
-                  <label>Tax<input id="ap-tax" type="number" min="0" step="0.01" value="0"></label>
-                  <label>Total<input id="ap-total" type="number" min="0" step="0.01" readonly></label>
-                </div>
                 <div class="table-wrap">
                   <table>
-                    <thead><tr><th>Type</th><th>Part #</th><th>Description</th><th>Qty</th><th>Cost</th><th></th></tr></thead>
+                    <thead><tr><th>Type</th><th>Part #</th><th>Description</th><th class="num-col">Qty</th><th class="num-col">Cost</th><th class="num-col">Line</th><th><span class="sr-only">Remove</span></th></tr></thead>
                     <tbody id="ap-invoice-items"></tbody>
                   </table>
                 </div>
-                <div class="form-row" style="margin-top:10px">
+                <div style="margin-top:8px">
                   <button type="button" class="btn btn-ghost btn-sm" id="ap-add-line">＋ Line</button>
-                  <button class="btn btn-primary" type="submit" style="align-self:flex-start">Post Invoice</button>
                 </div>
-                <p class="hint" id="ap-invoice-note"></p>
+                <!-- Totals read bottom-up, under the lines that produce them.
+                     Subtotal and Total are outputs, not fields -- only Tax is
+                     typed. Both are recomputed from the lines on every input,
+                     so they can never drift from what gets posted. -->
+                <div class="ap-totals" style="margin-top:12px">
+                  <div class="cost-line"><span>Subtotal</span><span class="num" id="ap-subtotal">$0.00</span></div>
+                  <div class="cost-line"><span>Tax</span><input id="ap-tax" type="number" min="0" step="0.01" value="0" aria-label="Tax"></div>
+                  <div class="cost-line total"><span>Total</span><span class="num" id="ap-total">$0.00</span></div>
+                  <span class="ap-over-threshold" id="ap-over-threshold" hidden>Over $500 — will be held for manual approval before posting.</span>
+                </div>
+                <div class="form-row" style="margin-top:12px">
+                  <button class="btn btn-primary" type="submit" style="align-self:flex-start">Post Invoice</button>
+                  <button type="button" class="btn btn-ghost btn-sm" id="ap-clear-invoice" style="align-self:center" title="Discard this invoice and start over">Clear</button>
+                </div>
+                <div id="ap-invoice-note" class="ap-alert" hidden></div>
               </form>
             </div>
           </div>
@@ -534,19 +576,21 @@
           <button class="chip" data-ap-range="month">This Month</button>
           <button class="chip" data-ap-range="ytd">YTD</button>
           <button class="chip active" data-ap-range="all">All Time</button>
-          <input type="date" id="ap-filter-start" style="width:auto">
+          <input type="date" id="ap-filter-start" style="width:auto" aria-label="Filter from date">
           <span style="color:var(--ink-faint);font-size:12.5px">to</span>
-          <input type="date" id="ap-filter-end" style="width:auto">
-          <input id="ap-search" class="filters-search" placeholder="Search invoice #, vendor, PO, vehicle…" autocomplete="off">
+          <input type="date" id="ap-filter-end" style="width:auto" aria-label="Filter to date">
+          <input id="ap-search" class="filters-search" placeholder="Search invoices…" title="Searches invoice #, vendor, PO, and vehicle" aria-label="Search invoices" autocomplete="off">
           <div class="filters-gap"></div>
-          <span class="filters-note" id="ap-count">0 invoices</span>
+          <span class="filters-note" id="ap-count" aria-live="polite">0 invoices</span>
         </div>
 
         <div class="panel">
-          <table>
-            <thead><tr><th>Invoice</th><th>Vendor</th><th>RO / PO</th><th>Vehicle</th><th class="num-col">Total</th><th>Status</th><th></th></tr></thead>
-            <tbody id="ap-table"></tbody>
-          </table>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Invoice</th><th>Posted</th><th>Vendor</th><th>RO / PO</th><th>Vehicle</th><th class="num-col">Total</th><th>Status</th><th><span class="sr-only">Actions</span></th></tr></thead>
+              <tbody id="ap-table"></tbody>
+            </table>
+          </div>
         </div>
       </section>
 
@@ -555,47 +599,58 @@
         <div class="page-head">
           <div>
             <h1>Cores &amp; Returns</h1>
-            <p class="page-desc">Core deposits owed back from vendors on parts like calipers, alternators, and engines — tracked per part so nothing gets left uncollected.</p>
+            <p class="page-desc">Core deposits owed back from vendors on parts like calipers, alternators, and engines — tracked per part from still-on-the-shelf, to picked up, to credited, so nothing gets left uncollected.</p>
           </div>
         </div>
 
+        <!-- Same three-state vocabulary as Returned Parts below: a core is
+             Pending (still here), Awaiting Credit (sent back, no paperwork
+             yet), or Credited (vendor's credit recorded). -->
         <div class="filters">
           <button class="chip active" data-cores-filter="pending">Pending</button>
-          <button class="chip" data-cores-filter="returned">Returned</button>
+          <button class="chip" data-cores-filter="awaiting">Awaiting Credit</button>
+          <button class="chip" data-cores-filter="credited">Credited</button>
           <button class="chip" data-cores-filter="all">All</button>
+          <input id="cores-search" class="filters-search" placeholder="Search cores…" title="Searches part, part #, RO, and vehicle" aria-label="Search cores" autocomplete="off">
           <div class="filters-gap"></div>
-          <span class="filters-note" id="cores-count">0 cores</span>
+          <span class="filters-note" id="cores-count" aria-live="polite">0 cores</span>
           <span class="filters-note" id="cores-total"></span>
         </div>
 
         <div class="panel">
-          <table>
-            <thead><tr><th>Part</th><th>Part #</th><th>RO / Vehicle</th><th class="num-col">Core Charge</th><th>Status</th><th></th></tr></thead>
-            <tbody id="cores-table"></tbody>
-          </table>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Part</th><th>Part #</th><th>RO / Vehicle</th><th class="num-col">Core Charge</th><th>Status</th><th><span class="sr-only">Actions</span></th></tr></thead>
+              <tbody id="cores-table"></tbody>
+            </table>
+          </div>
         </div>
 
-        <div class="page-head" style="margin-top:28px">
+        <div class="subsection-head">
           <div>
-            <h2 style="margin:0">Returned Parts</h2>
-            <p class="page-desc">Parts sent back to the vendor -- post the credit here once you have the vendor's RMA/credit number so the A/P books show what they owe back.</p>
+            <h2>Returned Parts</h2>
+            <p class="page-desc">Parts going back to the vendor — mark them picked up when the driver collects them, then record the credit once the vendor's paperwork arrives so the A/P books show what they owe back.</p>
           </div>
         </div>
 
         <div class="filters">
-          <button class="chip active" data-returns-filter="pending">Pending Credit</button>
+          <button class="chip active" data-returns-filter="pending">Pending</button>
+          <button class="chip" data-returns-filter="awaiting">Awaiting Credit</button>
           <button class="chip" data-returns-filter="credited">Credited</button>
           <button class="chip" data-returns-filter="all">All</button>
+          <input id="returns-search" class="filters-search" placeholder="Search returns…" title="Searches part, part #, RO, vehicle, and vendor" aria-label="Search returns" autocomplete="off">
           <div class="filters-gap"></div>
-          <span class="filters-note" id="returns-count">0 returns</span>
+          <span class="filters-note" id="returns-count" aria-live="polite">0 returns</span>
           <span class="filters-note" id="returns-total"></span>
         </div>
 
         <div class="panel">
-          <table>
-            <thead><tr><th>Part</th><th>Part #</th><th>RO / Vehicle</th><th>Vendor</th><th class="num-col">Credit Due</th><th>Status</th><th></th></tr></thead>
-            <tbody id="returns-table"></tbody>
-          </table>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Part</th><th>Part #</th><th>RO / Vehicle</th><th>Vendor</th><th class="num-col">Credit Due</th><th>Status</th><th><span class="sr-only">Actions</span></th></tr></thead>
+              <tbody id="returns-table"></tbody>
+            </table>
+          </div>
         </div>
       </section>
 
@@ -606,7 +661,17 @@
             <h1>Staff</h1>
             <p class="page-desc">Technicians and advisors. Deactivate rather than delete — history stays attributed.</p>
           </div>
+          <div class="page-head-actions">
+            <button type="button" class="btn btn-ghost" id="staff-report-link" title="Repair orders, hours and labor cost per technician">
+              <svg viewBox="0 0 24 24"><path d="M9 17H5a2 2 0 01-2-2V5a2 2 0 012-2h14a2 2 0 012 2v10a2 2 0 01-2 2h-4M9 17l3 4 3-4M9 17h6"/></svg>
+              Productivity Report
+            </button>
+          </div>
         </div>
+
+        <!-- Who does what in this shop, at a glance. -->
+        <div class="stats stats-staff" id="staff-stats"></div>
+
         <div class="card">
           <div class="card-head"><p class="section-eyebrow" style="margin:0">Add Staff</p></div>
           <form id="staff-form" class="form-row" style="padding:14px 16px">
@@ -615,20 +680,25 @@
               <option value="technician">Technician</option>
               <option value="advisor">Advisor / Service Writer</option>
               <option value="manager">Manager</option>
-            </select></label>
-            <button class="btn btn-primary" style="align-self:flex-end">Add</button>
+            </select>
+            <span class="hint" style="margin:4px 0 0">Managers can also be assigned as advisors on repair orders.</span></label>
+            <button class="btn btn-primary" style="align-self:flex-end;margin-bottom:12px">Add</button>
           </form>
         </div>
         <div class="filters">
-          <input id="staff-search" class="filters-search" placeholder="Search staff…" autocomplete="off">
+          <button class="chip active" data-staff-filter="active">Active</button>
+          <button class="chip" data-staff-filter="all">Include inactive</button>
+          <input id="staff-search" class="filters-search" placeholder="Search name or role…" aria-label="Search staff" autocomplete="off">
           <div class="filters-gap"></div>
-          <span class="filters-note" id="staff-count">0 staff</span>
+          <span class="filters-note" id="staff-count" aria-live="polite">0 staff</span>
         </div>
         <div class="panel">
-          <table>
-            <thead><tr><th>Name</th><th>Role</th><th>Status</th><th></th></tr></thead>
-            <tbody id="staff-table"></tbody>
-          </table>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Name</th><th>Role</th><th class="num-col">Open Tasks</th><th>Status</th><th><span class="sr-only">Actions</span></th></tr></thead>
+              <tbody id="staff-table"></tbody>
+            </table>
+          </div>
         </div>
       </section>
 
@@ -669,13 +739,13 @@
         <p class="stats-scope" id="tasks-scope">Every open task.</p>
 
         <form id="task-quick-add" class="task-quick-add">
-          <input id="task-title-input" placeholder="Add a task… e.g. Call John back about his Civic" required>
+          <input id="task-title-input" placeholder="Add a task… e.g. Call John back about his Civic" aria-label="New task title" required>
           <div class="ms-picker" id="task-assignee-picker">
-            <button type="button" class="ms-toggle" id="task-assignee-toggle">Unassigned</button>
+            <button type="button" class="ms-toggle" id="task-assignee-toggle" aria-haspopup="true" aria-expanded="false">Unassigned</button>
             <div class="ms-menu" id="task-assignee-menu"></div>
           </div>
-          <select id="task-order-input" title="Link to a vehicle (optional)"><option value="">No vehicle</option></select>
-          <input type="date" id="task-due-input" title="Due date (optional)">
+          <select id="task-order-input" title="Link to a vehicle (optional)" aria-label="Link to a vehicle (optional)"><option value="">No vehicle</option></select>
+          <label class="bulk-field"><span>Due</span><input type="date" id="task-due-input" title="Due date (optional)" aria-label="Due date (optional)"></label>
           <label class="task-urgent-toggle"><input type="checkbox" id="task-urgent-input"> Urgent</label>
           <button class="btn btn-primary" type="submit">Add Task</button>
         </form>
@@ -683,9 +753,15 @@
         <div class="filters">
           <button class="chip active" data-task-filter="">All</button>
           <button class="chip" data-task-filter="mine">Assigned to Me</button>
+          <label class="filters-select-wrap" for="tasks-assignee-filter">
+            <span>Assignee</span>
+            <select class="filters-select" id="tasks-assignee-filter">
+              <option value="">Anyone</option>
+            </select>
+          </label>
           <button type="button" class="chip chip-toggle" id="tasks-urgent-filter" aria-pressed="false"
                   title="Show only tasks flagged urgent">Urgent only</button>
-          <input id="task-search" class="filters-search" placeholder="Search tasks…" autocomplete="off">
+          <input id="task-search" type="search" class="filters-search" placeholder="Search tasks…" aria-label="Search tasks" autocomplete="off">
           <button type="button" class="btn btn-ghost btn-sm" id="tasks-reset-view" hidden>Reset view</button>
           <div class="filters-gap"></div>
           <label class="tasks-select-all-wrap" for="tasks-select-all">
@@ -699,20 +775,21 @@
              and undated, and fixing that one row at a time is what stopped
              anyone from using them. Every control here applies to the whole
              selection in one request. -->
-        <div class="bulk-bar" id="tasks-bulk-bar" style="display:none">
+        <div class="bulk-bar" id="tasks-bulk-bar" hidden>
           <span id="tasks-bulk-count"></span>
           <div class="ms-picker" id="tasks-bulk-assignee-picker">
-            <button type="button" class="ms-toggle" id="tasks-bulk-assignee-toggle">Assign to…</button>
+            <button type="button" class="ms-toggle" id="tasks-bulk-assignee-toggle" aria-haspopup="true" aria-expanded="false">Assign to…</button>
             <div class="ms-menu" id="tasks-bulk-assignee-menu"></div>
           </div>
           <label class="bulk-field" for="tasks-bulk-due">
             <span>Due</span>
             <input type="date" id="tasks-bulk-due" title="Set a due date on every selected task">
           </label>
+          <button type="button" class="btn btn-ghost btn-sm" id="tasks-bulk-due-clear" title="Clear the due date on every selected task">Clear due</button>
           <button type="button" class="btn btn-ghost btn-sm" id="tasks-bulk-urgent">Flag Urgent</button>
           <div class="filters-gap"></div>
           <button type="button" class="btn btn-ghost btn-sm" id="tasks-bulk-clear">Clear selection</button>
-          <button type="button" class="btn btn-ghost btn-sm" id="tasks-bulk-delete">Delete</button>
+          <button type="button" class="btn btn-ghost btn-sm btn-danger-ghost" id="tasks-bulk-delete">Delete</button>
           <button type="button" class="btn btn-primary btn-sm" id="tasks-bulk-done">Complete</button>
         </div>
 
@@ -722,29 +799,32 @@
         <div id="tasks-completed-list" class="task-list" style="display:none;margin-top:10px"></div>
       </section>
 
-      <!-- SUGGESTIONS / IDEAS -->
+      <!-- IDEAS (suggestions API underneath) -->
       <section class="view" id="view-suggestions">
         <div class="page-head">
           <div>
-            <h1>Suggestions</h1>
+            <h1>Ideas</h1>
             <p class="page-desc">Ideas and improvements for the system — write it down when you think of it, mark it done once it's handled.</p>
           </div>
         </div>
 
         <form id="suggestion-add" class="suggestion-add">
-          <textarea id="suggestion-text-input" placeholder="What should we add or fix?" required></textarea>
-          <button class="btn btn-primary" type="submit">Post Suggestion</button>
+          <!-- No `required`: an empty submit is handled by the disabled
+               button below, not the browser's un-themed validation bubble. -->
+          <textarea id="suggestion-text-input" placeholder="What should we add or fix?" rows="3" maxlength="2000" aria-label="New idea"></textarea>
+          <button class="btn btn-primary" type="submit" id="suggestion-submit" disabled title="Ctrl+Enter also posts">Post Idea</button>
         </form>
 
         <div class="filters">
-          <input id="suggestion-search" class="filters-search" placeholder="Search suggestions…" autocomplete="off">
+          <input id="suggestion-search" class="filters-search" placeholder="Search ideas…" aria-label="Search ideas" autocomplete="off">
           <div class="filters-gap"></div>
-          <span class="filters-note" id="suggestions-count">0 open</span>
+          <span class="filters-note" id="suggestions-count" aria-live="polite">0 open</span>
         </div>
 
         <div id="suggestions-list" class="suggestion-list"></div>
 
-        <button type="button" class="btn btn-ghost btn-sm" id="suggestions-toggle-resolved" style="margin-top:14px">Show resolved (0)</button>
+        <button type="button" class="btn btn-ghost btn-sm" id="suggestions-toggle-resolved" style="margin-top:14px"
+                aria-expanded="false" aria-controls="suggestions-resolved-list">Show done (0)</button>
         <div id="suggestions-resolved-list" class="suggestion-list" style="display:none;margin-top:10px"></div>
       </section>
 
@@ -753,30 +833,49 @@
         <div class="page-head">
           <div>
             <h1>Backup &amp; Restore</h1>
-            <p class="page-desc">A full database backup (.db) is made automatically every 24 hours and the last 14 are kept. Make one manually any time, and download, restore, or delete any backup below.</p>
+            <p class="page-desc" id="backup-policy-desc">A full database backup (.db) is made automatically every 24 hours and the last 14 are kept. Make one manually any time, and download, restore, or delete any backup below.</p>
           </div>
-          <div style="display:flex;gap:10px">
-            <a class="btn btn-ghost btn-sm" href="/api/export/vehicles.csv" download>Export Vehicles CSV</a>
+          <div class="page-head-actions">
             <button type="button" class="btn btn-primary" id="backup-run-btn">Create Backup Now</button>
           </div>
         </div>
 
+        <!-- "Am I actually protected right now?" -- answered before anything
+             else on the page, from the same payload as the table. -->
+        <div class="stats stats-backup" id="backup-stats"></div>
+        <div class="backup-warning" id="backup-auto-warning" hidden></div>
+
         <div class="panel">
-          <table>
-            <thead><tr><th>Name</th><th>Size</th><th>Created</th><th></th></tr></thead>
-            <tbody id="backup-table"></tbody>
-          </table>
+          <div class="table-wrap">
+            <table aria-label="Backups">
+              <thead><tr><th>Backup</th><th class="num-col">Size</th><th>Created</th><th><span class="sr-only">Actions</span></th></tr></thead>
+              <tbody id="backup-table"></tbody>
+            </table>
+          </div>
         </div>
 
-        <div class="page-head" style="margin-top:28px">
+        <div class="subsection-head">
           <div>
-            <h2 style="margin:0">Restore From a File</h2>
-            <p class="page-desc">Point at a .db backup file from anywhere -- a USB stick, a synced folder, wherever it was stashed. The current database is saved aside first, so this can be undone.</p>
+            <h2>Restore From a File</h2>
+            <p class="page-desc">Point at a .db backup file from anywhere — a USB stick, a synced folder, wherever it was stashed. The current database is saved aside first, so this can be undone.</p>
           </div>
         </div>
         <div class="panel" style="padding:16px 20px">
-          <label>Backup file<input type="file" id="backup-restore-file" accept=".db"></label>
-          <button type="button" class="btn btn-ghost" id="backup-restore-submit" style="margin-top:10px">Choose File &amp; Restore</button>
+          <input type="file" id="backup-restore-file" accept=".db" class="sr-only" aria-label="Backup file">
+          <div class="dropzone" id="backup-dropzone" role="button" tabindex="0" aria-label="Choose or drop a backup file">
+            <strong>Drop a .db backup here</strong> or click to choose a file
+          </div>
+          <button type="button" class="btn btn-danger" id="backup-restore-submit" style="margin-top:12px" disabled>Restore From This File</button>
+        </div>
+
+        <div class="subsection-head">
+          <div>
+            <h2>Exports</h2>
+            <p class="page-desc">Spreadsheets for the bookkeeper — separate from backups, which are the full database.</p>
+          </div>
+        </div>
+        <div class="panel" style="padding:14px 20px">
+          <a class="btn btn-ghost btn-sm" href="/api/export/vehicles.csv" download>Export Vehicles CSV</a>
         </div>
       </section>
 
@@ -949,8 +1048,10 @@
     <div class="modal-body">
       <p class="hint" id="post-return-desc"></p>
       <label>Vendor<select id="post-return-vendor" required></select></label>
-      <label>Credit / RMA #<input id="post-return-credit-number" required placeholder="RMA-1234"></label>
+      <p class="hint warn" id="post-return-vendor-warning" hidden>This part wasn't received against a vendor invoice, so the vendor couldn't be resolved — pick the one who supplied it.</p>
+      <label>Credit / RMA #<input id="post-return-credit-number" required minlength="2" placeholder="RMA-1234" autofocus></label>
       <div class="cost-summary" id="post-return-total-summary"></div>
+      <p class="hint">Posts a credit invoice to A/P against this vendor and closes out the return.</p>
     </div>
     <div class="modal-actions">
       <button class="btn btn-ghost" formnovalidate type="button" id="post-return-cancel-2">Cancel</button>
@@ -1061,6 +1162,28 @@
      whole database over the top of the live one", and no styling that says
      danger. This is one dialog reused by every call site; see
      confirmAction() in app.js. -->
+<!-- Invoice-number Prompt Dialog
+     A confirm with one required text field: returning a core or a part
+     always comes with vendor paperwork, so the number is captured at the
+     moment of the return rather than reconstructed later. Reused by every
+     call site via promptInvoiceNumber() in app.js. -->
+<dialog id="invoice-prompt-dialog">
+  <form class="modal" id="invoice-prompt-form">
+    <div class="modal-head">
+      <div><p class="eyebrow" id="invoice-prompt-eyebrow">RETURN</p><h2 id="invoice-prompt-title">Vendor invoice #</h2></div>
+      <button class="icon-btn" formnovalidate type="button" id="invoice-prompt-cancel">×</button>
+    </div>
+    <div class="modal-body">
+      <p class="hint" id="invoice-prompt-body"></p>
+      <label id="invoice-prompt-label-wrap">Invoice / credit #<input id="invoice-prompt-input" required minlength="1" placeholder="e.g. CR-10442" autocomplete="off"></label>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" formnovalidate type="button" id="invoice-prompt-cancel-2">Cancel</button>
+      <button class="btn btn-primary" type="submit" id="invoice-prompt-accept">Save</button>
+    </div>
+  </form>
+</dialog>
+
 <dialog id="confirm-dialog">
   <div class="modal confirm-modal">
     <div class="modal-head">

@@ -6,9 +6,11 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
 
-from .backup import backup_database, list_backups, prune_backups, restore_database
+from . import backup as backup_module
+from .backup import backup_database, list_backups, most_recent_backup_age_hours, prune_backups, restore_database
 
 BACKUP_RETENTION_COUNT = 14
+AUTO_BACKUP_INTERVAL_HOURS = 24
 
 
 def _entry(path: Path) -> dict:
@@ -32,6 +34,21 @@ def build_backup_router(db_path: Path, backups_dir: Path) -> APIRouter:
     @router.get("")
     def list_all():
         return [_entry(p) for p in list_backups(backups_dir)]
+
+    @router.get("/status")
+    def status():
+        """The truth behind the Backup page's health strip: whether anything
+        is actually running the auto-backup loop in this process, how stale
+        the newest backup is, and where the files live on disk (so they can
+        be copied off-machine, which is what makes any of this real disaster
+        protection)."""
+        return {
+            "auto_enabled": backup_module.AUTO_BACKUP_RUNNING,
+            "interval_hours": AUTO_BACKUP_INTERVAL_HOURS,
+            "retention": BACKUP_RETENTION_COUNT,
+            "backups_dir": str(backups_dir),
+            "last_age_hours": most_recent_backup_age_hours(backups_dir),
+        }
 
     @router.post("/run")
     def run_backup():

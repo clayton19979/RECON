@@ -180,6 +180,8 @@ def test_core_charge_is_saved_and_listed_in_cores(client):
     assert not cores[0]["core_returned"]
     assert cores[0]["vehicle_label"] == vehicle["stock_number"]
 
+    # No paperwork needed to mark it returned -- the core physically goes
+    # back first and the vendor's credit invoice arrives later.
     res = client.patch(f"/api/orders/{order['id']}/estimate/items/{item['id']}/core-return", json={"actor": "tester"})
     assert res.status_code == 200
     body = res.json()
@@ -188,11 +190,38 @@ def test_core_charge_is_saved_and_listed_in_cores(client):
     cores = client.get("/api/cores").json()
     assert cores[0]["core_returned"]
     assert cores[0]["core_returned_at"]
+    assert cores[0]["core_return_invoice_number"] == ""
 
-    # undo
+    # recording the credit is the separate, paperwork-bearing step
+    res = client.post(
+        f"/api/orders/{order['id']}/estimate/items/{item['id']}/core-credit",
+        json={"invoice_number": "CR-9001", "actor": "tester"},
+    )
+    assert res.status_code == 200
+    assert res.json()["core_return_invoice_number"] == "CR-9001"
+    cores = client.get("/api/cores").json()
+    assert cores[0]["core_return_invoice_number"] == "CR-9001"
+
+    # can't record twice
+    res = client.post(
+        f"/api/orders/{order['id']}/estimate/items/{item['id']}/core-credit",
+        json={"invoice_number": "CR-9002", "actor": "tester"},
+    )
+    assert res.status_code == 409
+
+    # undo the return -- the credit number clears with it
     res = client.patch(f"/api/orders/{order['id']}/estimate/items/{item['id']}/core-return", json={"returned": False})
     assert res.status_code == 200
-    assert not client.get("/api/cores").json()[0]["core_returned"]
+    cores = client.get("/api/cores").json()
+    assert not cores[0]["core_returned"]
+    assert cores[0]["core_return_invoice_number"] == ""
+
+    # and a credit can't be recorded against a core that isn't returned
+    res = client.post(
+        f"/api/orders/{order['id']}/estimate/items/{item['id']}/core-credit",
+        json={"invoice_number": "CR-9003", "actor": "tester"},
+    )
+    assert res.status_code == 400
 
 
 def test_core_return_rejects_line_with_no_core_charge(client):
@@ -224,6 +253,8 @@ def test_part_return_toggles_flag_and_drops_from_actual_cost(client):
     detail = client.get(f"/api/recon/vehicles/{vehicle['id']}").json()
     assert detail["total_cost"] == 10
 
+    # No paperwork needed at this step -- the part goes back to the vendor
+    # first; the credit invoice is recorded later via post-return-credit.
     res = client.patch(f"/api/orders/{order['id']}/estimate/items/{item_id}/part-return", json={"actor": "tester"})
     assert res.status_code == 200
     assert res.json() == {"id": item_id, "part_returned": True}
@@ -247,6 +278,133 @@ def test_part_return_toggles_flag_and_drops_from_actual_cost(client):
     assert not updated["part_returned_at"]
     detail = client.get(f"/api/recon/vehicles/{vehicle['id']}").json()
     assert detail["total_cost"] == 10
+
+
+def test_returning_the_new_part_drops_its_pending_core(client):
+    """A core deposit exists only because a new part was bought and the old
+    unit is owed back. Send the new part back instead of fitting it and the
+    whole line reverses -- there is no old unit to return, so the core must
+    not sit on the board as a chore that will never happen."""
+    vendor = client.post("/api/vendors", json={"name": "WorldPac"}).json()
+    vehicle = make_recon_vehicle(client)
+    order = make_recon_order(client, vehicle["id"])
+    estimate = save_estimate(
+        client, order["id"],
+        [{"kind": "part", "description": "Alternator", "part_number": "ALT-1", "quantity": 1,
+          "unit_price": 150, "unit_cost": 150, "core_charge": 45}],
+    )
+    item_id = estimate["items"][0]["id"]
+    client.post(
+        f"/api/orders/{order['id']}/estimate/receive-parts",
+        json={"item_ids": [item_id], "vendor_id": vendor["id"], "invoice_number": "INV-1"},
+    )
+    assert len(client.get("/api/cores").json()) == 1, "a received part with a core owes a core back"
+
+    client.patch(f"/api/orders/{order['id']}/estimate/items/{item_id}/part-return", json={"actor": "tester"})
+    assert client.get("/api/cores").json() == [], "the new part is going back, so there's no core to chase"
+    assert len(client.get("/api/returns").json()) == 1, "it is a part return, though"
+
+    # the core can't be marked returned either -- there is nothing to send
+    res = client.patch(f"/api/orders/{order['id']}/estimate/items/{item_id}/core-return", json={"actor": "tester"})
+    assert res.status_code == 400
+
+    # filtered, not destroyed: undoing the part return brings the core back
+    client.patch(f"/api/orders/{order['id']}/estimate/items/{item_id}/part-return", json={"returned": False})
+    cores = client.get("/api/cores").json()
+    assert len(cores) == 1 and cores[0]["core_charge"] == 45
+
+
+def test_a_core_already_sent_back_survives_a_later_part_return(client):
+    """The reverse order is a record, not a chore: that core physically went
+    to the vendor and may carry a credit, so it stays on the board."""
+    vendor = client.post("/api/vendors", json={"name": "WorldPac"}).json()
+    order = make_retail_order(client)
+    estimate = save_estimate(
+        client, order["id"],
+        [{"kind": "part", "description": "Caliper", "part_number": "CAL-9", "quantity": 1,
+          "unit_price": 80, "unit_cost": 80, "core_charge": 25}],
+    )
+    item_id = estimate["items"][0]["id"]
+    client.post(
+        f"/api/orders/{order['id']}/estimate/receive-parts",
+        json={"item_ids": [item_id], "vendor_id": vendor["id"], "invoice_number": "INV-1"},
+    )
+    client.patch(f"/api/orders/{order['id']}/estimate/items/{item_id}/core-return", json={"actor": "tester"})
+    client.patch(f"/api/orders/{order['id']}/estimate/items/{item_id}/part-return", json={"actor": "tester"})
+
+    cores = client.get("/api/cores").json()
+    assert len(cores) == 1 and cores[0]["core_returned"], "a core that already went back stays on the board"
+
+
+def test_part_pickup_tracks_whether_the_vendor_has_collected_it(client):
+    """A returned part sits at the shop until the vendor's driver takes it --
+    the three states the Returned Parts board shows are Pending (still here),
+    Awaiting Credit (picked up), Credited."""
+    vendor = client.post("/api/vendors", json={"name": "WorldPac"}).json()
+    vehicle = make_recon_vehicle(client)
+    order = make_recon_order(client, vehicle["id"])
+    estimate = save_estimate(
+        client, order["id"],
+        [{"kind": "part", "description": "Alternator", "part_number": "ALT-1", "quantity": 1, "unit_price": 150, "unit_cost": 150}],
+    )
+    item_id = estimate["items"][0]["id"]
+    client.post(
+        f"/api/orders/{order['id']}/estimate/receive-parts",
+        json={"item_ids": [item_id], "vendor_id": vendor["id"], "invoice_number": "INV-1"},
+    )
+
+    # can't be picked up before it's even flagged to go back
+    res = client.patch(f"/api/orders/{order['id']}/estimate/items/{item_id}/part-pickup", json={})
+    assert res.status_code == 400
+
+    client.patch(f"/api/orders/{order['id']}/estimate/items/{item_id}/part-return", json={"actor": "tester"})
+    assert client.get("/api/returns").json()[0]["part_picked_up_at"] == "", "a fresh return is still at the shop"
+
+    res = client.patch(f"/api/orders/{order['id']}/estimate/items/{item_id}/part-pickup", json={"actor": "tester"})
+    assert res.status_code == 200
+    assert client.get("/api/returns").json()[0]["part_picked_up_at"]
+
+    # put it back on the shelf
+    res = client.patch(
+        f"/api/orders/{order['id']}/estimate/items/{item_id}/part-pickup",
+        json={"picked_up": False, "actor": "tester"},
+    )
+    assert res.status_code == 200
+    assert client.get("/api/returns").json()[0]["part_picked_up_at"] == ""
+
+    # undoing the return itself clears any pickup stamp with it
+    client.patch(f"/api/orders/{order['id']}/estimate/items/{item_id}/part-pickup", json={"actor": "tester"})
+    client.patch(f"/api/orders/{order['id']}/estimate/items/{item_id}/part-return", json={"returned": False})
+    client.patch(f"/api/orders/{order['id']}/estimate/items/{item_id}/part-return", json={"actor": "tester"})
+    assert client.get("/api/returns").json()[0]["part_picked_up_at"] == ""
+
+
+def test_posting_a_credit_stamps_pickup_on_a_part_still_marked_pending(client):
+    """A credit in hand is proof the vendor took the part, so a line the shop
+    never got round to marking picked up isn't left contradicting its own
+    paperwork."""
+    vendor = client.post("/api/vendors", json={"name": "WorldPac"}).json()
+    order = make_retail_order(client)
+    estimate = save_estimate(
+        client, order["id"],
+        [{"kind": "part", "description": "Starter", "part_number": "ST-1", "quantity": 1, "unit_price": 90, "unit_cost": 90}],
+    )
+    item_id = estimate["items"][0]["id"]
+    client.post(
+        f"/api/orders/{order['id']}/estimate/receive-parts",
+        json={"item_ids": [item_id], "vendor_id": vendor["id"], "invoice_number": "INV-1"},
+    )
+    client.patch(f"/api/orders/{order['id']}/estimate/items/{item_id}/part-return", json={"actor": "tester"})
+    assert client.get("/api/returns").json()[0]["part_picked_up_at"] == ""
+
+    res = client.post(
+        f"/api/orders/{order['id']}/estimate/items/{item_id}/post-return-credit",
+        json={"vendor_id": vendor["id"], "credit_number": "RMA-5", "actor": "tester"},
+    )
+    assert res.status_code == 200
+    row = client.get("/api/returns").json()[0]
+    assert row["return_invoice_number"] == "RMA-5"
+    assert row["part_picked_up_at"], "a credited return can't still be sitting on the shelf"
 
 
 def test_part_return_rejects_line_that_was_never_received(client):

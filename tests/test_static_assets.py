@@ -27,6 +27,11 @@ INDEX_HTML = STATIC / "index.html"
 RUNTIME_CREATED_IDS: set[str] = {
     # rendered into #vd-last-worked, and only for a stalled vehicle
     "vd-worked-nudge",
+    # rendered into the staff table's empty state (no rows / no search hits)
+    "staff-empty-add",
+    "staff-empty-clear",
+    # rendered at the tail of the completed-tasks list once it's capped
+    "tasks-show-all-completed",
 }
 
 

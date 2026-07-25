@@ -15,7 +15,7 @@ import uvicorn
 from PIL import Image, ImageDraw
 
 from app import discovery
-from app.backup import backup_database, list_backups, most_recent_backup_age_hours, prune_backups, restore_database
+from app.backup import backup_database, list_backups, most_recent_backup_age_hours, prune_backups, restore_database, set_auto_backup_running
 from app.main import DATA_ROOT, DEFAULT_BACKUPS_DIR, DEFAULT_DB, NETWORK_FLAG, create_app
 
 
@@ -300,6 +300,9 @@ class TrayApp:
         last backup is stale, then checks again once an hour. Protects
         against data loss without Clay having to remember to click
         Backup Now."""
+        # The API serves in this same process (uvicorn runs on a thread), so
+        # this flag is what /api/backup/status reports as auto_enabled.
+        set_auto_backup_running(True)
         while True:
             try:
                 age = most_recent_backup_age_hours(DEFAULT_BACKUPS_DIR)

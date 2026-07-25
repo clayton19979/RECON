@@ -6988,11 +6988,19 @@ function renderBackupStats(backups, status) {
   const box = $("#backup-stats");
   if (!box) return;
   const newest = backups[0];
-  const ageHours = newest ? (Date.now() / 1000 - newest.modified_at) / 3600 : null;
-  const ageTone = ageHours == null ? "crit" : ageHours > 48 ? "crit" : ageHours > 26 ? "warn" : "";
-  const health = ageHours == null ? "None" : ageHours > 48 ? "Stale" : ageHours > 26 ? "Aging" : "Healthy";
+  const interval = status?.interval_hours ?? 24;
+  // status.last_age_hours is the server's own computation off the same
+  // files this page lists -- prefer it over recomputing client-side, and
+  // fall back only if the /status fetch itself failed.
+  const ageHours = status?.last_age_hours ?? (newest ? (Date.now() / 1000 - newest.modified_at) / 3600 : null);
+  // Thresholds scale with the real policy instead of a hardcoded 26/48 --
+  // a shop whose interval is ever tuned away from 24h shouldn't leave the
+  // health strip quietly judging against the wrong number.
+  const ageTone = ageHours == null ? "crit" : ageHours > interval * 2 ? "crit" : ageHours > interval + 2 ? "warn" : "";
+  const health = ageHours == null ? "None" : ageHours > interval * 2 ? "Stale" : ageHours > interval + 2 ? "Aging" : "Healthy";
   const totalBytes = backups.reduce((s, b) => s + b.size_bytes, 0);
   const retention = status?.retention ?? 14;
+  const autoOn = !!status?.auto_enabled;
   box.innerHTML = `
     <div class="stat">
       <div class="stat-label">Last Backup</div>
@@ -7002,7 +7010,12 @@ function renderBackupStats(backups, status) {
     <div class="stat">
       <div class="stat-label">Protection</div>
       <div class="stat-value${ageTone ? ` ${ageTone}` : ""}">${health}</div>
-      <div class="stat-sub">${ageHours == null ? "take one now" : ageTone ? "older than the 24-hour policy" : "within the 24-hour policy"}</div>
+      <div class="stat-sub">${ageHours == null ? "take one now" : ageTone ? `older than the ${interval}-hour policy` : `within the ${interval}-hour policy`}</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Auto-Backup</div>
+      <div class="stat-value${autoOn ? "" : " warn"}">${autoOn ? "On" : "Off"}</div>
+      <div class="stat-sub">${autoOn ? `runs every ${interval}h` : "click Create Backup Now instead"}</div>
     </div>
     <div class="stat">
       <div class="stat-label">Backups Kept</div>
@@ -7025,6 +7038,14 @@ function renderBackupStats(backups, status) {
     } else {
       warning.hidden = true;
     }
+  }
+
+  // The policy sentence used to hardcode "24 hours"/"14" -- if either
+  // constant is ever tuned, this kept the page quietly lying about the
+  // real policy. Now it reads the same status payload the cards do.
+  const policyDesc = $("#backup-policy-desc");
+  if (policyDesc && status) {
+    policyDesc.textContent = `A full database backup (.db) is made automatically every ${interval} hours and the last ${retention} are kept. Make one manually any time, and download, restore, or delete any backup below.`;
   }
 }
 

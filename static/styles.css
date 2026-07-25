@@ -1751,7 +1751,7 @@ tbody tr.voided-row td:nth-child(-n+3) { text-decoration: line-through; }
 th.sel-col, td.sel-col { width: 32px; padding-right: 0; }
 
 /* ---------- backup ---------- */
-.stats-backup { grid-template-columns: repeat(4, 1fr); }
+.stats-backup { grid-template-columns: repeat(5, 1fr); }
 .stats-backup .stat { border-top-color: var(--line); }
 .stats-backup .stat:has(.stat-value.warn) { border-top-color: var(--warn); }
 .stats-backup .stat:has(.stat-value.crit) { border-top-color: var(--crit); }

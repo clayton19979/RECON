@@ -9,3 +9,6 @@ build/
 dist/
 *.spec
 *.log
+# ...but the automated improvement run's changelog is a tracked project
+# document, not a throwaway runtime log.
+!auto_improvements.log

@@ -1,0 +1,21 @@
+# Normalize line endings so a file edited on Windows doesn't show up as a
+# whole-file rewrite in git. Without this, static/app.js (CRLF on disk)
+# diffed as ~5,900 changed lines against its LF-stored blob, which buried
+# every real change and made `git log -p` useless for those files.
+#
+# text=auto eol=lf: git stores LF in the repo and checks out LF. Editors on
+# Windows handle LF fine, and these are web assets where the line ending is
+# irrelevant at runtime.
+* text=auto eol=lf
+
+# PowerShell installers stay CRLF -- they're Windows-only by definition and
+# some older PowerShell hosts are picky about it.
+*.ps1 text eol=crlf
+
+# Never touch these.
+*.db binary
+*.png binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.ttf binary

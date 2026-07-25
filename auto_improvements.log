@@ -991,8 +991,13 @@ Sandbox notes for next run:
   * /tmp is not writable. Keep mutation-testing backups in ~ -- I lost a round
     to `cp: /tmp/app.orig.js: Permission denied`, which silently stacked four
     mutations on top of each other and made two of them look like survivors.
-  * Everything else holds: ~/g.sh for git (locks can only be renamed, not
-    deleted; the unlink warnings on commit are cosmetic), `pip install
+  * ~/g.sh must clear HEAD.lock, not just index.lock. A commit on this mount
+    leaves HEAD.lock behind (git can't unlink it), so the *next* commit dies
+    with "Another git process seems to be running" -- which reads like a hung
+    process and isn't. The helper now renames index.lock, HEAD.lock,
+    config.lock and objects/maintenance.lock before every git call. The
+    unlink warnings printed during a commit are cosmetic; that one is not.
+  * Everything else holds: `pip install
     --break-system-packages fastapi uvicorn httpx pytest`, splitting pytest
     across two bash calls for the 45s cap, and DON'T run seed_mock_data.py --
     it truncates data/shop.db and dies partway.

@@ -906,3 +906,110 @@ Next time, in rough priority order:
   6. seed_mock_data can't run on this mount at all, which makes the demo data
      un-refreshable. Splitting reset_db() out so the aging/enrichment passes
      can run standalone would make it usable in pieces.
+
+================================================================================
+2026-07-25 10:24 -- Tasks becomes a work queue (bulk edit, groups, stat cards)
+================================================================================
+
+Last run's note said the Tasks screen was now a destination the board sends
+people to and hadn't been looked at in a while, and that "Make N Tasks" lands
+its output unassigned and undated. That's the whole run.
+
+The gap, stated plainly: the board can turn eight stalled cars into eight
+follow-ups in one click, and leaves them blank on purpose -- who and when are
+decisions you make looking at the list, not at the board. But the only place
+to record those decisions was one row at a time, and a feature whose output
+takes eight edits to become useful doesn't get used.
+
+What shipped:
+  * Bulk edit. A checkbox per row (shift+click ranges, select-all, Escape to
+    clear), and a bar that sets assignee / due date / urgency or completes and
+    deletes the batch. Two new endpoints, POST /api/tasks/bulk and
+    /bulk-delete, one transaction for N rows. All-or-nothing on an unknown id,
+    so the count in the toast is one the server actually verified instead of a
+    tally of promises that mostly settled -- which is what the board's
+    Promise.allSettled fan-out still does, and is worth revisiting.
+  * Three-valued assignment (add / remove / replace) rather than an overwrite.
+    This is the design decision I'd defend hardest: a replace would silently
+    drop whoever was already on a task that happened to be in the selection.
+    Nobody notices until the person dropped doesn't turn up. The picker shows
+    the distinction -- checked means all of the selection, indeterminate means
+    some, with an n/N count beside the name.
+  * Grouping by due bucket (Overdue / Today / Next 7 Days / Later / No Due
+    Date) instead of a flat list. Empty buckets are dropped; five headings
+    over two tasks is worse than none.
+  * Stat cards in the board's grammar -- Open for context, three filters, zero
+    cards disabled, each counting with its own filter lifted. Plus urgent-only
+    chip, scope line, Reset view, prefs in localStorage. Selection is
+    deliberately not persisted: a restored selection is a set of rows you
+    don't remember picking sitting in front of a Delete button.
+  * Due date and urgency were write-once -- settable in the quick-add form and
+    nowhere else, which is exactly the wrong moment for either, and doubly
+    wrong for tasks the board creates blank. Both editable inline now.
+
+Tests: 214 -> 235. Thirteen pytest cases over the bulk endpoints, plus a fifth
+jsdom smoke (tasks_smoke.mjs, ~50 assertions).
+
+Mutation testing: 10 mutations, 10 killed after two rounds of repair. The
+three survivors all had the same shape -- a fixture where the right answer and
+the wrong one coincide:
+  * Deleting the selection-pruning line changed nothing, because every filter
+    path clears the selection explicitly anyway. Search is the one that can't
+    (you type it a letter at a time, so clearing per keystroke would make it
+    impossible to select anything while narrowing to it) -- that's where the
+    line is observable, and it's asserted there now.
+  * "Cards count with their own filter lifted" passed while counting the
+    filtered list: filtered to the single overdue row, overdue counts 1 either
+    way. The neighbouring cards are what make the rule visible.
+  * Shift+range walking the raw array instead of display order passed because
+    the first three rows give the same span in both. Re-anchored on a pair
+    where the two orders genuinely disagree.
+Separately: the bulk-delete section of the smoke matched no button (the
+confirm is #confirm-accept, not .btn-danger) and skipped itself entirely while
+still printing PASS. Rewritten against ids, and it now also asserts that
+cancelling is a real no-op rather than a slower yes.
+
+Verified end to end: 235 tests green across two pytest calls, all five jsdom
+smokes pass, uvicorn boots and serves, and the screen rendered against the
+real seeded database -- 3 open tasks landing in overdue/today/week, cards
+reading 3/1/1/1, "worst 2 days late", select-all reaching exactly the 3 rows
+shown, and the staff menu offering all 6 names.
+
+Sandbox notes for next run:
+  * IMPORTANT, this one cost 20 minutes: do NOT run the jsdom smokes with
+    NODE_PATH pointing into the mount. Loading jsdom off OneDrive takes
+    minutes per script (a single boot exceeded the 45s bash cap). Copy
+    node_modules to local disk ONCE and it drops to ~1s:
+        cp -r tests/dom/node_modules ~/domwork/node_modules   # ~22s, 24MB
+    It must live at ~/domwork/node_modules, not somewhere NODE_PATH points --
+    ESM ignores NODE_PATH and resolves by walking up from the script, so a
+    stray location fails on parse5 importing 'entities'. ~/domrun.sh copies
+    static/ + tests/dom/ into ~/domwork and runs from there.
+    Consequence: `pytest tests/test_dom_smoke.py` is unusably slow on this
+    mount (it always finds tests/dom/node_modules first). Run the .mjs files
+    directly via ~/domrun.sh and verify pytest only collects them.
+  * /tmp is not writable. Keep mutation-testing backups in ~ -- I lost a round
+    to `cp: /tmp/app.orig.js: Permission denied`, which silently stacked four
+    mutations on top of each other and made two of them look like survivors.
+  * Everything else holds: ~/g.sh for git (locks can only be renamed, not
+    deleted; the unlink warnings on commit are cosmetic), `pip install
+    --break-system-packages fastapi uvicorn httpx pytest`, splitting pytest
+    across two bash calls for the 45s cap, and DON'T run seed_mock_data.py --
+    it truncates data/shop.db and dies partway.
+  * ~/ is wiped between runs; both helper scripts are ~15 lines and the
+    recipes above are enough to rebuild them.
+
+Next time, in rough priority order:
+  1. The board's "Make N Tasks" still fires N separate POSTs and counts
+     settled promises. There's a real bulk path now; a POST /api/tasks/bulk-
+     create would make that button honest and is maybe 30 lines.
+  2. Task notes are display-only -- rendered on the row, editable nowhere.
+     Same write-once bug the due date and urgent flag just had, and the same
+     fix. Title too.
+  3. A/P and Cores/Returns still have no jsdom coverage; ~20 lines of fixture
+     each now that harness.mjs does the work. (Carried, 5th run.)
+  4. Debounced input on the estimate's money/qty fields. (Carried.)
+  5. Tab out of the last estimate row should add a new line. (Carried.)
+  6. Persist the message log to localStorage, capped. (Carried.)
+  7. Split reset_db() out of seed_mock_data so the aging/enrichment passes can
+     run standalone and the demo data is refreshable on this mount. (Carried.)

@@ -1018,3 +1018,95 @@ Next time, in rough priority order:
   6. Persist the message log to localStorage, capped. (Carried.)
   7. Split reset_db() out of seed_mock_data so the aging/enrichment passes can
      run standalone and the demo data is refreshable on this mount. (Carried.)
+
+================================================================================
+2026-07-25 (run: bulk task creation, inline task editing)
+================================================================================
+
+Took the top two carried items and closed both.
+
+POST /api/tasks/bulk-create. The board's "Make N Tasks" fired N separate
+POSTs and counted settled promises, so a batch could half-land and report
+"6 created, 2 failed" without being able to name the two -- leaving the user
+to re-select the right subset from memory or make duplicates. One request
+now, every ticket link validated before a single row is written, and the
+created rows come back through the same join the listing uses so the
+jump-to-vehicle chip survives. Shared fields (assignee/due/urgent) sit on
+the envelope; only title and order_id vary per row.
+
+Task title and notes are editable on the row. They were the last two
+write-once fields on this screen -- exactly the shape the due date and the
+urgent flag had two runs ago. Both open in place; notes get a textarea
+(bare Enter keeps making newlines, Ctrl+Enter saves) plus a "+ note" chip
+next to "+ due date". An empty title is refused on the row rather than
+traded for a 422. The five behaviours every inline editor needs (focus,
+commit on blur, commit on Enter, abandon on Escape, never commit twice) are
+now one inlineEdit() helper rather than retyped per field.
+
+Mutation-checked all six new paths: title editor sending the wrong field,
+Escape falling through to save, notes as a single-line input, the "+ note"
+chip never hiding, missing order-link pre-validation, shared fields not
+reaching every row. Each fails the assertion it was aimed at.
+
+Also, unplanned: c39cec7 and f533fcc.
+
+THE BIG TRAP THIS RUN -- read this before touching static/ on this mount.
+Arrived to a working tree holding ~100 lines of uncommitted customer-address
+work from a previous run (address columns + migration, a keyless
+/api/address-suggest proxy over Photon, autocomplete in the customer
+editor). Committed it as its own checkpoint. Minutes later git reported
+static/app.js modified again -- +63 lines I had not written. OneDrive was
+still streaming the file down. My commit had captured an app.js containing
+the *call* to setupAddressAutocomplete() but not its definition, so HEAD was
+briefly broken: any vehicle detail page threw a ReferenceError and rendered
+nothing. detail_smoke.mjs had passed 20 minutes earlier and failed after.
+
+  => A file on this mount can read as complete and still be mid-sync.
+     Before committing anything under static/, md5sum the file, sleep 6,
+     md5sum again, and only commit once it's stable across two reads. Do
+     that even when the file parses -- a truncated app.js parsed fine.
+  => Same trap bit styles.css: I added a .detail-customer rule that didn't
+     exist when I read the file, and the sync then delivered a better one.
+     Ended with a duplicate. Deleted mine.
+
+While verifying the boot I found /api/address-suggest returning 500. Its
+own docstring promises it degrades to an empty list, but it caught only
+(httpx.HTTPError, ValueError), and in this sandbox httpx raises ImportError
+for the missing socks extra. Now bare-excepts. The tests for it also turned
+up a real inconsistency: the dropdown label used the geocoder's full state
+name while the field it filled got the abbreviation, so picking a row looked
+like it filled something else. Both abbreviate now.
+
+Verified: 236 pytest across four calls, all five jsdom smokes, uvicorn boots
+and serves / , /assets/app.js, /api/tasks and /api/address-suggest (200 with
+[] -- the sandbox has no route to the geocoder, which is the degrade path
+working).
+
+Sandbox notes (all previous ones still hold -- HEAD.lock, /tmp not writable,
+node_modules off the mount, split pytest across calls, don't run
+seed_mock_data.py). One new one, and it is not optional:
+  * data/shop.db is HELD OPEN BY THE RUNNING APP. The user had RECON running
+    this whole run, so importing app.main dies with "sqlite3.OperationalError:
+    disk I/O error" before a single test collects. Do NOT go looking for
+    corruption. Export a scratch DB and every pytest call works:
+        export DISCOUNT_AUTO_OPS_DB=$HOME/pytest_shop.db
+        export DISCOUNT_AUTO_OPS_BACKUPS_DIR=$HOME/pytest_backups
+    Same for booting uvicorn to smoke-test it -- use a scratch DB and a port
+    that isn't 8000, since the user's instance owns that one.
+  * Static files are mounted at /assets, not /static. curl /static/app.js
+    returns 404 and that is correct.
+
+Next time, in rough priority order:
+  1. The customer-address autocomplete has no test coverage on the front end
+     at all -- the whole setupAddressAutocomplete() path (debounce, arrow
+     keys, click-to-fill, hide-on-failure) is untested, and it's the newest
+     and least-exercised code in the app. A jsdom fixture is ~30 lines now.
+  2. A/P and Cores/Returns still have no jsdom coverage. (Carried, 6th run.)
+  3. Debounced input on the estimate's money/qty fields. (Carried.)
+  4. Tab out of the last estimate row should add a new line. (Carried.)
+  5. Persist the message log to localStorage, capped. (Carried.)
+  6. Split reset_db() out of seed_mock_data so the aging/enrichment passes
+     can run standalone. (Carried.)
+  7. Task rows still can't be linked to a vehicle after creation -- order_id
+     is settable via PATCH and the API even has an unlink sentinel, but the
+     UI offers no control. Last write-once field on that screen.

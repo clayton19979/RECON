@@ -347,7 +347,7 @@ const VIEW_PLACEHOLDERS = {
   // failed load should say so once rather than three times down the page.
   reports:     [["#report-output", 0]],
   accounting:  [["#ap-table", 8]],
-  cores:       [["#cores-table", 6], ["#returns-table", 7]],
+  cores:       [["#cores-table", 8], ["#returns-table", 8]],
   staff:       [["#staff-table", 5]],
   backup:      [["#backup-table", 4]],
   tasks:       [["#tasks-list", 0]],
@@ -582,6 +582,13 @@ async function loadVehiclesView() {
   // showView's placeholder pass -- paint skeletons here too so the old
   // segment's rows never sit under the new segment's chips.
   showPlaceholders("vehicles");
+  // VIEW_PLACEHOLDERS only lists the table (same reasoning as Reports): the
+  // five summary cards and the chart need their own shape-matched skeleton,
+  // or a refetch shows the *previous* segment's numbers above a blank table
+  // for the duration of the request.
+  $("#vehicles-stats").innerHTML = skeletonCards(5);
+  $("#vehicles-scope").textContent = "";
+  $("#vehicles-chart").innerHTML = "";
   try {
     state.vehicles = await get(state.filter === "history" ? "/api/vehicles-board?archived=true" : "/api/vehicles-board");
   } catch (err) {
@@ -1228,7 +1235,7 @@ function vehicleRowHtml(v) {
       <td class="col-select"><input type="checkbox" class="veh-select" data-key="${key}" aria-label="Select ${esc(v.stock_number || v.vehicle)}" ${state.vehicleSelection.has(key) ? "checked" : ""}></td>
       <td class="num">${esc(v.stock_number || "—")}</td>
       <td>
-        <div class="veh-name">${esc(v.vehicle)}</div>
+        <div class="veh-name" title="${esc(v.vehicle)}">${esc(v.vehicle)}</div>
         <div class="veh-sub">${v.segment === "we_owe"
           ? `<span class="veh-customer"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-7 8-7s8 3 8 7"/></svg>${esc(v.customer_name || "—")}</span>`
           : (v.vin

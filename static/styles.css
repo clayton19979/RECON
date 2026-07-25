@@ -426,7 +426,10 @@ table.sticky-head thead th {
   background-clip: padding-box;
 }
 .board-table th.col-select, .board-table td.col-select { width: 34px; padding-right: 0; }
-.board-table .veh-name { font-weight: 600; }
+.board-table .veh-name {
+  font-weight: 600; max-width: 320px; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap;
+}
 /* min-height keeps a row with no VIN the same height as its neighbors. */
 .board-table .veh-sub { font-size: 11.5px; color: var(--ink-faint); min-height: 16px; }
 .board-table .veh-customer { display: inline-flex; align-items: center; gap: 4px; color: var(--ink-soft); font-weight: 500; }

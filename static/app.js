@@ -5797,7 +5797,7 @@ function taskRowHtml(t) {
           <button type="button" class="task-flag ${t.urgent ? "on" : ""}" title="${t.urgent ? "Clear the urgent flag" : "Flag this urgent"}">${t.urgent ? "Urgent" : "Flag urgent"}</button>
           ${t.notes ? "" : `<button type="button" class="task-notes-add" title="Add a note">+ note</button>`}
           ${linkable ? `<button type="button" class="task-order-link" data-segment="${t.order_segment}" data-ref-id="${refId}">${TASK_VEHICLE_SVG}${esc(t.order_label || t.order_number)}</button>` : ""}
-          <span>by ${esc(t.created_by || "Unspecified")} · ${relativeTime(t.created_at)}</span>
+          <span>by ${esc(t.created_by || "Unspecified")} · ${relativeTime(t.created_at)}${t.done && t.completed_at ? ` · done ${relativeTime(t.completed_at)}` : ""}</span>
         </div>
         ${t.notes ? `<button type="button" class="task-notes" title="Click to edit this note">${esc(t.notes)}</button>` : ""}
       </div>
@@ -6167,19 +6167,21 @@ function renderTasksList() {
     urgentChip.setAttribute("aria-pressed", state.taskUrgentOnly ? "true" : "false");
   }
 
+  const resetAction = `<button type="button" class="btn btn-ghost btn-sm" data-empty-action="tasks-reset-view">Show everything</button>`;
   $("#tasks-list").innerHTML = rows.length
     ? renderTaskGroups(rows)
     : emptyState(query
-        ? { icon: "search", title: "No tasks match that search", hint: `Nothing open matched "${state.taskSearch}". Completed tasks are searched too — check the list below.` }
+        ? { icon: "search", title: "No tasks match that search", hint: `Nothing open matched "${state.taskSearch}". Completed tasks are searched too — check the list below.`, actions: resetAction }
         : state.taskCard
-        ? { icon: "check", title: `Nothing ${state.taskCard === "unassigned" ? "unassigned" : state.taskCard === "today" ? "due today" : "overdue"}`, hint: "Click the card again to see everything else." }
+        ? { icon: "check", title: `Nothing ${state.taskCard === "unassigned" ? "unassigned" : state.taskCard === "today" ? "due today" : "overdue"}`, hint: "Click the card again to see everything else.", actions: resetAction }
         : state.taskAssignee
-        ? { icon: "check", title: `Nothing assigned to ${state.taskAssignee}`, hint: "Switch the assignee filter back to Anyone to see the rest." }
+        ? { icon: "check", title: `Nothing assigned to ${state.taskAssignee}`, hint: "Switch the assignee filter back to Anyone to see the rest.", actions: resetAction }
         : state.taskFilter === "mine"
-        ? { icon: "check", title: "Nothing assigned to you", hint: `No open tasks are assigned to ${currentActor() || "you"}. Switch to All to see everyone else's.` }
+        ? { icon: "check", title: "Nothing assigned to you", hint: `No open tasks are assigned to ${currentActor() || "you"}. Switch to All to see everyone else's.`, actions: resetAction }
         : state.taskUrgentOnly
-        ? { icon: "check", title: "Nothing flagged urgent", hint: "Turn off the Urgent filter to see the rest." }
-        : { icon: "task", title: "No open tasks", hint: "Add one above and it syncs to everyone the moment they open RECON." });
+        ? { icon: "check", title: "Nothing flagged urgent", hint: "Turn off the Urgent filter to see the rest.", actions: resetAction }
+        : { icon: "task", title: "No open tasks", hint: "Add one above and it syncs to everyone the moment they open RECON.",
+            actions: `<button type="button" class="btn btn-primary btn-sm" data-empty-action="add-task">Add a task</button>` });
 
   // The completed list is unbounded over the shop's whole history -- cap the
   // DOM at the recent tail unless asked for everything.
@@ -6461,6 +6463,13 @@ function renderTaskAssigneeFilter() {
 
 function wireTasksView() {
   wireAssigneeToggle($("#task-assignee-toggle"), $("#task-assignee-menu"));
+
+  $("#tasks-list").addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-empty-action]");
+    if (!btn) return;
+    if (btn.dataset.emptyAction === "tasks-reset-view") resetTaskView();
+    else if (btn.dataset.emptyAction === "add-task") $("#task-title-input")?.focus();
+  });
 
   $("#task-quick-add").addEventListener("submit", async (e) => {
     e.preventDefault();

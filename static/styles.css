@@ -1678,6 +1678,12 @@ tr.group-row:hover { background: none; }
 .stf-name:hover { border-color: var(--line); background: var(--paper-raise); }
 .stf-name:focus { border-color: var(--accent); background: var(--surface); box-shadow: 0 0 0 3px var(--accent-tint); }
 .stf-role-select { width: auto; padding: 4px 8px; font-size: 12px; }
+.stf-task-link {
+  background: none; border: none; font: inherit; font-variant-numeric: tabular-nums;
+  color: var(--accent); cursor: pointer; padding: 0; text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.stf-task-link:hover { color: var(--accent-strong); }
 
 /* ---------- accounts payable ---------- */
 .stats-ap { grid-template-columns: repeat(4, 1fr); }

@@ -5390,16 +5390,27 @@ function openTasksPerson(s) {
   return state.staffTasks.filter((t) => !t.done && !t.completed_at && (t.assigned_to || []).includes(s.name)).length;
 }
 
+// Single writer for state.staffFilter, so the toolbar chips and the
+// Inactive stat card (which drives the same filter) can never fall out of
+// sync with each other.
+function applyStaffFilter(filter) {
+  state.staffFilter = filter;
+  $$('#view-staff [data-staff-filter]').forEach((c) => c.classList.toggle("active", c.dataset.staffFilter === filter));
+  renderStaffStats();
+  renderStaffTable();
+}
+
 function renderStaffStats() {
   const active = state.allStaff.filter((s) => s.active);
   const techs = active.filter((s) => s.role === "technician").length;
   const advisors = active.filter((s) => s.role === "advisor" || s.role === "manager").length;
   const inactive = state.allStaff.length - active.length;
   const openTasks = state.staffTasks.filter((t) => !t.done && !t.completed_at && (t.assigned_to || []).length).length;
+  const showingInactive = state.staffFilter === "all";
   $("#staff-stats").innerHTML = `
     <div class="stat">
       <div class="stat-label">Technicians</div>
-      <div class="stat-value">${techs}</div>
+      <div class="stat-value${techs ? "" : " crit"}">${techs}</div>
       <div class="stat-sub">${techs ? "assignable on repair orders" : "add one to assign work"}</div>
     </div>
     <div class="stat">
@@ -5407,16 +5418,16 @@ function renderStaffStats() {
       <div class="stat-value">${advisors}</div>
       <div class="stat-sub">write and advise tickets</div>
     </div>
-    <div class="stat">
+    <button type="button" class="stat stat-action" data-staff-stat="tasks" aria-pressed="false" ${openTasks ? "" : "disabled"} title="${openTasks ? "Go to Tasks" : ""}">
       <div class="stat-label">Assigned Tasks</div>
       <div class="stat-value">${openTasks}</div>
       <div class="stat-sub">open tasks with an owner</div>
-    </div>
-    <div class="stat">
+    </button>
+    <button type="button" class="stat stat-action" data-staff-stat="inactive" aria-pressed="${showingInactive ? "true" : "false"}" ${inactive || showingInactive ? "" : "disabled"} title="${showingInactive ? "Showing inactive — click to hide" : (inactive ? "Show inactive staff" : "")}">
       <div class="stat-label">Inactive</div>
       <div class="stat-value">${inactive}</div>
       <div class="stat-sub">${inactive ? "hidden from all dropdowns" : "nobody deactivated"}</div>
-    </div>`;
+    </button>`;
 }
 
 function staffRowHtml(s) {
@@ -5425,9 +5436,11 @@ function staffRowHtml(s) {
     <tr data-id="${s.id}" class="${s.active ? "" : "staff-inactive"}">
       <td><input class="stf-name" value="${esc(s.name)}" title="Click to rename" aria-label="Name of ${esc(s.name)}"></td>
       <td><button type="button" class="role-badge role-${esc(s.role)} stf-role-badge" title="Click to change role">${STAFF_ROLE_LABEL[s.role] || esc(s.role)}</button></td>
-      <td class="num-col">${openTasks || '<span class="muted-dash">—</span>'}</td>
+      <td class="num-col">${openTasks
+        ? `<button type="button" class="stf-task-link" data-name="${esc(s.name)}" title="See ${esc(s.name)}'s open tasks">${openTasks}</button>`
+        : '<span class="muted-dash">—</span>'}</td>
       <td><span class="pill ${s.active ? "pill-done" : "pill-inactive"}">${s.active ? "Active" : "Inactive"}</span></td>
-      <td class="actions-col"><button type="button" class="btn btn-ghost btn-xs stf-toggle" aria-label="${s.active ? "Deactivate" : "Activate"} ${esc(s.name)}">${s.active ? "Deactivate" : "Activate"}</button></td>
+      <td class="actions-col"><button type="button" class="btn btn-ghost btn-xs stf-toggle${s.active ? " btn-warn-ghost" : ""}" aria-label="${s.active ? "Deactivate" : "Activate"} ${esc(s.name)}">${s.active ? "Deactivate" : "Activate"}</button></td>
     </tr>`;
 }
 
@@ -5527,6 +5540,13 @@ function renderStaffTable() {
     });
   });
 
+  $$(".stf-task-link", $("#staff-table")).forEach((btn) => btn.addEventListener("click", () => {
+    state.taskFilter = "";
+    state.taskAssignee = btn.dataset.name;
+    const railItem = $('.rail-item[data-view="tasks"]');
+    if (railItem) railItem.click();
+  }));
+
   $$(".stf-toggle", $("#staff-table")).forEach((btn) => btn.addEventListener("click", async () => {
     const tr = btn.closest("tr");
     const person = state.allStaff.find((s) => s.id === Number(tr.dataset.id));
@@ -5582,12 +5602,17 @@ function wireStaffView() {
     }
   });
   $$('#view-staff [data-staff-filter]').forEach((chip) => {
-    chip.addEventListener("click", () => {
-      state.staffFilter = chip.dataset.staffFilter;
-      $$('#view-staff [data-staff-filter]').forEach((c) => c.classList.remove("active"));
-      chip.classList.add("active");
-      renderStaffTable();
-    });
+    chip.addEventListener("click", () => applyStaffFilter(chip.dataset.staffFilter));
+  });
+  $("#staff-stats").addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-staff-stat]");
+    if (!btn || btn.disabled) return;
+    if (btn.dataset.staffStat === "inactive") {
+      applyStaffFilter(state.staffFilter === "all" ? "active" : "all");
+    } else if (btn.dataset.staffStat === "tasks") {
+      const railItem = $('.rail-item[data-view="tasks"]');
+      if (railItem) railItem.click();
+    }
   });
   $("#staff-report-link").addEventListener("click", () => {
     state.reportType = "technicians";

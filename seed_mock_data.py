@@ -117,6 +117,14 @@ BOARD_AGES = {
     "Iris Chandler": 34,
     "Jordan Whitfield": 3,
 }
+#
+# Only R-1002 and R-0997 actually have a repair order, so they're the only two
+# entries here that can do anything -- idle lives on orders.last_activity_at,
+# and a car with no ticket has nothing to write it to. Listing a car without
+# one (R-1001, Jordan Whitfield) is harmless but inert: it silently falls back
+# to age, which is the correct answer anyway. Left as-is rather than trimmed,
+# because these keys have to survive a re-seed that does give those cars
+# tickets, and being wrong-but-ignored beats being quietly deleted.
 BOARD_IDLE = {"R-1002": 4, "R-0997": 1, "Jordan Whitfield": 0}
 
 

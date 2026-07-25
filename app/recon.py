@@ -56,6 +56,44 @@ def idle_days(last_activity_at: str) -> int:
     the board down."""
     return age_days(last_activity_at)
 
+
+# Anything this or newer counts as stalled. Named here rather than written as a
+# 7 at each call site because the board's card, the board's row colouring and
+# the API all have to agree about which cars are stalled -- and it's the same
+# boundary the "cold" idle bucket starts at in app.js.
+STALLED_AFTER_DAYS = 7
+
+
+def last_activity_detail(db: sqlite3.Connection, column: str, ref_id: int, fallback: str) -> dict:
+    """When work last happened on this vehicle, and -- where we can honestly
+    say -- what it was and who did it.
+
+    Two sources, deliberately kept apart. `at` comes from orders.last_activity_at
+    (see last_activity above); that's the authoritative clock, the one the
+    board's Idle column reads, and it moves for *every* write. The attribution
+    comes from the newest row in activity_events, which only exists for writes
+    worth logging -- the estimate grid autosaves through touch_order without
+    logging an event, on purpose, or the log would be nothing but noise.
+
+    So the two can disagree, and when they do the event is not what last
+    happened. Rather than captioning a fresh timestamp with a stale name, we
+    only attribute when the newest event *is* the newest activity; otherwise
+    action/actor come back empty and the UI says when without claiming who.
+    A slightly thinner answer beats a confidently wrong one."""
+    at = last_activity(db, column, ref_id, fallback)
+    row = db.execute(
+        f"""SELECT e.action, e.actor, e.created_at
+            FROM activity_events e JOIN orders o ON o.id=e.order_id
+            WHERE o.{column}=? AND o.voided=0
+            ORDER BY e.created_at DESC, e.id DESC LIMIT 1""",
+        (ref_id,),
+    ).fetchone()
+    detail = {"at": at, "idle_days": idle_days(at), "action": "", "actor": ""}
+    if row and row["created_at"] and row["created_at"] >= at:
+        detail["action"] = row["action"] or ""
+        detail["actor"] = row["actor"] or ""
+    return detail
+
 RECON_STATUSES = {"acquired", "in_repair", "ready", "sold", "retained"}
 WE_OWE_STATUSES = {"open", "fulfilled", "waived"}
 
@@ -271,6 +309,12 @@ def vehicle_board_rows(db: sqlite3.Connection, start: str | None = None, end: st
                 "parts_pending": rollup["parts_pending"],
                 "parts_pending_value": rollup["parts_pending_value"],
                 "technicians": technician_names(db, order_ids),
+                # The ticket a board-level action should attach itself to:
+                # the open one if there is one, else the most recent, else
+                # nothing (a car with no ticket yet). Tasks created off the
+                # board link through this, so "follow up on that stalled car"
+                # lands on the RO rather than floating unattached.
+                "order_id": (active_order or latest_order)["id"] if (active_order or latest_order) else None,
                 "updated_at": row["updated_at"],
                 "age_days": age_days(row["created_at"]),
                 "last_activity_at": activity_at,
@@ -320,6 +364,12 @@ def vehicle_board_rows(db: sqlite3.Connection, start: str | None = None, end: st
                 "customer_paid": customer_paid,
                 "net_cost": round(rollup["total_cost"] - customer_paid, 2),
                 "technicians": technician_names(db, order_ids),
+                # The ticket a board-level action should attach itself to:
+                # the open one if there is one, else the most recent, else
+                # nothing (a car with no ticket yet). Tasks created off the
+                # board link through this, so "follow up on that stalled car"
+                # lands on the RO rather than floating unattached.
+                "order_id": (active_order or latest_order)["id"] if (active_order or latest_order) else None,
                 "updated_at": row["updated_at"],
                 "age_days": age_days(row["created_at"]),
                 "last_activity_at": activity_at,
@@ -356,6 +406,7 @@ def build_recon_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
             if detail["sale_price"] is not None
             else None
         )
+        detail["last_activity"] = last_activity_detail(db, "recon_vehicle_id", recon_id, detail["created_at"])
         return detail
 
     def we_owe_row(db: sqlite3.Connection, we_owe_id: int) -> sqlite3.Row:
@@ -382,6 +433,7 @@ def build_recon_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
         detail["payments"] = payments
         detail["customer_paid"] = round(sum(p["amount"] for p in payments), 2)
         detail["net_cost"] = round(detail["total_cost"] - detail["customer_paid"], 2)
+        detail["last_activity"] = last_activity_detail(db, "we_owe_id", we_owe_id, detail["created_at"])
         return detail
 
     @router.get("/vehicles-board")

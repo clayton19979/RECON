@@ -22,7 +22,12 @@ INDEX_HTML = STATIC / "index.html"
 # IDs that app.js legitimately looks up but index.html never declares, because
 # they're created at runtime. Keep this list short and explain every entry --
 # a growing allowlist means the real check is being eroded.
-RUNTIME_CREATED_IDS: set[str] = set()
+# Ids that app.js writes into the DOM itself and then looks back up, so
+# index.html correctly doesn't declare them.
+RUNTIME_CREATED_IDS: set[str] = {
+    # rendered into #vd-last-worked, and only for a stalled vehicle
+    "vd-worked-nudge",
+}
 
 
 @pytest.fixture(scope="module")
@@ -459,12 +464,16 @@ def test_board_chart_bars_are_filters(js: str, html: str) -> None:
 
 
 def test_hiding_the_board_chart_clears_its_filter(js: str) -> None:
-    """The bucket filter can only be seen and cleared from the chart, so
+    """A bucket filter can only be seen and cleared from the chart, so
     collapsing the chart while one is applied would leave rows missing with
-    nothing on screen explaining why."""
+    nothing on screen explaining why.
+
+    "stalled" is the one selection that survives, because the Stalled summary
+    card sets it and stays on screen showing it -- see the wiring's comment."""
     wiring = _function_source(js, "wireVehiclesView")
     assert re.search(r"state\.vehicleChartOpen = !state\.vehicleChartOpen;\s*(?://[^\n]*\n\s*)*"
-                     r"if \(!state\.vehicleChartOpen\) state\.vehicleIdleBucket = \"\";", wiring), (
+                     r"if \(!state\.vehicleChartOpen && state\.vehicleIdleBucket !== \"stalled\"\)"
+                     r" state\.vehicleIdleBucket = \"\";", wiring), (
         "hiding the activity chart doesn't clear the idle filter it owns"
     )
 
@@ -482,3 +491,113 @@ def test_idle_bucket_filter_round_trips_with_the_other_preferences(js: str) -> N
     assert "state.vehicleIdleBucket = \"\";" in _function_source(js, "resetVehicleView"), (
         "Reset view leaves the idle bucket filter applied"
     )
+
+
+# ---------------------------------------------------------------------------
+# The Stalled card, and the two places its threshold has to agree with itself.
+# ---------------------------------------------------------------------------
+
+
+def test_stalled_threshold_agrees_across_the_stack(js: str) -> None:
+    """Three definitions of "stalled" have to be one number: the summary card,
+    the idle bucket its span starts at, and the server's own constant.
+
+    The card is derived from the bucket in code (STALLED_AFTER_DAYS reads
+    IDLE_BY_KEY.cold.min) so those two can't drift. Python's copy can, and
+    a server that thinks 5 days is stalled while the board draws the line at
+    7 is the kind of disagreement nobody notices until someone asks why two
+    screens report different numbers."""
+    from app.recon import STALLED_AFTER_DAYS as server_value
+
+    assert re.search(r"const STALLED_AFTER_DAYS = IDLE_BY_KEY\.cold\.min;", js), (
+        "the front end's stalled threshold no longer derives from the cold bucket, "
+        "so the Stalled card and the bars it spans can now disagree"
+    )
+    cold = re.search(r'\{ key: "cold",[^}]*min:\s*(\d+)', js)
+    assert cold, "the cold idle bucket is gone"
+    assert int(cold.group(1)) == server_value, (
+        f"app.js starts 'stalled' at {cold.group(1)} days, app/recon.py at {server_value}"
+    )
+
+
+def test_stalled_span_is_matched_by_range_not_bucket_identity(js: str) -> None:
+    """"Stalled" covers two buckets, so filtering by comparing bucket keys
+    would silently match nothing. One range test serves both kinds of
+    selection, which is also what keeps a span from disagreeing with the
+    bars it spans."""
+    visible = _function_source(js, "visibleVehicles")
+    assert "idleSelection(state.vehicleIdleBucket)" in visible, (
+        "the idle filter no longer resolves through IDLE_SELECTIONS, so 'stalled' can't match"
+    )
+    assert "matchesIdleSelection" in visible, "the idle filter isn't matching by range"
+
+
+def test_actionable_board_cards_are_buttons_wired_to_a_filter(html: str, js: str) -> None:
+    """A number you can read but not act on sends you hunting down the table
+    for the rows behind it. These three are controls, and being real <button>s
+    is what makes them keyboard-operable and announced as pressed."""
+    for which in ("parts", "stalled", "over"):
+        assert re.search(rf'<button[^>]*class="stat stat-action"[^>]*data-board-filter="{which}"', html), (
+            f'the "{which}" summary card isn\'t a button wired to a board filter'
+        )
+        assert f'data-board-filter="{which}"' in js, f'nothing in app.js responds to the "{which}" card'
+    sync = _function_source(js, "syncBoardStatCards")
+    assert 'setAttribute("aria-pressed"' in sync, "the cards' pressed state isn't announced"
+    assert "el.disabled = !count && !active" in sync, (
+        "a zero card stays clickable, offering a click into a guaranteed-empty table"
+    )
+
+
+def test_the_stalled_card_counts_with_the_idle_filter_lifted(js: str) -> None:
+    """The Stalled card and the chart's bars set the same piece of state, so
+    picking a bar changes what a naively-computed Stalled card counts -- it'd
+    drop to the size of that one bucket while still labelled "Stalled". It
+    counts over the pool with the idle filter lifted instead, which is the
+    rule the chart's own bars already follow.
+
+    Waiting on Parts and Over Quote deliberately need no equivalent: their
+    filters keep exactly the rows they count, so the number is the same
+    either way and lifting it would be code no test could observe."""
+    stats = _function_source(js, "renderStats")
+    assert "visibleVehicles({ ignoreIdle: true })" in stats, (
+        "the Stalled card counts over the idle-filtered rows, so picking a bucket relabels it"
+    )
+    assert "ignoreIdle" in _function_source(js, "visibleVehicles"), (
+        "visibleVehicles no longer honours ignoreIdle"
+    )
+
+
+def test_board_card_filters_round_trip_with_the_other_preferences(js: str) -> None:
+    save = _function_source(js, "saveVehicleViewPrefs")
+    load = _function_source(js, "loadVehicleViewPrefs")
+    assert "overOnly" in save and "overOnly" in load, "the over-quote filter isn't a saved view preference"
+    assert "IDLE_SELECTIONS[saved.idleBucket]" in load, (
+        "restoring preferences validates against the buckets only, so a saved 'stalled' is dropped"
+    )
+    assert "state.vehicleOverOnly" in _function_source(js, "resetVehicleView"), (
+        "Reset view leaves the over-quote filter on"
+    )
+
+
+def test_activity_labels_cover_every_action_the_server_logs(js: str) -> None:
+    """The activity log and the detail page's "last worked on" line both print
+    these. An action with no entry falls back to de-underscoring, which reads
+    as a half-translated identifier ("ap invoice voided") on a screen advisors
+    use -- tolerable as a safety net, not as the normal case."""
+    app_dir = Path(__file__).resolve().parent.parent / "app"
+    logged: set[str] = set()
+    for path in app_dir.glob("*.py"):
+        source = path.read_text(encoding="utf-8")
+        logged |= set(re.findall(r'record_activity\(\s*(?:\n\s*)?db,\s*[^,]+,\s*"([a-z_]+)"', source))
+        logged |= set(re.findall(r'record_activity\(\s*(?:\n\s*)?db,\s*[^,]+,\s*"([a-z_]+)" if ', source))
+        logged |= set(re.findall(r'record_activity\(\s*(?:\n\s*)?db,\s*[^,]+,\s*"[a-z_]+" if [^"]+ else "([a-z_]+)"', source))
+    assert logged, "found no record_activity calls to check against -- the scan is broken"
+
+    labelled = set(re.findall(r"^  ([a-z_]+): \"", _label_map(js), re.M))
+    missing = sorted(logged - labelled)
+    assert not missing, "ACTIVITY_LABEL has no wording for: " + ", ".join(missing)
+
+
+def _label_map(js: str) -> str:
+    start = js.index("const ACTIVITY_LABEL = {")
+    return js[start:js.index("};", start)]

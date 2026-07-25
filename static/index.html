@@ -115,32 +115,44 @@
           </div>
         </div>
 
-        <!-- These four describe exactly the rows in the table below, not the
+        <!-- These five describe exactly the rows in the table below, not the
              whole lot: filter to Recon and every number here follows. The
              scope line spells out what's included so the count can't be
-             misread as lot-wide. Cards 2 and 4 are the "go look at
-             something" cards and go warn/crit when they're non-zero. -->
-        <div class="stats stats-board">
+             misread as lot-wide.
+
+             Three of them are the "go look at something" cards -- they go
+             warn/crit when they're non-zero, and they're real <button>s
+             because clicking one filters the board to what it counts. Those
+             three count with their own filter lifted (see boardStats), so
+             clicking a card never changes the number printed on it. Vehicles
+             and Cost aren't filters and stay plain divs; a card you can't
+             click shouldn't look like one you can. -->
+        <div class="stats stats-board" id="vehicles-stats">
           <div class="stat">
             <div class="stat-label">Vehicles</div>
             <div class="stat-value" id="stat-veh-count">0</div>
             <div class="stat-sub" id="stat-veh-split">no vehicles</div>
           </div>
-          <div class="stat">
+          <button type="button" class="stat stat-action" data-board-filter="parts" aria-pressed="false">
             <div class="stat-label">Waiting on Parts</div>
             <div class="stat-value" id="stat-parts-waiting">0</div>
             <div class="stat-sub" id="stat-parts-waiting-sub">nothing on order</div>
-          </div>
+          </button>
+          <button type="button" class="stat stat-action" data-board-filter="stalled" aria-pressed="false">
+            <div class="stat-label">Stalled</div>
+            <div class="stat-value" id="stat-stalled">0</div>
+            <div class="stat-sub" id="stat-stalled-sub">nothing over 6 days</div>
+          </button>
           <div class="stat">
             <div class="stat-label">Cost</div>
             <div class="stat-value num" id="stat-actual-total">$0</div>
             <div class="stat-sub" id="stat-quoted-sub">received parts + labor</div>
           </div>
-          <div class="stat">
+          <button type="button" class="stat stat-action" data-board-filter="over" aria-pressed="false">
             <div class="stat-label">Over Quote</div>
             <div class="stat-value" id="stat-over-quote">0</div>
             <div class="stat-sub" id="stat-over-quote-sub">none past estimate</div>
-          </div>
+          </button>
         </div>
         <p class="stats-scope" id="vehicles-scope">Every vehicle on the board.</p>
 
@@ -174,6 +186,10 @@
           <span id="vehicles-bulk-count"></span>
           <div class="filters-gap"></div>
           <button type="button" class="btn btn-ghost btn-sm" id="vehicles-bulk-clear">Clear selection</button>
+          <!-- The action the Stalled card leads to: filter to stalled, select
+               the ones you can't deal with right now, write down what needs to
+               happen. One task per vehicle, each linked to its ticket. -->
+          <button type="button" class="btn btn-ghost btn-sm" id="vehicles-bulk-task">Make Tasks</button>
           <button type="button" class="btn btn-primary btn-sm" id="vehicles-bulk-archive">Send to History</button>
         </div>
 
@@ -220,6 +236,13 @@
           <div>
             <div class="detail-title" id="vd-title"></div>
             <div class="detail-sub" id="vd-sub"></div>
+            <!-- Closes the loop from the board's Idle column: the board says
+                 which cars are sitting, this says what the last thing that
+                 happened to *this* one was. Above the record-updated line
+                 because "someone edited the VIN 3 minutes ago" and "nobody
+                 has worked on this car in 9 days" are both true at once, and
+                 only the second one is why you opened the page. -->
+            <div class="detail-worked" id="vd-last-worked" hidden></div>
             <div class="detail-updated" id="vd-updated"></div>
             <div class="detail-concern" id="vd-concern-preview" style="display:none"><span class="detail-concern-label">Concern</span><span id="vd-concern-preview-text"></span></div>
           </div>

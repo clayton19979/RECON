@@ -319,7 +319,8 @@ const state = {
   vehicleSort: { key: "", dir: "desc" }, // key "" == the server's own order (newest first)
   vehicleStatus: "",                      // "" == any status
   vehiclePartsOnly: false,                // "Waiting on parts" toggle
-  vehicleIdleBucket: "",                  // "" == any; else an IDLE_BUCKETS key, set by clicking a chart bar
+  vehicleOverOnly: false,                 // "Over Quote" card toggle
+  vehicleIdleBucket: "",                  // "" == any; else an IDLE_SELECTIONS key (a chart bar, or "stalled" from the card)
   vehicleChartOpen: true,                 // the idle-bucket chart above the table
   vehicleCursor: null,                    // key of the keyboard-focused row
   vehicleAnchor: null,                    // key of the last row clicked, for Shift+click ranges
@@ -540,7 +541,8 @@ function loadVehicleViewPrefs() {
     state.vehicleSort = { key: saved.sort.key, dir: saved.sort.dir === "asc" ? "asc" : "desc" };
   }
   if (typeof saved.partsOnly === "boolean") state.vehiclePartsOnly = saved.partsOnly;
-  if (typeof saved.idleBucket === "string" && (saved.idleBucket === "" || IDLE_BY_KEY[saved.idleBucket])) {
+  if (typeof saved.overOnly === "boolean") state.vehicleOverOnly = saved.overOnly;
+  if (typeof saved.idleBucket === "string" && (saved.idleBucket === "" || IDLE_SELECTIONS[saved.idleBucket])) {
     state.vehicleIdleBucket = saved.idleBucket;
   }
   if (typeof saved.chartOpen === "boolean") state.vehicleChartOpen = saved.chartOpen;
@@ -564,7 +566,8 @@ function saveVehicleViewPrefs() {
   try {
     localStorage.setItem(VEHICLE_PREFS_KEY, JSON.stringify({
       filter: state.filter, status: state.vehicleStatus, sort: state.vehicleSort,
-      partsOnly: state.vehiclePartsOnly, idleBucket: state.vehicleIdleBucket,
+      partsOnly: state.vehiclePartsOnly, overOnly: state.vehicleOverOnly,
+      idleBucket: state.vehicleIdleBucket,
       chartOpen: state.vehicleChartOpen,
     }));
   } catch {}
@@ -572,7 +575,7 @@ function saveVehicleViewPrefs() {
   // doesn't hide any rows, so offering to reset the view over it would be
   // noise. Every other pref here changes which cars you can see.
   const dirty = !!(state.filter || state.vehicleStatus || state.vehicleSort.key || state.search
-    || state.vehiclePartsOnly || state.vehicleIdleBucket);
+    || state.vehiclePartsOnly || state.vehicleOverOnly || state.vehicleIdleBucket);
   $("#vehicles-reset-view").hidden = !dirty;
 }
 
@@ -580,6 +583,7 @@ function resetVehicleView() {
   state.filter = "";
   state.vehicleStatus = "";
   state.vehiclePartsOnly = false;
+  state.vehicleOverOnly = false;
   state.vehicleIdleBucket = "";
   state.vehicleSort = { key: "", dir: "desc" };
   state.search = "";
@@ -619,9 +623,22 @@ function renderVehicleStatusOptions() {
    being computed at different moments.
 
    The scope line under the cards says in words which rows are included, so
-   "4 vehicles" can't be misread as the size of the lot. */
-function boardStats(rows) {
+   "4 vehicles" can't be misread as the size of the lot.
+
+   Three of the five cards are also the control for their own filter. Two of
+   those three (Waiting on Parts, Over Quote) need no special handling: their
+   filter keeps exactly the rows they count, so the number is the same either
+   way. Stalled is the one that does, because the idle filter it shares with
+   the chart can be set to something *else* -- pick the 14+ day bar and a
+   naive Stalled card drops from 8 to 6 while still labelled "Stalled", which
+   is a number you stop trusting. So it counts over the pool with the idle
+   filter lifted, the same rule the chart's own bars follow.
+
+   The two cards that aren't controls (Vehicles, Cost) describe the table
+   exactly, because that's the only thing they could honestly describe. */
+function boardStats(rows, idlePool = rows) {
   const overs = rows.filter(isOverQuote);
+  const stalled = idlePool.filter(isStalled);
   return {
     count: rows.length,
     recon: rows.filter((v) => v.segment === "recon").length,
@@ -632,11 +649,15 @@ function boardStats(rows) {
     partsValue: rows.reduce((s, v) => s + (v.parts_pending_value || 0), 0),
     overCount: overs.length,
     overAmount: overs.reduce((s, v) => s + (v.actual_cost - v.quoted_cost), 0),
+    stalledCount: stalled.length,
+    stalledWorst: stalled.reduce((worst, v) => Math.max(worst, v.idle_days || 0), 0),
   };
 }
 
 function renderStats(rows) {
-  const s = boardStats(rows);
+  // The idle filter lifted, and only that one -- filter to We-Owe and the
+  // Stalled card still counts we-owe cars, as it should.
+  const s = boardStats(rows, state.vehicleIdleBucket ? visibleVehicles({ ignoreIdle: true }) : rows);
   const setValue = (sel, text, tone) => {
     const el = $(sel);
     el.textContent = text;
@@ -664,7 +685,42 @@ function renderStats(rows) {
     ? `${money(s.overAmount)} past estimate`
     : "none past estimate";
 
+  // Naming the worst car's idle time rather than repeating the count: "3" and
+  // "3 vehicles" side by side is a wasted line, and how long the worst one has
+  // been sitting is the number that decides whether you act today.
+  setValue("#stat-stalled", s.stalledCount, s.stalledCount ? "crit" : null);
+  $("#stat-stalled-sub").textContent = s.stalledCount
+    ? `worst sitting ${s.stalledWorst} days`
+    : `nothing over ${STALLED_AFTER_DAYS - 1} days`;
+
+  syncBoardStatCards(s);
   $("#vehicles-scope").textContent = boardScopeLabel();
+}
+
+/* The three cards that are also filters. Pressed state lives in two places
+   the DOM cares about (a class for the paint, aria-pressed for screen
+   readers) and both are written here from state, so a card lit up by a click,
+   by restored preferences or by Reset view can't get out of step -- the same
+   single-writer rule syncPartsFilterChip follows for the toolbar chip.
+
+   A zero card is disabled rather than merely inert: "0 stalled" is good news
+   and clicking it could only ever produce an empty table. */
+function syncBoardStatCards(s) {
+  const setCard = (sel, active, count, hint) => {
+    const el = $(sel);
+    if (!el) return;
+    el.classList.toggle("active", !!active);
+    el.setAttribute("aria-pressed", active ? "true" : "false");
+    el.disabled = !count && !active;
+    el.title = active ? "Showing only these — click to clear" : (count ? hint : "");
+  };
+  setCard('[data-board-filter="parts"]', state.vehiclePartsOnly, s.partsWaiting,
+          "Show only vehicles waiting on a part");
+  setCard('[data-board-filter="over"]', state.vehicleOverOnly, s.overCount,
+          "Show only vehicles past their estimate");
+  setCard('[data-board-filter="stalled"]', state.vehicleIdleBucket === "stalled", s.stalledCount,
+          `Show only vehicles untouched for ${STALLED_AFTER_DAYS}+ days`);
+  syncPartsFilterChip();
 }
 
 // Reads back the filters in the order the toolbar shows them. Deliberately
@@ -680,10 +736,9 @@ function boardScopeLabel() {
   else if (state.filter === "we_owe") parts.push("we-owe");
   if (state.vehicleStatus) parts.push(STATUS_LABEL[state.vehicleStatus] || state.vehicleStatus);
   if (state.vehiclePartsOnly) parts.push("waiting on parts");
-  if (state.vehicleIdleBucket) {
-    const b = IDLE_BY_KEY[state.vehicleIdleBucket];
-    if (b) parts.push(b.key === "today" ? "active today" : `idle ${b.short}`);
-  }
+  if (state.vehicleOverOnly) parts.push("over quote");
+  const b = idleSelection(state.vehicleIdleBucket);
+  if (b) parts.push(b.key === "today" ? "active today" : b.span ? `stalled ${b.short}` : `idle ${b.short}`);
   if (state.search) parts.push(`matching “${state.search}”`);
   if (!parts.length) return "Every vehicle on the board.";
   return `Showing vehicles: ${parts.join(" · ")}.`;
@@ -724,6 +779,46 @@ const IDLE_BY_KEY = Object.fromEntries(IDLE_BUCKETS.map((b) => [b.key, b]));
 function idleBucket(days) {
   const n = Math.max(0, days || 0);
   return IDLE_BUCKETS.find((b) => n >= b.min && n <= b.max) || IDLE_BUCKETS[0];
+}
+
+/* "Stalled" is a span across the last two buckets, not a sixth bucket.
+
+   The chart answers "what does the lot look like"; the Stalled card answers
+   "how many cars are in trouble", and those want different granularity. A
+   week is where a recon car stops being slow and starts being a problem, so
+   the card draws its line at the start of the "cold" bucket rather than
+   carrying its own 7 -- move that boundary and the card, the chart and the
+   row colours all move together, which is the same rule idleClass follows.
+   app/recon.py's STALLED_AFTER_DAYS is the server-side half of this and is
+   pinned to it by test_static_assets. */
+const STALLED_AFTER_DAYS = IDLE_BY_KEY.cold.min;
+
+/* Every idle filter the board can hold, keyed the way it's persisted. The
+   five buckets are what the chart's bars set; "stalled" is what the summary
+   card sets and covers two of them at once. Both are matched by range rather
+   than by bucket identity, so one code path filters either kind and a span
+   can't disagree with the bars it spans. */
+const IDLE_SELECTIONS = {
+  ...IDLE_BY_KEY,
+  stalled: {
+    key: "stalled", label: "Stalled", short: `${STALLED_AFTER_DAYS}+ days`,
+    min: STALLED_AFTER_DAYS, max: Infinity, tone: "over", span: true,
+  },
+};
+
+function idleSelection(key) {
+  return IDLE_SELECTIONS[key] || null;
+}
+
+// The one definition of stalled, used by the summary card, the card's filter
+// and the row nudge on the detail page.
+function isStalled(v) {
+  return Math.max(0, (v && v.idle_days) || 0) >= STALLED_AFTER_DAYS;
+}
+
+function matchesIdleSelection(v, sel) {
+  const n = Math.max(0, (v && v.idle_days) || 0);
+  return n >= sel.min && n <= sel.max;
 }
 
 // Matches the bucket boundaries above, so a row's color and the bar it lands
@@ -769,9 +864,17 @@ function renderIdleChart(rows) {
   // when you click one -- a chart that collapses to the single bar you just
   // selected gives you no way back and nothing to compare against.
   const pool = visibleVehicles({ ignoreIdle: true });
+  // The Stalled card selects a span across the last two buckets, and those two
+  // bars have to show they're involved without claiming to *be* the filter:
+  // aria-pressed stays false because clicking one narrows to that single
+  // bucket rather than toggling the span off, and a control that says
+  // "pressed" but doesn't un-press when clicked is worse than an unmarked one.
+  // A quieter class carries the "you're inside this" signal instead.
+  const sel = idleSelection(state.vehicleIdleBucket);
   const items = IDLE_BUCKETS.map((b) => {
     const count = pool.filter((v) => idleBucket(v.idle_days).key === b.key).length;
     const selected = state.vehicleIdleBucket === b.key;
+    const inSpan = !selected && !!sel && sel.span && b.min >= sel.min;
     return {
       label: b.label,
       value: count,
@@ -780,6 +883,7 @@ function renderIdleChart(rows) {
       attrs: `data-idle-bucket="${b.key}" role="button" tabindex="0" aria-pressed="${selected}"` +
              ` title="${esc(`${count} vehicle${count === 1 ? "" : "s"} with no activity ${b.short === "today" ? "logged today" : `for ${b.short}`}${count ? " — click to filter" : ""}`)}"`,
       muted: count === 0,
+      inSpan,
     };
   }).filter((i) => i.value > 0 || state.vehicleIdleBucket);
 
@@ -788,7 +892,7 @@ function renderIdleChart(rows) {
     note: pool.length ? `${pool.length} vehicle${pool.length === 1 ? "" : "s"} in view` : "",
     items,
     rowAttrs: (i) => i.attrs,
-    rowClass: (i) => (i.muted ? "bar-row-muted" : ""),
+    rowClass: (i) => [i.muted ? "bar-row-muted" : "", i.inSpan ? "bar-row-in-span" : ""].filter(Boolean).join(" "),
   }) || `<div class="panel chart-panel chart-empty">No vehicles in view to chart.</div>`;
 }
 
@@ -828,15 +932,27 @@ function vehiclesEmptyState() {
   // Same reasoning as the parts toggle: the bucket is a filter the advisor
   // clicked, and an empty one is usually the answer they wanted ("nothing has
   // gone a week untouched"), not an empty lot.
-  if (state.vehicleIdleBucket) {
-    const b = IDLE_BY_KEY[state.vehicleIdleBucket];
-    const cold = b && b.min >= 3;
+  // Same reasoning again: an over-quote filter that comes back empty means
+  // every car in view is inside its estimate, which is the answer you wanted.
+  if (state.vehicleOverOnly) {
+    return {
+      icon: "check",
+      title: "Nothing is over quote",
+      hint: "Every vehicle in this view has come in at or under the estimate it was quoted at.",
+      actions: `<button type="button" class="btn btn-ghost btn-sm" data-empty-action="clear-over">Show all vehicles</button>`,
+    };
+  }
+  const idleSel = idleSelection(state.vehicleIdleBucket);
+  if (idleSel) {
+    const cold = idleSel.min >= 3;
     return {
       icon: cold ? "check" : "search",
-      title: cold ? `Nothing has been sitting ${b.short}` : "No vehicles in that bucket",
+      title: idleSel.span
+        ? "Nothing is stalled"
+        : cold ? `Nothing has been sitting ${idleSel.short}` : "No vehicles in that bucket",
       hint: cold
-        ? "Every vehicle in this view has been worked on more recently than that."
-        : `No vehicle in this view was last touched ${b ? b.short : "then"}.`,
+        ? `Every vehicle in this view has been worked on within the last ${idleSel.min} days.`
+        : `No vehicle in this view was last touched ${idleSel.short}.`,
       actions: `<button type="button" class="btn btn-ghost btn-sm" data-empty-action="clear-idle">Show all vehicles</button>`,
     };
   }
@@ -908,17 +1024,18 @@ function sortVehicleRows(rows, { key, dir }) {
   });
 }
 
-// ignoreIdle skips the idle-bucket filter only: it's what the chart counts
-// over, so selecting a bucket narrows the table without collapsing the chart
-// that selected it. Every other caller gets the fully filtered list.
+// ignoreIdle skips the idle filter only: it's what both the chart and the
+// Stalled card count over, so selecting a bucket narrows the table without
+// collapsing the chart that selected it or relabelling the card beside it.
+// Every other caller gets the fully filtered list.
 function visibleVehicles({ ignoreIdle = false } = {}) {
   let rows = state.vehicles;
   if (state.filter && state.filter !== "history") rows = rows.filter((v) => v.segment === state.filter);
   if (state.vehicleStatus) rows = rows.filter((v) => v.status === state.vehicleStatus);
   if (state.vehiclePartsOnly) rows = rows.filter((v) => (v.parts_pending || 0) > 0);
-  if (state.vehicleIdleBucket && !ignoreIdle) {
-    rows = rows.filter((v) => idleBucket(v.idle_days).key === state.vehicleIdleBucket);
-  }
+  if (state.vehicleOverOnly) rows = rows.filter(isOverQuote);
+  const idleSel = ignoreIdle ? null : idleSelection(state.vehicleIdleBucket);
+  if (idleSel) rows = rows.filter((v) => matchesIdleSelection(v, idleSel));
   if (state.search) {
     const q = state.search.toLowerCase();
     rows = rows.filter((v) =>
@@ -1117,6 +1234,24 @@ function renderVehicleBulkBar() {
   if (!n) return;
   $("#vehicles-bulk-count").textContent = `${n} selected`;
   $("#vehicles-bulk-archive").textContent = state.filter === "history" ? "Reopen Selected" : "Send Selected to History";
+  // Nothing to follow up on in History -- those cars are done by definition,
+  // and a task pointing at an archived vehicle is a dead end.
+  const task = $("#vehicles-bulk-task");
+  if (task) {
+    task.hidden = state.filter === "history";
+    task.textContent = n === 1 ? "Make a Task" : `Make ${n} Tasks`;
+  }
+}
+
+// The title a board-level task gets. Named because both the button and its
+// confirmation preview have to show the same string -- a preview that doesn't
+// match what gets created is worse than no preview.
+function bulkTaskTitle(v) {
+  const name = [v.stock_number, v.vehicle].filter(Boolean).join(" ");
+  const days = Math.max(0, v.idle_days || 0);
+  return isStalled(v)
+    ? `Follow up: ${name} — no work in ${days} days`
+    : `Follow up: ${name}`;
 }
 
 /* ---------- selection ---------- */
@@ -1189,6 +1324,35 @@ function wireVehiclesView() {
   });
   $("#vehicles-reset-view").addEventListener("click", () => resetVehicleView());
 
+  /* The summary cards double as the filter for what they count. Reading "3
+     over quote" and then having to work out which three is the same
+     half-feature the chart's bars fixed; the number you're looking at should
+     be the thing you can click.
+
+     Delegated from the row and keyed off data-board-filter rather than the
+     card's position, because these are <button>s inside a grid whose
+     :nth-child rules already caught us once colouring by position. Stalled
+     writes the same state the chart's bars do -- one idle filter, whether it
+     came from a bar or from the card -- so the two can never both be on and
+     disagree. */
+  const statsRow = $("#vehicles-stats");
+  if (statsRow) {
+    statsRow.addEventListener("click", (e) => {
+      const card = e.target.closest("[data-board-filter]");
+      if (!card || card.disabled) return;
+      const which = card.dataset.boardFilter;
+      if (which === "parts") state.vehiclePartsOnly = !state.vehiclePartsOnly;
+      else if (which === "over") state.vehicleOverOnly = !state.vehicleOverOnly;
+      else if (which === "stalled") {
+        // Any other bucket selected means the chart owns the idle filter;
+        // taking it over is what the advisor asked for by clicking here.
+        state.vehicleIdleBucket = state.vehicleIdleBucket === "stalled" ? "" : "stalled";
+      } else return;
+      state.vehicleCursor = null;
+      renderVehiclesTable();
+    });
+  }
+
   // The chart's bars are filters. Delegated from the container because the
   // whole chart is re-rendered on every filter change, so per-bar listeners
   // would be re-bound (or lost) constantly. Clicking the selected bucket
@@ -1228,8 +1392,10 @@ function wireVehiclesView() {
       state.vehicleChartOpen = !state.vehicleChartOpen;
       // Hiding the chart must not silently leave a filter on that only the
       // chart could show or clear -- that's how a board ends up "missing" cars
-      // with no visible reason why.
-      if (!state.vehicleChartOpen) state.vehicleIdleBucket = "";
+      // with no visible reason why. "stalled" is the exception and stays: it
+      // was set from the Stalled card, which is still on screen still lit up,
+      // so there's nothing invisible about it.
+      if (!state.vehicleChartOpen && state.vehicleIdleBucket !== "stalled") state.vehicleIdleBucket = "";
       renderVehiclesTable();
     });
   }
@@ -1258,6 +1424,10 @@ function wireVehiclesView() {
       if (trigger.dataset.emptyAction === "clear-parts") {
         state.vehiclePartsOnly = false;
         syncPartsFilterChip();
+        renderVehiclesTable();
+      }
+      if (trigger.dataset.emptyAction === "clear-over") {
+        state.vehicleOverOnly = false;
         renderVehiclesTable();
       }
       if (trigger.dataset.emptyAction === "clear-idle") {
@@ -1352,6 +1522,58 @@ function wireVehiclesView() {
     state.vehicleSelection.clear();
     renderVehiclesTable();
   });
+
+  /* Turns a selection into one follow-up task per vehicle.
+
+     This is the action the Stalled card was always pointing at: the card
+     tells you eight cars have gone a week untouched, the filter shows you
+     which eight, and until now the only thing you could do about it from
+     here was open each one and retype its name into the task box. The single
+     + Task button on the detail page covers one car well; eight is where the
+     board has to do it.
+
+     One task per vehicle rather than one task listing eight, because a task
+     is the unit that gets assigned, dated and ticked off -- and each one
+     carries its vehicle's order_id, so it shows the jump-to-vehicle chip on
+     the Tasks screen and closes the loop back.
+
+     Selecting one vehicle deliberately does *not* shortcut to the prefilled
+     Tasks form the detail page's nudge uses: the same button doing two
+     different things depending on how many rows are ticked is the kind of
+     surprise that makes people stop trusting a control. */
+  const bulkTask = $("#vehicles-bulk-task");
+  if (bulkTask) {
+    bulkTask.addEventListener("click", async () => {
+      const byKey = new Map(state.vehicles.map((v) => [vehicleKey(v), v]));
+      const targets = [...state.vehicleSelection].map((k) => byKey.get(k)).filter(Boolean);
+      if (!targets.length) return;
+      const plural = `${targets.length} task${targets.length === 1 ? "" : "s"}`;
+      // Shows the exact first title rather than describing it, because the
+      // wording is generated and this is the only chance to see it before
+      // twenty of them land in the queue.
+      const preview = bulkTaskTitle(targets[0]);
+      if (!(await confirmAction({
+        eyebrow: "TASKS",
+        title: `Create ${plural}?`,
+        body: `One per selected vehicle, linked to its ticket. The first will read “${preview}”.`,
+        confirmLabel: `Create ${plural}`,
+      }))) return;
+      const results = await Promise.allSettled(targets.map((v) => post("/api/tasks", {
+        title: bulkTaskTitle(v),
+        order_id: v.order_id || null,
+        actor: currentActor(),
+      })));
+      const failed = results.filter((r) => r.status === "rejected").length;
+      toast(failed ? `${targets.length - failed} created, ${failed} failed` : `${plural} created`, !!failed);
+      if (failed < targets.length) {
+        // Clearing the selection is the point: these cars have been dealt
+        // with as far as this screen is concerned, and leaving them ticked
+        // invites creating the same tasks twice.
+        state.vehicleSelection.clear();
+        renderVehiclesTable();
+      }
+    });
+  }
 
   $("#vehicles-bulk-archive").addEventListener("click", async () => {
     const reopening = state.filter === "history";
@@ -1479,6 +1701,81 @@ async function selectOrder(orderId) {
   await loadVehicleDetail();
 }
 
+/* "Last worked on" -- the other end of the board's Idle column.
+
+   The board tells you a car has been sitting nine days; until now, opening it
+   dropped you onto a page whose only timestamp said "Updated 3 minutes ago"
+   (the vehicle record, moved by a VIN correction), with the real answer buried
+   at the bottom of the activity log in the sidebar. Same number the board
+   sorted on, same STALLED_AFTER_DAYS boundary the card counts by, stated
+   where you land.
+
+   The server sends `last_activity` as {at, idle_days, action, actor} and
+   leaves action/actor empty when it can't honestly attribute the timestamp --
+   see last_activity_detail in app/recon.py. That case is common, not an edge:
+   the estimate grid autosaves without logging an event, so a car worked on
+   for an hour this morning may have no event to name. Rendering it as
+   "— by unknown" would be worse than saying nothing, so attribution is a
+   suffix on a line that stands on its own without it. */
+function renderLastWorked() {
+  const el = $("#vd-last-worked");
+  if (!el) return;
+  const la = state.detail.item && state.detail.item.last_activity;
+  if (!la || !la.at) {
+    el.hidden = true;
+    el.textContent = "";
+    return;
+  }
+  el.hidden = false;
+  const days = Math.max(0, la.idle_days || 0);
+  const stalled = days >= STALLED_AFTER_DAYS;
+  const when = days === 0 ? "today" : relativeTime(la.at);
+  const who = la.action ? `${activityLabel(la.action)}${la.actor ? ` by ${la.actor}` : ""}` : "";
+  el.className = `detail-worked${stalled ? " stalled" : ""}`;
+  el.title = `Last activity ${String(la.at).slice(0, 10)}`;
+  // The nudge only appears on a car that's actually stalled, and points at the
+  // + Task button already in the header rather than adding a second way to do
+  // the same thing three inches away from the first.
+  el.innerHTML = `<span class="detail-worked-label">Last worked on</span> ${esc(when)}` +
+    (who ? ` <span class="detail-worked-what">— ${esc(who)}</span>` : "") +
+    (stalled ? ` <button type="button" class="detail-worked-nudge" id="vd-worked-nudge">Stalled ${days} days — make a task</button>` : "");
+  const nudge = $("#vd-worked-nudge");
+  if (nudge) {
+    nudge.addEventListener("click", () => addTaskForThisVehicle({
+      prefill: `Follow up: ${$("#vd-title").textContent} — no work in ${days} days`,
+    }));
+  }
+}
+
+/* Jumps to Tasks with this vehicle's ticket pre-selected in the link
+   dropdown, rather than making the advisor reopen the picker and hunt for the
+   RO they were just looking at.
+
+   Was inline on the + Task button; pulled out because the stalled nudge on
+   the line above wants the same thing, and "notice a car has been sitting for
+   nine days" -> "write down what to do about it" is the whole point of
+   surfacing idle time at all. `prefill` lets a caller seed the title, which
+   the nudge uses -- the advisor can still type over it, but an empty box is
+   one more thing to compose at the exact moment they were about to move on.
+
+   Deliberately does not create the task: nobody wants a queue full of
+   auto-generated "follow up" rows, and the assignee and due date are the
+   parts that make a task worth having. */
+async function addTaskForThisVehicle({ prefill = "" } = {}) {
+  const order = state.detail.order;
+  showView("tasks");
+  await loadTasksView();
+  if (order && $$("#task-order-input option").some((o) => o.value === String(order.id))) {
+    $("#task-order-input").value = String(order.id);
+  }
+  const title = $("#task-title-input");
+  if (prefill && !title.value) title.value = prefill;
+  title.focus();
+  // Caret at the end rather than selecting the prefill, so typing extends the
+  // suggestion instead of silently wiping it.
+  if (title.value) title.setSelectionRange(title.value.length, title.value.length);
+}
+
 function renderDetailHead() {
   const { segment, item } = state.detail;
   const updatedEl = $("#vd-updated");
@@ -1489,6 +1786,13 @@ function renderDetailHead() {
   } else {
     updatedEl.textContent = "";
   }
+  // Deliberately relabelled from "Updated" to name what it actually tracks.
+  // Side by side with the line above it, an unqualified "Updated 3 minutes
+  // ago" under "Last worked on 9 days ago" reads as a contradiction; it isn't,
+  // it's the vehicle *record* -- someone correcting a VIN, which is exactly
+  // the edit the idle clock is built to ignore.
+  if (updatedEl.textContent) updatedEl.textContent = `Record updated ${relativeTime(item.updated_at)}`;
+  renderLastWorked();
   // Vehicle Info (VIN/year/make/model/etc.) is shared by both segments --
   // a car is sometimes entered quickly with the VIN added later, whether
   // it's a recon vehicle or a we-owe promise.
@@ -2367,10 +2671,51 @@ function renderNotes(order) {
     <div class="mini-item"><div>${esc(n.text)} <span class="pill" style="background:var(--line-soft);color:var(--ink-faint);text-transform:none;font-weight:600">${n.visibility}</span></div><div class="mi-meta">${esc(n.actor)} · ${fmtDate(n.created_at)}</div></div>
   `).join("") : emptyState({ icon: "idea", title: "No notes yet", hint: "Anything worth remembering about this vehicle -- what the customer said, what you found.", compact: true });
 }
+/* The activity log's actions are database verbs, and the log used to print
+   them with the underscores swapped for spaces: "technician findings
+   recorded", "ap invoice voided", "estimate item moved out". Readable enough
+   to debug with, but the log is on a screen advisors use, and now the same
+   strings caption the "last worked on" line at the top of the page, where a
+   half-translated identifier looks broken.
+
+   Anything missing from this map falls back to the old de-underscoring, so a
+   new server-side action is ugly rather than blank -- these are written in a
+   dozen places across five modules and this list will drift. */
+const ACTIVITY_LABEL = {
+  order_created: "Ticket opened",
+  status_changed: "Status changed",
+  concern_updated: "Concern updated",
+  assignment_updated: "Assignment changed",
+  note_added: "Note added",
+  inspection_saved: "Inspection saved",
+  technician_findings_recorded: "Findings recorded",
+  job_created: "Job added",
+  job_updated: "Job updated",
+  job_deleted: "Job removed",
+  estimate_approved: "Estimate approved",
+  estimate_declined: "Estimate declined",
+  estimate_item_moved_in: "Line moved onto this ticket",
+  estimate_item_moved_out: "Line moved to another ticket",
+  parts_received: "Parts received",
+  part_returned: "Part returned",
+  part_return_undone: "Part return undone",
+  part_return_credited: "Return credited",
+  core_returned: "Core returned",
+  core_return_undone: "Core return undone",
+  invoice_created: "Invoice created",
+  payment_recorded: "Payment recorded",
+  ap_invoice_voided: "Vendor invoice voided",
+  order_voided: "Ticket voided",
+};
+
+function activityLabel(action) {
+  return ACTIVITY_LABEL[action] || String(action || "").replace(/_/g, " ");
+}
+
 function renderActivity(order) {
   const box = $("#vd-activity-list");
   box.innerHTML = order.activity.length ? order.activity.slice().reverse().map((a) => `
-    <div class="mini-item"><div>${esc(a.action.replace(/_/g, " "))}</div><div class="mi-meta">${esc(a.actor)} · ${fmtDate(a.created_at)}</div></div>
+    <div class="mini-item"><div>${esc(activityLabel(a.action))}</div><div class="mi-meta">${esc(a.actor)} · ${fmtDate(a.created_at)}</div></div>
   `).join("") : emptyState({ icon: "check", title: "No activity yet", hint: "Status changes, assignments, and receipts on this ticket get logged here.", compact: true });
 }
 
@@ -2521,18 +2866,7 @@ function wireVehicleDetail() {
     window.print();
   });
 
-  // Jumps to Tasks with this order pre-selected in the link dropdown, rather
-  // than making the advisor reopen the picker and hunt for the RO they were
-  // just looking at.
-  $("#vd-add-task").addEventListener("click", async () => {
-    const order = state.detail.order;
-    showView("tasks");
-    await loadTasksView();
-    if ($$("#task-order-input option").some((o) => o.value === String(order.id))) {
-      $("#task-order-input").value = String(order.id);
-    }
-    $("#task-title-input").focus();
-  });
+  $("#vd-add-task").addEventListener("click", () => addTaskForThisVehicle());
 
   $("#vd-archive-vehicle").addEventListener("click", async () => {
     const { segment, id, item } = state.detail;

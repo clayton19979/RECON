@@ -782,3 +782,127 @@ Next time, in rough priority order:
   6. The vehicle detail page shows the activity log but nothing summarises it
      -- "last worked on, by whom" at the top of the page is now one field away
      and would close the loop from the board's Idle column.
+
+================================================================================
+2026-07-25 -- Stalled: make idle time actionable, both ends
+================================================================================
+
+Last run shipped the Idle column and the activity chart -- the board could
+finally say which cars were sitting. This run does something about them.
+
+The Stalled card. Fifth summary card, counting cars untouched for 7+ days,
+with "worst sitting 41 days" underneath rather than a restatement of the
+count -- how long the worst one has sat is the number that decides whether you
+act today. Three of the five cards are now real <button>s that filter the
+board to what they count (Waiting on Parts, Stalled, Over Quote); the two that
+aren't controls stay plain divs, because a card you can't click shouldn't look
+like one you can. Over Quote had no filter at all before this.
+  * "Stalled" is a span across the last two buckets, not a sixth bucket, and
+    STALLED_AFTER_DAYS reads IDLE_BY_KEY.cold.min rather than carrying its own
+    7 -- same discipline as idleClass. app/recon.py has the server-side half
+    and test_static_assets pins the two together by parsing both files.
+  * IDLE_SELECTIONS = the five buckets + the span, all matched by range rather
+    than bucket identity, so one code path filters either kind and a span
+    can't disagree with the bars it spans.
+  * The two bars inside an active span get a marker class, deliberately *not*
+    aria-pressed: clicking one narrows to that bucket rather than clearing the
+    span, and a control that says "pressed" but won't un-press is worse than
+    an unmarked one.
+  * The Stalled card counts with the idle filter lifted (the rule the chart
+    already followed). Pick the 14+ bar and the board shows 3 rows while the
+    card still reads 8 -- without this it silently relabels the bucket's count
+    as the stalled count and loses the number you clicked on.
+  * Hiding the chart still clears a bucket filter but no longer clears
+    "stalled", because the card that set it is still on screen showing it.
+
+"Last worked on" on the vehicle detail page. The board says a car has sat nine
+days; opening it used to land you on a page whose only timestamp read "Updated
+3 minutes ago" -- the vehicle *record*, moved by a VIN correction, which is
+exactly the edit the idle clock exists to ignore. Now the header leads with
+"Last worked on 41 days ago — Parts received by Dana Ruiz", and the old line
+is relabelled "Record updated" so the two stop reading as a contradiction.
+  * last_activity_detail() keeps two sources apart on purpose. The timestamp
+    comes from orders.last_activity_at (moves on every write); the
+    attribution from the newest activity_event (only exists for logged
+    writes). The estimate grid autosaves without logging, so the two can
+    disagree -- and when they do, action/actor come back empty rather than
+    captioning a fresh timestamp with a stale name. A thinner answer beats a
+    confidently wrong one, and it's the common case, not an edge.
+  * ACTIVITY_LABEL: the log used to print database verbs with the underscores
+    swapped for spaces ("ap invoice voided", "technician findings recorded").
+    Fine to debug with, broken-looking at the top of an advisor's page. A test
+    scans every record_activity() call across app/*.py and fails on any action
+    with no wording -- caught all 22 when I checked it by deleting one.
+
+Making a task out of it. Both ends now lead somewhere:
+  * A stalled detail page grows a "Stalled 41 days — make a task" button that
+    jumps to Tasks with the ticket pre-selected and the title composed (caret
+    at the end, so typing extends rather than wipes it). It does not create
+    the task -- nobody wants a queue full of auto-generated "follow up" rows,
+    and the assignee and due date are what make a task worth having.
+  * The bulk bar grows "Make N Tasks": filter to stalled, select what you
+    can't get to today, one task per vehicle each linked to its ticket. Board
+    rows now carry order_id (the open ticket, else the most recent) so those
+    tasks show the jump-to-vehicle chip and close the loop back. Hidden on
+    History -- a follow-up pointing at an archived car is a dead end.
+
+Tests: 201 -> 214 pytest, plus a third jsdom smoke (detail_smoke.mjs, ~25
+assertions over the last-worked line, the nudge, the unattributed and
+no-activity cases, the label vocabulary and escaping). board_smoke grew ~45
+assertions over the Stalled card. The showModal/close shim moved from
+estimate_smoke into harness.mjs -- without it any flow that confirms before
+acting dies in an unhandled rejection halfway through, which reads as "the
+button did nothing".
+
+Mutation testing: 9 mutations, 9 killed after one round of repair. Two are
+worth remembering, both the same lesson:
+  * "cards count with their own filter lifted" survived for parts and over
+    quote, because their filters keep exactly the rows they count -- the
+    lifting was a no-op no test could ever observe. Deleted it rather than
+    keeping untestable code, and rewrote the assertion around the one case
+    that *is* observable (a bucket selected while the Stalled card reads on).
+  * order_id "prefers the open ticket" survived because my fixture created the
+    open one last, so "newest" and "open" were the same row. Fixed by making
+    the open ticket the older of the two.
+
+Sandbox notes for next run (updated):
+  * I broke data/shop.db this run: `python3 seed_mock_data.py` calls reset_db()
+    which truncates the file, then dies on "disk I/O error" partway through
+    (the mount won't take sqlite's create). It leaves shop.db at 0 bytes and a
+    stale -journal, and from then on *every* pytest run fails at import,
+    because app/main.py calls create_app() at module scope. Recovery: move the
+    journal aside (deletes fail, renames work) and `cat
+    data/shop.db.pre-mock-seed.bak > data/shop.db` -- the seed takes that
+    backup itself just before resetting. DON'T run the seed on this mount.
+    Individual pieces of it are fine: `age_the_board()` alone works and is how
+    the board got its time dimension back.
+  * Everything else from last run still holds: ~/g.sh for git (lock files
+    can't be deleted, only renamed), ~/domrun.sh to run a jsdom smoke from a
+    scratch tree with NODE_PATH set (running in place hangs on
+    tests/dom/node_modules), `pip install --break-system-packages fastapi
+    uvicorn httpx pytest`, and splitting the suite across two bash calls
+    because they cap at 45s.
+  * ~/ is wiped between runs -- both helper scripts had to be rewritten.
+    They're ~15 lines each; the recipe above is enough to rebuild them.
+
+Verified end to end: suite green, server boots clean, and the real seeded
+database rendered in jsdom -- 8 vehicles, Stalled reading 5 with a 41-day
+worst case, the four occupied buckets scaling correctly, the card's filter
+narrowing to 5 rows while the card holds at 5, cold+frozen marked as in-span,
+and R-0981's detail page reading "Last worked on 41 days ago" over "Record
+updated 10 hours ago" -- which is the exact pair of facts this run existed to
+stop contradicting each other.
+
+Next time, in rough priority order:
+  1. The Tasks screen is now a destination the board sends people to, and it
+     hasn't been looked at in a while. Worth a pass of its own: the tasks
+     created by "Make N Tasks" land unassigned and undated, so a bulk
+     "assign these to..." on that screen is the obvious other half.
+  2. A/P and Cores/Returns still have no jsdom coverage; ~20 lines of fixture
+     each now that harness.mjs is doing the work. (Carried, 4th run.)
+  3. Debounced input on the estimate's money/qty fields. (Carried.)
+  4. Tab out of the last estimate row should add a new line. (Carried.)
+  5. Persist the message log to localStorage, capped. (Carried.)
+  6. seed_mock_data can't run on this mount at all, which makes the demo data
+     un-refreshable. Splitting reset_db() out so the aging/enrichment passes
+     can run standalone would make it usable in pieces.

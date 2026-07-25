@@ -607,3 +607,140 @@ def test_idle_days_survives_a_garbage_timestamp(client, db_path):
     assert res.status_code == 200, res.text
     row = next(r for r in res.json() if r["recon_id"] == vehicle["id"])
     assert row["idle_days"] == 0
+
+
+# ---------------------------------------------------------------------------
+# "Last worked on, by whom" -- the vehicle-detail end of the board's Idle
+# column, and the order_id the board hands to actions taken on a row.
+# ---------------------------------------------------------------------------
+
+
+def test_detail_names_who_last_worked_on_the_car(client):
+    """The board says a car has been sitting; opening it should say what the
+    last thing that happened to it actually was, not just when."""
+    vehicle = make_recon_vehicle(client, stock_number="R-LW-1")
+    order = make_recon_order(client, vehicle["id"])
+    assert client.patch(
+        f"/api/orders/{order['id']}/status", json={"status": "in_progress", "actor": "Dana Ruiz"}
+    ).status_code == 200
+
+    la = client.get(f"/api/recon/vehicles/{vehicle['id']}").json()["last_activity"]
+    assert la["action"] == "status_changed"
+    assert la["actor"] == "Dana Ruiz"
+    assert la["idle_days"] == 0
+    assert la["at"], "a vehicle with a ticket must carry a last-activity timestamp"
+
+
+def test_detail_declines_to_attribute_an_unlogged_write(client, db_path):
+    """Saving the estimate grid bumps the activity clock but deliberately logs
+    no event (it autosaves; logging it would bury the log in noise). So the
+    newest event can be older than the newest activity -- and captioning a
+    fresh timestamp with a stale name would be a confident lie about who last
+    touched the car. Better to say when and stop."""
+    vehicle = make_recon_vehicle(client, stock_number="R-LW-2")
+    order = make_recon_order(client, vehicle["id"])
+    assert client.patch(
+        f"/api/orders/{order['id']}/status", json={"status": "in_progress", "actor": "Dana Ruiz"}
+    ).status_code == 200
+    # Push every logged event into the past, then do an unlogged write.
+    with connect(db_path) as db:
+        db.execute("UPDATE activity_events SET created_at=? WHERE order_id=?", ("2026-01-01T09:00:00", order["id"]))
+        db.commit()
+    save_estimate(client, order["id"], [
+        {"kind": "labor", "description": "Diagnose", "quantity": 1, "unit_price": 120, "unit_cost": 60},
+    ])
+
+    la = client.get(f"/api/recon/vehicles/{vehicle['id']}").json()["last_activity"]
+    assert la["idle_days"] == 0, "the estimate save should still have moved the clock"
+    assert la["action"] == "" and la["actor"] == "", (
+        "an unlogged write was attributed to whoever happened to log the last event"
+    )
+
+
+def test_detail_last_activity_falls_back_to_acquisition(client, db_path):
+    """A car with no ticket has no events at all -- the page still has to say
+    something, and the honest answer is how long it's been on the lot."""
+    vehicle = make_recon_vehicle(client, stock_number="R-LW-3")
+    with connect(db_path) as db:
+        db.execute("UPDATE recon_vehicles SET created_at=? WHERE id=?", ("2026-06-01T09:00:00", vehicle["id"]))
+        db.commit()
+
+    la = client.get(f"/api/recon/vehicles/{vehicle['id']}").json()["last_activity"]
+    assert la["at"] == "2026-06-01T09:00:00"
+    assert la["action"] == "" and la["actor"] == ""
+    assert la["idle_days"] > 30
+
+
+def test_detail_last_activity_ignores_voided_tickets(client, db_path):
+    """Same rule the board follows: voiding a ticket means the work never
+    happened, so it can't be the last thing that happened to the car."""
+    vehicle = make_recon_vehicle(client, stock_number="R-LW-4")
+    real = make_recon_order(client, vehicle["id"], concern="Real work")
+    mistake = make_recon_order(client, vehicle["id"], concern="Started by mistake")
+    backdate_activity(db_path, real["id"], "2026-04-01T09:00:00")
+    with connect(db_path) as db:
+        db.execute("UPDATE activity_events SET created_at=? WHERE order_id=?", ("2026-04-01T09:00:00", real["id"]))
+        db.commit()
+    assert client.post(f"/api/orders/{mistake['id']}/void", json={"actor": "tester"}).status_code == 200
+
+    la = client.get(f"/api/recon/vehicles/{vehicle['id']}").json()["last_activity"]
+    assert la["at"] == "2026-04-01T09:00:00", "a voided ticket's activity is being read as the car's"
+    assert la["actor"] != "tester", "the voided ticket's actor is being credited with the last work"
+
+
+def test_we_owe_detail_carries_last_activity_too(client):
+    """Both segments open the same detail page, so a field only recon had
+    would leave the header line blank down every we-owe promise."""
+    item = make_we_owe(client, description="Replace mirror")
+    order = client.post(
+        "/api/orders", json={"concern": "Mirror", "segment": "we_owe", "we_owe_id": item["id"]}
+    ).json()
+    assert client.patch(
+        f"/api/orders/{order['id']}/status", json={"status": "in_progress", "actor": "Chris"}
+    ).status_code == 200
+
+    la = client.get(f"/api/we-owe/{item['id']}").json()["last_activity"]
+    assert la["actor"] == "Chris" and la["action"] == "status_changed"
+
+
+def test_board_rows_carry_the_ticket_an_action_should_attach_to(client):
+    """Actions taken on a board row (creating a follow-up task, say) link
+    through this. The open ticket wins over a finished one, so a follow-up
+    lands on the work in progress rather than on last month's closed RO."""
+    vehicle = make_recon_vehicle(client, stock_number="R-OID-1")
+    assert board_row(client, vehicle["id"])["order_id"] is None, (
+        "a car with no ticket should offer nothing to link to"
+    )
+
+    done = make_recon_order(client, vehicle["id"], concern="Finished job")
+    assert client.patch(
+        f"/api/orders/{done['id']}/status", json={"status": "complete", "actor": "tester"}
+    ).status_code == 200
+    assert board_row(client, vehicle["id"])["order_id"] == done["id"], (
+        "with only a closed ticket, that's still the one to link to"
+    )
+
+    # The open ticket is deliberately the *older* of the two here: picking the
+    # most recent row would pass a fixture where the open one happens to be
+    # newest, and quietly attach every follow-up to a ticket that's already
+    # been closed out.
+    live = make_recon_order(client, vehicle["id"], concern="Open job")
+    newer_done = make_recon_order(client, vehicle["id"], concern="Later, already finished")
+    assert client.patch(
+        f"/api/orders/{newer_done['id']}/status", json={"status": "complete", "actor": "tester"}
+    ).status_code == 200
+    assert board_row(client, vehicle["id"])["order_id"] == live["id"], (
+        "an open ticket should win over a completed one, even a newer completed one"
+    )
+
+
+def test_we_owe_board_rows_carry_an_order_id(client):
+    item = make_we_owe(client, description="Replace mirror")
+    row = next(r for r in client.get("/api/vehicles-board").json() if r["we_owe_id"] == item["id"])
+    assert row["order_id"] is None
+
+    order = client.post(
+        "/api/orders", json={"concern": "Mirror", "segment": "we_owe", "we_owe_id": item["id"]}
+    ).json()
+    row = next(r for r in client.get("/api/vehicles-board").json() if r["we_owe_id"] == item["id"])
+    assert row["order_id"] == order["id"]

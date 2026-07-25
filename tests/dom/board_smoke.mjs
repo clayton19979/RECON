@@ -15,7 +15,7 @@ const veh = (over) => ({
   vin: "", customer_name: "", status: "in_progress", status_bucket: "in_progress",
   purchase_price: 0, actual_cost: 0, quoted_cost: 0, technicians: [], updated_at: "2026-07-01T09:00:00",
   age_days: 1, parts_pending: 0, parts_pending_value: 0,
-  idle_days: 0, last_activity_at: "2026-07-25T08:00:00", ...over,
+  idle_days: 0, last_activity_at: "2026-07-25T08:00:00", order_id: null, ...over,
 });
 
 /* Deliberately not in any column's sorted order, so "did it sort?" can't pass
@@ -53,7 +53,8 @@ const { w, doc, fetchLog, settle, ok, finish, rejections } = await boot({
   expose: ["state", "renderVehiclesTable", "loadVehiclesView", "visibleVehicles", "sortVehicleRows",
            "vehicleKey", "loadVehicleViewPrefs", "renderVehicleStatusOptions", "VEHICLE_SORTS",
            "VEHICLE_PREFS_KEY", "resetVehicleView", "boardStats", "isOverQuote", "BOARD_COLUMNS",
-           "IDLE_BUCKETS", "idleBucket"],
+           "IDLE_BUCKETS", "idleBucket", "IDLE_SELECTIONS", "STALLED_AFTER_DAYS", "isStalled",
+           "bulkTaskTitle"],
   fetch: async (url) => {
     if (url.startsWith("/api/vehicles-board")) return url.includes("archived=true") ? [] : board;
     if (/^\/api\/(recon\/vehicles|we-owe)\/\d+$/.test(url)) return { id: 1, archived_at: "", stock_number: "B204", vehicle: "2019 Ford F-150" };
@@ -463,6 +464,207 @@ ok(!chartEl.hidden && bars().length === 3, "showing the chart again didn't re-re
 w.resetVehicleView();
 await settle();
 ok(!w.state.vehicleIdleBucket && dataRows().length === 5, "Reset view left a bucket filter on");
+
+/* ---------- the Stalled card ----------
+
+   The chart says how the lot is distributed; the Stalled card says how much
+   of it is in trouble, in the four-or-five numbers people read before
+   anything else. It's also a filter, so most of what's worth testing is the
+   interaction between it and the chart's bars: they write the same piece of
+   state, and "stalled" is a span across the last two buckets rather than a
+   sixth bucket, which is exactly the shape that goes wrong.
+
+   This fixture has two stalled cars -- the Silverado at 9 days and the
+   Outback at 21 -- so the card should read 2 and name 21 as the worst. */
+const stalledCard = () => doc.querySelector('[data-board-filter="stalled"]');
+const overCard = () => doc.querySelector('[data-board-filter="over"]');
+const partsCard = () => doc.querySelector('[data-board-filter="parts"]');
+
+ok(stalledCard() && stalledCard().tagName === "BUTTON",
+   "the Stalled card isn't a real button, so it isn't keyboard-operable");
+ok(card("stat-stalled") === "2", `Stalled card reads "${card("stat-stalled")}", expected 2 (Silverado 9d, Outback 21d)`);
+ok(card("stat-stalled-sub") === "worst sitting 21 days", `Stalled sub reads "${card("stat-stalled-sub")}"`);
+ok(doc.querySelector("#stat-stalled").classList.contains("crit"), "a non-zero stalled count isn't flagged");
+
+// The card and the chart derive from one threshold. If the card counted with
+// its own 7 it could disagree with the two bars it spans, which is the whole
+// reason STALLED_AFTER_DAYS is read off the "cold" bucket.
+ok(w.STALLED_AFTER_DAYS === w.IDLE_BUCKETS.find((b) => b.key === "cold").min,
+   "the stalled threshold has drifted from the bucket boundary it's meant to track");
+ok(Number(card("stat-stalled")) === Number(barCount("cold")) + Number(barCount("frozen")),
+   "the Stalled card and the two bars it spans disagree about how many cars are stalled");
+ok(w.state.vehicles.filter(w.isStalled).length === 2, "isStalled disagrees with the fixture");
+
+// clicking it filters to the span, not to one bucket
+stalledCard().click();
+ok(w.state.vehicleIdleBucket === "stalled", `the Stalled card set "${w.state.vehicleIdleBucket}"`);
+ok(dataRows().length === 2 && dataRows().map((tr) => tr.dataset.key).sort().join(",") === "recon:3,we_owe:6",
+   `Stalled should leave the two 7+ day cars, got ${dataRows().map((tr) => tr.dataset.key).join(",")}`);
+ok(stalledCard().getAttribute("aria-pressed") === "true", "the active Stalled card isn't marked pressed");
+ok(cards().scope === "Showing vehicles: stalled 7+ days.", `scope line reads "${cards().scope}"`);
+
+ok(card("stat-veh-count") === "2", "the Vehicles card should follow the table, which is now 2 rows");
+
+/* The card and the chart's bars write the same piece of state, which is what
+   makes this worth pinning: with the 14+ day bar selected the board shows one
+   car, but "Stalled" must still read 2. A card computed off the filtered rows
+   would say 1 -- relabelling the 14+ bucket's count as the stalled count and
+   losing the number the advisor was reading when they clicked. */
+barFor("frozen").click();
+ok(dataRows().length === 1, `the 14+ bar should leave one car, got ${dataRows().length}`);
+ok(card("stat-stalled") === "2",
+   `Stalled reads "${card("stat-stalled")}" with a bucket selected -- it should count with the idle filter lifted`);
+ok(card("stat-veh-count") === "1", "the Vehicles card should follow the table down to 1");
+stalledCard().click();
+ok(w.state.vehicleIdleBucket === "stalled" && dataRows().length === 2, "the Stalled card didn't take the filter back");
+
+// the two bars inside the span are marked, but not as *pressed*: clicking one
+// narrows to that bucket rather than clearing the span, and a control that
+// says pressed but won't un-press when clicked is worse than an unmarked one
+ok(barFor("cold").classList.contains("bar-row-in-span") && barFor("frozen").classList.contains("bar-row-in-span"),
+   "the bars covered by the Stalled span aren't marked");
+ok(!barFor("stale").classList.contains("bar-row-in-span"), "a bar outside the span is marked as inside it");
+ok(bars().every((b) => b.getAttribute("aria-pressed") === "false"),
+   "a bar inside the span claims to be the pressed filter");
+ok(bars().length === 5, `the chart collapsed to ${bars().length} bar(s) under the Stalled filter`);
+
+// a bar inside the span narrows to that bucket
+barFor("frozen").click();
+ok(w.state.vehicleIdleBucket === "frozen" && dataRows().length === 1,
+   "clicking a bar inside the span didn't narrow to that bucket");
+ok(stalledCard().getAttribute("aria-pressed") === "false", "the Stalled card stayed pressed after a bar took the filter");
+ok(!barFor("cold").classList.contains("bar-row-in-span"), "the span marker survived the span being replaced");
+
+// ...and the card takes it back
+stalledCard().click();
+ok(w.state.vehicleIdleBucket === "stalled" && dataRows().length === 2,
+   "the Stalled card didn't take the idle filter back off a bucket");
+
+/* Hiding the chart clears a bucket filter, because nothing else on screen
+   could show or clear it. "stalled" is the exception and must survive: the
+   card that set it is still there, still lit up. */
+chartToggle.click();
+ok(chartEl.hidden && w.state.vehicleIdleBucket === "stalled" && dataRows().length === 2,
+   "hiding the chart cleared the Stalled filter, which the card can still see and clear");
+ok(stalledCard().getAttribute("aria-pressed") === "true", "the Stalled card lost its pressed state with the chart hidden");
+chartToggle.click();
+
+// clicking again clears
+stalledCard().click();
+ok(!w.state.vehicleIdleBucket && dataRows().length === 5, "clicking the active Stalled card didn't clear it");
+
+// persisted like every other view preference, and restored
+stalledCard().click();
+ok(JSON.parse(w.localStorage.getItem("dao-vehicle-view")).idleBucket === "stalled",
+   "the Stalled filter wasn't persisted");
+w.state.vehicleIdleBucket = "";
+w.loadVehicleViewPrefs();
+ok(w.state.vehicleIdleBucket === "stalled", "the Stalled filter wasn't restored from preferences");
+
+// its own empty state, phrased as good news
+w.state.filter = "we_owe";
+w.renderVehiclesTable();
+ok(dataRows().length === 1, `we-owe + stalled should leave the Outback, got ${dataRows().length}`);
+w.state.vehicles = board.filter((v) => v.idle_days < 7);
+w.renderVehiclesTable();
+const stalledEmpty = body.querySelector("tr");
+ok(stalledEmpty.textContent.includes("Nothing is stalled"),
+   `stalled empty state reads "${stalledEmpty.textContent.trim().slice(0, 60)}"`);
+w.state.vehicles = board;
+w.state.filter = "";
+w.renderVehiclesTable();
+
+// a zero card stops being a control -- clicking it could only ever produce an
+// empty table -- but keeps its normal weight, because 0 is the good news
+w.state.vehicleIdleBucket = "";
+w.state.vehicles = board.filter((v) => v.idle_days < 7);
+w.renderVehiclesTable();
+ok(card("stat-stalled") === "0" && stalledCard().disabled, "a zero Stalled card is still clickable");
+ok(!doc.querySelector("#stat-stalled").classList.contains("crit"), "a zero stalled count is flagged as critical");
+ok(card("stat-stalled-sub") === "nothing over 6 days", `zero Stalled sub reads "${card("stat-stalled-sub")}"`);
+stalledCard().click();
+ok(!w.state.vehicleIdleBucket, "a disabled Stalled card still applied its filter");
+w.state.vehicles = board;
+w.renderVehiclesTable();
+
+/* ---------- Over Quote and Waiting on Parts as filters ----------
+   Same rule as Stalled: the number you're reading is the thing you click. */
+overCard().click();
+ok(w.state.vehicleOverOnly && dataRows().length === 1 && dataRows()[0].dataset.key === "recon:1",
+   `Over Quote should leave the F-150, got ${dataRows().map((tr) => tr.dataset.key).join(",")}`);
+ok(card("stat-over-quote") === "1", "the Over Quote card moved when it was clicked");
+ok(cards().scope === "Showing vehicles: over quote.", `scope line reads "${cards().scope}"`);
+ok(!doc.querySelector("#vehicles-reset-view").hidden, "Reset view stayed hidden with an over-quote filter on");
+ok(JSON.parse(w.localStorage.getItem("dao-vehicle-view")).overOnly === true, "the over-quote filter wasn't persisted");
+
+/* Each card lifts only its *own* filter, which has a consequence worth
+   pinning: with Over Quote on, Stalled counts over-quote cars, and in this
+   fixture that's zero -- so the Stalled card goes disabled rather than
+   offering a click into a guaranteed-empty table. That's the rule working,
+   not a bug, and it's why the two can't be composed from the cards here. */
+ok(card("stat-stalled") === "0" && stalledCard().disabled,
+   "with Over Quote on, Stalled should count over-quote cars only (zero here) and go inert");
+
+// composes with the segment chips, and brings its own empty state
+chip("we_owe").click();
+ok(dataRows().length === 0, "we-owe + over quote should be empty in this fixture");
+const overEmpty = body.querySelector("tr");
+ok(overEmpty.textContent.includes("Nothing is over quote"),
+   `over-quote empty state reads "${overEmpty.textContent.trim().slice(0, 60)}"`);
+ok(Number(overEmpty.querySelector("td").getAttribute("colspan")) === w.BOARD_COLUMNS,
+   "the over-quote empty row doesn't span the table");
+overEmpty.querySelector('[data-empty-action="clear-over"]').click();
+ok(!w.state.vehicleOverOnly && dataRows().length === 2, "the empty state's button didn't clear the over-quote filter");
+chip("").click();
+
+// the parts card and the toolbar chip are one filter with two controls, so
+// they must never disagree about whether it's on
+partsCard().click();
+ok(w.state.vehiclePartsOnly, "the parts card didn't apply its filter");
+ok(doc.querySelector("#vehicles-parts-filter").getAttribute("aria-pressed") === "true",
+   "the parts card left the toolbar chip showing the filter as off");
+doc.querySelector("#vehicles-parts-filter").click();
+ok(!w.state.vehiclePartsOnly && partsCard().getAttribute("aria-pressed") === "false",
+   "the toolbar chip left the parts card showing the filter as on");
+
+w.resetVehicleView();
+await settle();
+ok(!w.state.vehicleOverOnly && !w.state.vehicleIdleBucket && dataRows().length === 5,
+   "Reset view left one of the card filters on");
+
+/* ---------- bulk "Make Tasks" ----------
+   The action the Stalled card leads to: filter to stalled, select what you
+   can't get to today, write it down. One task per vehicle, each linked to
+   its ticket. */
+const bulkTaskBtn = doc.querySelector("#vehicles-bulk-task");
+ok(bulkTaskBtn, "the bulk bar has no Make Tasks button");
+stalledCard().click();
+click(w, doc.querySelector("#vehicles-select-all"));
+ok(w.state.vehicleSelection.size === 2, `select-all under the Stalled filter picked ${w.state.vehicleSelection.size}`);
+ok(bulkTaskBtn.textContent === "Make 2 Tasks", `the button reads "${bulkTaskBtn.textContent}"`);
+ok(w.bulkTaskTitle(board.find((v) => v.recon_id === 3)) === "Follow up: C007 2015 Chevy Silverado — no work in 9 days",
+   `generated title reads "${w.bulkTaskTitle(board.find((v) => v.recon_id === 3))}"`);
+
+const postsBefore = fetchLog.filter((f) => f.url === "/api/tasks").length;
+bulkTaskBtn.click();
+await settle();
+// confirmAction is a real <dialog>; accept it the way a person would
+doc.querySelector("#confirm-accept").click();
+await settle();
+const taskPosts = fetchLog.filter((f) => f.url === "/api/tasks" && f.method === "POST").length - postsBefore;
+ok(taskPosts === 2, `expected one POST /api/tasks per selected vehicle, got ${taskPosts}`);
+ok(w.state.vehicleSelection.size === 0, "the selection survived creating its tasks, inviting a duplicate run");
+
+// History is finished work -- a follow-up task pointing at an archived car is
+// a dead end, so the button isn't offered there
+w.state.filter = "history";
+w.state.vehicleSelection.add("recon:3");
+w.renderVehiclesTable();
+ok(bulkTaskBtn.hidden, "Make Tasks is offered on the History board");
+w.state.filter = "";
+w.state.vehicleSelection.clear();
+w.resetVehicleView();
+await settle();
 
 /* ---------- row clicks: open, toggle, shift-range ---------- */
 const rowFor = (key) => dataRows().find((tr) => tr.dataset.key === key);

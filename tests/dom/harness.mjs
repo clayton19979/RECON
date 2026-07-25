@@ -68,6 +68,18 @@ export async function boot({ fetch: handler, expose = [] } = {}) {
     else { w.document.dispatchEvent(new w.Event("DOMContentLoaded", { bubbles: true })); resolve(); }
   });
 
+  // jsdom implements <dialog> as an element but not showModal/close, and
+  // confirmAction calls showModal(). Without this, any flow that asks before
+  // acting dies in an unhandled rejection halfway through -- which reads as
+  // "the button did nothing" and hides what actually broke. Shimmed here
+  // rather than per-file because confirming before a destructive or bulk
+  // action is the house style and every screen has some.
+  const dlg = w.document.querySelector("#confirm-dialog");
+  if (dlg) {
+    dlg.showModal = function () { this.open = true; };
+    dlg.close = function () { this.open = false; this.dispatchEvent(new w.Event("close")); };
+  }
+
   // Give queued promise callbacks (fetch -> json -> render) a chance to run.
   const settle = async (times = 6) => { for (let i = 0; i < times; i++) await new Promise((r) => setTimeout(r, 0)); };
 

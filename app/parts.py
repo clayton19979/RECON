@@ -478,6 +478,7 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
             rows = db.execute(
                 """SELECT ei.id, ei.description, ei.part_number, ei.core_charge,
                        ei.core_returned, ei.core_returned_at, ei.core_return_invoice_number,
+                       ei.received_invoice_number,
                        o.id order_id, o.number ro_number, o.voided, o.segment,
                        o.recon_vehicle_id, o.we_owe_id,
                        rv.stock_number, wc.name we_owe_customer_name
@@ -500,6 +501,18 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
                     value["vehicle_label"] = f"We-Owe: {value['we_owe_customer_name']}"
                 else:
                     value["vehicle_label"] = "Retail"
+                # Same vendor resolution as /returns: the core deposit belongs
+                # to whichever vendor invoice received the part it came with.
+                vendor_id = None
+                vendor_name = ""
+                if value["received_invoice_number"]:
+                    invoice = find_received_invoice(db, value["order_id"], value["received_invoice_number"])
+                    if invoice:
+                        vendor = db.execute("SELECT id,name FROM vendors WHERE id=?", (invoice["vendor_id"],)).fetchone()
+                        if vendor:
+                            vendor_id, vendor_name = vendor["id"], vendor["name"]
+                value["vendor_id"] = vendor_id
+                value["vendor_name"] = vendor_name
                 result.append(value)
             return result
 

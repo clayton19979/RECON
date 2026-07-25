@@ -1730,6 +1730,11 @@ tbody tr.voided-row td:nth-child(-n+3) { text-decoration: line-through; }
 /* "Pending credit" is money owed back, not work in progress -- accent, not
    amber, so the two tables' pending states read differently at a glance. */
 .pill-credit-pending { background: var(--accent); }
+.stats-cores { grid-template-columns: repeat(4, 1fr); margin-bottom: 16px; }
+.stats-cores .stat { border-top-color: var(--line); }
+.stats-cores .stat:has(.stat-value.warn) { border-top-color: var(--warn); }
+.stats-cores .stat:has(.stat-value.crit) { border-top-color: var(--crit); }
+th.sel-col, td.sel-col { width: 32px; padding-right: 0; }
 
 /* ---------- backup ---------- */
 .stats-backup { grid-template-columns: repeat(4, 1fr); }
@@ -1796,8 +1801,8 @@ input.overdue { border-color: var(--crit); color: var(--crit); }
    ever actually collapsed on a narrow window. Re-apply the same breakpoints
    here, after their declarations, so they do. */
 @media (max-width: 1240px) {
-  .stats-staff, .stats-ap, .stats-backup { grid-template-columns: repeat(2, 1fr); }
+  .stats-staff, .stats-ap, .stats-backup, .stats-cores { grid-template-columns: repeat(2, 1fr); }
 }
 @media (max-width: 700px) {
-  .stats-staff, .stats-ap, .stats-backup { grid-template-columns: 1fr; }
+  .stats-staff, .stats-ap, .stats-backup, .stats-cores { grid-template-columns: 1fr; }
 }

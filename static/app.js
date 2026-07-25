@@ -396,9 +396,11 @@ const state = {
   cores: [],
   coresFilter: "pending",
   coresSearch: "",
+  coresSelected: new Set(),
   returns: [],
   returnsFilter: "pending",
   returnsSearch: "",
+  returnsSelected: new Set(),
   postReturnItem: null,
   vehicleSelection: new Set(), // "segment:id" strings, cleared on filter change/reload
   // Reports: which of the four reports, over what window, sorted how. Like
@@ -4772,16 +4774,75 @@ async function loadCoresView() {
   const [coresRes, returnsRes] = await Promise.allSettled([get("/api/cores"), get("/api/returns")]);
   if (coresRes.status === "fulfilled") {
     state.cores = coresRes.value;
+    state.coresSelected = new Set();
     renderCoresTable();
   } else {
-    renderViewFailure("cores", coresRes.reason, [["#cores-table", 6]]);
+    renderViewFailure("cores", coresRes.reason, [["#cores-table", 8]]);
   }
   if (returnsRes.status === "fulfilled") {
     state.returns = returnsRes.value;
+    state.returnsSelected = new Set();
     renderReturnsTable();
   } else if (coresRes.status === "fulfilled") {
-    renderViewFailure("cores", returnsRes.reason, [["#returns-table", 7]]);
+    renderViewFailure("cores", returnsRes.reason, [["#returns-table", 8]]);
   }
+  renderCoresReturnsStats();
+}
+
+// How many days since a timestamp, floored -- used only for the "still
+// awaiting credit" age hint, so a null/blank timestamp (not yet picked up)
+// just doesn't render one.
+function daysSince(value) {
+  if (!value) return null;
+  return Math.max(0, Math.floor((Date.now() - new Date(value).getTime()) / 86400000));
+}
+
+// One summary row above both tables: what's still owed back across cores
+// and returns combined, since a vendor call to chase credits doesn't care
+// which table a line started in.
+function renderCoresReturnsStats() {
+  const cores = state.cores.filter((c) => !c.voided);
+  const returns = state.returns.filter((r) => !r.voided);
+  const outstanding =
+    cores.filter((c) => coreStatus(c) !== "credited").reduce((s, c) => s + c.core_charge, 0) +
+    returns.filter((r) => returnStatus(r) !== "credited").reduce((s, r) => s + Math.abs(r.credit_total), 0);
+  const awaitingCores = cores.filter((c) => coreStatus(c) === "awaiting");
+  const awaitingReturns = returns.filter((r) => returnStatus(r) === "awaiting");
+  const awaitingAges = [
+    ...awaitingCores.map((c) => daysSince(c.core_returned_at)),
+    ...awaitingReturns.map((r) => daysSince(r.part_picked_up_at)),
+  ].filter((d) => d != null);
+  const oldestAwaiting = awaitingAges.length ? Math.max(...awaitingAges) : 0;
+  const awaitingTone = oldestAwaiting >= 30 ? "crit" : oldestAwaiting >= 14 ? "warn" : "";
+  const creditedCount =
+    cores.filter((c) => coreStatus(c) === "credited").length +
+    returns.filter((r) => returnStatus(r) === "credited").length;
+  const vendorsOwed = new Set([
+    ...cores.filter((c) => coreStatus(c) !== "credited").map((c) => c.vendor_name),
+    ...returns.filter((r) => returnStatus(r) !== "credited").map((r) => r.vendor_name),
+  ].filter(Boolean)).size;
+
+  $("#cores-returns-stats").innerHTML = `
+    <div class="stat">
+      <div class="stat-label">Outstanding</div>
+      <div class="stat-value num">${money(outstanding)}</div>
+      <div class="stat-sub">across cores and returns</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Awaiting Credit</div>
+      <div class="stat-value${awaitingTone ? ` ${awaitingTone}` : ""}">${awaitingAges.length}</div>
+      <div class="stat-sub">${awaitingAges.length ? `oldest ${oldestAwaiting}d since pickup` : "nothing sent back yet"}</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Credited</div>
+      <div class="stat-value">${creditedCount}</div>
+      <div class="stat-sub">paperwork recorded</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Vendors Owed</div>
+      <div class="stat-value">${vendorsOwed}</div>
+      <div class="stat-sub">${vendorsOwed ? "still chasing credit" : "nothing outstanding"}</div>
+    </div>`;
 }
 
 // Rows carry their own segment/vehicle ids from the API -- resolving through
@@ -4808,6 +4869,14 @@ function coreStatus(c) {
   return c.core_return_invoice_number ? "credited" : "awaiting";
 }
 
+// A row's "N days awaiting credit" hint, colored with the same age scale the
+// board already uses for its own day counts -- consistent severity language
+// across the app rather than a bespoke threshold just for this page.
+function awaitingAgeHtml(days) {
+  if (days == null) return "";
+  return `<div class="veh-sub ${ageClass(days)}">Awaiting ${days}d</div>`;
+}
+
 function renderCoresTable() {
   const filter = state.coresFilter;
   const query = (state.coresSearch || "").toLowerCase();
@@ -4828,10 +4897,17 @@ function renderCoresTable() {
   const CORE_PILL = { pending: "pill-progress", awaiting: "pill-credit-pending", credited: "pill-done" };
   const CORE_LABEL = { pending: "Pending", awaiting: "Awaiting Credit", credited: "Credited" };
 
+  // Selection only ever applies to Pending rows -- Awaiting -> Credited needs
+  // a distinct invoice number per item, so that transition stays one-at-a-time.
+  const selectableIds = new Set(rows.filter((c) => !c.voided && coreStatus(c) === "pending").map((c) => c.id));
+  state.coresSelected = new Set([...state.coresSelected].filter((id) => selectableIds.has(id)));
+
   $("#cores-table").innerHTML = rows.length ? rows.map((c) => {
     const clickable = c.stock_number || c.we_owe_customer_name;
     const voided = !!c.voided;
     const status = coreStatus(c);
+    const selectable = !voided && status === "pending";
+    const checked = state.coresSelected.has(c.id);
     const actions = voided ? "" : status === "pending"
       ? `<button type="button" class="btn btn-ghost btn-xs cores-toggle" data-order-id="${c.order_id}" data-item-id="${c.id}" data-returned="0">Mark Picked Up</button>`
       : status === "awaiting"
@@ -4840,15 +4916,17 @@ function renderCoresTable() {
       : "";
     return `
     <tr class="${clickable ? "clickable" : ""} ${voided ? "voided-row" : ""}" data-id="${c.id}" ${clickable ? `title="Open ${esc(c.vehicle_label)}"` : `title="Not linked to a vehicle record"`}>
-      <td>${esc(c.description)}${status === "credited" ? `<div class="veh-sub num">Inv ${esc(c.core_return_invoice_number)}</div>` : ""}</td>
+      <td class="sel-col">${selectable ? `<input type="checkbox" class="cores-select" data-id="${c.id}" ${checked ? "checked" : ""} aria-label="Select ${esc(c.description)}">` : ""}</td>
+      <td>${esc(c.description)}${status === "credited" ? `<div class="veh-sub num">Inv ${esc(c.core_return_invoice_number)}</div>` : status === "awaiting" ? awaitingAgeHtml(daysSince(c.core_returned_at)) : ""}</td>
       <td>${c.part_number ? esc(c.part_number) : '<span class="muted-dash">—</span>'}</td>
       <td>${esc(c.ro_number)} · ${esc(c.vehicle_label)}</td>
+      <td>${esc(c.vendor_name || "—")}</td>
       <td class="num-col">${money(c.core_charge)}</td>
       <td><span class="pill ${CORE_PILL[status]}">${CORE_LABEL[status]}</span></td>
       <td class="actions-col"><div class="row-actions">${actions}</div></td>
     </tr>
   `;
-  }).join("") : emptyRow(6, query ? {
+  }).join("") : emptyRow(8, query ? {
     icon: "search",
     title: "No cores match that search",
     hint: `Nothing matched "${state.coresSearch}".`,
@@ -4869,7 +4947,7 @@ function renderCoresTable() {
 
   $$(".clickable", $("#cores-table")).forEach((row) => {
     row.addEventListener("click", (e) => {
-      if (e.target.closest(".cores-toggle, .cores-credit")) return;
+      if (e.target.closest(".cores-toggle, .cores-credit, .cores-select")) return;
       const item = state.cores.find((c) => c.id === Number(row.dataset.id));
       if (item) openVehicleFromRow(item);
     });
@@ -4914,6 +4992,23 @@ function renderCoresTable() {
       }
     });
   });
+  $$(".cores-select", $("#cores-table")).forEach((box) => {
+    box.addEventListener("click", (e) => e.stopPropagation());
+    box.addEventListener("change", () => {
+      const id = Number(box.dataset.id);
+      if (box.checked) state.coresSelected.add(id); else state.coresSelected.delete(id);
+      syncCoresBulkBar();
+    });
+  });
+  $("#cores-select-all").checked = selectableIds.size > 0 && state.coresSelected.size === selectableIds.size;
+  $("#cores-select-all").disabled = selectableIds.size === 0;
+  syncCoresBulkBar();
+}
+
+function syncCoresBulkBar() {
+  const n = state.coresSelected.size;
+  $("#cores-bulk-bar").hidden = n === 0;
+  $("#cores-bulk-count").textContent = `${n} selected`;
 }
 
 function wireCoresView() {
@@ -4928,6 +5023,35 @@ function wireCoresView() {
   $("#cores-search").addEventListener("input", (e) => {
     state.coresSearch = e.target.value.trim();
     renderCoresTable();
+  });
+  $("#cores-select-all").addEventListener("change", (e) => {
+    const ids = $$(".cores-select", $("#cores-table")).map((box) => Number(box.dataset.id));
+    state.coresSelected = new Set(e.target.checked ? ids : []);
+    renderCoresTable();
+  });
+  $("#cores-bulk-clear").addEventListener("click", () => {
+    state.coresSelected = new Set();
+    renderCoresTable();
+  });
+  $("#cores-bulk-pickup").addEventListener("click", async (e) => {
+    const ids = [...state.coresSelected];
+    if (!ids.length) return;
+    if (!(await confirmAction({
+      eyebrow: "CORES",
+      title: `Mark ${ids.length} core${ids.length === 1 ? "" : "s"} picked up?`,
+      body: "Moves them to Awaiting Credit. No paperwork is needed yet -- record the credit once the vendor's invoice arrives.",
+      confirmLabel: "Mark Picked Up",
+    }))) return;
+    await withLoading(e.currentTarget, "Updating…", async () => {
+      const targets = ids.map((id) => state.cores.find((c) => c.id === id)).filter(Boolean);
+      const results = await Promise.allSettled(targets.map((c) =>
+        patch(`/api/orders/${c.order_id}/estimate/items/${c.id}/core-return`, { returned: true, actor: currentActor() })
+      ));
+      const failed = results.filter((r) => r.status === "rejected").length;
+      toast(failed ? `${targets.length - failed} of ${targets.length} marked picked up` : `${targets.length} core${targets.length === 1 ? "" : "s"} marked picked up`, !!failed);
+      state.coresSelected = new Set();
+      await loadCoresView();
+    });
   });
 }
 
@@ -4961,10 +5085,15 @@ function renderReturnsTable() {
   const RETURN_PILL = { pending: "pill-progress", awaiting: "pill-credit-pending", credited: "pill-done" };
   const RETURN_LABEL = { pending: "Pending", awaiting: "Awaiting Credit", credited: "Credited" };
 
+  const selectableIds = new Set(rows.filter((r) => !r.voided && returnStatus(r) === "pending").map((r) => r.id));
+  state.returnsSelected = new Set([...state.returnsSelected].filter((id) => selectableIds.has(id)));
+
   $("#returns-table").innerHTML = rows.length ? rows.map((r) => {
     const clickable = r.stock_number || r.we_owe_customer_name;
     const voided = !!r.voided;
     const status = returnStatus(r);
+    const selectable = !voided && status === "pending";
+    const checked = state.returnsSelected.has(r.id);
     const actions = voided ? "" : status === "pending"
       ? `<button type="button" class="btn btn-ghost btn-xs returns-pickup" data-id="${r.id}" data-picked-up="0">Mark Picked Up</button>`
       : status === "awaiting"
@@ -4973,7 +5102,8 @@ function renderReturnsTable() {
       : "";
     return `
     <tr class="${clickable ? "clickable" : ""} ${voided ? "voided-row" : ""}" data-id="${r.id}" ${clickable ? `title="Open ${esc(r.vehicle_label)}"` : `title="Not linked to a vehicle record"`}>
-      <td>${esc(r.description)}${status === "credited" ? `<div class="veh-sub num">Inv ${esc(r.return_invoice_number)}</div>` : ""}</td>
+      <td class="sel-col">${selectable ? `<input type="checkbox" class="returns-select" data-id="${r.id}" ${checked ? "checked" : ""} aria-label="Select ${esc(r.description)}">` : ""}</td>
+      <td>${esc(r.description)}${status === "credited" ? `<div class="veh-sub num">Inv ${esc(r.return_invoice_number)}</div>` : status === "awaiting" ? awaitingAgeHtml(daysSince(r.part_picked_up_at)) : ""}</td>
       <td>${r.part_number ? esc(r.part_number) : '<span class="muted-dash">—</span>'}</td>
       <td>${esc(r.ro_number)} · ${esc(r.vehicle_label)}</td>
       <td>${esc(r.vendor_name || "—")}</td>
@@ -4982,7 +5112,7 @@ function renderReturnsTable() {
       <td class="actions-col"><div class="row-actions">${actions}</div></td>
     </tr>
   `;
-  }).join("") : emptyRow(7, query ? {
+  }).join("") : emptyRow(8, query ? {
     icon: "search",
     title: "No returns match that search",
     hint: `Nothing matched "${state.returnsSearch}".`,
@@ -5003,7 +5133,7 @@ function renderReturnsTable() {
 
   $$(".clickable", $("#returns-table")).forEach((row) => {
     row.addEventListener("click", (e) => {
-      if (e.target.closest(".returns-post, .returns-pickup")) return;
+      if (e.target.closest(".returns-post, .returns-pickup, .returns-select")) return;
       const item = state.returns.find((r) => r.id === Number(row.dataset.id));
       if (item) openVehicleFromRow(item);
     });
@@ -5032,6 +5162,23 @@ function renderReturnsTable() {
       if (item) await withLoading(btn, "Opening…", () => openPostReturnDialog(item));
     });
   });
+  $$(".returns-select", $("#returns-table")).forEach((box) => {
+    box.addEventListener("click", (e) => e.stopPropagation());
+    box.addEventListener("change", () => {
+      const id = Number(box.dataset.id);
+      if (box.checked) state.returnsSelected.add(id); else state.returnsSelected.delete(id);
+      syncReturnsBulkBar();
+    });
+  });
+  $("#returns-select-all").checked = selectableIds.size > 0 && state.returnsSelected.size === selectableIds.size;
+  $("#returns-select-all").disabled = selectableIds.size === 0;
+  syncReturnsBulkBar();
+}
+
+function syncReturnsBulkBar() {
+  const n = state.returnsSelected.size;
+  $("#returns-bulk-bar").hidden = n === 0;
+  $("#returns-bulk-count").textContent = `${n} selected`;
 }
 
 function wireReturnsView() {
@@ -5046,6 +5193,35 @@ function wireReturnsView() {
   $("#returns-search").addEventListener("input", (e) => {
     state.returnsSearch = e.target.value.trim();
     renderReturnsTable();
+  });
+  $("#returns-select-all").addEventListener("change", (e) => {
+    const ids = $$(".returns-select", $("#returns-table")).map((box) => Number(box.dataset.id));
+    state.returnsSelected = new Set(e.target.checked ? ids : []);
+    renderReturnsTable();
+  });
+  $("#returns-bulk-clear").addEventListener("click", () => {
+    state.returnsSelected = new Set();
+    renderReturnsTable();
+  });
+  $("#returns-bulk-pickup").addEventListener("click", async (e) => {
+    const ids = [...state.returnsSelected];
+    if (!ids.length) return;
+    if (!(await confirmAction({
+      eyebrow: "RETURNS",
+      title: `Mark ${ids.length} part${ids.length === 1 ? "" : "s"} picked up?`,
+      body: "Moves them to Awaiting Credit. No paperwork is needed yet -- record the credit once the vendor's invoice arrives.",
+      confirmLabel: "Mark Picked Up",
+    }))) return;
+    await withLoading(e.currentTarget, "Updating…", async () => {
+      const targets = ids.map((id) => state.returns.find((r) => r.id === id)).filter(Boolean);
+      const results = await Promise.allSettled(targets.map((r) =>
+        patch(`/api/orders/${r.order_id}/estimate/items/${r.id}/part-pickup`, { picked_up: true, actor: currentActor() })
+      ));
+      const failed = results.filter((r) => r.status === "rejected").length;
+      toast(failed ? `${targets.length - failed} of ${targets.length} marked picked up` : `${targets.length} part${targets.length === 1 ? "" : "s"} marked picked up`, !!failed);
+      state.returnsSelected = new Set();
+      await loadCoresView();
+    });
   });
 }
 

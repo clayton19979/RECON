@@ -603,6 +603,8 @@
           </div>
         </div>
 
+        <div class="stats stats-cores" id="cores-returns-stats"></div>
+
         <!-- Same three-state vocabulary as Returned Parts below: a core is
              Pending (still here), Awaiting Credit (sent back, no paperwork
              yet), or Credited (vendor's credit recorded). -->
@@ -611,16 +613,23 @@
           <button class="chip" data-cores-filter="awaiting">Awaiting Credit</button>
           <button class="chip" data-cores-filter="credited">Credited</button>
           <button class="chip" data-cores-filter="all">All</button>
-          <input id="cores-search" class="filters-search" placeholder="Search cores…" title="Searches part, part #, RO, and vehicle" aria-label="Search cores" autocomplete="off">
+          <input id="cores-search" class="filters-search" placeholder="Search cores…" title="Searches part, part #, RO, vehicle, and vendor" aria-label="Search cores" autocomplete="off">
           <div class="filters-gap"></div>
           <span class="filters-note" id="cores-count" aria-live="polite">0 cores</span>
           <span class="filters-note" id="cores-total"></span>
         </div>
 
+        <div class="bulk-bar" id="cores-bulk-bar" hidden>
+          <span class="bulk-count" id="cores-bulk-count">0 selected</span>
+          <button type="button" class="btn btn-primary btn-sm" id="cores-bulk-pickup">Mark Picked Up</button>
+          <div class="filters-gap"></div>
+          <button type="button" class="btn btn-ghost btn-sm" id="cores-bulk-clear">Clear</button>
+        </div>
+
         <div class="panel">
           <div class="table-wrap">
             <table>
-              <thead><tr><th>Part</th><th>Part #</th><th>RO / Vehicle</th><th class="num-col">Core Charge</th><th>Status</th><th><span class="sr-only">Actions</span></th></tr></thead>
+              <thead><tr><th class="sel-col"><input type="checkbox" id="cores-select-all" title="Select all pending cores" aria-label="Select all pending cores"></th><th>Part</th><th>Part #</th><th>RO / Vehicle</th><th>Vendor</th><th class="num-col">Core Charge</th><th>Status</th><th><span class="sr-only">Actions</span></th></tr></thead>
               <tbody id="cores-table"></tbody>
             </table>
           </div>
@@ -644,10 +653,17 @@
           <span class="filters-note" id="returns-total"></span>
         </div>
 
+        <div class="bulk-bar" id="returns-bulk-bar" hidden>
+          <span class="bulk-count" id="returns-bulk-count">0 selected</span>
+          <button type="button" class="btn btn-primary btn-sm" id="returns-bulk-pickup">Mark Picked Up</button>
+          <div class="filters-gap"></div>
+          <button type="button" class="btn btn-ghost btn-sm" id="returns-bulk-clear">Clear</button>
+        </div>
+
         <div class="panel">
           <div class="table-wrap">
             <table>
-              <thead><tr><th>Part</th><th>Part #</th><th>RO / Vehicle</th><th>Vendor</th><th class="num-col">Credit Due</th><th>Status</th><th><span class="sr-only">Actions</span></th></tr></thead>
+              <thead><tr><th class="sel-col"><input type="checkbox" id="returns-select-all" title="Select all pending returns" aria-label="Select all pending returns"></th><th>Part</th><th>Part #</th><th>RO / Vehicle</th><th>Vendor</th><th class="num-col">Credit Due</th><th>Status</th><th><span class="sr-only">Actions</span></th></tr></thead>
               <tbody id="returns-table"></tbody>
             </table>
           </div>

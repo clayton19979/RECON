@@ -45,9 +45,16 @@ let board = [
   veh({ recon_id: 1, stock_number: "B204", vehicle: "2019 Ford F-150", vin: "1FTEW1E5XKF", status: "in_progress", technicians: ["Dana"], age_days: 22, quoted_cost: 900, actual_cost: 1450, parts_pending: 2, parts_pending_value: 340, idle_days: 0, last_activity_at: "2026-07-25T08:15:00" }),
   veh({ recon_id: 2, stock_number: "A118", vehicle: "2021 Honda Civic", vin: "2HGFC2F69MH", status: "estimate", technicians: [], age_days: 3, quoted_cost: 600, actual_cost: 0, idle_days: 2, last_activity_at: "2026-07-23T11:00:00" }),
   veh({ segment: "we_owe", we_owe_id: 5, stock_number: "", vehicle: "2017 Toyota Camry", customer_name: "R. Alvarez", status: "pending_approval", status_bucket: "in_progress", technicians: ["Chris", "Dana"], age_days: 41, quoted_cost: 300, actual_cost: 310, parts_pending: 1, parts_pending_value: 85, idle_days: 4, last_activity_at: "2026-07-21T09:30:00" }),
-  veh({ recon_id: 3, stock_number: "C007", vehicle: "2015 Chevy Silverado", vin: "3GCUKREC0FG", status: "complete", status_bucket: "finished", technicians: ["Bo"], age_days: 9, quoted_cost: 1200, actual_cost: 1180, idle_days: 9, last_activity_at: "2026-07-16T14:00:00" }),
-  veh({ segment: "we_owe", we_owe_id: 6, stock_number: "D451", vehicle: "2020 Subaru Outback", customer_name: "T. Nguyen", status: "fulfilled", status_bucket: "finished", technicians: [], age_days: 15, quoted_cost: 0, actual_cost: 0, idle_days: 21, last_activity_at: "2026-07-04T10:00:00" }),
+  // The two stalled cars carry real ticket ids: they're what "Make Tasks"
+  // acts on, and the id is what gives the resulting task its jump-to-vehicle
+  // chip. Distinct values so a batch that sent one order_id for every item
+  // can't pass. The other three stay null -- a car can sit on the board
+  // before anyone opens an RO on it, and that has to survive the same path.
+  veh({ recon_id: 3, order_id: 71, stock_number: "C007", vehicle: "2015 Chevy Silverado", vin: "3GCUKREC0FG", status: "complete", status_bucket: "finished", technicians: ["Bo"], age_days: 9, quoted_cost: 1200, actual_cost: 1180, idle_days: 9, last_activity_at: "2026-07-16T14:00:00" }),
+  veh({ segment: "we_owe", we_owe_id: 6, order_id: 72, stock_number: "D451", vehicle: "2020 Subaru Outback", customer_name: "T. Nguyen", status: "fulfilled", status_bucket: "finished", technicians: [], age_days: 15, quoted_cost: 0, actual_cost: 0, idle_days: 21, last_activity_at: "2026-07-04T10:00:00" }),
 ];
+
+const bulkCreateBodies = [];
 
 const { w, doc, fetchLog, settle, ok, finish, rejections } = await boot({
   expose: ["state", "renderVehiclesTable", "loadVehiclesView", "visibleVehicles", "sortVehicleRows",
@@ -55,9 +62,14 @@ const { w, doc, fetchLog, settle, ok, finish, rejections } = await boot({
            "VEHICLE_PREFS_KEY", "resetVehicleView", "boardStats", "isOverQuote", "BOARD_COLUMNS",
            "IDLE_BUCKETS", "idleBucket", "IDLE_SELECTIONS", "STALLED_AFTER_DAYS", "isStalled",
            "bulkTaskTitle"],
-  fetch: async (url) => {
+  fetch: async (url, opts) => {
     if (url.startsWith("/api/vehicles-board")) return url.includes("archived=true") ? [] : board;
     if (/^\/api\/(recon\/vehicles|we-owe)\/\d+$/.test(url)) return { id: 1, archived_at: "", stock_number: "B204", vehicle: "2019 Ford F-150" };
+    if (url === "/api/tasks/bulk-create") {
+      const body = JSON.parse(opts.body);
+      bulkCreateBodies.push(body);
+      return { created: body.items.length, tasks: [] };
+    }
     return [];
   },
 });
@@ -645,14 +657,30 @@ ok(bulkTaskBtn.textContent === "Make 2 Tasks", `the button reads "${bulkTaskBtn.
 ok(w.bulkTaskTitle(board.find((v) => v.recon_id === 3)) === "Follow up: C007 2015 Chevy Silverado — no work in 9 days",
    `generated title reads "${w.bulkTaskTitle(board.find((v) => v.recon_id === 3))}"`);
 
-const postsBefore = fetchLog.filter((f) => f.url === "/api/tasks").length;
+/* One request carrying N items, not N requests. The fan-out version could
+   half-land and report "6 created, 2 failed" without being able to name the
+   two, leaving the user to re-select the right subset from memory or make
+   duplicates. Asserted as "zero single-row POSTs" as well as "one batch",
+   because a batch call sent *alongside* the old loop would satisfy the
+   batch check on its own. */
+const singleBefore = fetchLog.filter((f) => f.url === "/api/tasks" && f.method === "POST").length;
 bulkTaskBtn.click();
 await settle();
 // confirmAction is a real <dialog>; accept it the way a person would
 doc.querySelector("#confirm-accept").click();
 await settle();
-const taskPosts = fetchLog.filter((f) => f.url === "/api/tasks" && f.method === "POST").length - postsBefore;
-ok(taskPosts === 2, `expected one POST /api/tasks per selected vehicle, got ${taskPosts}`);
+const batchCalls = fetchLog.filter((f) => f.url === "/api/tasks/bulk-create" && f.method === "POST");
+ok(batchCalls.length === 1, `expected exactly 1 POST /api/tasks/bulk-create, got ${batchCalls.length}`);
+ok(fetchLog.filter((f) => f.url === "/api/tasks" && f.method === "POST").length === singleBefore,
+   "Make Tasks still fires a POST per vehicle alongside the batch");
+ok(bulkCreateBodies.length === 1 && bulkCreateBodies[0].items.length === 2,
+   `the batch carried ${bulkCreateBodies[0] && bulkCreateBodies[0].items.length} items for 2 selected vehicles`);
+ok(bulkCreateBodies[0].items.every((i) => i.title),
+   `an item went out without a title: ${JSON.stringify(bulkCreateBodies[0].items)}`);
+// Each item keeps *its own* car's ticket, not the first one's -- that link is
+// the whole reason the resulting task can point back at the vehicle.
+ok(JSON.stringify(bulkCreateBodies[0].items.map((i) => i.order_id).sort()) === "[71,72]",
+   `the batch carried order ids ${JSON.stringify(bulkCreateBodies[0].items.map((i) => i.order_id))}, expected each car's own`);
 ok(w.state.vehicleSelection.size === 0, "the selection survived creating its tasks, inviting a duplicate run");
 
 // History is finished work -- a follow-up task pointing at an archived car is

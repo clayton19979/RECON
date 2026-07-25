@@ -1564,20 +1564,29 @@ function wireVehiclesView() {
         body: `One per selected vehicle, linked to its ticket. The first will read “${preview}”.`,
         confirmLabel: `Create ${plural}`,
       }))) return;
-      const results = await Promise.allSettled(targets.map((v) => post("/api/tasks", {
-        title: bulkTaskTitle(v),
-        order_id: v.order_id || null,
-        actor: currentActor(),
-      })));
-      const failed = results.filter((r) => r.status === "rejected").length;
-      toast(failed ? `${targets.length - failed} created, ${failed} failed` : `${plural} created`, !!failed);
-      if (failed < targets.length) {
-        // Clearing the selection is the point: these cars have been dealt
-        // with as far as this screen is concerned, and leaving them ticked
-        // invites creating the same tasks twice.
-        state.vehicleSelection.clear();
-        renderVehiclesTable();
+      /* One request, not N. The old version fanned out a POST per vehicle and
+         counted settled promises, which could report "6 created, 2 failed"
+         without being able to say which two -- leaving the only recovery as
+         re-ticking the right subset from memory or creating duplicates. The
+         server now takes the whole batch and refuses it whole if any ticket
+         link is bad, so the outcome is one of two states the user can act on. */
+      let created;
+      try {
+        const result = await post("/api/tasks/bulk-create", {
+          items: targets.map((v) => ({ title: bulkTaskTitle(v), order_id: v.order_id || null })),
+          actor: currentActor(),
+        });
+        created = result.created ?? targets.length;
+      } catch (err) {
+        toast(`Could not create tasks: ${err.message}`, true);
+        return;
       }
+      toast(`${created} task${created === 1 ? "" : "s"} created`);
+      // Clearing the selection is the point: these cars have been dealt
+      // with as far as this screen is concerned, and leaving them ticked
+      // invites creating the same tasks twice.
+      state.vehicleSelection.clear();
+      renderVehiclesTable();
     });
   }
 
@@ -1813,12 +1822,22 @@ function renderDetailHead() {
   if (segment === "recon") {
     $("#vd-title").textContent = `${item.stock_number} — ${item.year} ${item.make} ${item.model}`;
     $("#vd-sub").textContent = [item.vin, item.mileage ? `${item.mileage.toLocaleString()} mi` : "", item.trim].filter(Boolean).join(" · ");
+    $("#vd-customer-line").hidden = true;
+    $("#vd-customer-info-card").style.display = "none";
     $("#vd-we-owe-status-card").style.display = "none";
     $("#vd-deposits-card").style.display = "none";
     $("#vd-recon-purchase-price").value = item.purchase_price || 0;
   } else {
     $("#vd-title").textContent = `${item.year} ${item.make} ${item.model}`;
-    $("#vd-sub").textContent = [item.customer_name, item.description].filter(Boolean).join(" · ");
+    $("#vd-sub").textContent = [item.vin, item.description].filter(Boolean).join(" · ");
+    // Customer name gets its own prominent line in the header rather than
+    // being buried mid-subtitle -- for a we-owe promise, whose car it is is
+    // the first thing the advisor needs.
+    const customerLine = $("#vd-customer-line");
+    customerLine.textContent = item.customer_name ? `Customer: ${item.customer_name}` : "";
+    customerLine.hidden = !item.customer_name;
+    $("#vd-customer-info-card").style.display = "";
+    renderCustomerInfoSummary();
     $("#vd-we-owe-status-card").style.display = "";
     $("#vd-we-owe-status").value = item.status;
     $("#vd-we-owe-description").value = item.description || "";
@@ -1859,6 +1878,22 @@ function renderVehicleInfoSummary() {
   ];
   if (segment === "recon") rows.push(["Purchase price", money(item.purchase_price || 0)]);
   $("#vd-vehicle-info-summary").innerHTML = rows.map(([label, value]) => `<div class="kv-row"><span class="kv-label">${label}</span><span class="kv-value">${value}</span></div>`).join("");
+}
+
+// Customer Info card -- we-owe only (recon vehicles are shop-owned inventory
+// with no real customer). Mirrors the Vehicle Info card: a compact read-only
+// summary with an Edit button that opens the customer dialog.
+function renderCustomerInfoSummary() {
+  const { item } = state.detail;
+  const cityLine = [item.customer_city, [item.customer_state, item.customer_postal_code].filter(Boolean).join(" ")].filter(Boolean).join(", ");
+  const address = [item.customer_address_line1, item.customer_address_line2, cityLine].filter(Boolean).join(", ");
+  const rows = [
+    ["Name", esc(item.customer_name || "—")],
+    ["Phone", item.customer_phone ? `<a href="tel:${esc(item.customer_phone)}">${esc(item.customer_phone)}</a>` : "—"],
+    ["Email", item.customer_email ? esc(item.customer_email) : "—"],
+    ["Address", esc(address || "—")],
+  ];
+  $("#vd-customer-info-summary").innerHTML = rows.map(([label, value]) => `<div class="kv-row"><span class="kv-label">${label}</span><span class="kv-value">${value}</span></div>`).join("");
 }
 
 function renderDepositsSummary() {
@@ -4595,7 +4630,7 @@ function taskRowHtml(t) {
         <svg viewBox="0 0 24 24"><path d="M5 13l4 4L19 7"/></svg>
       </button>
       <div class="task-body">
-        <div class="task-title">${esc(t.title)}</div>
+        <button type="button" class="task-title" title="Click to rename">${esc(t.title)}</button>
         <div class="task-meta">
           <div class="ms-picker" data-id="${t.id}">
             <button type="button" class="ms-toggle task-assignee-toggle">${esc(assigneeSummaryLabel(t.assigned_to))}</button>
@@ -4605,17 +4640,114 @@ function taskRowHtml(t) {
             ? `<button type="button" class="task-due ${due.cls}" data-due="${esc(t.due_date)}" title="Change the due date">Due ${due.label}</button>`
             : `<button type="button" class="task-due task-due-empty" data-due="" title="Set a due date">+ due date</button>`}
           <button type="button" class="task-flag ${t.urgent ? "on" : ""}" title="${t.urgent ? "Clear the urgent flag" : "Flag this urgent"}">${t.urgent ? "Urgent" : "Flag urgent"}</button>
+          ${t.notes ? "" : `<button type="button" class="task-notes-add" title="Add a note">+ note</button>`}
           ${linkable ? `<button type="button" class="task-order-link" data-segment="${t.order_segment}" data-ref-id="${refId}">🚗 ${esc(t.order_label || t.order_number)}</button>` : ""}
           <span>by ${esc(t.created_by || "Unspecified")} · ${relativeTime(t.created_at)}</span>
         </div>
-        ${t.notes ? `<div class="task-notes">${esc(t.notes)}</div>` : ""}
+        ${t.notes ? `<button type="button" class="task-notes" title="Click to edit this note">${esc(t.notes)}</button>` : ""}
       </div>
       <button type="button" class="task-delete" title="Delete">×</button>
     </div>
   `;
 }
 
+/* Swap a chip or a line of text for a real input, in place.
+
+   Every editable thing on a task row wants the same five behaviours -- focus
+   on open, commit on blur, commit on Enter, abandon on Escape, and never
+   commit twice -- and the due-date chip was the only one that had them,
+   written inline. Repeating that by hand for the title and the notes is how
+   you end up with three subtly different Escape keys, so it lives here once.
+
+   `commit` gets the trimmed value and is only called when it actually differs
+   from the original; anything else falls through to a plain re-render, which
+   is also what a failed save does. The caller supplies the re-render because
+   the notes editor and the title editor have to put back different markup. */
+function inlineEdit(el, { value = "", multiline = false, placeholder = "", commit, cancel }) {
+  const input = document.createElement(multiline ? "textarea" : "input");
+  input.className = multiline ? "task-inline-edit task-inline-notes" : "task-inline-edit";
+  if (!multiline) input.type = "text";
+  input.value = value;
+  if (placeholder) input.placeholder = placeholder;
+  if (multiline) input.rows = Math.min(6, Math.max(2, value.split("\n").length + 1));
+  el.replaceWith(input);
+  input.focus();
+  // Caret at the end rather than the start: these open on an existing value
+  // that people mostly want to append to or fix the tail of.
+  try { input.setSelectionRange(input.value.length, input.value.length); } catch {}
+  let settled = false;
+  const finish = async () => {
+    if (settled) return;
+    settled = true;
+    const next = input.value.trim();
+    if (next === value.trim()) return cancel();
+    await commit(next);
+  };
+  input.addEventListener("blur", finish);
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      settled = true;
+      cancel();
+    } else if (e.key === "Enter" && (!multiline || e.ctrlKey || e.metaKey)) {
+      // A bare Enter in the notes box has to keep making newlines -- notes are
+      // the one field on this row where more than one line is normal.
+      e.preventDefault();
+      finish();
+    }
+  });
+  return input;
+}
+
 function wireTaskRowActions(container) {
+  /* Title and notes were display-only: set once in the quick-add box and
+     frozen after that. Same write-once shape the due date and the urgent flag
+     had, and the same reason it matters -- the board's bulk button generates
+     titles like "Follow up: R-0981 — no work in 41 days", which is a fine
+     starting point and a poor permanent name, and it creates every one of
+     them with no note at all. */
+  const patchField = async (taskId, body, fallback) => {
+    try {
+      await patch(`/api/tasks/${taskId}`, body);
+      await loadTasksView();
+    } catch (err) {
+      toast(err.message, true);
+      fallback();
+    }
+  };
+  $$(".task-title", container).forEach((el) => {
+    el.addEventListener("click", () => {
+      const id = el.closest(".task-row").dataset.id;
+      inlineEdit(el, {
+        value: el.textContent.trim(),
+        cancel: renderTasksList,
+        // An empty title is the one edit the server would reject outright, and
+        // silently reverting is friendlier than a 422 for what is almost
+        // always a select-all-and-delete on the way to retyping.
+        commit: (title) => title
+          ? patchField(id, { title }, renderTasksList)
+          : (toast("A task needs a title", true), renderTasksList()),
+      });
+    });
+  });
+  $$(".task-notes, .task-notes-add", container).forEach((el) => {
+    el.addEventListener("click", () => {
+      const id = el.closest(".task-row").dataset.id;
+      const adding = el.classList.contains("task-notes-add");
+      // The "+ note" affordance sits in the meta row, but its editor belongs
+      // under it where the note itself will end up -- otherwise a multi-line
+      // box appears wedged between two chips. The placeholder div is only ever
+      // a location for replaceWith to aim at; a re-render clears it either way.
+      const host = adding ? el.closest(".task-body").appendChild(document.createElement("div")) : el;
+      inlineEdit(host, {
+        value: adding ? "" : el.textContent.trim(),
+        multiline: true,
+        placeholder: "Note — Ctrl+Enter to save, Esc to cancel",
+        cancel: renderTasksList,
+        commit: (notes) => patchField(id, { notes }, renderTasksList),
+      });
+    });
+  });
   $$(".task-check", container).forEach((btn) => {
     btn.addEventListener("click", async () => {
       const row = btn.closest(".task-row");

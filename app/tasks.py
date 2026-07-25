@@ -56,6 +56,30 @@ class TaskBulkDelete(BaseModel):
     ids: list[int] = Field(min_length=1, max_length=500)
 
 
+class TaskBulkCreateItem(BaseModel):
+    title: str = Field(min_length=1, max_length=300)
+    notes: str = ""
+    order_id: int | None = None
+
+
+class TaskBulkCreate(BaseModel):
+    """Many new tasks in one request.
+
+    The board's "Make N Tasks" fired N separate POSTs and counted settled
+    promises, which meant a run could half-succeed and leave the user staring
+    at "6 created, 2 failed" with no way to tell which two. The shared fields
+    live on the envelope rather than being repeated per item because the only
+    thing that actually differs row to row is the title and which ticket it
+    hangs off -- who and when are decisions made later, looking at the queue.
+    """
+
+    items: list[TaskBulkCreateItem] = Field(min_length=1, max_length=200)
+    assigned_to: list[str] = []
+    due_date: str = ""
+    urgent: bool = False
+    actor: str = "ui"
+
+
 class SuggestionIn(BaseModel):
     text: str = Field(min_length=1, max_length=2000)
     author: str = ""
@@ -120,6 +144,33 @@ def build_tasks_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
                 (item.title.strip(), item.notes.strip(), json.dumps(_clean_names(item.assigned_to)), item.due_date.strip(), int(item.urgent), item.order_id, item.actor.strip(), ts, ts),
             )
             return task_dict(db.execute(task_query + " WHERE t.id=?", (cur.lastrowid,)).fetchone())
+
+    # Declared before /tasks/{task_id} would matter only for GETs, but keeping
+    # every bulk route together beats hunting for them.
+    @router.post("/tasks/bulk-create", status_code=201)
+    def bulk_create_tasks(item: TaskBulkCreate):
+        with connect() as db:
+            # All-or-nothing on the order links, checked before a single row is
+            # written. A partial create is worse than a clean failure here: the
+            # caller is a "select 8 cars, make 8 tasks" button, and half a batch
+            # means re-selecting the right subset by hand or creating doubles.
+            for entry in item.items:
+                assert_valid_order(db, entry.order_id)
+            ts = now_fn()
+            names = json.dumps(_clean_names(item.assigned_to))
+            due = item.due_date.strip()
+            urgent = int(item.urgent)
+            actor = item.actor.strip()
+            new_ids: list[int] = []
+            for entry in item.items:
+                cur = db.execute(
+                    "INSERT INTO tasks(title,notes,assigned_to,due_date,urgent,order_id,created_by,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
+                    (entry.title.strip(), entry.notes.strip(), names, due, urgent, entry.order_id, actor, ts, ts),
+                )
+                new_ids.append(cur.lastrowid)
+            placeholders = ",".join("?" * len(new_ids))
+            rows = db.execute(task_query + f" WHERE t.id IN ({placeholders})", new_ids).fetchall()
+            return {"created": len(new_ids), "tasks": [task_dict(r) for r in rows]}
 
     @router.patch("/tasks/{task_id}")
     def update_task(task_id: int, item: TaskPatch):

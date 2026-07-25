@@ -48,6 +48,7 @@ let tasks = [
 ];
 
 const bulkCalls = [];
+const patchCalls = [];
 
 const { w, doc, fetchLog, settle, ok, finish, rejections } = await boot({
   expose: ["state", "loadTasksView", "renderTasksList", "visibleTasks", "taskBucket", "taskScopeLabel", "showView"],
@@ -76,6 +77,23 @@ const { w, doc, fetchLog, settle, ok, finish, rejections } = await boot({
         return next;
       });
       return { updated: body.ids.length, tasks: tasks.filter((t) => body.ids.includes(t.id)) };
+    }
+    // A single-row PATCH applies to the fixture rather than echoing the row
+    // back unchanged: the inline editors below all re-read the list after
+    // saving, so a handler that lies about the result would let an editor that
+    // sends the wrong field pass on the strength of its own optimistic render.
+    if (url.startsWith("/api/tasks/") && opts.method === "PATCH") {
+      const id = Number(url.split("/").pop());
+      const body = JSON.parse(opts.body);
+      patchCalls.push({ id, body });
+      tasks = tasks.map((t) => {
+        if (t.id !== id) return t;
+        const next = { ...t, ...body };
+        if (body.urgent !== undefined) next.urgent = body.urgent ? 1 : 0;
+        if (body.done !== undefined) next.done = body.done ? 1 : 0;
+        return next;
+      });
+      return tasks.find((t) => t.id === id);
     }
     if (url.startsWith("/api/tasks/")) return tasks.find((t) => t.id === Number(url.split("/").pop())) || tasks[0];
     if (url === "/api/orders" || url.startsWith("/api/orders?")) return [];
@@ -333,6 +351,96 @@ editor.value = iso(1);
 editor.dispatchEvent(new w.Event("change", { bubbles: true }));
 await settle();
 ok(fetchLog.some((f) => f.method === "PATCH" && f.url === "/api/tasks/2"), "editing the due date inline didn't save");
+
+/* Title and notes were the last two write-once fields on this row, and they're
+   the two the board's bulk button is worst at: it generates titles like
+   "Follow up: R-0981 — no work in 41 days" and no note at all. A generated
+   title is a fine prompt and a poor permanent name. */
+const titleEl = rowFor(3).querySelector(".task-title");
+ok(titleEl && titleEl.tagName === "BUTTON", "the task title isn't a control anyone can click or tab to");
+titleEl.click();
+await settle();
+let titleInput = rowFor(3).querySelector(".task-inline-edit");
+ok(titleInput, "clicking the title didn't swap in an editor");
+ok(titleInput.value === "Overdue: call John about his Civic",
+   `the title editor opened holding "${titleInput.value}" rather than the current title`);
+titleInput.value = "Call John — his Civic is ready";
+titleInput.dispatchEvent(new w.Event("blur", { bubbles: false }));
+await settle();
+const titlePatch = patchCalls.find((c) => c.id === 3 && c.body.title);
+ok(titlePatch, "committing a title edit sent no PATCH");
+ok(titlePatch && titlePatch.body.title === "Call John — his Civic is ready",
+   `the title PATCH carried "${titlePatch && titlePatch.body.title}"`);
+ok(!("notes" in (titlePatch?.body || {})), "the title editor sent the notes field along with it");
+ok(rowFor(3).querySelector(".task-title").textContent.trim() === "Call John — his Civic is ready",
+   "the row didn't re-render with the new title");
+
+/* Escape has to abandon, and abandoning has to be silent. An editor that
+   saves on the way out of an Escape is worse than one that can't be escaped
+   at all, because the user believes they cancelled. */
+const patchesBefore = patchCalls.length;
+rowFor(3).querySelector(".task-title").click();
+await settle();
+titleInput = rowFor(3).querySelector(".task-inline-edit");
+titleInput.value = "typed then thought better of it";
+press(w, "Escape", { target: titleInput });
+await settle();
+ok(patchCalls.length === patchesBefore, "Escape out of a title edit still saved");
+ok(rowFor(3).querySelector(".task-title").textContent.trim() === "Call John — his Civic is ready",
+   "Escape left the abandoned text on the row");
+
+// An unchanged value is not an edit. Opening a title and clicking away is the
+// most common thing that happens to an inline editor by accident.
+rowFor(3).querySelector(".task-title").click();
+await settle();
+titleInput = rowFor(3).querySelector(".task-inline-edit");
+titleInput.dispatchEvent(new w.Event("blur", { bubbles: false }));
+await settle();
+ok(patchCalls.length === patchesBefore, "opening and closing a title with no change still sent a PATCH");
+
+// An empty title is the one edit the server rejects outright, so the row
+// refuses it rather than trading a 422 for the user's text.
+rowFor(3).querySelector(".task-title").click();
+await settle();
+titleInput = rowFor(3).querySelector(".task-inline-edit");
+titleInput.value = "   ";
+titleInput.dispatchEvent(new w.Event("blur", { bubbles: false }));
+await settle();
+ok(patchCalls.length === patchesBefore, "a blanked title was sent to the server anyway");
+ok(rowFor(3).querySelector(".task-title").textContent.trim() === "Call John — his Civic is ready",
+   "a blanked title wiped the row's heading on screen");
+
+/* Notes: the board creates every task without one, so the affordance to add
+   the first note matters more than editing an existing one. */
+ok(!rowFor(3).querySelector(".task-notes"), "a task with no notes is rendering an empty note block");
+const addNote = rowFor(3).querySelector(".task-notes-add");
+ok(addNote, "a task without notes offers no way to add one");
+addNote.click();
+await settle();
+const noteInput = rowFor(3).querySelector(".task-inline-notes");
+ok(noteInput && noteInput.tagName === "TEXTAREA",
+   "the note editor isn't a textarea -- notes run to more than one line");
+ok(noteInput.value === "", "the note editor opened pre-filled on a task that has no note");
+noteInput.value = "Left a voicemail Tuesday.\nTry the shop number next.";
+// Ctrl+Enter rather than Enter: a bare Enter has to keep making newlines here.
+press(w, "Enter", { target: noteInput, ctrlKey: true });
+await settle();
+const notePatch = patchCalls.find((c) => c.id === 3 && c.body.notes);
+ok(notePatch, "saving a note sent no PATCH");
+ok(notePatch && /voicemail Tuesday/.test(notePatch.body.notes), `the note PATCH carried "${notePatch && notePatch.body.notes}"`);
+ok(!("title" in (notePatch?.body || {})), "the note editor sent the title field along with it");
+const noteEl = rowFor(3).querySelector(".task-notes");
+ok(noteEl && /Try the shop number next/.test(noteEl.textContent), "the saved note didn't render on the row");
+ok(!rowFor(3).querySelector(".task-notes-add"), "the + note chip is still offered on a task that now has a note");
+
+// And an existing note reopens holding what's there, newlines intact.
+noteEl.click();
+await settle();
+const reopened = rowFor(3).querySelector(".task-inline-notes");
+ok(reopened && reopened.value.split("\n").length === 2,
+   `reopening a two-line note gave ${JSON.stringify(reopened && reopened.value)}`);
+press(w, "Escape", { target: reopened });
+await settle();
 
 /* ---------- destructive actions confirm first ----------
    Both of these take the whole batch with them, so both ask. Written against

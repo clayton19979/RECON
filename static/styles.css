@@ -761,7 +761,17 @@ textarea { min-height: 70px; resize: vertical; font-family: inherit; }
 .task-row.done .task-check { background: var(--good); border-color: var(--good); }
 .task-row.done .task-check svg { opacity: 1; }
 .task-body { flex: 1; min-width: 0; }
-.task-title { font-size: 14px; font-weight: 600; }
+/* The title is a button so it's reachable by keyboard and obviously clickable,
+   but it has to keep reading as the row's heading -- so the button chrome is
+   stripped back to nothing and only the hover hints that it's editable. */
+.task-title {
+  font-size: 14px; font-weight: 600; display: block; width: 100%; text-align: left;
+  background: none; border: none; padding: 1px 4px; margin: -1px -4px; cursor: text;
+  color: inherit; font-family: inherit; line-height: 1.35; border-radius: 5px;
+  transition: background .12s, box-shadow .12s;
+}
+.task-title:hover { background: var(--line-soft); box-shadow: inset 0 0 0 1px var(--line); }
+.task-title:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .task-row.done .task-title { text-decoration: line-through; color: var(--ink-faint); }
 .task-meta { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 6px; font-size: 11.5px; color: var(--ink-faint); }
 /* Both chips are buttons now: the due date and the urgent flag were settable
@@ -790,7 +800,26 @@ textarea { min-height: 70px; resize: vertical; font-family: inherit; }
   font-weight: 700; border: none; cursor: pointer; font-size: 11px;
 }
 .task-order-link:hover { text-decoration: underline; }
-.task-notes { font-size: 12.5px; color: var(--ink-soft); margin-top: 7px; white-space: pre-wrap; line-height: 1.5; }
+.task-notes {
+  font-size: 12.5px; color: var(--ink-soft); margin-top: 7px; white-space: pre-wrap; line-height: 1.5;
+  display: block; width: 100%; text-align: left; background: none; border: none;
+  padding: 2px 5px; margin-left: -5px; cursor: text; font-family: inherit;
+  border-radius: 5px; border-left: 2px solid var(--line); transition: background .12s, border-color .12s;
+}
+.task-notes:hover { background: var(--line-soft); border-left-color: var(--accent); }
+.task-notes:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* Sits with the other "this is missing, add it" affordances -- same dashed
+   outline as "+ due date" so the row reads as one set of open slots. */
+.task-notes-add {
+  padding: 2px 9px; border-radius: 999px; background: none; border: 1px dashed var(--line);
+  color: var(--ink-faint); font-weight: 600; font-size: 11.5px; cursor: pointer;
+}
+.task-notes-add:hover { color: var(--accent); border-color: var(--accent); border-style: solid; }
+.task-inline-edit {
+  width: 100%; font-family: inherit; font-size: 14px; font-weight: 600;
+  padding: 1px 4px; margin: -1px -4px; line-height: 1.35;
+}
+.task-inline-notes { font-size: 12.5px; font-weight: 400; margin-top: 7px; resize: vertical; line-height: 1.5; }
 .task-delete { background: none; border: none; color: var(--ink-faint); cursor: pointer; font-size: 17px; padding: 2px 6px; flex-shrink: 0; }
 .task-delete:hover { color: var(--crit); }
 

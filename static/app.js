@@ -3038,6 +3038,19 @@ function renderAssignment(order) {
   // drawer -- it turns red instead of sitting there looking routine.
   promised.classList.toggle("overdue",
     !!(a && a.promised_at) && new Date(a.promised_at) < new Date() && order.status !== "complete");
+
+  // The toggle used to always read "Assign" even once both roles were
+  // filled in, so reading who's on the ticket meant opening the popover --
+  // same first-name-only convention as the Tasks assignee summary.
+  const firstName = (name) => (name || "").split(" ")[0];
+  const label = $("#vd-assign-picker-label");
+  if (a && (a.technician_name || a.advisor_name)) {
+    label.textContent = `${firstName(a.technician_name) || "—"} / ${firstName(a.advisor_name) || "—"}`;
+    label.closest("button").title = `Technician: ${a.technician_name || "Unassigned"} · Advisor: ${a.advisor_name || "Unassigned"}`;
+  } else {
+    label.textContent = "Assign";
+    label.closest("button").title = "";
+  }
 }
 
 /* ---------- print a single ticket ---------- */
@@ -3100,6 +3113,7 @@ function renderPrintTicket() {
       <div class="print-meta">
         <div class="print-report-title">Repair Order ${esc(order.number)}</div>
         <div>${esc(vehicleLabel)}${customerLabel ? " — " + esc(customerLabel) : ""}</div>
+        ${item.vin ? `<div class="print-meta-line">VIN ${esc(item.vin)}</div>` : ""}
         <div class="print-generated">Generated ${esc(generated)}</div>
       </div>
     </header>
@@ -3107,6 +3121,10 @@ function renderPrintTicket() {
       <thead><tr><th>Status</th><th>Technician</th><th>Advisor</th><th>Concern</th></tr></thead>
       <tbody><tr><td>${esc(STATUS_LABEL[order.status] || order.status)}</td><td>${esc(techName)}</td><td>${esc(advisorName)}</td><td>${esc(order.concern)}</td></tr></tbody>
     </table>
+    ${(a && (a.date_in || a.odometer_in || a.promised_at)) ? `<table class="print-table">
+      <thead><tr><th>Date In</th><th>Odometer In</th><th>Promised</th></tr></thead>
+      <tbody><tr><td>${a.date_in ? esc(fmtDate(a.date_in)) : "—"}</td><td>${a.odometer_in ? `${esc(String(a.odometer_in))} mi` : "—"}</td><td>${a.promised_at ? esc(fmtDate(a.promised_at)) : "—"}</td></tr></tbody>
+    </table>` : ""}
     <div class="print-subhead" style="margin:16px 0 6px">Parts &amp; Labor</div>
     <table class="print-table">
       <thead><tr><th>Kind</th><th>Description</th><th>Part #</th><th class="num-col">Qty</th><th class="num-col">Cost</th><th>Status</th></tr></thead>

@@ -159,10 +159,10 @@ function wireConfirmDialog() {
   dlg.addEventListener("click", (e) => { if (e.target === dlg) settleConfirm(false); });
 }
 
-/* A confirm with one required text field. Returning a core or a part always
-   comes with vendor paperwork (an invoice, credit slip or RMA), so the
-   number is captured at the moment of the return -- resolves to the trimmed
-   string, or null on cancel. */
+/* A confirm with one required text field. Used only once the vendor's credit
+   paperwork (invoice, credit slip or RMA) has actually arrived -- a core or
+   part physically going back is a separate, earlier step with no number to
+   capture yet. Resolves to the trimmed string, or null on cancel. */
 let invoicePromptResolve = null;
 
 function promptInvoiceNumber({ title, body = "", label = "Invoice / credit #", placeholder = "e.g. CR-10442", confirmLabel = "Save", eyebrow = "RETURN", value = "" }) {
@@ -3068,7 +3068,7 @@ function renderPrintTicket() {
       const bucketItems = items.filter((i) => (i.job_id ?? null) === bucket.id);
       if (!bucketItems.length) return "";
       const jobTech = bucket.id === null ? "" : (bucket.technician_name || "Use ticket default");
-      const jobSubtotal = bucketItems.reduce((s, i) => s + i.quantity * i.unit_cost, 0);
+      const jobSubtotal = bucketItems.filter((i) => !(i.kind === "part" && i.part_returned)).reduce((s, i) => s + i.quantity * i.unit_cost, 0);
       const kindGroups = KIND_GROUP_ORDER
         .map((kind) => ({ kind, kindItems: bucketItems.filter((i) => i.kind === kind) }))
         .filter((g) => g.kindItems.length);

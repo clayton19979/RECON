@@ -1163,9 +1163,9 @@
      danger. This is one dialog reused by every call site; see
      confirmAction() in app.js. -->
 <!-- Invoice-number Prompt Dialog
-     A confirm with one required text field: returning a core or a part
-     always comes with vendor paperwork, so the number is captured at the
-     moment of the return rather than reconstructed later. Reused by every
+     A confirm with one required text field, shown only once the vendor's
+     credit paperwork has actually arrived for a core or part that already
+     went back -- not at the moment of the return itself. Reused by every
      call site via promptInvoiceNumber() in app.js. -->
 <dialog id="invoice-prompt-dialog">
   <form class="modal" id="invoice-prompt-form">

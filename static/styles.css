@@ -463,7 +463,12 @@ table.sticky-head thead th {
   color: #fff;
 }
 .pill-recon { background: var(--recon); }
-.pill-weowe { background: var(--weowe); }
+/* Outline, not filled: Type sits directly beside a filled Status pill
+   (pill-status-pending etc.), and --weowe is nearly the same amber as --warn
+   in every theme -- a filled We-Owe pill next to a "Pending Approval" status
+   pill read as one badge repeated twice. Outline reads as secondary context
+   instead of competing with the status pill's fill. */
+.pill-weowe { background: var(--weowe-tint); border: 1px solid var(--weowe); color: var(--weowe); }
 .pill-progress { background: var(--warn); }
 .pill-done { background: var(--good); }
 
@@ -1630,7 +1635,8 @@ td.actions-col { text-align: right; white-space: nowrap; }
 /* ---------- staff ---------- */
 .stats-staff { grid-template-columns: repeat(4, 1fr); }
 .stats-staff .stat { border-top-color: var(--line); }
-.stats-staff .stat:nth-child(1) { border-top-color: var(--accent); }
+.stats-staff .stat:has(.stat-value.warn) { border-top-color: var(--warn); }
+.stats-staff .stat:has(.stat-value.crit) { border-top-color: var(--crit); }
 
 .role-badge {
   display: inline-flex; align-items: center; padding: 3px 10px; border-radius: 999px;
@@ -1668,8 +1674,8 @@ tr.group-row:hover { background: none; }
 /* ---------- accounts payable ---------- */
 .stats-ap { grid-template-columns: repeat(4, 1fr); }
 .stats-ap .stat { border-top-color: var(--line); }
-.stats-ap .stat:nth-child(1) { border-top-color: var(--accent); }
 .stats-ap .stat:has(.stat-value.warn) { border-top-color: var(--warn); }
+.stats-ap .stat:has(.stat-value.crit) { border-top-color: var(--crit); }
 
 /* Post-result feedback: a structured alert, not a grey hint. */
 .ap-alert {
@@ -1728,7 +1734,6 @@ tbody tr.voided-row td:nth-child(-n+3) { text-decoration: line-through; }
 /* ---------- backup ---------- */
 .stats-backup { grid-template-columns: repeat(4, 1fr); }
 .stats-backup .stat { border-top-color: var(--line); }
-.stats-backup .stat:nth-child(1) { border-top-color: var(--accent); }
 .stats-backup .stat:has(.stat-value.warn) { border-top-color: var(--warn); }
 .stats-backup .stat:has(.stat-value.crit) { border-top-color: var(--crit); }
 
@@ -1784,3 +1789,15 @@ input.overdue { border-color: var(--crit); color: var(--crit); }
 .ms-menu.ms-menu-up { top: auto; bottom: calc(100% + 4px); }
 .task-order-link svg { width: 11px; height: 11px; fill: none; stroke: currentColor; stroke-width: 2; vertical-align: -1px; margin-right: 3px; }
 #tasks-bulk-due-clear { padding: 2px 7px; font-size: 12px; }
+
+/* .stats-staff/.stats-ap/.stats-backup each declare their own unconditional
+   4-column grid, later in the cascade than the generic .stats breakpoints
+   above -- so at equal specificity they always won, and none of the three
+   ever actually collapsed on a narrow window. Re-apply the same breakpoints
+   here, after their declarations, so they do. */
+@media (max-width: 1240px) {
+  .stats-staff, .stats-ap, .stats-backup { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 700px) {
+  .stats-staff, .stats-ap, .stats-backup { grid-template-columns: 1fr; }
+}

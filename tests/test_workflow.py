@@ -60,12 +60,57 @@ def test_staff_rename_follows_through_to_task_assignments(client):
 
     res = client.patch(f"/api/staff/{ray['id']}", json={"name": "Raymond Ortiz"})
     assert res.status_code == 200
+    # The response reports how many tasks followed the rename, so the UI can
+    # say "2 tasks moved with them" -- Dana's task doesn't count.
+    assert res.json()["tasks_moved"] == 2
 
     tasks = {t["id"]: t for t in client.get("/api/tasks").json()}
     assert tasks[shared["id"]]["assigned_to"] == ["Raymond Ortiz", "Dana Wu"]
     assert tasks[done["id"]]["assigned_to"] == ["Raymond Ortiz"]
     assert tasks[danas["id"]]["assigned_to"] == ["Dana Wu"]
     assert tasks[shared["id"]]["created_by"] == "Ray Ortiz"
+
+    # A patch that doesn't rename reports zero moved, and a rename with no
+    # tasks attached does too -- the field is always present, never null.
+    res = client.patch(f"/api/staff/{ray['id']}", json={"role": "manager"})
+    assert res.json()["tasks_moved"] == 0
+    dana_less = client.post("/api/staff", json={"name": "Lee Park", "role": "technician"}).json()
+    res = client.patch(f"/api/staff/{dana_less['id']}", json={"name": "Lee Parker"})
+    assert res.json()["tasks_moved"] == 0
+
+
+def test_reset_db_moves_old_database_aside(tmp_path):
+    """reset_db (split out of seed_mock_data so a clean database doesn't
+    require importing the mock dataset) renames db + sidecars to backups and
+    recreates an empty schema in place."""
+    from app.db import connect, init_db, reset_db
+
+    db_path = tmp_path / "shop.db"
+    init_db(db_path)
+    db = connect(db_path)
+    db.execute("INSERT INTO staff(name,role,created_at) VALUES('Ray','technician','2026-01-01T00:00:00Z')")
+    db.commit()
+    # Flush the real WAL (if the schema runs in WAL mode) before planting a
+    # fake sidecar -- overwriting a live WAL would eat the commit above.
+    db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    db.close()
+    (tmp_path / "shop.db-wal").write_bytes(b"wal")
+
+    backup = reset_db(db_path, backup_suffix=".pre-test.bak")
+
+    assert backup == tmp_path / "shop.db.pre-test.bak"
+    assert backup.is_file()
+    assert (tmp_path / "shop.db-wal.pre-test.bak").is_file()
+    assert not (tmp_path / "shop.db-wal").is_file()
+    with connect(db_path) as db:
+        assert db.execute("SELECT COUNT(*) FROM staff WHERE name='Ray'").fetchone()[0] == 0
+    with connect(backup) as db:
+        assert db.execute("SELECT COUNT(*) FROM staff WHERE name='Ray'").fetchone()[0] == 1
+
+    # Nothing to move: returns None and still leaves a fresh db behind.
+    empty = tmp_path / "fresh.db"
+    assert reset_db(empty) is None
+    assert empty.is_file()
 
 
 def test_assignment_requires_active_matching_role(client):

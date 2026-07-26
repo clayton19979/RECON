@@ -7,11 +7,11 @@ the same validation and business logic a real request would -- order
 numbering, workflow initialization, cost rollups, etc.
 
 Run with:
-    uv run python seed_mock_data.py
+    uv run python seed_mock_data.py                # reset + seed
+    uv run python seed_mock_data.py --reset-only   # just a clean, empty db
 """
 from __future__ import annotations
 
-import shutil
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -20,16 +20,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from fastapi.testclient import TestClient
 
-from app.db import connect, init_db
+from app.db import connect, reset_db
 from app.main import DEFAULT_DB, app
-
-
-def reset_db() -> None:
-    for suffix in ("", "-wal", "-shm"):
-        src = Path(str(DEFAULT_DB) + suffix)
-        if src.is_file():
-            shutil.move(str(src), str(src) + ".pre-mock-seed.bak")
-    init_db(DEFAULT_DB)
 
 
 def post(client: TestClient, path: str, json: dict, expect: int = 201) -> dict:
@@ -164,7 +156,12 @@ def age_the_board() -> None:
 
 def main() -> None:
     print(f"Resetting database at {DEFAULT_DB} ...")
-    reset_db()
+    backup = reset_db(DEFAULT_DB, backup_suffix=".pre-mock-seed.bak")
+    if backup:
+        print(f"Previous database moved aside to {backup}")
+    if "--reset-only" in sys.argv[1:]:
+        print("Done (reset only, nothing seeded).")
+        return
     client = TestClient(app)
 
     print("Creating staff ...")

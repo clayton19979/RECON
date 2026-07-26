@@ -54,10 +54,16 @@ const { w, doc, settle, ok, finish, rejections } = await boot({
       const id = Number(url.split("/")[3]);
       const body = JSON.parse(opts.body);
       patches.push({ url, body });
+      // Mirror the real API: a rename reports how many tasks followed the
+      // name (done ones included), so the UI can announce the follow-through.
+      const oldName = staffData.find((s) => s.id === id)?.name;
+      const tasksMoved = body.name && body.name !== oldName
+        ? TASKS.filter((t) => (t.assigned_to || []).includes(oldName)).length
+        : 0;
       staffData = staffData.map((s) => (s.id === id
         ? { ...s, ...body, active: "active" in body ? (body.active ? 1 : 0) : s.active }
         : s));
-      return staffData.find((s) => s.id === id);
+      return { ...staffData.find((s) => s.id === id), tasks_moved: tasksMoved };
     }
     if (url === "/api/tasks") return TASKS;
     if (url === "/api/orders") return [];
@@ -186,6 +192,10 @@ await settle();
 ok(patches.some((p) => p.url === "/api/staff/1" && p.body.name === "Raymond Ortiz"),
    "renaming should PATCH the new name on blur");
 ok(row(1).querySelector(".stf-name").value === "Raymond Ortiz", "the rename didn't survive the reload");
+// Ray had three tasks keyed to his old name (two open + one done); the toast
+// announces they moved with him instead of the rename looking like a no-op.
+ok(/Renamed to Raymond Ortiz — 3 tasks moved with them/.test($("#toast").textContent),
+   `the rename toast should report the tasks that followed, reads "${$("#toast").textContent}"`);
 
 const patchCountBefore = patches.length;
 const unchanged = row(2).querySelector(".stf-name");

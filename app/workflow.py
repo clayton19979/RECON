@@ -281,6 +281,7 @@ def build_workflow_router(connect: Callable[[], sqlite3.Connection], now_fn: Cal
             # to them under the name they go by now. created_by is left
             # alone on purpose -- it records who typed the task, as typed.
             new_name = item.name.strip() if item.name is not None else old_name
+            tasks_moved = 0
             if new_name != old_name:
                 for task in db.execute("SELECT id, assigned_to FROM tasks WHERE assigned_to LIKE '%' || ? || '%'", (old_name,)):
                     names = json.loads(task["assigned_to"]) if task["assigned_to"] else []
@@ -289,7 +290,11 @@ def build_workflow_router(connect: Callable[[], sqlite3.Connection], now_fn: Cal
                             "UPDATE tasks SET assigned_to=? WHERE id=?",
                             (json.dumps([new_name if n == old_name else n for n in names]), task["id"]),
                         )
-            return dict(db.execute("SELECT * FROM staff WHERE id=?", (staff_id,)).fetchone())
+                        tasks_moved += 1
+            # tasks_moved rides along so the UI can say "3 tasks moved with
+            # them" instead of the rename looking like it touched nothing.
+            # It's response metadata, not a staff column.
+            return dict(db.execute("SELECT * FROM staff WHERE id=?", (staff_id,)).fetchone()) | {"tasks_moved": tasks_moved}
 
     @router.put("/orders/{order_id}/assignment")
     def save_assignment(order_id: int, item: AssignmentIn):

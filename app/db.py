@@ -502,3 +502,29 @@ def connect(path: Path) -> sqlite3.Connection:
     db.row_factory = sqlite3.Row
     db.execute("PRAGMA foreign_keys=ON")
     return db
+
+
+def reset_db(path: Path, backup_suffix: str = ".pre-reset.bak") -> Path | None:
+    """Move an existing database (and its WAL/SHM sidecars) aside, then
+    recreate it empty.
+
+    Nothing is ever deleted: each file is renamed to <file><backup_suffix>,
+    clobbering only a previous backup with the same suffix. Returns the
+    backup path of the main db file, or None if there was nothing to move.
+
+    Lives here rather than in seed_mock_data so "give me a clean database"
+    is available without dragging in the mock dataset (or the TestClient
+    import chain it rides on).
+    """
+    import shutil
+
+    moved = None
+    for suffix in ("", "-wal", "-shm"):
+        src = Path(str(path) + suffix)
+        if src.is_file():
+            dest = Path(str(src) + backup_suffix)
+            shutil.move(str(src), str(dest))
+            if suffix == "":
+                moved = dest
+    init_db(path)
+    return moved

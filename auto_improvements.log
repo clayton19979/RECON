@@ -1432,3 +1432,67 @@ Next time, in rough priority order:
   5. Staff screen polish idea: the Assigned Tasks stat could link per-person
      the way row counts do; and renames could toast "3 tasks moved with
      them" now that the server actually moves them.
+
+================================================================
+2026-07-26 -- estimate grid walks backwards, renames report their
+follow-through, reset_db escapes seed_mock_data, address
+autocomplete finally under test
+================================================================
+
+  * Estimate grid: Shift+Enter is now Enter's mirror. It walks the field
+    chain backwards (Core -> Cost -> Qty -> Description) and from the
+    start of a line climbs into the previous row's last enabled money
+    field -- across job groups, same order Tab/Enter descend. No
+    last-row-only guard on purpose: walking backwards never adds a line,
+    and a correction three lines up is exactly what it's for. At the top
+    of the grid it falls through to the default. (Carried idea #3.)
+
+  * Staff renames now say what moved. PATCH /api/staff/{id} returns a
+    tasks_moved count (response metadata, not a staff column) and the
+    Staff screen's rename toast reads "Renamed to Raymond Ortiz — 3 tasks
+    moved with them" -- surfacing the rename follow-through the last run
+    built, instead of it looking like a no-op. Role/active-only patches
+    and no-task renames report 0. (Carried idea #5, the toast half.)
+
+  * reset_db split out of seed_mock_data into app/db.py (carried #2):
+    "give me a clean database" no longer drags in the mock dataset or its
+    TestClient import chain. Parameterized on path + backup suffix, still
+    move-aside-never-delete, returns the backup path. seed_mock_data
+    keeps its .pre-mock-seed.bak naming and grew --reset-only for a
+    clean-slate without the fake shop.
+
+  * Address autocomplete front-end coverage (carried #1, top of the
+    list): detail_smoke.mjs now drives the customer editor's street
+    field -- sub-3-char queries never hit the endpoint, rapid keystrokes
+    debounce to one request carrying the latest text, results render and
+    a pick fills Street/City/State/ZIP + focuses line 2, Escape
+    dismisses, empty answers and 502s just hide the list, and a response
+    landing after focus left the field stays hidden (the stale-dropdown
+    guard). Plus estimate_smoke coverage for the whole Shift+Enter
+    contract and a staff_smoke assertion on the moved-tasks toast.
+
+  * Suite: 251 python tests passing (+2: tasks_moved counting, reset_db
+    move-aside semantics incl. WAL sidecars), all 9 dom suites pass,
+    uvicorn boots, /, /api/orders, /api/staff all 200.
+
+Sandbox notes this run: same proxy block on uv's interpreter download --
+python3.10 venv + pip in /tmp again. New wrinkle: data/shop.db has a live
+WAL on the OneDrive mount and sqlite dies on it from here ("disk I/O
+error" at import, since app.main builds the module-level app eagerly);
+DISCOUNT_AUTO_OPS_DB=/tmp/... routes around it for tests and boot checks.
+jsdom from the mount is unusably slow -- mirror app/static/tests to /tmp
+and run there.
+
+Next time, in rough priority order:
+  1. Estimate grid cursor/entry docs are now three stacked handlers
+     (Tab, Enter, Shift+Enter) with duplicated guards -- extract the
+     shared "rows/fields of the grid" helpers before a fourth appears.
+  2. Board + tasks cursors share-a-helper refactor. (Carried.)
+  3. Staff screen: per-person task links exist on rows; consider making
+     the Assigned Tasks stat card show a per-person breakdown on hover
+     or click-through grouped by owner.
+  4. The customer editor's City/State/ZIP don't validate at all --
+     state accepts any text, ZIP accepts letters. Cheap win.
+  5. seed_mock_data --reset-only prints a confusing "Previous database
+     moved aside" even on a fresh path because app.main's import
+     eagerly created the db; consider lazy app construction.

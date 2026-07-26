@@ -298,6 +298,49 @@ blankRow.querySelector(".ei-desc").value = "New part"; // put it back, no events
 await settle();
 
 /* ------------------------------------------------------------------
+   Shift+Enter walks the same chain backwards -- Core -> Cost -> Qty ->
+   Description, then up into the previous line's last money field. It
+   never adds a line, so unlike Enter it works from any row. Grid
+   state: four rows, the last two are parts (Core fields present).
+   ------------------------------------------------------------------ */
+const pressShiftEnter = (el) => {
+  const ev = new w.KeyboardEvent("keydown", { key: "Enter", shiftKey: true, bubbles: true, cancelable: true });
+  el.dispatchEvent(ev);
+  return ev;
+};
+const backRow = gridRows().at(-1);
+backRow.querySelector(".ei-core").focus();
+ok(pressShiftEnter(backRow.querySelector(".ei-core")).defaultPrevented,
+   "Shift+Enter in Core fell through");
+ok(doc.activeElement === backRow.querySelector(".ei-cost"),
+   "Shift+Enter from Core didn't land on Cost");
+pressShiftEnter(backRow.querySelector(".ei-cost"));
+ok(doc.activeElement === backRow.querySelector(".ei-qty"),
+   "Shift+Enter from Cost didn't land on Qty");
+pressShiftEnter(backRow.querySelector(".ei-qty"));
+ok(doc.activeElement === backRow.querySelector(".ei-desc"),
+   "Shift+Enter from Qty didn't land on Description");
+
+// From the start of a line, Shift+Enter climbs to the previous row's last
+// enabled money field -- the exact spot Enter/Tab would have left from.
+pressShiftEnter(backRow.querySelector(".ei-desc"));
+const climbRow = gridRows().at(-2);
+const climbTarget = climbRow.querySelector(".ei-core") || climbRow.querySelector(".ei-cost");
+ok(doc.activeElement === climbTarget,
+   "Shift+Enter from a line's description didn't climb to the previous row's last money field");
+
+// Works mid-grid too (it never adds lines, so there's no last-row-only
+// guard), and never grows the estimate.
+pressShiftEnter(gridRows()[0].querySelector(".ei-qty"));
+ok(doc.activeElement === gridRows()[0].querySelector(".ei-desc"),
+   "Shift+Enter on a middle row didn't walk backwards");
+ok(gridRows().length === 4, "Shift+Enter changed the row count");
+
+// First field of the first line: nowhere further back, keep the default.
+const topOut = pressShiftEnter(gridRows()[0].querySelector(".ei-desc"));
+ok(!topOut.defaultPrevented, "Shift+Enter at the top of the grid was hijacked");
+
+/* ------------------------------------------------------------------
    Message log: a toast that faded is still recoverable from the bell.
    ------------------------------------------------------------------ */
 const notifList = doc.querySelector("#notif-list");

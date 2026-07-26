@@ -4,57 +4,100 @@
 }
 
 /* ---------- theme tokens ---------- */
-/* "midnight" is the default look -- dark, steel-blue accent. */
-:root, :root[data-theme="midnight"] {
-  --paper: #14161a; --paper-raise: #1b1e24; --surface: #20232a;
-  --ink: #eef1f5; --ink-soft: #a8b0bd; --ink-faint: #6b7280;
-  --line: #2e333c; --line-soft: #262a32;
-  --accent: #5b9bd5; --accent-strong: #7db4e3; --accent-tint: #1c2b3a;
-  --recon: #9aa4b2; --recon-tint: #262a32;
-  --weowe: #d1a35e; --weowe-tint: #33291a;
-  --good: #6fbf7a; --good-tint: #1a2e1e;
-  --warn: #e0a15c; --warn-tint: #362a18;
-  --crit: #e2837a; --crit-tint: #3a221e;
-  --shadow: 0 1px 2px rgba(0,0,0,.35), 0 8px 24px -12px rgba(0,0,0,.55);
+/* Every block carries its own color-scheme (native date pickers, form
+   controls) and --backdrop (dialog::backdrop) so no rule further down has
+   to enumerate theme names. All token pairs are contrast-validated: ink 7:1
+   on all grounds, solid-on-tint 4.5:1, white-on-pill floors, and the
+   paper < paper-raise < surface luminance ladder. */
+/* "harbor" is the default look -- ink-navy water, azure beacon accent. */
+:root, :root[data-theme="harbor"] {
+  --paper: #0c1118; --paper-raise: #121a25; --surface: #172232;
+  --ink: #e9eff7; --ink-soft: #a9b6c8; --ink-faint: #74839a;
+  --line: #2a3850; --line-soft: #1f2a3c;
+  --accent: #3f8bd9; --accent-strong: #67a3e1; --accent-tint: #0d1e33;
+  --recon: #90a4bb; --recon-tint: #1b2536;
+  --weowe: #d79d3e; --weowe-tint: #2a2008;
+  --good: #2fa161; --good-tint: #0c2716;
+  --warn: #c1802a; --warn-tint: #2a1e09;
+  --crit: #e0564a; --crit-tint: #2b0f0d;
+  --shadow: 0 1px 2px rgba(3,8,15,.5), 0 10px 28px -12px rgba(3,8,15,.65);
+  --backdrop: color-mix(in srgb, #060b12 55%, transparent);
+  color-scheme: dark;
 }
-/* "carbon" -- near-black, warm copper accent. */
-:root[data-theme="carbon"] {
-  --paper: #121110; --paper-raise: #191715; --surface: #1e1b19;
-  --ink: #f0ebe4; --ink-soft: #b3a99c; --ink-faint: #756c60;
-  --line: #332e29; --line-soft: #2a2521;
-  --accent: #d98a4f; --accent-strong: #e8a06b; --accent-tint: #34241a;
-  --recon: #a39a8e; --recon-tint: #2a2521;
-  --weowe: #c9a15e; --weowe-tint: #322a1a;
-  --good: #7dbb7f; --good-tint: #1e2c1e;
-  --warn: #e0a15c; --warn-tint: #362a18;
-  --crit: #d9705f; --crit-tint: #35211c;
-  --shadow: 0 1px 2px rgba(0,0,0,.35), 0 8px 24px -12px rgba(0,0,0,.55);
+/* "gunmetal" -- parkerized steel, polished-brass accent. */
+:root[data-theme="gunmetal"] {
+  --paper: #151a21; --paper-raise: #1b212a; --surface: #232b36;
+  --ink: #e9edf3; --ink-soft: #a9b4c2; --ink-faint: #7c8794;
+  --line: #38424f; --line-soft: #2a333e;
+  --accent: #b18b2c; --accent-strong: #bc9b48; --accent-tint: #251d0b;
+  --recon: #94a5b4; --recon-tint: #1c2530;
+  --weowe: #d19a3d; --weowe-tint: #271b07;
+  --good: #43a05c; --good-tint: #0e2513;
+  --warn: #c4762a; --warn-tint: #2a1a06;
+  --crit: #dd5a4a; --crit-tint: #260c09;
+  --shadow: 0 1px 2px rgba(6,10,16,.5), 0 10px 28px -12px rgba(6,10,16,.65);
+  --backdrop: color-mix(in srgb, #0b0f16 55%, transparent);
+  color-scheme: dark;
 }
-/* "slate" -- dark blue-gray, teal accent. */
-:root[data-theme="slate"] {
-  --paper: #10171a; --paper-raise: #161e22; --surface: #1a2327;
-  --ink: #e6f0f2; --ink-soft: #9fb3b8; --ink-faint: #647579;
-  --line: #263136; --line-soft: #1f292d;
-  --accent: #4fb8b0; --accent-strong: #6fcec6; --accent-tint: #16302e;
-  --recon: #93a5aa; --recon-tint: #1f292d;
-  --weowe: #cf9f5c; --weowe-tint: #332918;
-  --good: #6fbf85; --good-tint: #1a2d21;
-  --warn: #dea25f; --warn-tint: #35291a;
-  --crit: #de8478; --crit-tint: #382220;
-  --shadow: 0 1px 2px rgba(0,0,0,.35), 0 8px 24px -12px rgba(0,0,0,.55);
+/* "petrol" -- engine-oil green-black, petrol-teal sheen. */
+:root[data-theme="petrol"] {
+  --paper: #0e1514; --paper-raise: #141c1a; --surface: #1a2422;
+  --ink: #e4ede9; --ink-soft: #a2b6af; --ink-faint: #71857f;
+  --line: #2e3d39; --line-soft: #23302d;
+  --accent: #26a191; --accent-strong: #46afa1; --accent-tint: #0a1f1c;
+  --recon: #93a7ad; --recon-tint: #182226;
+  --weowe: #cf9b3a; --weowe-tint: #251b08;
+  --good: #3fa25b; --good-tint: #0c2413;
+  --warn: #bf7527; --warn-tint: #281905;
+  --crit: #d9564a; --crit-tint: #250c0a;
+  --shadow: 0 1px 2px rgba(4,10,9,.5), 0 10px 28px -12px rgba(4,10,9,.65);
+  --backdrop: color-mix(in srgb, #081110 55%, transparent);
+  color-scheme: dark;
 }
-/* "paper" -- light, warm paper ground, steel-blue accent. */
-:root[data-theme="paper"] {
-  --paper: #f6f2ea; --paper-raise: #fdfbf7; --surface: #ffffff;
-  --ink: #211d18; --ink-soft: #5c5548; --ink-faint: #948c7c;
-  --line: #ddd4c2; --line-soft: #eae3d3;
-  --accent: #234a6b; --accent-strong: #17334c; --accent-tint: #e7edf2;
-  --recon: #5c6470; --recon-tint: #eceeef;
-  --weowe: #93672c; --weowe-tint: #f3e9db;
-  --good: #3f7d4a; --good-tint: #e7f1e8;
-  --warn: #b8722b; --warn-tint: #f6ebdd;
-  --crit: #a6392e; --crit-tint: #f5e5e2;
-  --shadow: 0 1px 2px rgba(33,29,24,.06), 0 8px 24px -12px rgba(33,29,24,.18);
+/* "mesa" -- high-desert dusk, plum-brown ground, ember-copper accent. */
+:root[data-theme="mesa"] {
+  --paper: #171114; --paper-raise: #1d161a; --surface: #251c21;
+  --ink: #f3eae6; --ink-soft: #c8b2ab; --ink-faint: #937d76;
+  --line: #3d2e33; --line-soft: #2e2226;
+  --accent: #d4622f; --accent-strong: #df8a63; --accent-tint: #2b130a;
+  --recon: #ae9ea3; --recon-tint: #2b2126;
+  --weowe: #d59a38; --weowe-tint: #2a2008;
+  --good: #35a05e; --good-tint: #0d2615;
+  --warn: #c48520; --warn-tint: #2a1e07;
+  --crit: #dc4a55; --crit-tint: #220a0c;
+  --shadow: 0 1px 2px rgba(12,6,8,.5), 0 10px 28px -12px rgba(12,6,8,.65);
+  --backdrop: color-mix(in srgb, #0d0709 55%, transparent);
+  color-scheme: dark;
+}
+/* "cobalt" -- light: warm ivory ledger paper, fountain-pen cobalt. */
+:root[data-theme="cobalt"] {
+  --paper: #f2ebdb; --paper-raise: #f7f2e7; --surface: #fdfbf4;
+  --ink: #262119; --ink-soft: #5c5546; --ink-faint: #857b68;
+  --line: #d5cab2; --line-soft: #e3dac7;
+  --accent: #2149c9; --accent-strong: #16389f; --accent-tint: #dbe3fa;
+  --recon: #43596b; --recon-tint: #dde5eb;
+  --weowe: #8a5a10; --weowe-tint: #f5e7c4;
+  --good: #1a7038; --good-tint: #d9efdd;
+  --warn: #96520a; --warn-tint: #f8ead0;
+  --crit: #c02434; --crit-tint: #fadfe0;
+  --shadow: 0 1px 2px rgba(43,36,23,.08), 0 10px 28px -12px rgba(43,36,23,.22);
+  --backdrop: color-mix(in srgb, #2b2417 40%, transparent);
+  color-scheme: light;
+}
+/* "verdigris" -- light: patina-green mist, deep viridian accent. */
+:root[data-theme="verdigris"] {
+  --paper: #e5ede6; --paper-raise: #eff5ef; --surface: #fbfdfa;
+  --ink: #1b2620; --ink-soft: #47594f; --ink-faint: #6b7f74;
+  --line: #c2d1c5; --line-soft: #d4e0d6;
+  --accent: #0c6b57; --accent-strong: #094f41; --accent-tint: #d7f0e7;
+  --recon: #465c6c; --recon-tint: #dbe6ec;
+  --weowe: #8a5a10; --weowe-tint: #f2e6c3;
+  --good: #1f733a; --good-tint: #dbf0de;
+  --warn: #9a5410; --warn-tint: #f6e8cd;
+  --crit: #ba2d3c; --crit-tint: #f9dee0;
+  --shadow: 0 1px 2px rgba(22,38,30,.08), 0 10px 28px -12px rgba(22,38,30,.20);
+  --backdrop: color-mix(in srgb, #16261e 40%, transparent);
+  color-scheme: light;
 }
 
 * { box-sizing: border-box; }
@@ -984,10 +1027,9 @@ textarea { min-height: 70px; resize: vertical; font-family: inherit; }
 
 /* ---------- dialogs ---------- */
 dialog { border: none; border-radius: 12px; padding: 0; box-shadow: var(--shadow); background: var(--surface); color: var(--ink); max-width: 560px; width: calc(100vw - 40px); }
-/* Derived from the theme's own ground rather than a hardcoded warm black,
-   which looked wrong over the slate and paper themes. */
-dialog::backdrop { background: color-mix(in srgb, #0a0c0f 45%, transparent); backdrop-filter: blur(2px); }
-:root[data-theme="paper"] dialog::backdrop { background: color-mix(in srgb, #211d18 32%, transparent); }
+/* Each theme block defines --backdrop from its own ground, so light themes
+   get a lighter scrim without a per-theme override here. */
+dialog::backdrop { background: var(--backdrop); backdrop-filter: blur(2px); }
 /* The receive dialog shows a line list plus a cost summary; 560px squashes it. */
 #receive-dialog { max-width: 680px; }
 #move-item-dialog { max-width: 620px; }
@@ -1084,85 +1126,191 @@ dialog::backdrop { background: color-mix(in srgb, #0a0c0f 45%, transparent); bac
 .notif-item-time { flex-shrink: 0; font-size: 11px; color: var(--ink-faint); font-variant-numeric: tabular-nums; }
 .notif-empty { margin: 0; padding: 18px 14px; font-size: 12.5px; color: var(--ink-faint); text-align: center; line-height: 1.5; }
 
-/* ---------- print ---------- */
+/* ---------- print ----------
+   One design system for both printed documents (reports + repair orders):
+   Ink:   #000 data, headings, structural rules · #333 secondary text ·
+          #555 micro-labels and stamps · #bbb hairline borders only.
+   Rules: 2px document rules (letterhead, grand-total top) · 1.5px section
+          rules (thead bottom, job bands, concern box) · 0.75pt component
+          hairlines. Nothing thinner (sub-pixel lines vanish in some print
+          engines) and nothing at 1px, which is neither weight.
+   Type:  Bahnschrift-led display, Segoe UI body (taller x-height than
+          Manrope at 9-11px), IBM Plex Mono numerals at weight 500+ -- the
+          local faces are 500/600/700, so a 400 request silently falls
+          back to Consolas. */
 .print-only { display: none; }
 
 @media print {
-  @page { margin: 14mm 12mm; }
-  html, body { background: #fff !important; }
+  /* 16mm bottom reserves the running-footer band. */
+  @page { margin: 14mm 12mm 16mm; }
+  /* height/overflow: the screen shell locks scrolling; left in force it can
+     truncate multi-page print output in some engines. */
+  html, body { background: #fff !important; height: auto !important; overflow: visible !important; }
   .app, #toast { display: none !important; }
   .print-only { display: block !important; }
+  /* Clearance so the last page's content stops above the fixed footer. */
+  body { padding-bottom: 26px; }
 
+  #print-report {
+    font-family: "Segoe UI", Manrope, sans-serif;
+    font-size: 10.5px; line-height: 1.45; color: #000;
+    orphans: 3; widows: 3;
+  }
+  .print-dim { color: #555; font-size: 9.5px; }
+
+  /* letterhead -- thick-thin ledger rule, reads as a business form */
   .print-letterhead {
-    display: flex; justify-content: space-between; align-items: flex-end;
-    border-bottom: 2px solid #000; padding-bottom: 10px; margin-bottom: 16px;
+    display: flex; justify-content: space-between; align-items: flex-end; gap: 24px;
+    border-bottom: 2px solid #000; padding-bottom: 9px; margin-bottom: 18px;
+    position: relative; break-inside: avoid; break-after: avoid;
   }
-  .print-shop-name { font-family: Bahnschrift, "Segoe UI Semibold", sans-serif; font-size: 20px; font-weight: 700; color: #000; }
-  .print-shop-sub { font-size: 11px; color: #333; margin-top: 2px; }
-  .print-meta { text-align: right; font-size: 11px; color: #333; }
-  .print-report-title { font-family: Bahnschrift, "Segoe UI Semibold", sans-serif; font-size: 14px; font-weight: 700; color: #000; }
-  .print-generated { color: #666; margin-top: 2px; }
-
-  /* Summary strip under the letterhead -- the four on-screen cards, in ink. */
-  .print-summary { display: flex; gap: 14px; margin: 0 0 16px; }
-  .print-summary > div { flex: 1; border: 0.75pt solid #000; padding: 6px 9px; }
-  .ps-label { font-size: 8.5px; text-transform: uppercase; letter-spacing: .05em; color: #444; font-weight: 700; }
-  .ps-value { font-family: "IBM Plex Mono", Consolas, monospace; font-size: 15px; font-weight: 700; color: #000; margin-top: 2px; }
-  .ps-sub { font-size: 8.5px; color: #555; margin-top: 1px; }
-
-  .print-table {
-    width: 100%; border-collapse: collapse; font-size: 10.5px; color: #000;
-    font-family: "Segoe UI", sans-serif;
+  .print-letterhead::after {
+    content: ""; position: absolute; left: 0; right: 0; bottom: -4px;
+    border-bottom: 0.75pt solid #000;
   }
-  /* Multi-page reports repeat their column labels and totals. */
+  .print-shop-name { font-family: Bahnschrift, "Segoe UI Semibold", "Space Grotesk", sans-serif; font-size: 22px; font-weight: 700; letter-spacing: .01em; line-height: 1.05; color: #000; }
+  .print-shop-sub { font-size: 8.5px; text-transform: uppercase; letter-spacing: .08em; color: #555; margin-top: 4px; }
+  .print-meta { text-align: right; font-size: 10px; color: #333; line-height: 1.5; }
+  .print-report-title { font-family: Bahnschrift, "Segoe UI Semibold", "Space Grotesk", sans-serif; font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: #000; }
+  .print-meta-line { font-size: 10px; color: #333; }
+  .print-generated { font-size: 8.5px; color: #555; margin-top: 3px; }
+
+  /* Scope line: what's actually in the table below (row count, sort, any
+     filter). A filtered printout that doesn't declare itself on paper is
+     indistinguishable from the full report the moment it's filed. */
+  .print-scope { display: flex; align-items: baseline; gap: 6px; font-size: 10px; color: #333; margin: -8px 0 14px; }
+  .print-scope .scope-count { font-weight: 700; color: #000; }
+  .print-scope .scope-flag { margin-left: auto; font-size: 8.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: #000; border: 0.75pt solid #000; padding: 1px 6px; }
+
+  /* Summary strip: one open band, not four bordered boxes -- boxes read
+     as blank form fields in ink. */
+  .print-summary { display: flex; margin: 0 0 18px; border-top: 1.5px solid #000; border-bottom: 0.75pt solid #000; break-inside: avoid; }
+  .print-summary > div { flex: 1; padding: 7px 12px 8px; border-left: 0.75pt solid #bbb; }
+  .print-summary > div:first-child { border-left: none; padding-left: 2px; }
+  .ps-label { font-size: 9.5px; text-transform: uppercase; letter-spacing: .06em; color: #555; font-weight: 700; }
+  .ps-value { font-family: "IBM Plex Mono", Consolas, monospace; font-size: 19px; font-weight: 700; line-height: 1.15; color: #000; margin-top: 3px; }
+  .ps-sub { font-size: 9.5px; color: #555; margin-top: 2px; }
+
+  /* The concern -- the one line a technician must read -- boxed at the top. */
+  .print-concern { border: 1.5px solid #000; padding: 10px 14px; margin: 0 0 14px; break-inside: avoid; }
+  .print-concern .label { font-size: 8.5px; text-transform: uppercase; letter-spacing: .05em; color: #555; font-weight: 700; }
+  .print-concern .text { font-size: 15px; font-weight: 600; color: #000; margin-top: 3px; }
+
+  /* Labeled info blocks: vehicle / customer-or-stock / service. */
+  .print-info-grid { display: flex; gap: 12px; margin: 0 0 16px; }
+  .print-info-block { flex: 1; border: 0.75pt solid #000; padding: 8px 11px; break-inside: avoid; }
+  .pi-label { font-size: 8.5px; text-transform: uppercase; letter-spacing: .05em; color: #555; font-weight: 700; margin-bottom: 4px; }
+  .pi-row { display: flex; justify-content: space-between; gap: 10px; font-size: 11px; color: #000; padding: 1.5px 0; }
+  .pi-row .k { color: #555; flex-shrink: 0; }
+  .pi-row .v { font-weight: 600; text-align: right; word-break: break-word; }
+
+  .print-table { width: 100%; border-collapse: collapse; font-size: 10.5px; color: #000; }
+  /* Multi-page tables repeat their column labels and totals. */
   .print-table thead { display: table-header-group; }
   .print-table tfoot { display: table-footer-group; }
   .print-table thead th {
     text-align: left; font-size: 9.5px; text-transform: uppercase; letter-spacing: .03em;
     border-bottom: 1.5px solid #000; padding: 6px 8px; color: #000; background: none;
+    /* The screen-side .num-col rule sets a mono stack directly on the th;
+       without this, numeric column headers print in IBM Plex Mono while
+       text headers print Segoe. */
+    font-family: inherit;
   }
   /* 0.75pt, not 0.5px -- sub-pixel hairlines round to nothing in some print
      engines and the rows lose their separators entirely. */
-  .print-table tbody td { padding: 5px 8px; border-bottom: 0.75pt solid #999; background: none; color: #000; }
+  .print-table tbody td { padding: 5px 8px; border-bottom: 0.75pt solid #bbb; background: none; color: #000; vertical-align: top; }
   .print-table tbody tr { break-inside: avoid; }
-  .print-table tfoot td {
-    padding: 6px 8px; font-weight: 700; font-size: 11px; background: none; color: #000;
-  }
-  .print-table tfoot tr:first-child td { border-top: 1.5px solid #000; padding-top: 8px; }
-  /* Ticket footer's "Quoted" row -- a lighter subtotal sitting directly
-     above the bold "Cost" total, not a second total in its own right. */
-  .print-table tfoot tr.subtotal td { font-weight: 600; font-size: 10.5px; color: #333; padding-bottom: 2px; }
-  .print-table .num-col {
-    text-align: right; font-family: "IBM Plex Mono", "Cascadia Mono", Consolas, monospace; font-variant-numeric: tabular-nums;
-  }
-  .print-subhead { font-family: Bahnschrift, "Segoe UI Semibold", sans-serif; font-size: 15px; font-weight: 700; color: #000; margin: 20px 0 8px; }
-  .print-notes { font-size: 13px; color: #000; line-height: 1.6; }
-  .print-concern {
-    border: 1.5px solid #000; border-radius: 4px; padding: 10px 14px; margin: 4px 0 18px;
-  }
-  .print-concern .label { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; color: #444; font-weight: 700; }
-  .print-concern .text { font-size: 15px; font-weight: 600; color: #000; margin-top: 3px; }
-  .print-meta-line { font-size: 12px; color: #333; margin-top: 2px; }
-  /* Color alone (.over-quote on screen) doesn't survive to paper -- every
-     body cell is forced to #000 for print. Bold plus an asterisk/footnote
-     carries the same "over quote" signal without depending on color. */
-  .print-note { font-size: 11px; color: #333; margin: 4px 0 0; }
+  /* One tbody per job: the whole job stays on a page when it fits; Chrome
+     breaks inside it (rows still atomic) when it can't, so an oversized
+     job can never force a blank page. */
+  .print-table tbody.print-job { break-inside: avoid; }
+  .print-table tfoot td { padding: 6px 8px; font-weight: 700; font-size: 11px; background: none; color: #000; }
+  /* The grand total bookends the letterhead's 2px document rule. */
+  .print-table tfoot tr:first-child td { border-top: 2px solid #000; padding-top: 7px; }
+  .print-table tfoot td.num-col { font-weight: 700; }
+  /* Repeating-tfoot spacer: reserves running-footer clearance on every
+     page the table spans, which body padding alone only does for the last. */
+  .print-table tfoot tr.tfoot-space td { border: 0; padding: 0; height: 18px; }
+  /* Alignment on th+td both; mono on data cells only (uppercase mono
+     headers clash with the Segoe headers of the text columns), at weight
+     500 so the local Plex faces actually render. */
+  .print-table .num-col { text-align: right; }
+  .print-table td.num-col { font-family: "IBM Plex Mono", "Cascadia Mono", Consolas, monospace; font-weight: 500; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .print-table td.num { font-family: "IBM Plex Mono", "Cascadia Mono", Consolas, monospace; font-weight: 500; font-size: 10px; white-space: nowrap; }
+
+  /* Report tables only: zebra as an enhancement over the rules --
+     print-color-adjust keeps the fill through Chrome's background-
+     graphics-off default, and if an engine strips it anyway the hairlines
+     still separate every row. Idle techs print in secondary ink to match
+     the screen's row muting. */
+  .print-table.report tbody tr:nth-child(even) td { background: #f2f2f2; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .print-table.report tbody tr.idle td { color: #555; }
+
+  /* Color alone (.over-quote on screen) doesn't survive to paper. Bold
+     plus an asterisk in a fixed-width slot carries the signal without
+     shifting the cents column out of alignment. */
+  .print-table .oq-slot { display: inline-block; width: 8px; text-align: left; font-weight: 700; }
   .print-table .over-quote-mark { font-weight: 700; }
-  /* Ticket printouts get more breathing room than the dense multi-row
-     report tables -- a technician reading one printed RO on the shop
-     floor needs it legible at a glance, not packed tight. */
+
+  .print-subhead { font-family: Bahnschrift, "Segoe UI Semibold", "Space Grotesk", sans-serif; font-size: 15px; font-weight: 700; color: #000; margin: 18px 0 6px; break-after: avoid; }
+  .print-notes { font-size: 13px; color: #000; line-height: 1.6; }
+  .print-notes > div { break-inside: avoid; }
+  .print-note { font-size: 9.5px; color: #333; margin: 4px 0 0; }
+
+  /* Ticket variant: shop-floor legibility over report density. */
   .print-table.ticket thead th { font-size: 11px; padding: 8px 10px; }
   .print-table.ticket tbody td { font-size: 13px; padding: 9px 10px; }
-  .print-table.ticket tfoot td { font-size: 13px; }
-  .print-job-head td {
-    font-weight: 700; text-transform: uppercase; font-size: 10.5px; letter-spacing: .03em;
-    background: #eee !important; border-bottom: 1px solid #000;
+  .print-table.ticket .pt-desc-sub { font-size: 10px; color: #333; margin-top: 1px; }
+
+  /* Job band: the borders carry the grouping in ink; the #eee fill is an
+     enhancement print-color-adjust keeps through Chrome's background-
+     graphics-off default, never load-bearing. */
+  /* Both selectors carry tbody+tr on purpose: (0,2,3) has to outrank both
+     .print-table tbody td (0,1,2) and .print-table.ticket tbody td (0,2,2),
+     or the band's fill, size and padding all lose the cascade and the rules
+     below are decoration for a style that never renders -- exactly what the
+     old !important on the band's background was papering over. */
+  .print-table tbody tr.print-job-head td {
+    font-weight: 700; text-transform: uppercase; font-size: 11px; letter-spacing: .03em;
+    border-top: 1.5px solid #000; border-bottom: 0.75pt solid #000; padding: 8px 10px 6px;
+    background: #eee; -webkit-print-color-adjust: exact; print-color-adjust: exact;
   }
   /* Parts/Labor sub-header within a printed job -- lighter than the job
      header itself, mirroring the on-screen kind-subgroup header row. */
-  .print-kind-head td {
+  .print-table tbody tr.print-kind-head td {
     font-weight: 700; text-transform: uppercase; font-size: 9px; letter-spacing: .04em;
-    color: #555; padding: 4px 8px 2px; border-bottom: none;
+    color: #555; padding: 5px 10px 2px; border-bottom: none; background: none;
+  }
+
+  /* Invoice-style totals under the ticket's table. */
+  .print-totals { width: 46%; margin: 10px 0 0 auto; break-inside: avoid; }
+  .print-totals .tl-row { display: flex; justify-content: space-between; gap: 12px; font-size: 12px; color: #000; padding: 3px 0; }
+  .print-totals .tl-row .num { font-family: "IBM Plex Mono", "Cascadia Mono", Consolas, monospace; font-weight: 500; font-variant-numeric: tabular-nums; }
+  .print-totals .tl-row.muted { color: #555; font-size: 10.5px; }
+  .print-totals .tl-row.grand { border-top: 1.5px solid #000; font-weight: 700; font-size: 13.5px; padding-top: 6px; margin-top: 3px; }
+  .print-totals .tl-row.grand .num { font-weight: 700; }
+  .print-totals .tl-note { font-size: 8.5px; color: #555; text-align: right; margin-top: 3px; }
+
+  /* End-of-report terminator: a page without it is implicitly "continued". */
+  .print-end { break-inside: avoid; margin: 22px 0 20px; }
+  .print-end-line { font-size: 9.5px; color: #333; border-top: 0.75pt solid #000; padding-top: 5px; }
+
+  /* Signature: rule with the label beneath, shared by both documents. */
+  .print-sign { display: flex; gap: 36px; margin-top: 36px; max-width: 420px; break-inside: avoid; }
+  .print-sign .sign-cell { flex: 1; }
+  .print-sign .sign-cell:first-child { flex: 2; }
+  .print-sign .sign-rule { border-bottom: 0.75pt solid #000; height: 18px; }
+  .print-sign .sign-label { font-size: 8.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: #555; margin-top: 3px; }
+
+  /* Running footer: position:fixed repeats per printed page in Chrome (the
+     supported substitute for @page margin boxes, which it lacks). Opaque
+     white masks any hairline a page's last row grazes into the band. */
+  .print-foot {
+    position: fixed; bottom: 0; left: 0; right: 0;
+    display: flex; justify-content: space-between; align-items: baseline; gap: 16px;
+    border-top: 0.75pt solid #000; padding-top: 4px;
+    font-size: 8px; letter-spacing: .02em; color: #555; line-height: 1.2;
+    background: #fff; -webkit-print-color-adjust: exact; print-color-adjust: exact;
   }
 }
 
@@ -1605,9 +1753,8 @@ a.btn-ghost { color: var(--ink); }
   overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
 }
 
-/* Dark themes get a dark native date-picker and a visible calendar glyph. */
-:root, :root[data-theme="midnight"], :root[data-theme="carbon"], :root[data-theme="slate"] { color-scheme: dark; }
-:root[data-theme="paper"] { color-scheme: light; }
+/* color-scheme now lives in each theme's token block (top of file), so the
+   native date-picker follows the theme without an enumerated rule here. */
 input[type="date"]::-webkit-calendar-picker-indicator,
 input[type="datetime-local"]::-webkit-calendar-picker-indicator { opacity: .6; cursor: pointer; }
 input[type="date"]::-webkit-calendar-picker-indicator:hover,

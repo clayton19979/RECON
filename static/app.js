@@ -464,6 +464,13 @@ const STATUS_PILL_CLASS = {
 };
 const KIND_GROUP_ORDER = ["part", "labor", "fee"];
 const KIND_GROUP_LABEL = { part: "Parts", labor: "Labor", fee: "Fees" };
+// Print-surface label maps. Value domains match the backend enums:
+// estimate-item status (quoted/ordered/received), estimate-authorization
+// method (workflow.py AuthorizationIn), we-owe payment method (recon.py
+// PaymentIn) -- raw enum strings on paper read as a rendering fault.
+const ITEM_STATUS_LABEL = { quoted: "Quoted", ordered: "Ordered", received: "Received" };
+const AUTH_METHOD_LABEL = { in_person: "in person", phone: "by phone", sms: "by text", email: "by email", other: "" };
+const PAY_METHOD_LABEL = { cash: "Cash", card: "Card", check: "Check", bank: "Bank", other: "Other" };
 
 /* ---------- nav / shell ---------- */
 // One place that knows how each view loads itself, so switching views can put
@@ -547,7 +554,7 @@ function showView(name) {
   runViewLoader(name);
 }
 
-const THEMES = ["midnight", "carbon", "slate", "paper"];
+const THEMES = ["harbor", "gunmetal", "petrol", "mesa", "cobalt", "verdigris"];
 
 function applyTheme(name) {
   document.documentElement.setAttribute("data-theme", name);
@@ -557,7 +564,7 @@ function applyTheme(name) {
 
 function initTheme() {
   const saved = localStorage.getItem("dao-theme");
-  applyTheme(THEMES.includes(saved) ? saved : "midnight");
+  applyTheme(THEMES.includes(saved) ? saved : "harbor");
 
   $("#theme-toggle").addEventListener("click", (e) => {
     e.stopPropagation();
@@ -3065,48 +3072,99 @@ function renderAssignment(order) {
 function renderPrintTicket() {
   const { segment, item, order } = state.detail;
   const generated = new Date().toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" });
+  const isWeOwe = segment !== "recon";
   const vehicleLabel = segment === "recon"
     ? `${item.stock_number} — ${item.year} ${item.make} ${item.model}`
     : `${item.year} ${item.make} ${item.model}`;
-  const customerLabel = segment === "recon" ? "Recon Inventory" : (item.customer_name || "");
+  const customerLabel = isWeOwe ? (item.customer_name || "") : "";
   const items = order.estimate ? order.estimate.items : [];
   const jobs = order.estimate?.jobs ?? [];
   const quotedTotal = items.filter((i) => !(i.kind === "part" && i.part_returned)).reduce((s, i) => s + i.quantity * i.unit_cost, 0);
   const actualParts = items.filter((i) => i.kind === "part" && !i.part_returned).reduce((s, i) => s + i.received_quantity * i.unit_cost, 0);
   const actualOther = items.filter((i) => i.kind !== "part").reduce((s, i) => s + i.quantity * i.unit_cost, 0);
+  const actualTotal = actualParts + actualOther;
   const a = order.assignment;
   const techName = (a && a.technician_name) || "Unassigned";
   const advisorName = (a && a.advisor_name) || "Unassigned";
+  // A we-owe ticket can end up in the customer's hands -- internal notes
+  // stay off that paper. A recon ticket is a shop document; everything
+  // prints, and either way the visibility tag itself stays on screen.
+  const printNotes = isWeOwe ? (order.notes || []).filter((n) => n.visibility === "customer") : (order.notes || []);
+  const auth = order.authorization;
+  const payments = isWeOwe ? (item.payments || []) : [];
+  const paid = isWeOwe ? (item.customer_paid || 0) : 0;
+  // Key/value line that drops itself when there's nothing to say, so the
+  // info blocks self-compact instead of printing rows of dashes.
+  const kv = (k, v) => (v ? `<div class="pi-row"><span class="k">${k}</span><span class="v">${v}</span></div>` : "");
 
-  const itemRow = (i) => `
-    <tr><td>${esc(i.kind)}</td><td>${esc(i.description)}</td><td>${esc(i.part_number || "")}</td>
-    <td class="num-col">${i.quantity}</td><td class="num-col">${money(i.part_returned ? 0 : i.unit_cost)}</td><td>${esc(i.part_returned ? "Returned" : (STATUS_LABEL[i.status] || i.status || ""))}</td></tr>
-  `;
+  // 6 columns: Description | Part # | Qty | Unit | Total | Status. The line
+  // total is what lets anyone verify the math on paper; status is a
+  // parts-only concept (labor/fees have no order lifecycle), mirroring the
+  // on-screen grid.
+  const itemRow = (i) => {
+    const returned = i.kind === "part" && i.part_returned;
+    let status = "";
+    if (i.kind === "part") {
+      if (returned) status = "Returned";
+      else if ((i.received_quantity ?? 0) > 0 && i.received_quantity < i.quantity) status = `Received ${i.received_quantity}/${i.quantity}`;
+      else status = ITEM_STATUS_LABEL[i.status] || "Quoted";
+    }
+    const coreSub = i.kind === "part" && (i.core_charge || 0) > 0
+      ? `<div class="pt-desc-sub">Core charge ${money(i.core_charge)}</div>` : "";
+    return `<tr><td>${esc(i.description)}${coreSub}</td><td>${i.part_number ? esc(i.part_number) : ""}</td>
+      <td class="num-col">${i.quantity}</td><td class="num-col">${money(returned ? 0 : i.unit_cost)}</td>
+      <td class="num-col">${money(returned ? 0 : i.quantity * i.unit_cost)}</td><td>${status}</td></tr>`;
+  };
+
+  // Parts/Labor/Fees sub-headers replace the old Kind column -- the same
+  // grouping whether or not the ticket has jobs, so the column count never
+  // changes shape between tickets. Exhaustive over every kind actually
+  // present, not just the three named groups: vendor-credit ingest writes
+  // kind="credit" lines, and a printed row list that drops them stops
+  // summing to its own printed totals.
+  const kindGroupRows = (bucketItems) => {
+    const extraKinds = [...new Set(bucketItems.map((x) => x.kind).filter((k) => !KIND_GROUP_ORDER.includes(k)))];
+    return [...KIND_GROUP_ORDER, ...extraKinds]
+      .map((kind) => ({ kind, kindItems: bucketItems.filter((x) => x.kind === kind) }))
+      .filter((g) => g.kindItems.length)
+      .map((g) => `<tr class="print-kind-head"><td colspan="6">${KIND_GROUP_LABEL[g.kind] || (g.kind === "credit" ? "Credits" : esc(g.kind))}</td></tr>` + g.kindItems.map(itemRow).join(""))
+      .join("");
+  };
 
   // Same job/General buckets as the on-screen ticket (renderEstimate) --
   // a printed ticket that's grouped differently than what the advisor was
   // just looking at on screen would be confusing to hand to a technician.
-  let rows;
+  // One tbody per job so a page break can't strand a job title alone.
+  let bodyRows;
   if (!jobs.length) {
-    rows = items.length ? items.map(itemRow).join("") : `<tr><td colspan="6">No parts or labor lines.</td></tr>`;
+    bodyRows = `<tbody>${items.length ? kindGroupRows(items) : `<tr><td colspan="6">No parts or labor lines.</td></tr>`}</tbody>`;
   } else {
     const buckets = [...jobs, { id: null, title: "General" }];
-    rows = buckets.map((bucket) => {
+    bodyRows = buckets.map((bucket) => {
       const bucketItems = items.filter((i) => (i.job_id ?? null) === bucket.id);
       if (!bucketItems.length) return "";
       const jobTech = bucket.id === null ? "" : (bucket.technician_name || "Use ticket default");
       const jobSubtotal = bucketItems.filter((i) => !(i.kind === "part" && i.part_returned)).reduce((s, i) => s + i.quantity * i.unit_cost, 0);
-      const kindGroups = KIND_GROUP_ORDER
-        .map((kind) => ({ kind, kindItems: bucketItems.filter((i) => i.kind === kind) }))
-        .filter((g) => g.kindItems.length);
-      return `<tr class="print-job-head"><td colspan="5">${esc(bucket.title)}${jobTech ? ` — ${esc(jobTech)}` : ""}</td><td class="num-col">${money(jobSubtotal)}</td></tr>`
-        + kindGroups.map((g) => `<tr class="print-kind-head"><td colspan="6">${KIND_GROUP_LABEL[g.kind]}</td></tr>` + g.kindItems.map(itemRow).join("")).join("");
-    }).join("") || `<tr><td colspan="6">No parts or labor lines.</td></tr>`;
+      return `<tbody class="print-job"><tr class="print-job-head"><td colspan="4">${esc(bucket.title)}${jobTech ? ` — ${esc(jobTech)}` : ""}</td><td class="num-col">${money(jobSubtotal)}</td><td></td></tr>${kindGroupRows(bucketItems)}</tbody>`;
+    }).join("") || `<tbody><tr><td colspan="6">No parts or labor lines.</td></tr></tbody>`;
   }
 
-  const notesHtml = (order.notes || []).length
-    ? order.notes.map((n) => `<div>${esc(n.text)} <span style="color:#666">(${esc(n.visibility)})</span></div>`).join("")
-    : "<div>No notes.</div>";
+  // Invoice-style totals. With deposits (we-owe), the balance is the grand
+  // row; without them Actual Cost is the bottom line itself.
+  const totalsRows = [`<div class="tl-row"><span>Total Quote</span><span class="num">${money(quotedTotal)}</span></div>`];
+  if (paid > 0) {
+    totalsRows.push(`<div class="tl-row"><span>Actual Cost</span><span class="num">${money(actualTotal)}</span></div>`);
+    // The API returns payments newest-first; paper reads oldest-first.
+    payments.slice().reverse().forEach((p) => totalsRows.push(
+      `<div class="tl-row muted"><span>Deposit · ${PAY_METHOD_LABEL[p.method] || esc(p.method)} · ${esc(fmtDate(p.created_at))}</span><span class="num">−${money(p.amount)}</span></div>`));
+    totalsRows.push(`<div class="tl-row grand"><span>Balance</span><span class="num">${money(item.net_cost)}</span></div>`);
+  } else {
+    totalsRows.push(`<div class="tl-row grand"><span>Actual Cost</span><span class="num">${money(actualTotal)}</span></div>`);
+  }
+  // net_cost/customer_paid roll up the whole vehicle, not just this RO --
+  // say so whenever more than one RO shares them.
+  const totalsNote = paid > 0 && (item.orders || []).length > 1
+    ? `<div class="tl-note">Deposits and balance include all repair orders on this vehicle.</div>` : "";
 
   $("#print-report").innerHTML = `
     <header class="print-letterhead">
@@ -3117,29 +3175,62 @@ function renderPrintTicket() {
       <div class="print-meta">
         <div class="print-report-title">Repair Order ${esc(order.number)}</div>
         <div>${esc(vehicleLabel)}${customerLabel ? " — " + esc(customerLabel) : ""}</div>
-        ${item.vin ? `<div class="print-meta-line">VIN ${esc(item.vin)}</div>` : ""}
+        <div class="print-meta-line">${esc(STATUS_LABEL[order.status] || order.status)} · ${isWeOwe ? "Customer Vehicle (We-Owe)" : "Recon Inventory"}</div>
         <div class="print-generated">Generated ${esc(generated)}</div>
       </div>
     </header>
-    <table class="print-table">
-      <thead><tr><th>Status</th><th>Technician</th><th>Advisor</th><th>Concern</th></tr></thead>
-      <tbody><tr><td>${esc(STATUS_LABEL[order.status] || order.status)}</td><td>${esc(techName)}</td><td>${esc(advisorName)}</td><td>${esc(order.concern)}</td></tr></tbody>
+    ${order.concern ? `<div class="print-concern"><div class="label">Concern</div><div class="text">${esc(order.concern)}</div></div>` : ""}
+    <div class="print-info-grid">
+      <div class="print-info-block">
+        <div class="pi-label">Vehicle</div>
+        ${kv("Year/Make/Model", esc([item.year, item.make, item.model].filter(Boolean).join(" ")))}
+        ${kv("VIN", esc(item.vin || ""))}
+        ${kv("Mileage", item.mileage ? `${item.mileage.toLocaleString()} mi` : "")}
+        ${kv("Trim", esc(item.trim || ""))}
+        ${kv("Engine", esc(item.engine || ""))}
+        ${kv("Color", esc(item.color || ""))}
+      </div>
+      ${isWeOwe ? `
+      <div class="print-info-block">
+        <div class="pi-label">Customer</div>
+        ${kv("Name", esc(item.customer_name || ""))}
+        ${kv("Phone", esc(item.customer_phone || ""))}
+        ${kv("Email", esc(item.customer_email || ""))}
+        ${kv("We-Owe", esc(item.description || ""))}
+      </div>` : `
+      <div class="print-info-block">
+        <div class="pi-label">Stock</div>
+        ${kv("Stock #", esc(item.stock_number || ""))}
+        ${kv("Source", esc(item.acquisition_source || ""))}
+        ${kv("Acquired", item.acquisition_date ? esc(fmtDate(item.acquisition_date)) : "")}
+      </div>`}
+      <div class="print-info-block">
+        <div class="pi-label">Service</div>
+        ${kv("Technician", esc(techName))}
+        ${kv("Advisor", esc(advisorName))}
+        ${kv("Date in", a?.date_in ? esc(fmtDate(a.date_in)) : "")}
+        ${kv("Odometer in", a?.odometer_in ? `${esc(String(a.odometer_in))} mi` : "")}
+        ${kv("Promised", a?.promised_at ? esc(fmtDate(a.promised_at)) : "")}
+        ${isWeOwe && item.target_date ? kv("Target date", esc(fmtDate(item.target_date))) : ""}
+      </div>
+    </div>
+    <div class="print-subhead">Parts &amp; Labor</div>
+    <table class="print-table ticket">
+      <thead><tr><th>Description</th><th>Part #</th><th class="num-col">Qty</th><th class="num-col">Unit</th><th class="num-col">Total</th><th>Status</th></tr></thead>
+      ${bodyRows}
+      <tfoot><tr class="tfoot-space" aria-hidden="true"><td colspan="6"></td></tr></tfoot>
     </table>
-    ${(a && (a.date_in || a.odometer_in || a.promised_at)) ? `<table class="print-table">
-      <thead><tr><th>Date In</th><th>Odometer In</th><th>Promised</th></tr></thead>
-      <tbody><tr><td>${a.date_in ? esc(fmtDate(a.date_in)) : "—"}</td><td>${a.odometer_in ? `${esc(String(a.odometer_in))} mi` : "—"}</td><td>${a.promised_at ? esc(fmtDate(a.promised_at)) : "—"}</td></tr></tbody>
-    </table>` : ""}
-    <div class="print-subhead" style="margin:16px 0 6px">Parts &amp; Labor</div>
-    <table class="print-table">
-      <thead><tr><th>Kind</th><th>Description</th><th>Part #</th><th class="num-col">Qty</th><th class="num-col">Cost</th><th>Status</th></tr></thead>
-      <tbody>${rows}</tbody>
-      <tfoot>
-        <tr class="subtotal"><td colspan="4">Total Quote</td><td class="num-col">${money(quotedTotal)}</td><td></td></tr>
-        <tr><td colspan="4">Actual Cost</td><td class="num-col">${money(actualParts + actualOther)}</td><td></td></tr>
-      </tfoot>
-    </table>
-    <div class="print-subhead" style="margin:16px 0 6px">Notes</div>
-    <div class="print-notes">${notesHtml}</div>
+    <div class="print-totals">${totalsRows.join("")}${totalsNote}</div>
+    ${printNotes.length ? `<div class="print-subhead">Notes</div><div class="print-notes">${printNotes.map((n) => `<div>${esc(n.text)}</div>`).join("")}</div>` : ""}
+    ${auth && auth.status === "approved" ? `<p class="print-note">Estimate approved by ${esc(auth.approved_by)}${AUTH_METHOD_LABEL[auth.method] ? ` ${AUTH_METHOD_LABEL[auth.method]}` : ""} · ${esc(fmtDate(auth.created_at))}</p>` : ""}
+    <div class="print-sign">
+      <div class="sign-cell"><div class="sign-rule"></div><div class="sign-label">${isWeOwe ? "Customer Authorization" : "Technician Sign-Off"}</div></div>
+      <div class="sign-cell"><div class="sign-rule"></div><div class="sign-label">Date</div></div>
+    </div>
+    <footer class="print-foot">
+      <span>RECON · Discount Auto Repair</span>
+      <span>Repair Order ${esc(order.number)} · ${esc(vehicleLabel)} · Generated ${esc(generated)}</span>
+    </footer>
   `;
 }
 
@@ -4196,34 +4287,58 @@ function reportDateRangeLabel(start, end) {
 function renderPrintReport(rows, type, start, end) {
   const generated = new Date().toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" });
   const rangeLabel = reportDateRangeLabel(start, end);
+  const shape = reportShape(type);
   // The printout keeps the screen's reading order: summary numbers first,
   // then the table -- a spend report with no total line is a worse artifact
   // than the screen it came from.
-  const cards = reportShape(type) === "technicians" ? technicianStatCards(rows) : vehicleSpendStatCards(rows);
+  const cards = shape === "technicians" ? technicianStatCards(rows) : vehicleSpendStatCards(rows);
   const summary = `<div class="print-summary">${cards.map((c) => `
     <div><div class="ps-label">${esc(c.label)}</div><div class="ps-value">${esc(c.value)}</div><div class="ps-sub">${esc(c.sub)}</div></div>`).join("")}</div>`;
+  // The paper must say what the screen knew: row count, sort order, and any
+  // active filter. A filtered printout that doesn't declare itself becomes
+  // indistinguishable from the full report the moment it's filed.
+  const sortSpec = REPORT_SORTS[shape][state.reportSort.key] || REPORT_SORTS[shape].cost;
+  const dirWord = sortSpec.type === "number"
+    ? (state.reportSort.dir === "desc" ? "high to low" : "low to high")
+    : (state.reportSort.dir === "asc" ? "A to Z" : "Z to A");
+  const scope = `<div class="print-scope">
+    <span class="scope-count">${rows.length} row${rows.length === 1 ? "" : "s"}</span>
+    <span>· sorted by ${esc(sortSpec.label)}, ${dirWord}</span>
+    ${shape === "vehicle-spend" && state.reportOverOnly ? `<span class="scope-flag">Over-quote vehicles only</span>` : ""}
+  </div>`;
   let body;
-  if (reportShape(type) === "technicians") {
+  if (shape === "technicians") {
+    const working = rows.filter((r) => r.ro_count > 0).length;
+    const totRos = rows.reduce((s, r) => s + r.ro_count, 0);
+    const totDone = rows.reduce((s, r) => s + r.completed_count, 0);
     const totalHours = rows.reduce((s, r) => s + r.labor_hours, 0);
     const totalCost = rows.reduce((s, r) => s + r.labor_cost, 0);
     body = `
-      <table class="print-table">
+      <table class="print-table report">
         <thead><tr><th>Technician</th><th class="num-col">ROs</th><th class="num-col">Completed</th><th class="num-col">Labor Hours</th><th class="num-col">Labor Cost</th></tr></thead>
-        <tbody>${rows.map((r) => `<tr><td>${esc(r.technician)}</td><td class="num-col">${r.ro_count}</td><td class="num-col">${r.completed_count}</td><td class="num-col">${r.labor_hours}</td><td class="num-col">${money(r.labor_cost)}</td></tr>`).join("")}</tbody>
-        <tfoot><tr><td>Total</td><td class="num-col"></td><td class="num-col"></td><td class="num-col">${Math.round(totalHours * 100) / 100}</td><td class="num-col">${money(totalCost)}</td></tr></tfoot>
+        <tbody>${rows.map((r) => `<tr${r.ro_count ? "" : ' class="idle"'}><td>${esc(r.technician)}</td><td class="num-col">${r.ro_count}</td><td class="num-col">${r.completed_count}</td><td class="num-col">${Math.round(r.labor_hours * 100) / 100}</td><td class="num-col">${money(r.labor_cost)}</td></tr>`).join("")}</tbody>
+        <tfoot>
+          <tr><td>Report Total (${working} of ${rows.length} working)</td><td class="num-col">${totRos}</td><td class="num-col">${totDone}</td><td class="num-col">${Math.round(totalHours * 100) / 100}</td><td class="num-col">${money(totalCost)}</td></tr>
+          <tr class="tfoot-space" aria-hidden="true"><td colspan="5"></td></tr>
+        </tfoot>
       </table>`;
   } else {
     const totalActual = rows.reduce((s, r) => s + r.actual_cost, 0);
     const totalPaid = rows.reduce((s, r) => s + (r.customer_paid || 0), 0);
     const hasDeposits = totalPaid > 0;
+    const over = rows.filter(overQuote);
+    const overBy = over.reduce((s, r) => s + (r.actual_cost - r.quoted_cost), 0);
     body = `
-      <table class="print-table">
+      <table class="print-table report">
         <thead><tr><th>Stock #</th><th>Vehicle</th><th>Type</th><th>Status</th><th>Technician(s)</th><th class="num-col">Cost</th>${hasDeposits ? `<th class="num-col">Customer Paid</th><th class="num-col">Net to Shop</th>` : ""}</tr></thead>
-        <tbody>${rows.map((r) => `<tr><td class="num">${esc(r.stock_number || "—")}</td><td>${esc(r.vehicle)}${r.customer_name ? ` (${esc(r.customer_name)})` : ""}</td>
+        <tbody>${rows.map((r) => `<tr><td class="num">${esc(r.stock_number || "—")}</td><td>${esc(r.vehicle)}${r.customer_name ? ` <span class="print-dim">(${esc(r.customer_name)})</span>` : ""}</td>
         <td>${r.segment === "recon" ? "Recon" : "We-Owe"}</td><td>${esc(STATUS_LABEL[r.status] || r.status)}</td>
-        <td>${esc((r.technicians || []).join(", ")) || "—"}</td><td class="num-col${overQuote(r) ? " over-quote-mark" : ""}">${money(r.actual_cost)}${overQuote(r) ? "*" : ""}</td>${hasDeposits ? `<td class="num-col">${r.customer_paid ? money(r.customer_paid) : "—"}</td><td class="num-col">${r.customer_paid ? money(r.net_cost) : "—"}</td>` : ""}</tr>`).join("")}</tbody>
-        <tfoot><tr><td colspan="4">Total (${rows.length} vehicle${rows.length === 1 ? "" : "s"})</td><td class="num-col"></td><td class="num-col">${money(totalActual)}</td>${hasDeposits ? `<td class="num-col">${money(totalPaid)}</td><td class="num-col">${money(totalActual - totalPaid)}</td>` : ""}</tr></tfoot>
-      </table>${rows.some(overQuote) ? `<p class="print-note">* over the quoted estimate</p>` : ""}`;
+        <td>${esc((r.technicians || []).join(", ")) || "—"}</td><td class="num-col${overQuote(r) ? " over-quote-mark" : ""}">${money(r.actual_cost)}<span class="oq-slot">${overQuote(r) ? "*" : ""}</span></td>${hasDeposits ? `<td class="num-col">${r.customer_paid ? money(r.customer_paid) : "—"}</td><td class="num-col">${r.customer_paid ? money(r.net_cost) : "—"}</td>` : ""}</tr>`).join("")}</tbody>
+        <tfoot>
+          <tr><td colspan="4">Report Total (${rows.length} vehicle${rows.length === 1 ? "" : "s"})</td><td class="num-col"></td><td class="num-col">${money(totalActual)}<span class="oq-slot"></span></td>${hasDeposits ? `<td class="num-col">${money(totalPaid)}</td><td class="num-col">${money(totalActual - totalPaid)}</td>` : ""}</tr>
+          <tr class="tfoot-space" aria-hidden="true"><td colspan="${hasDeposits ? 8 : 6}"></td></tr>
+        </tfoot>
+      </table>${over.length ? `<p class="print-note">* ${over.length} vehicle${over.length === 1 ? "" : "s"} more than 10% over quote — ${money(overBy)} past estimates combined</p>` : ""}`;
   }
   return `
     <header class="print-letterhead">
@@ -4237,8 +4352,20 @@ function renderPrintReport(rows, type, start, end) {
         <div class="print-generated">Generated ${esc(generated)}</div>
       </div>
     </header>
+    ${scope}
     ${summary}
     ${body}
+    <div class="print-end">
+      <div class="print-end-line">End of report — ${esc(REPORT_TITLES[type] || type)} · ${esc(rangeLabel)} · ${rows.length} row${rows.length === 1 ? "" : "s"}</div>
+      <div class="print-sign">
+        <div class="sign-cell"><div class="sign-rule"></div><div class="sign-label">Reviewed by</div></div>
+        <div class="sign-cell"><div class="sign-rule"></div><div class="sign-label">Date</div></div>
+      </div>
+    </div>
+    <footer class="print-foot">
+      <span>RECON · Discount Auto Repair</span>
+      <span>${esc(REPORT_TITLES[type] || type)} · ${esc(rangeLabel)} · Generated ${esc(generated)}</span>
+    </footer>
   `;
 }
 

@@ -1372,3 +1372,63 @@ Next time, in rough priority order:
   4. Estimate grid: Shift+Enter walking backwards through the chain.
   5. Board + tasks cursors could share one moveCursor(listEl, state-key)
      helper -- third screen that grows a list cursor should force it.
+
+================================================================
+Run: 2026-07-26 ~02:00 (hourly auto-improvement)
+================================================================
+Housekeeping first: the previous run's tasks-cursor work was sitting
+uncommitted in the tree behind a stale .git/index.lock (00:20, crashed run).
+Cleared the lock and committed it as its own checkpoint (e7c71eb) before
+touching anything.
+
+Staff screen jsdom coverage (carried item 3 -- DONE) + the bug it caught:
+
+  * tests/dom/staff_smoke.mjs (~55 assertions): stats cards (active tech /
+    advisor+manager counts, assigned-open-task count excluding done and
+    unassigned, inactive count), the Inactive stat card and filter chips
+    driving one shared filter (aria-pressed, chip lighting, counts line),
+    role-grouped browse vs flat search results, search by name AND role
+    term, no-match empty state + its Clear button, Escape clearing search,
+    add form (case-insensitive duplicate refused before the POST, happy
+    path POSTs name+role, form resets, focus returns), rename-on-blur
+    (PATCH, unchanged/blanked no-ops snap back), role badge->select->PATCH
+    with group recount and blur-restores-badge, deactivate confirm (names
+    the person, warns about their open tasks, cancel is a no-op, confirm
+    PATCHes active:false), reactivate asks nothing, task-count links land
+    on Tasks pre-filtered to the person, Productivity Report link lands on
+    Reports with the technicians report selected.
+
+  * The suite caught a real data bug while being written: tasks.assigned_to
+    is a JSON list of NAMES, so renaming a staff member orphaned every task
+    they were assigned to -- the old name stayed on the task where no
+    filter, picker, or Staff-screen count could reach it. update_staff now
+    follows the rename through task assignments (done tasks included --
+    same human; created_by left alone, it's a who-typed-it audit field).
+
+  * While in there: the API now enforces the name-uniqueness rule the
+    front end already had -- POST /api/staff and rename both 409 (case-
+    insensitively) on a collision, self-rename capitalization fixes exempt.
+    The duplicate guard was client-side only, so bulk imports or a second
+    browser tab could still mint twins.
+
+  * tests/test_workflow.py: +2 tests (uniqueness on create+rename paths,
+    rename follow-through incl. co-assignee/other-tasks/created_by
+    non-interference). Python suite now 259 passing; all 9 dom suites
+    pass; uvicorn boots, /, /api/orders, /api/staff all 200.
+
+Sandbox notes this run: uv couldn't fetch a 3.12 interpreter (github
+release downloads blocked at the proxy today) -- worked around with a
+python3.10 venv + pip in /tmp, which the code happens to run fine on.
+Stale /tmp checkouts from earlier sessions are owned by other uids and
+unwritable; use a fresh dir. .git/index.lock needed the desktop app's
+file-delete permission before rm would take.
+
+Next time, in rough priority order:
+  1. Customer-address autocomplete front-end coverage. (Carried.)
+  2. Split reset_db() out of seed_mock_data. (Carried.)
+  3. Estimate grid: Shift+Enter walking backwards through the chain.
+  4. Board + tasks cursors share-a-helper refactor when a third list grows
+     cursor keys.
+  5. Staff screen polish idea: the Assigned Tasks stat could link per-person
+     the way row counts do; and renames could toast "3 tasks moved with
+     them" now that the server actually moves them.

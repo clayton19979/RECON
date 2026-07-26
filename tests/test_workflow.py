@@ -24,6 +24,50 @@ def test_staff_crud(client):
     assert updated["role"] == "manager"
 
 
+def test_staff_names_must_be_unique(client):
+    """Assignment pickers, task owners and reports identify staff by name
+    alone, so the API refuses a second person under the same name -- however
+    it's capitalized -- on both the create and the rename path."""
+    client.post("/api/staff", json={"name": "Ray Ortiz", "role": "technician"})
+    dup = client.post("/api/staff", json={"name": "ray ortiz", "role": "advisor"})
+    assert dup.status_code == 409
+
+    other = client.post("/api/staff", json={"name": "Dana Wu", "role": "advisor"}).json()
+    collide = client.patch(f"/api/staff/{other['id']}", json={"name": "RAY ORTIZ"})
+    assert collide.status_code == 409
+    assert next(s for s in client.get("/api/staff").json() if s["id"] == other["id"])["name"] == "Dana Wu"
+
+    # Renaming yourself -- including a capitalization fix -- is not a
+    # collision.
+    fixed = client.patch(f"/api/staff/{other['id']}", json={"name": "dana wu"})
+    assert fixed.status_code == 200
+    assert fixed.json()["name"] == "dana wu"
+
+
+def test_staff_rename_follows_through_to_task_assignments(client):
+    """tasks.assigned_to is a JSON list of names, so a rename used to orphan
+    every task the person owned: the old name stayed on the task where no
+    picker or filter could reach it anymore. The rename must carry through --
+    done tasks included, it's the same human -- while co-assignees, other
+    people's tasks and the created_by audit field stay untouched."""
+    ray = client.post("/api/staff", json={"name": "Ray Ortiz", "role": "technician"}).json()
+    client.post("/api/staff", json={"name": "Dana Wu", "role": "advisor"})
+
+    shared = client.post("/api/tasks", json={"title": "Shared detail", "assigned_to": ["Ray Ortiz", "Dana Wu"], "actor": "Ray Ortiz"}).json()
+    done = client.post("/api/tasks", json={"title": "Old sublet", "assigned_to": ["Ray Ortiz"]}).json()
+    client.patch(f"/api/tasks/{done['id']}", json={"done": True})
+    danas = client.post("/api/tasks", json={"title": "Call customer", "assigned_to": ["Dana Wu"]}).json()
+
+    res = client.patch(f"/api/staff/{ray['id']}", json={"name": "Raymond Ortiz"})
+    assert res.status_code == 200
+
+    tasks = {t["id"]: t for t in client.get("/api/tasks").json()}
+    assert tasks[shared["id"]]["assigned_to"] == ["Raymond Ortiz", "Dana Wu"]
+    assert tasks[done["id"]]["assigned_to"] == ["Raymond Ortiz"]
+    assert tasks[danas["id"]]["assigned_to"] == ["Dana Wu"]
+    assert tasks[shared["id"]]["created_by"] == "Ray Ortiz"
+
+
 def test_assignment_requires_active_matching_role(client):
     vehicle = make_recon_vehicle(client)
     order = make_recon_order(client, vehicle["id"])

@@ -232,20 +232,36 @@ def build_workflow_router(connect: Callable[[], sqlite3.Connection], now_fn: Cal
             query = "SELECT * FROM staff ORDER BY name" if include_inactive else "SELECT * FROM staff WHERE active=1 ORDER BY name"
             return [dict(row) for row in db.execute(query)]
 
+    def _assert_name_free(db, name: str, exclude_id: int | None = None) -> None:
+        # Assignment pickers, task owners and reports all identify staff by
+        # name alone, so two "Ray Ortiz" rows would be indistinguishable
+        # everywhere forever. The front end refuses duplicates too, but the
+        # API is the last line -- and the only line for bulk imports.
+        row = db.execute(
+            "SELECT id FROM staff WHERE lower(name)=lower(?)" + (" AND id!=?" if exclude_id is not None else ""),
+            (name, exclude_id) if exclude_id is not None else (name,),
+        ).fetchone()
+        if row:
+            raise HTTPException(409, "Someone with that name is already on staff")
+
     @router.post("/staff", status_code=201)
     def create_staff(item: StaffIn):
         with connect() as db:
+            _assert_name_free(db, item.name.strip())
             cur = db.execute("INSERT INTO staff(name,role,created_at) VALUES(?,?,?)", (item.name.strip(), item.role, now_fn()))
             return dict(db.execute("SELECT * FROM staff WHERE id=?", (cur.lastrowid,)).fetchone())
 
     @router.patch("/staff/{staff_id}")
     def update_staff(staff_id: int, item: StaffPatch):
         with connect() as db:
-            if not db.execute("SELECT 1 FROM staff WHERE id=?", (staff_id,)).fetchone():
+            row = db.execute("SELECT name FROM staff WHERE id=?", (staff_id,)).fetchone()
+            if not row:
                 raise HTTPException(404, "Staff member not found")
+            old_name = row["name"]
             fields: list[str] = []
             params: list[object] = []
             if item.name is not None:
+                _assert_name_free(db, item.name.strip(), exclude_id=staff_id)
                 fields.append("name=?")
                 params.append(item.name.strip())
             if item.role is not None:
@@ -257,6 +273,22 @@ def build_workflow_router(connect: Callable[[], sqlite3.Connection], now_fn: Cal
             if fields:
                 params.append(staff_id)
                 db.execute(f"UPDATE staff SET {','.join(fields)} WHERE id=?", params)
+            # Task assignment is name-keyed (tasks.assigned_to is a JSON list
+            # of names), so a rename used to orphan every task the person was
+            # assigned to -- the tasks kept the old name, which no filter or
+            # picker could reach anymore. Follow the rename through, done
+            # tasks included: it's the same human, history stays attributed
+            # to them under the name they go by now. created_by is left
+            # alone on purpose -- it records who typed the task, as typed.
+            new_name = item.name.strip() if item.name is not None else old_name
+            if new_name != old_name:
+                for task in db.execute("SELECT id, assigned_to FROM tasks WHERE assigned_to LIKE '%' || ? || '%'", (old_name,)):
+                    names = json.loads(task["assigned_to"]) if task["assigned_to"] else []
+                    if old_name in names:
+                        db.execute(
+                            "UPDATE tasks SET assigned_to=? WHERE id=?",
+                            (json.dumps([new_name if n == old_name else n for n in names]), task["id"]),
+                        )
             return dict(db.execute("SELECT * FROM staff WHERE id=?", (staff_id,)).fetchone())
 
     @router.put("/orders/{order_id}/assignment")

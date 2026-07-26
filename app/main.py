@@ -21,7 +21,7 @@ from .db import RECON_SHOP_CUSTOMER_ID, connect as db_connect, init_db, now
 from .export import build_export_router
 from .jobs import build_jobs_router
 from .parts import build_parts_router
-from .recon import assert_vehicle_editable, build_recon_router, vehicle_board_rows
+from .recon import assert_vehicle_editable, build_recon_router, cost_rollup, last_activity_detail, vehicle_board_rows
 from .reports import build_reports_router
 from .tasks import build_tasks_router
 from .workflow import (
@@ -156,6 +156,25 @@ class OrderIn(BaseModel):
     segment: Literal["retail", "recon", "we_owe"] = "recon"
     recon_vehicle_id: int | None = None
     we_owe_id: int | None = None
+
+
+class RetailVehiclePatch(BaseModel):
+    # Core vehicle info only -- who owns the car is edited through the
+    # customer endpoints, and there's no purchase price: the shop never
+    # bought this vehicle, it drove in.
+    vin: str | None = None
+    year: int | None = Field(default=None, ge=1900, le=2100)
+    make: str | None = Field(default=None, min_length=1)
+    model: str | None = Field(default=None, min_length=1)
+    trim: str | None = None
+    engine: str | None = None
+    color: str | None = None
+    mileage: int | None = Field(default=None, ge=0)
+    plate: str | None = None
+    plate_state: str | None = None
+    # Accepted for call-site symmetry with recon/we-owe, but not enforced:
+    # the vehicles table carries no edit_version counter of its own.
+    expected_version: int | None = None
 
 
 class EstimateItem(BaseModel):
@@ -495,6 +514,77 @@ def create_app(db_path: Path = DEFAULT_DB, backups_dir: Path = DEFAULT_BACKUPS_D
             "vin": vin, "year": int(year), "make": make, "model": model,
             "trim": (results.get("Trim") or "").strip(), "engine": engine, "color": "",
         }
+
+    # --- Retail vehicles ---
+    # A customer's own car, on the vehicle-detail page. There is no container
+    # row like recon_vehicles/we_owe_items: the vehicle itself is the entity,
+    # keyed by its vehicles.id, and only its *retail* tickets roll up here --
+    # the same physical car can also carry we-owe promises, which have their
+    # own page and their own totals.
+
+    def retail_vehicle_row(db: sqlite3.Connection, vehicle_id: int) -> sqlite3.Row:
+        row = db.execute(
+            """SELECT v.id, v.customer_id, v.year, v.make, v.model, v.vin, v.mileage,
+                      v.plate, v.plate_state, v.trim, v.engine, v.color, v.created_at,
+                      c.name customer_name, c.phone customer_phone, c.email customer_email,
+                      c.address_line1 customer_address_line1, c.address_line2 customer_address_line2,
+                      c.city customer_city, c.state customer_state, c.postal_code customer_postal_code
+               FROM vehicles v JOIN customers c ON c.id=v.customer_id
+               WHERE v.id=? AND c.is_shop_owned=0""",
+            (vehicle_id,),
+        ).fetchone()
+        if not row:
+            # Shop-owned recon inventory 404s here on purpose: those cars have
+            # a recon page, and pretending they're retail would double-count.
+            raise HTTPException(404, "Vehicle not found")
+        return row
+
+    def retail_vehicle_detail(db: sqlite3.Connection, vehicle_id: int) -> dict:
+        detail = dict(retail_vehicle_row(db, vehicle_id))
+        detail["vehicle_id"] = vehicle_id
+        rollup = cost_rollup(db, "vehicle_id", vehicle_id, segment="retail")
+        detail["orders"] = rollup["orders"]
+        detail["total_cost"] = rollup["total_cost"]
+        detail["quoted_cost"] = rollup["quoted_cost"]
+        detail["last_activity"] = last_activity_detail(db, "vehicle_id", vehicle_id, detail["created_at"], segment="retail")
+        # Retail vehicles never archive -- the RO's own status is the whole
+        # lifecycle -- and the vehicles table has no optimistic-lock counter.
+        # Both keys exist so the detail page can treat all three segments
+        # uniformly (falsy = not archived, version ignored on save).
+        detail["archived_at"] = ""
+        detail["edit_version"] = 0
+        return detail
+
+    @app.get("/api/retail/vehicles/{vehicle_id}")
+    def get_retail_vehicle(vehicle_id: int):
+        with connect() as db:
+            return retail_vehicle_detail(db, vehicle_id)
+
+    @app.patch("/api/retail/vehicles/{vehicle_id}")
+    def update_retail_vehicle(vehicle_id: int, item: RetailVehiclePatch):
+        with connect() as db:
+            retail_vehicle_row(db, vehicle_id)
+            fields: list[str] = []
+            params: list[object] = []
+            for name, value in (
+                ("vin", item.vin.strip().upper() if item.vin is not None else None),
+                ("year", item.year),
+                ("make", item.make.strip() if item.make is not None else None),
+                ("model", item.model.strip() if item.model is not None else None),
+                ("trim", item.trim.strip() if item.trim is not None else None),
+                ("engine", item.engine.strip() if item.engine is not None else None),
+                ("color", item.color.strip() if item.color is not None else None),
+                ("mileage", item.mileage),
+                ("plate", item.plate.strip().upper() if item.plate is not None else None),
+                ("plate_state", item.plate_state.strip().upper() if item.plate_state is not None else None),
+            ):
+                if value is not None:
+                    fields.append(f"{name}=?")
+                    params.append(value)
+            if fields:
+                params.append(vehicle_id)
+                db.execute(f"UPDATE vehicles SET {','.join(fields)} WHERE id=?", params)
+            return retail_vehicle_detail(db, vehicle_id)
 
     @app.get("/api/orders")
     def list_orders(segment: str | None = None):

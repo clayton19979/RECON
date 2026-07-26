@@ -26,7 +26,8 @@ let customers = [
 ];
 
 // Marta's detail: one vehicle with a jumpable we-owe RO plus a voided one,
-// a second vehicle with a retail RO (no page of its own -> inert chip).
+// a second vehicle with a retail RO (jumps to the vehicle's retail page;
+// only the voided chip stays inert).
 const DETAILS = {
   1: {
     ...customers[0],
@@ -50,6 +51,7 @@ const DETAILS = {
 
 const detailFetches = [];
 const patches = [];
+const roPosts = [];
 
 const { w, doc, settle, ok, finish, rejections } = await boot({
   expose: ["state", "showView", "loadCustomersView", "renderCustomersTable", "toggleCustomerExpand"],
@@ -69,6 +71,16 @@ const { w, doc, settle, ok, finish, rejections } = await boot({
     }
     // The we-owe chip jump loads the vehicle detail page.
     if (url === "/api/we-owe/71") return { id: 71, description: "Mirror", customer_id: 1, vehicle_id: 11, status: "open", archived_at: "", edit_version: 1 };
+    // The retail chip / Write RO jump loads the vehicle's retail page.
+    const retail = url.match(/^\/api\/retail\/vehicles\/(\d+)$/);
+    if (retail) return { id: Number(retail[1]), customer_id: 1, customer_name: "Marta Alvarez", year: 2015, make: "Jeep", model: "Patriot",
+      vin: "", mileage: 0, trim: "", color: "", archived_at: "", edit_version: 0, orders: [], total_cost: 0, quoted_cost: 0,
+      last_activity: { at: "2026-01-10T09:30:00", idle_days: 0, action: "", actor: "" } };
+    if (url === "/api/orders" && opts.method === "POST") {
+      const body = JSON.parse(opts.body);
+      roPosts.push(body);
+      return { id: 555, number: "RO-2607-0555", ...body };
+    }
     if (url.startsWith("/api/orders")) return [];
     if (url.startsWith("/api/staff")) return [];
     if (url.startsWith("/api/vehicles-board")) return [];
@@ -136,8 +148,9 @@ ok(expand.querySelector('a[href="mailto:marta@example.com"]'), "email renders as
 const chips = [...expand.querySelectorAll(".cust-ro-chip")];
 ok(chips.length === 3, `all three ROs should show as chips, got ${chips.length}`);
 const jumpable = expand.querySelectorAll("button.cust-ro-chip[data-seg]");
-ok(jumpable.length === 1, `only the live we-owe RO should be jumpable, got ${jumpable.length}`);
+ok(jumpable.length === 2, `the live we-owe and retail ROs should both be jumpable, got ${jumpable.length}`);
 ok(expand.textContent.includes("Voided"), "the voided RO stays visible, flagged");
+ok(expand.querySelectorAll(".cust-new-ro").length === 2, "every vehicle offers a Write RO button");
 
 // Re-expanding uses the cache -- no second fetch.
 click(w, row(1));
@@ -152,6 +165,44 @@ await settle();
 ok($("#view-vehicle-detail").classList.contains("active"), "a live RO chip should land on the vehicle detail page");
 ok(w.state.detail.segment === "we_owe" && w.state.detail.id === 71,
    `the detail page should be on we-owe 71, got ${w.state.detail.segment}:${w.state.detail.id}`);
+
+/* ---------- a retail chip jumps to the vehicle's retail page ---------- */
+w.showView("customers");
+await settle();
+click(w, row(1));
+await settle();
+click(w, $('#customers-table button.cust-ro-chip[data-seg="retail"]'));
+await settle();
+ok($("#view-vehicle-detail").classList.contains("active"), "a retail chip should land on the vehicle detail page");
+ok(w.state.detail.segment === "retail" && w.state.detail.id === 12,
+   `the detail page should be on retail vehicle 12, got ${w.state.detail.segment}:${w.state.detail.id}`);
+ok($("#back-to-vehicles-label").textContent === "Back to Customers",
+   "the back link on a retail page points home to Customers");
+ok($("#vd-archive-vehicle").style.display === "none" && $("#vd-reopen-vehicle").style.display === "none",
+   "retail vehicles offer no archive/reopen -- the RO's status is the lifecycle");
+ok($("#vd-we-owe-status-card").style.display === "none" && $("#vd-deposits-card").style.display === "none",
+   "the we-owe promise cards stay hidden on a retail page");
+ok($("#vd-customer-info-card").style.display !== "none", "the customer card shows on a retail page");
+
+/* ---------- Write RO: dialog -> POST -> the new ticket's page ---------- */
+w.showView("customers");
+await settle();
+click(w, row(1));
+await settle();
+click(w, $('.cust-new-ro[data-vehicle-id="11"]'));
+const roDialog = $("#retail-ro-dialog");
+ok(roDialog && roDialog.open, "Write RO opens the dialog");
+ok($("#retail-ro-customer").textContent === "Marta Alvarez", "the dialog names the customer");
+ok($("#retail-ro-vehicle").textContent.includes("Kia Soul"), "the dialog names the vehicle");
+input($("#retail-ro-concern"), "Brakes grinding");
+$("#retail-ro-form").dispatchEvent(new w.Event("submit", { bubbles: true, cancelable: true }));
+await settle();
+ok(roPosts.length === 1 && roPosts[0].segment === "retail" && roPosts[0].customer_id === 1 && roPosts[0].vehicle_id === 11,
+   `the POST carries segment/customer/vehicle, got ${JSON.stringify(roPosts[0])}`);
+ok(!roDialog.open, "the dialog closes after starting the RO");
+ok(w.state.detail.segment === "retail" && w.state.detail.id === 11,
+   "the advisor lands on the new ticket's vehicle page");
+ok(!(1 in w.state.customerDetails), "the cached expansion is dropped -- its RO list is stale now");
 
 /* ---------- the shared editor, reachable without a vehicle ---------- */
 w.showView("customers");

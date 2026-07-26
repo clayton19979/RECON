@@ -1865,7 +1865,10 @@ td.actions-col { text-align: right; white-space: nowrap; }
 .cust-contact-block .btn { margin-top: 8px; }
 
 .cust-vehicles { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
-.cust-vehicle-name { font-weight: 600; font-size: 13px; }
+.cust-vehicle-name { font-weight: 600; font-size: 13px; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+/* Quiet until the row is looked at -- a ghost button per vehicle would
+   otherwise dominate a rolodex that's mostly read, not written. */
+.cust-new-ro { padding: 1px 8px; font-size: 11.5px; margin-left: auto; }
 .cust-ro-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 5px; }
 .cust-ro-chip {
   display: inline-flex; align-items: center; gap: 7px; padding: 4px 10px;

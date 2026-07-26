@@ -100,12 +100,14 @@ def build_tasks_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
     task_query = """
         SELECT t.*, o.number order_number, o.segment order_segment,
                o.recon_vehicle_id order_recon_vehicle_id, o.we_owe_id order_we_owe_id,
-               rv.stock_number, wc.name we_owe_customer_name
+               o.vehicle_id order_vehicle_id,
+               rv.stock_number, wc.name we_owe_customer_name, oc.name order_customer_name
         FROM tasks t
         LEFT JOIN orders o ON o.id=t.order_id
         LEFT JOIN recon_vehicles rv ON rv.id=o.recon_vehicle_id
         LEFT JOIN we_owe_items wi ON wi.id=o.we_owe_id
         LEFT JOIN customers wc ON wc.id=wi.customer_id
+        LEFT JOIN customers oc ON oc.id=o.customer_id
     """
 
     def task_dict(row: sqlite3.Row) -> dict:
@@ -117,6 +119,8 @@ def build_tasks_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
             value["order_label"] = value["stock_number"]
         elif value["we_owe_customer_name"]:
             value["order_label"] = f"We-Owe: {value['we_owe_customer_name']}"
+        elif value["order_segment"] == "retail" and value["order_customer_name"]:
+            value["order_label"] = f"Retail: {value['order_customer_name']}"
         else:
             value["order_label"] = value["order_number"]
         return value

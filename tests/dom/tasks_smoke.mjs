@@ -55,8 +55,8 @@ let tasks = [
     order_recon_vehicle_id: null, order_we_owe_id: null, order_number: null },
 ];
 
-// What the vehicle picker gets from /api/orders. The retail RO is here to be
-// excluded: it has no detail view to jump to, so the picker must not offer it.
+// What the vehicle picker gets from /api/orders. All three segments are
+// offered now that retail ROs have a vehicle page of their own.
 const ORDERS = [
   { id: 42, segment: "recon", stock_number: "R-0981", year: 2019, make: "Ford", model: "Edge", customer_name: null, number: "RO-1042" },
   { id: 55, segment: "we_owe", stock_number: null, year: 2021, make: "Kia", model: "Sorento", customer_name: "Maria Soto", number: "RO-1077" },
@@ -500,9 +500,8 @@ const linkSelect = rowFor(3).querySelector(".task-link-edit");
 ok(linkSelect && linkSelect.tagName === "SELECT", "clicking + vehicle didn't swap in a picker");
 ok([...linkSelect.options].some((o) => /R-0981/.test(o.textContent)), "the picker is missing the recon vehicle");
 ok([...linkSelect.options].some((o) => /Maria Soto/.test(o.textContent)), "the picker is missing the we-owe vehicle");
-// Retail ROs have no vehicle-detail view to jump to -- offering one here
-// would mint dead-end chips. Same rule as the quick-add select.
-ok(![...linkSelect.options].some((o) => /F-150/.test(o.textContent)), "a retail RO leaked into the vehicle picker");
+// Retail ROs have a vehicle page now -- the picker offers them too.
+ok([...linkSelect.options].some((o) => /Bob Lang/.test(o.textContent)), "the picker is missing the retail vehicle");
 linkSelect.value = "55";
 linkSelect.dispatchEvent(new w.Event("change", { bubbles: true }));
 await settle();

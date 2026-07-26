@@ -427,14 +427,15 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
                        ei.part_returned_at, ei.received_invoice_number, ei.return_invoice_number,
                        ei.part_return_reference, ei.part_picked_up_at,
                        o.id order_id, o.number ro_number, o.voided, o.segment,
-                       o.recon_vehicle_id, o.we_owe_id,
-                       rv.stock_number, wc.name we_owe_customer_name
+                       o.recon_vehicle_id, o.we_owe_id, o.vehicle_id,
+                       rv.stock_number, wc.name we_owe_customer_name, oc.name order_customer_name
                    FROM estimate_items ei
                    JOIN estimates e ON e.id=ei.estimate_id
                    JOIN orders o ON o.id=e.order_id
                    LEFT JOIN recon_vehicles rv ON rv.id=o.recon_vehicle_id
                    LEFT JOIN we_owe_items wi ON wi.id=o.we_owe_id
                    LEFT JOIN customers wc ON wc.id=wi.customer_id
+                   LEFT JOIN customers oc ON oc.id=o.customer_id
                    WHERE ei.part_returned=1
                    ORDER BY (ei.return_invoice_number!='') ASC,
                             (ei.part_picked_up_at!='') ASC,
@@ -447,6 +448,8 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
                     value["vehicle_label"] = value["stock_number"]
                 elif value["we_owe_customer_name"]:
                     value["vehicle_label"] = f"We-Owe: {value['we_owe_customer_name']}"
+                elif value["order_customer_name"]:
+                    value["vehicle_label"] = f"Retail: {value['order_customer_name']}"
                 else:
                     value["vehicle_label"] = "Retail"
                 vendor_id = None
@@ -480,14 +483,15 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
                        ei.core_returned, ei.core_returned_at, ei.core_return_invoice_number,
                        ei.received_invoice_number,
                        o.id order_id, o.number ro_number, o.voided, o.segment,
-                       o.recon_vehicle_id, o.we_owe_id,
-                       rv.stock_number, wc.name we_owe_customer_name
+                       o.recon_vehicle_id, o.we_owe_id, o.vehicle_id,
+                       rv.stock_number, wc.name we_owe_customer_name, oc.name order_customer_name
                    FROM estimate_items ei
                    JOIN estimates e ON e.id=ei.estimate_id
                    JOIN orders o ON o.id=e.order_id
                    LEFT JOIN recon_vehicles rv ON rv.id=o.recon_vehicle_id
                    LEFT JOIN we_owe_items wi ON wi.id=o.we_owe_id
                    LEFT JOIN customers wc ON wc.id=wi.customer_id
+                   LEFT JOIN customers oc ON oc.id=o.customer_id
                    WHERE ei.core_charge > 0
                      AND NOT (ei.part_returned=1 AND ei.core_returned=0)
                    ORDER BY (ei.core_return_invoice_number!='') ASC, ei.core_returned ASC, ei.id DESC""",
@@ -499,6 +503,8 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
                     value["vehicle_label"] = value["stock_number"]
                 elif value["we_owe_customer_name"]:
                     value["vehicle_label"] = f"We-Owe: {value['we_owe_customer_name']}"
+                elif value["order_customer_name"]:
+                    value["vehicle_label"] = f"Retail: {value['order_customer_name']}"
                 else:
                     value["vehicle_label"] = "Retail"
                 # Same vendor resolution as /returns: the core deposit belongs

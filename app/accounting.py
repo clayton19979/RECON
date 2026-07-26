@@ -157,14 +157,15 @@ def build_accounting_router(connect: Callable[[], sqlite3.Connection], now: Call
         with connect() as db:
             rows = db.execute(
                 """SELECT a.*, v.name vendor_name, o.number ro_number, o.segment,
-                       o.recon_vehicle_id, o.we_owe_id,
-                       rv.stock_number, wc.name we_owe_customer_name
+                       o.recon_vehicle_id, o.we_owe_id, o.vehicle_id,
+                       rv.stock_number, wc.name we_owe_customer_name, oc.name order_customer_name
                    FROM ap_invoices a
                    JOIN vendors v ON v.id=a.vendor_id
                    JOIN orders o ON o.id=a.order_id
                    LEFT JOIN recon_vehicles rv ON rv.id=o.recon_vehicle_id
                    LEFT JOIN we_owe_items wi ON wi.id=o.we_owe_id
                    LEFT JOIN customers wc ON wc.id=wi.customer_id
+                   LEFT JOIN customers oc ON oc.id=o.customer_id
                    WHERE (:start IS NULL OR a.posted_at>=:start) AND (:end IS NULL OR a.posted_at<=:end)
                    ORDER BY a.id DESC""",
                 {"start": start, "end": end_bound},
@@ -176,6 +177,8 @@ def build_accounting_router(connect: Callable[[], sqlite3.Connection], now: Call
                     value["vehicle_label"] = value["stock_number"]
                 elif value["we_owe_customer_name"]:
                     value["vehicle_label"] = f"We-Owe: {value['we_owe_customer_name']}"
+                elif value["order_customer_name"]:
+                    value["vehicle_label"] = f"Retail: {value['order_customer_name']}"
                 else:
                     value["vehicle_label"] = "Retail"
                 result.append(value)

@@ -241,7 +241,7 @@
       <section class="view" id="view-vehicle-detail">
         <button type="button" class="back-link" id="back-to-vehicles" style="background:none;border:none;font:inherit;padding:0">
           <svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg>
-          Back to Vehicles
+          <span id="back-to-vehicles-label">Back to Vehicles</span>
         </button>
 
         <div id="vd-archived-banner" class="archived-banner" role="status" style="display:none">
@@ -1180,6 +1180,25 @@
     <div class="modal-actions">
       <button class="btn btn-ghost" formnovalidate type="button" id="customer-edit-cancel-2">Cancel</button>
       <button class="btn btn-primary" type="submit">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- Write Retail RO Dialog (Customers screen) -->
+<dialog id="retail-ro-dialog">
+  <form class="modal" id="retail-ro-form">
+    <div class="modal-head">
+      <div><p class="eyebrow">REPAIR ORDER</p><h2>Write Repair Order</h2></div>
+      <button class="icon-btn" formnovalidate type="button" id="retail-ro-cancel">×</button>
+    </div>
+    <div class="modal-body">
+      <div class="kv-row"><span class="kv-label">Customer</span><span class="kv-value" id="retail-ro-customer"></span></div>
+      <div class="kv-row" style="margin-bottom:8px"><span class="kv-label">Vehicle</span><span class="kv-value" id="retail-ro-vehicle"></span></div>
+      <label>What's being done<textarea id="retail-ro-concern" required minlength="3" placeholder="e.g. Brakes grinding — inspect front and rear"></textarea></label>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" formnovalidate type="button" id="retail-ro-cancel-2">Cancel</button>
+      <button class="btn btn-primary" type="submit">Start Repair Order</button>
     </div>
   </form>
 </dialog>

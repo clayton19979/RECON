@@ -1926,18 +1926,31 @@ async function openVehicleDetail(segment, id) {
   await loadVehicleDetail();
 }
 // showView only knows named views wired to the rail; vehicle-detail is entered directly.
+// A retail vehicle's home screen is Customers, not the recon/we-owe board --
+// the rail highlight and the back link both say where Back actually goes.
+function detailHomeView() {
+  return state.detail.segment === "retail" ? "customers" : "vehicles";
+}
 function enterVehicleDetailView() {
+  const home = detailHomeView();
   $$(".view").forEach((v) => v.classList.toggle("active", v.id === "view-vehicle-detail"));
-  $$(".rail-item").forEach((b) => b.classList.toggle("active", b.dataset.view === "vehicles"));
+  $$(".rail-item").forEach((b) => b.classList.toggle("active", b.dataset.view === home));
+  $("#back-to-vehicles-label").textContent = home === "customers" ? "Back to Customers" : "Back to Vehicles";
 }
 
 async function loadVehicleDetail() {
   const { segment, id } = state.detail;
   let item, orders;
   try {
-    item = segment === "recon" ? await get(`/api/recon/vehicles/${id}`) : await get(`/api/we-owe/${id}`);
+    // Three segments, three entities: recon/we-owe pages are keyed by their
+    // container row's id; a retail page is keyed by the vehicle row itself.
+    item = segment === "recon" ? await get(`/api/recon/vehicles/${id}`)
+      : segment === "retail" ? await get(`/api/retail/vehicles/${id}`)
+      : await get(`/api/we-owe/${id}`);
     const allOrders = await get(`/api/orders?segment=${segment}`);
-    orders = allOrders.filter((o) => segment === "recon" ? o.recon_vehicle_id === id : o.we_owe_id === id)
+    orders = allOrders.filter((o) => segment === "recon" ? o.recon_vehicle_id === id
+      : segment === "retail" ? o.vehicle_id === id
+      : o.we_owe_id === id)
       .sort((a, b) => b.id - a.id);
   } catch (err) {
     toast(`Could not load vehicle: ${err.message}`, true);
@@ -1964,8 +1977,10 @@ async function loadVehicleDetail() {
   renderDetailHead();
   renderOrderHistory(orders, active ? active.id : null);
   // Deleting a vehicle with real order history would silently orphan its
-  // cost data -- only offer it while there's nothing to lose yet.
-  $("#vd-delete").style.display = orders.length === 0 ? "" : "none";
+  // cost data -- only offer it while there's nothing to lose yet. Retail
+  // vehicles are never deletable from here at all: they're the customer's
+  // property record, managed from the Customers screen.
+  $("#vd-delete").style.display = orders.length === 0 && segment !== "retail" ? "" : "none";
   if (!active) {
     $("#vd-void-order").style.display = "none";
     $("#vd-print-ticket").style.display = "none";
@@ -2143,23 +2158,30 @@ function renderDetailHead() {
     $("#vd-deposits-card").style.display = "none";
     $("#vd-recon-purchase-price").value = item.purchase_price || 0;
   } else {
+    // we_owe and retail share the customer-owned-car layout; only we_owe has
+    // the promise machinery (status/category/target, dealer-paid deposits).
     $("#vd-title").textContent = `${item.year} ${item.make} ${item.model}`;
-    $("#vd-sub").textContent = [item.vin, item.description].filter(Boolean).join(" · ");
+    $("#vd-sub").textContent = [item.vin, item.mileage ? `${item.mileage.toLocaleString()} mi` : "", item.description].filter(Boolean).join(" · ");
     // Customer name gets its own prominent line in the header rather than
-    // being buried mid-subtitle -- for a we-owe promise, whose car it is is
-    // the first thing the advisor needs.
+    // being buried mid-subtitle -- whose car it is is the first thing the
+    // advisor needs.
     const customerLine = $("#vd-customer-line");
     customerLine.textContent = item.customer_name ? `Customer: ${item.customer_name}` : "";
     customerLine.hidden = !item.customer_name;
     $("#vd-customer-info-card").style.display = "";
     renderCustomerInfoSummary();
-    $("#vd-we-owe-status-card").style.display = "";
-    $("#vd-we-owe-status").value = item.status;
-    $("#vd-we-owe-description").value = item.description || "";
-    $("#vd-we-owe-category").value = item.category || "";
-    $("#vd-we-owe-target").value = item.target_date || "";
-    $("#vd-deposits-card").style.display = "";
-    renderDepositsSummary();
+    if (segment === "we_owe") {
+      $("#vd-we-owe-status-card").style.display = "";
+      $("#vd-we-owe-status").value = item.status;
+      $("#vd-we-owe-description").value = item.description || "";
+      $("#vd-we-owe-category").value = item.category || "";
+      $("#vd-we-owe-target").value = item.target_date || "";
+      $("#vd-deposits-card").style.display = "";
+      renderDepositsSummary();
+    } else {
+      $("#vd-we-owe-status-card").style.display = "none";
+      $("#vd-deposits-card").style.display = "none";
+    }
   }
   renderCostSummary();
   renderVehicleInfoSummary();
@@ -2388,9 +2410,14 @@ function renderPaymentDialogList() {
 // this just keeps the UI from offering an action that would 409 anyway
 // once a vehicle is archived to History.
 function applyArchivedLockUI(archived) {
+  // Retail vehicles don't archive: the customer drives the car home and the
+  // RO's own Complete status is the end of the story. No History membership
+  // means neither button; everything below still runs (archived is always
+  // false for retail) so shared controls get re-enabled uniformly.
+  const retail = state.detail.segment === "retail";
   $("#vd-archived-banner").style.display = archived ? "" : "none";
-  $("#vd-archive-vehicle").style.display = archived ? "none" : "";
-  $("#vd-reopen-vehicle").style.display = archived ? "" : "none";
+  $("#vd-archive-vehicle").style.display = archived || retail ? "none" : "";
+  $("#vd-reopen-vehicle").style.display = archived && !retail ? "" : "none";
 
   // These are static controls reused across renders (unlike the estimate
   // rows, which are rebuilt fresh every time) -- reopening must explicitly
@@ -3561,7 +3588,7 @@ function renderPrintTicket() {
       <div class="print-meta">
         <div class="print-report-title">Repair Order ${esc(order.number)}</div>
         <div>${esc(vehicleLabel)}${customerLabel ? " — " + esc(customerLabel) : ""}</div>
-        <div class="print-meta-line">${esc(STATUS_LABEL[order.status] || order.status)} · ${isWeOwe ? "Customer Vehicle (We-Owe)" : "Recon Inventory"}</div>
+        <div class="print-meta-line">${esc(STATUS_LABEL[order.status] || order.status)} · ${segment === "recon" ? "Recon Inventory" : segment === "retail" ? "Customer Vehicle (Retail)" : "Customer Vehicle (We-Owe)"}</div>
         <div class="print-generated">Generated ${esc(generated)}</div>
       </div>
     </header>
@@ -3622,14 +3649,15 @@ function renderPrintTicket() {
 
 /* ---------- vehicle-detail event wiring (wired once) ---------- */
 function wireVehicleDetail() {
-  $("#back-to-vehicles").addEventListener("click", () => showView("vehicles"));
+  $("#back-to-vehicles").addEventListener("click", () => showView(detailHomeView()));
 
   $("#vd-start-ro").addEventListener("click", async () => {
     const concern = $("#vd-new-ro-concern").value.trim();
     if (!concern) return toast("Describe what's being done first", true);
-    const { segment, id } = state.detail;
+    const { segment, id, item } = state.detail;
     const payload = { concern, segment, customer_id: null, vehicle_id: null };
     if (segment === "recon") payload.recon_vehicle_id = id;
+    else if (segment === "retail") { payload.customer_id = item.customer_id; payload.vehicle_id = id; }
     else payload.we_owe_id = id;
     try {
       await post("/api/orders", payload);
@@ -3899,6 +3927,8 @@ function wireVehicleDetail() {
         if (segment === "recon") {
           payload.purchase_price = Number($("#vd-recon-purchase-price").value || 0);
           await patch(`/api/recon/vehicles/${id}`, payload);
+        } else if (segment === "retail") {
+          await patch(`/api/retail/vehicles/${id}`, payload);
         } else {
           await patch(`/api/we-owe/${id}`, payload);
         }
@@ -5077,14 +5107,13 @@ function renderPoSelect() {
 function renderApTable(invoices) {
   const liveTotal = invoices.filter((a) => a.status !== "voided").reduce((s, a) => s + (a.total || 0), 0);
   $("#ap-count").textContent = `${invoices.length} invoice${invoices.length === 1 ? "" : "s"} · ${money(liveTotal)}`;
-  // Only recon/we-owe rows can jump anywhere -- retail ROs have no
-  // vehicle-detail view, so they render as a plain (non-clickable) row.
+  // Every segment's rows can jump to a vehicle page now that retail has one.
   $("#ap-table").innerHTML = invoices.length ? invoices.map((a) => {
-    const refId = a.recon_vehicle_id ?? a.we_owe_id;
-    const clickable = refId != null && (a.segment === "recon" || a.segment === "we_owe");
+    const refId = a.segment === "retail" ? a.vehicle_id : (a.recon_vehicle_id ?? a.we_owe_id);
+    const clickable = refId != null && (a.segment === "recon" || a.segment === "we_owe" || a.segment === "retail");
     const voided = a.status === "voided";
     return `
-    <tr class="${clickable ? "clickable" : ""} ${voided ? "voided-row" : ""}" ${clickable ? `data-segment="${a.segment}" data-ref-id="${refId}" role="button" tabindex="0" title="Open this vehicle"` : `title="Retail ticket — no vehicle page"`}>
+    <tr class="${clickable ? "clickable" : ""} ${voided ? "voided-row" : ""}" ${clickable ? `data-segment="${a.segment}" data-ref-id="${refId}" role="button" tabindex="0" title="Open this vehicle"` : `title="No vehicle page for this ticket"`}>
       <td>${esc(a.invoice_number)}</td>
       <td>${esc(fmtDate(a.posted_at))}</td>
       <td>${esc(a.vendor_name)}</td><td>${esc(a.po_number)}</td>
@@ -5444,8 +5473,8 @@ function renderCoresReturnsStats() {
 // state.orders (only loaded by the Accounting view) made every row click a
 // silent no-op unless you'd visited A/P first.
 function openVehicleFromRow(row) {
-  const refId = row.recon_vehicle_id ?? row.we_owe_id;
-  if (refId != null && (row.segment === "recon" || row.segment === "we_owe")) {
+  const refId = row.segment === "retail" ? row.vehicle_id : (row.recon_vehicle_id ?? row.we_owe_id);
+  if (refId != null && (row.segment === "recon" || row.segment === "we_owe" || row.segment === "retail")) {
     openVehicleDetail(row.segment, refId);
   }
 }
@@ -6026,9 +6055,11 @@ function customerRowHtml(c, open) {
 }
 
 /* The expansion: contact block on the left, vehicles-with-their-ROs on the
-   right. Recon and We-Owe chips jump to the vehicle detail page; retail ROs
-   have no page of their own (same rule as the tasks screen's vehicle chips),
-   so those render inert with the status still visible. */
+   right. Every unvoided chip jumps to the vehicle detail page -- recon and
+   we-owe to their container's page, retail to the vehicle's own retail page.
+   Voided ROs stay visible but inert: there's nothing left to do on them.
+   Each vehicle also gets a Write RO button -- this is where a retail ticket
+   for an existing customer starts. */
 function customerExpandRowHtml(c) {
   const detail = state.customerDetails[c.id];
   let body;
@@ -6053,14 +6084,17 @@ function customerExpandRowHtml(c) {
         const status = o.voided ? "Voided" : (STATUS_LABEL[o.status] || o.status);
         const pill = o.voided ? "pill-inactive" : (STATUS_PILL_CLASS[o.status] || "");
         const label = `${esc(o.number)} <span class="pill ${pill}">${esc(status)}</span>`;
-        const jumpable = !o.voided && (o.segment === "recon" || o.segment === "we_owe");
+        const refId = o.segment === "recon" ? o.recon_vehicle_id : o.segment === "we_owe" ? o.we_owe_id : v.id;
+        const jumpable = !o.voided && refId != null;
         return jumpable
-          ? `<button type="button" class="cust-ro-chip" data-seg="${esc(o.segment)}" data-ref-id="${o.segment === "recon" ? o.recon_vehicle_id : o.we_owe_id}" title="${esc(o.concern || "Open this repair order")}">${label}</button>`
+          ? `<button type="button" class="cust-ro-chip" data-seg="${esc(o.segment)}" data-ref-id="${refId}" title="${esc(o.concern || "Open this repair order")}">${label}</button>`
           : `<span class="cust-ro-chip cust-ro-static" title="${esc(o.concern || "")}">${label}</span>`;
       }).join("") : '<span class="cust-sub">no repair orders yet</span>';
       return `
         <div class="cust-vehicle">
-          <div class="cust-vehicle-name">${esc(name)}${meta ? `<span class="cust-sub"> · ${meta}</span>` : ""}</div>
+          <div class="cust-vehicle-name">${esc(name)}${meta ? `<span class="cust-sub"> · ${meta}</span>` : ""}
+            <button type="button" class="btn btn-ghost btn-sm cust-new-ro" data-vehicle-id="${v.id}" title="Start a retail repair order on this vehicle">+ Write RO</button>
+          </div>
           <div class="cust-ro-chips">${orders}</div>
         </div>`;
     }).join("") : '<div class="cust-sub">No vehicles on file.</div>';
@@ -6164,6 +6198,11 @@ function wireCustomersView() {
       if (customer) openCustomerEditorFor(customer);
       return;
     }
+    const newRo = e.target.closest(".cust-new-ro");
+    if (newRo) {
+      openRetailRoDialog(Number(newRo.dataset.vehicleId));
+      return;
+    }
     const chip = e.target.closest(".cust-ro-chip[data-seg]");
     if (chip) {
       openVehicleDetail(chip.dataset.seg, Number(chip.dataset.refId));
@@ -6222,6 +6261,52 @@ function openCustomerEditorFor(customer) {
     }
     renderCustomersStats();
     renderCustomersTable();
+  });
+}
+
+/* ---------- write a retail RO (Customers screen) ----------
+   The one place a retail ticket for an existing customer can start. The
+   button lives on the vehicle row inside the expansion, so the customer and
+   vehicle are already chosen -- the dialog only asks the one thing the
+   advisor actually has to type: what's being done. On success we land on
+   the vehicle's retail detail page, same as clicking the new chip would. */
+let retailRoTarget = null; // { customer, vehicle } while the dialog is open
+
+function openRetailRoDialog(vehicleId) {
+  const customer = state.customerDetails[state.customerOpenId];
+  const vehicle = customer && (customer.vehicles || []).find((v) => v.id === vehicleId);
+  if (!vehicle) return;
+  retailRoTarget = { customer, vehicle };
+  $("#retail-ro-customer").textContent = customer.name || "";
+  $("#retail-ro-vehicle").textContent = [vehicle.year, vehicle.make, vehicle.model].filter(Boolean).join(" ");
+  $("#retail-ro-concern").value = "";
+  $("#retail-ro-dialog").showModal();
+  $("#retail-ro-concern").focus();
+}
+
+function wireRetailRoDialog() {
+  $("#retail-ro-cancel").addEventListener("click", () => $("#retail-ro-dialog").close());
+  $("#retail-ro-cancel-2").addEventListener("click", () => $("#retail-ro-dialog").close());
+  $("#retail-ro-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const concern = $("#retail-ro-concern").value.trim();
+    if (concern.length < 3) return toast("Describe what's being done first", true);
+    const { customer, vehicle } = retailRoTarget || {};
+    if (!vehicle) return;
+    await withLoading(e.submitter, "Starting…", async () => {
+      try {
+        await post("/api/orders", { segment: "retail", customer_id: customer.id, vehicle_id: vehicle.id, concern });
+        $("#retail-ro-dialog").close();
+        toast("Repair order started");
+        // The cached expansion (and the list's RO counts) are stale now;
+        // dropping the cache is enough -- the Customers view reloads on
+        // re-entry, and the advisor lands on the new ticket meanwhile.
+        delete state.customerDetails[customer.id];
+        openVehicleDetail("retail", vehicle.id);
+      } catch (err) {
+        toast(err.message, true);
+      }
+    });
   });
 }
 
@@ -6786,8 +6871,8 @@ const TASK_VEHICLE_SVG = `<svg viewBox="0 0 24 24">${EMPTY_ICONS.vehicle}</svg>`
    the jump chip but lose both editors -- a done task's link is history, not a
    decision anyone should still be making.
 
-   A linked-but-unjumpable chip (retail RO, or a segment the detail view can't
-   open) renders as static text instead of vanishing, because the × needs
+   A linked-but-unjumpable chip (a segment the detail view can't open, or a
+   row missing its ref id) renders as static text instead of vanishing, because the × needs
    something to sit next to -- unlink is exactly what you want for a task
    pointing at a record you can no longer visit. */
 function taskVehicleChip(t, linkable, refId) {
@@ -6803,8 +6888,8 @@ function taskVehicleChip(t, linkable, refId) {
 
 function taskRowHtml(t) {
   const due = taskDueInfo(t.due_date);
-  const refId = t.order_recon_vehicle_id ?? t.order_we_owe_id;
-  const linkable = t.order_id && refId != null && (t.order_segment === "recon" || t.order_segment === "we_owe");
+  const refId = t.order_segment === "retail" ? t.order_vehicle_id : (t.order_recon_vehicle_id ?? t.order_we_owe_id);
+  const linkable = t.order_id && refId != null && (t.order_segment === "recon" || t.order_segment === "we_owe" || t.order_segment === "retail");
   const selected = state.taskSelection.has(t.id);
   const unassigned = !(t.assigned_to || []).length;
   // The cursor class rides along in the row markup rather than being painted
@@ -6986,7 +7071,7 @@ function wireTaskRowActions(container) {
   $$(".task-link-add", container).forEach((btn) => {
     btn.addEventListener("click", () => {
       const row = btn.closest(".task-row");
-      const linkables = (state.taskOrders || []).filter((o) => o.segment === "recon" || o.segment === "we_owe");
+      const linkables = (state.taskOrders || []).filter((o) => o.segment === "recon" || o.segment === "we_owe" || o.segment === "retail");
       if (!linkables.length) return toast("No recon or customer vehicles to link yet", true);
       const select = document.createElement("select");
       select.className = "task-link-edit";
@@ -7485,10 +7570,10 @@ function saveTaskPrefs() {
   } catch {}
 }
 
-// Only recon/we-owe orders are offered -- retail ROs have no vehicle-detail
-// view to jump to, so linking a task to one would be a dead-end chip.
+// All three segments have a vehicle-detail page now (retail's arrived last),
+// so every order is fair game to link.
 function renderTaskOrderSelect(orders) {
-  const linkable = orders.filter((o) => o.segment === "recon" || o.segment === "we_owe");
+  const linkable = orders.filter((o) => o.segment === "recon" || o.segment === "we_owe" || o.segment === "retail");
   $("#task-order-input").innerHTML = `<option value="">No vehicle</option>` + linkable.map((o) => {
     const label = o.stock_number ? `${o.stock_number} — ${o.year} ${o.make} ${o.model}` : `${o.customer_name} — ${o.year} ${o.make} ${o.model}`;
     return `<option value="${o.id}">${esc(label)}</option>`;
@@ -7916,6 +8001,7 @@ document.addEventListener("DOMContentLoaded", () => {
   wireViewRetry();
   wireVehiclesView();
   wireCustomersView();
+  wireRetailRoDialog();
   // Before wireVehicleDetail: the detail page's "Edit Customer" opens the
   // shared dialog this wires.
   wireCustomerEditor();

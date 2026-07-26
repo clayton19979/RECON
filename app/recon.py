@@ -26,7 +26,7 @@ def age_days(created_at: str) -> int:
     return (datetime.now(timezone.utc) - created).days
 
 
-def last_activity(db: sqlite3.Connection, column: str, ref_id: int, fallback: str) -> str:
+def last_activity(db: sqlite3.Connection, column: str, ref_id: int, fallback: str, segment: str | None = None) -> str:
     """When anything last actually happened to this vehicle.
 
     The newest last_activity_at across the vehicle's tickets (bumped by every
@@ -44,8 +44,9 @@ def last_activity(db: sqlite3.Connection, column: str, ref_id: int, fallback: st
     Voided tickets are excluded for the same reason cost_rollup excludes them:
     voiding one means the work never happened."""
     row = db.execute(
-        f"SELECT max(last_activity_at) FROM orders WHERE {column}=? AND voided=0 AND last_activity_at!=''",
-        (ref_id,),
+        f"SELECT max(last_activity_at) FROM orders WHERE {column}=? AND voided=0 AND last_activity_at!=''"
+        + (" AND segment=?" if segment else ""),
+        (ref_id, segment) if segment else (ref_id,),
     ).fetchone()
     return (row[0] if row and row[0] else None) or fallback
 
@@ -64,7 +65,7 @@ def idle_days(last_activity_at: str) -> int:
 STALLED_AFTER_DAYS = 7
 
 
-def last_activity_detail(db: sqlite3.Connection, column: str, ref_id: int, fallback: str) -> dict:
+def last_activity_detail(db: sqlite3.Connection, column: str, ref_id: int, fallback: str, segment: str | None = None) -> dict:
     """When work last happened on this vehicle, and -- where we can honestly
     say -- what it was and who did it.
 
@@ -80,13 +81,14 @@ def last_activity_detail(db: sqlite3.Connection, column: str, ref_id: int, fallb
     only attribute when the newest event *is* the newest activity; otherwise
     action/actor come back empty and the UI says when without claiming who.
     A slightly thinner answer beats a confidently wrong one."""
-    at = last_activity(db, column, ref_id, fallback)
+    at = last_activity(db, column, ref_id, fallback, segment)
     row = db.execute(
         f"""SELECT e.action, e.actor, e.created_at
             FROM activity_events e JOIN orders o ON o.id=e.order_id
-            WHERE o.{column}=? AND o.voided=0
-            ORDER BY e.created_at DESC, e.id DESC LIMIT 1""",
-        (ref_id,),
+            WHERE o.{column}=? AND o.voided=0"""
+        + (" AND o.segment=?" if segment else "")
+        + " ORDER BY e.created_at DESC, e.id DESC LIMIT 1",
+        (ref_id, segment) if segment else (ref_id,),
     ).fetchone()
     detail = {"at": at, "idle_days": idle_days(at), "action": "", "actor": ""}
     if row and row["created_at"] and row["created_at"] >= at:
@@ -177,7 +179,7 @@ class WeOwePaymentIn(BaseModel):
     actor: str = ""
 
 
-def cost_rollup(db: sqlite3.Connection, column: str, ref_id: int) -> dict:
+def cost_rollup(db: sqlite3.Connection, column: str, ref_id: int, segment: str | None = None) -> dict:
     """Actual cost = what's really landed: labor/fees count in full the moment
     they're logged, but parts only count once received, and stop counting
     again once sent back to the vendor (part_returned). quoted_cost (full
@@ -201,10 +203,12 @@ def cost_rollup(db: sqlite3.Connection, column: str, ref_id: int) -> dict:
            FROM orders o
            LEFT JOIN estimates e ON e.order_id=o.id
            LEFT JOIN estimate_items ei ON ei.estimate_id=e.id
-           WHERE o.{column}=?
+           WHERE o.{column}=?"""
+        + (" AND o.segment=?" if segment else "")
+        + """
            GROUP BY o.id
            ORDER BY o.id""",
-        (ref_id,),
+        (ref_id, segment) if segment else (ref_id,),
     ).fetchall()
     orders = []
     for row in rows:

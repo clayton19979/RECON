@@ -2188,7 +2188,7 @@ function renderCustomerInfoSummary() {
   const address = [item.customer_address_line1, item.customer_address_line2, cityLine].filter(Boolean).join(", ");
   const rows = [
     ["Name", esc(item.customer_name || "—")],
-    ["Phone", item.customer_phone ? `<a href="tel:${esc(item.customer_phone)}">${esc(item.customer_phone)}</a>` : "—"],
+    ["Phone", item.customer_phone ? `<a href="tel:${esc(phoneDigits(item.customer_phone) || item.customer_phone)}">${esc(fmtPhone(item.customer_phone))}</a>` : "—"],
     ["Email", item.customer_email ? esc(item.customer_email) : "—"],
     ["Address", esc(address || "—")],
   ];
@@ -2209,6 +2209,60 @@ const US_STATE_CODES = new Set([
 function focusInvalidField(el) {
   el.focus();
   if (typeof el.select === "function") el.select();
+}
+
+/* ---------- phone numbers (shared) ---------- */
+// Phones are typed in two places (the customer editor and the we-owe
+// new-customer form) and shown in several more (customer info card, printed
+// ticket, tel: links). One set of helpers so they all agree: inputs mask to
+// (313) 555-0142 as you type, saved values must be a real 10-digit number or
+// empty, display always shows the formatted form, and tel: links get bare
+// digits so the phone app doesn't choke on punctuation.
+
+function phoneDigits(raw) {
+  let d = String(raw || "").replace(/\D/g, "");
+  if (d.length === 11 && d.startsWith("1")) d = d.slice(1); // +1 country code
+  return d;
+}
+
+// Display formatting: pretty-print a stored value if it's a 10-digit US
+// number, otherwise show whatever was stored (old records predate the mask).
+function fmtPhone(raw) {
+  const d = phoneDigits(raw);
+  if (d.length !== 10) return String(raw || "").trim();
+  return `(${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6)}`;
+}
+
+// Progressive mask for typing: digits land formatted, everything else never
+// lands, capped at 10 digits. Same normalize-as-you-type treatment the
+// State/ZIP fields get.
+function phoneMask(raw) {
+  const d = phoneDigits(raw).slice(0, 10);
+  if (!d) return "";
+  if (d.length < 4) return `(${d}`;
+  if (d.length < 7) return `(${d.slice(0, 3)}) ${d.slice(3)}`;
+  return `(${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6)}`;
+}
+
+function wirePhoneInput(el) {
+  el.addEventListener("input", () => { el.value = phoneMask(el.value); });
+}
+
+// Submit-time check for a masked field: empty is fine (phone is optional),
+// anything else has to be all 10 digits. Toasts, focuses, returns false on a
+// partial number so callers can bail before saving. A value identical to
+// what the dialog loaded (el.dataset.loadedValue) also passes: records from
+// before the mask can hold a 7-digit local number, and an advisor opening
+// the editor to fix the *address* shouldn't be held hostage by it.
+function phoneFieldOk(el) {
+  const value = el.value.trim();
+  if (!value || el.value === (el.dataset.loadedValue || "")) return true;
+  if (phoneDigits(value).length !== 10) {
+    toast("Phone needs all 10 digits, like (313) 555-0142", true);
+    focusInvalidField(el);
+    return false;
+  }
+  return true;
 }
 
 /* ---------- address autocomplete (customer editor) ---------- */
@@ -3510,7 +3564,7 @@ function renderPrintTicket() {
       <div class="print-info-block">
         <div class="pi-label">Customer</div>
         ${kv("Name", esc(item.customer_name || ""))}
-        ${kv("Phone", esc(item.customer_phone || ""))}
+        ${kv("Phone", esc(fmtPhone(item.customer_phone || "")))}
         ${kv("Email", esc(item.customer_email || ""))}
         ${kv("We-Owe", esc(item.description || ""))}
       </div>` : `
@@ -3801,6 +3855,9 @@ function wireVehicleDetail() {
     const { item } = state.detail;
     $("#customer-edit-name").value = item.customer_name || "";
     $("#customer-edit-phone").value = item.customer_phone || "";
+    // Remembered so an untouched legacy phone (saved before the mask
+    // existed) doesn't fail validation on an unrelated edit -- see phoneFieldOk.
+    $("#customer-edit-phone").dataset.loadedValue = $("#customer-edit-phone").value;
     $("#customer-edit-email").value = item.customer_email || "";
     $("#customer-edit-address1").value = item.customer_address_line1 || "";
     $("#customer-edit-address2").value = item.customer_address_line2 || "";
@@ -3813,6 +3870,7 @@ function wireVehicleDetail() {
   $("#customer-edit-cancel").addEventListener("click", () => $("#customer-edit-dialog").close());
   $("#customer-edit-cancel-2").addEventListener("click", () => $("#customer-edit-dialog").close());
   setupAddressAutocomplete();
+  wirePhoneInput($("#customer-edit-phone"));
   // State uppercases and strips non-letters as you type; ZIP keeps digits
   // (and the ZIP+4 hyphen) only. Both are optional fields, but if filled in
   // they must be real: a two-letter USPS code and a 5-digit (or 5+4) ZIP.
@@ -3838,6 +3896,7 @@ function wireVehicleDetail() {
       toast("ZIP should be 5 digits (or ZIP+4, like 48203-1234)", true);
       return void focusInvalidField(postalEl);
     }
+    if (!phoneFieldOk($("#customer-edit-phone"))) return;
     const { item } = state.detail;
     try {
       await patch(`/api/customers/${item.customer_id}`, {
@@ -4050,6 +4109,7 @@ function wireWeOweDialog() {
   $("#we-owe-vehicle").addEventListener("change", () => {
     $("#we-owe-new-vehicle").style.display = $("#we-owe-vehicle").value === "__new__" ? "" : "none";
   });
+  wirePhoneInput($("#we-owe-new-customer-phone"));
   $("#we-owe-decode-vin").addEventListener("click", async () => {
     const vin = $("#we-owe-new-vin").value.trim();
     if (vin.length < 5) return toast("Enter a VIN first", true);
@@ -4071,6 +4131,7 @@ function wireWeOweDialog() {
         if (customerId === "__new__") {
           const name = $("#we-owe-new-customer-name").value.trim();
           if (!name) return toast("Enter the customer's name", true);
+          if (!phoneFieldOk($("#we-owe-new-customer-phone"))) return;
           const customer = await post("/api/customers", { name, phone: $("#we-owe-new-customer-phone").value.trim(), email: "" });
           customerId = customer.id;
         } else {

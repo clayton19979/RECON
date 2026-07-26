@@ -1592,3 +1592,49 @@ Next time, in rough priority order:
      list, so only partially).
   4. .git lock debris keeps growing (stale.* renames); a run from the
      Windows side could actually delete them.
+
+================================================================
+Run: 2026-07-26 (evening) -- phone numbers grow up + honest --reset-only
+================================================================
+
+* Phones now have one canonical shape, (313) 555-0142, enforced at every
+  layer. The API normalizes on create/patch (any punctuation, optional
+  +1 -- but anything that isn't 10 digits is kept as typed, so legacy
+  records and oddball entries never start failing saves). The two inputs
+  (customer editor, we-owe new-customer) mask as you type -- same
+  treatment State/ZIP got last run -- and refuse partial numbers on
+  submit with a toast + focus. Displays (customer info card, printed
+  ticket) pretty-print whatever's stored; tel: links now carry bare
+  digits instead of punctuation. Key wrinkle: an *untouched* legacy
+  value (7-digit numbers from before the mask) passes validation, so an
+  advisor fixing an address isn't held hostage by a 1998 phone record --
+  the editor remembers what it loaded (dataset.loadedValue) and only
+  validates changes. Seed data upgraded to 10-digit numbers so the mock
+  dataset demos the pretty format.
+
+* seed_mock_data --reset-only told a fresh install "Previous database
+  moved aside" -- because `app = create_app()` ran at import, init_db'd
+  the default path, and handed reset_db a file to "back up" that hadn't
+  existed a moment earlier. app.main's `app` is now built lazily via
+  module __getattr__ (PEP 562): `uvicorn app.main:app` still resolves,
+  but importing DEFAULT_DB no longer creates a database. The seed script
+  defers `from app.main import app` until after the reset. Verified:
+  bare import creates no db, --reset-only on a fresh path prints no
+  backup line, full seed still builds.
+
+* Tests: +1 python test (normalization matrix incl. kept-as-typed and
+  PATCH), detail_smoke grew a phone section (mask progression, +1 fold,
+  10-digit cap, partial refused with focus, legacy pass-through, masked
+  save payload). 252 python tests green, all 9 dom suites pass, uvicorn
+  boots, /, /api/orders, /api/staff all 200.
+
+Next time, in rough priority order:
+  1. The detail page's own Escape/keyboard handling could partially
+     join the wireListKeyboard model. (Carried.)
+  2. Customers have no screen of their own -- phone/email/address are
+     only reachable through a vehicle. A simple customer list/search
+     might be worth it.
+  3. .git lock debris keeps growing (dead28*.lock renames); a run from
+     the Windows side could actually delete them.
+  4. Email field could get the same treatment phone just did (loose
+     validate-on-change, keep legacy).

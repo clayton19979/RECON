@@ -34,8 +34,26 @@ def test_customer_patch_updates_fields(client):
     assert res.status_code == 200
     body = res.json()
     assert body["name"] == "Jamie Lee"
-    assert body["phone"] == "219-555-9999"
+    assert body["phone"] == "(219) 555-9999"  # normalized to the canonical shape
     assert body["email"] == "jamie@example.com"
+
+
+def test_customer_phone_normalized_on_create_and_patch(client):
+    # Ten digits in any punctuation come out in the one canonical shape.
+    for raw in ("313.555.0142", "3135550142", "(313) 555-0142", "+1 313-555-0142", "1-313-555-0142"):
+        customer = client.post("/api/customers", json={"name": "Pat", "phone": raw}).json()
+        assert customer["phone"] == "(313) 555-0142", f"{raw!r} -> {customer['phone']!r}"
+
+    # Anything that isn't a 10-digit number is kept as typed, not rejected:
+    # legacy records and oddball entries (extensions, short codes) still save.
+    kept = client.post("/api/customers", json={"name": "Pat", "phone": "555-0142"}).json()
+    assert kept["phone"] == "555-0142"
+    empty = client.post("/api/customers", json={"name": "Pat", "phone": "  "}).json()
+    assert empty["phone"] == ""
+
+    # PATCH goes through the same normalization as create.
+    res = client.patch(f"/api/customers/{kept['id']}", json={"phone": "219 555 0100"})
+    assert res.json()["phone"] == "(219) 555-0100"
 
 
 def test_customer_address_create_and_patch_round_trip(client):

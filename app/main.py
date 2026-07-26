@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import sqlite3
 import sys
 from datetime import datetime
@@ -71,6 +72,25 @@ _US_STATE_ABBREV = {
     "tennessee": "TN", "texas": "TX", "utah": "UT", "vermont": "VT", "virginia": "VA",
     "washington": "WA", "west virginia": "WV", "wisconsin": "WI", "wyoming": "WY",
 }
+
+
+def _normalize_phone(raw: str) -> str:
+    """Store phones one way: (313) 555-0142.
+
+    The UI masks input to that shape already, but the API is also driven by
+    the seed script, tests, and anything else that speaks HTTP -- so the
+    canonical form is enforced here. A 10-digit number (with or without
+    punctuation, with or without a leading +1) is reformatted; anything else
+    is kept as typed rather than rejected, because old records and oddball
+    entries (a shop's 4-digit extension, say) shouldn't start failing saves.
+    """
+    raw = raw.strip()
+    digits = re.sub(r"\D", "", raw)
+    if len(digits) == 11 and digits.startswith("1"):
+        digits = digits[1:]
+    if len(digits) == 10:
+        return f"({digits[:3]}) {digits[3:6]}-{digits[6:]}"
+    return raw
 
 
 def _state_abbrev(state: str) -> str:
@@ -253,7 +273,7 @@ def create_app(db_path: Path = DEFAULT_DB, backups_dir: Path = DEFAULT_BACKUPS_D
         with connect() as db:
             cur = db.execute(
                 "INSERT INTO customers(name,phone,email,address_line1,address_line2,city,state,postal_code,created_at) VALUES(?,?,?,?,?,?,?,?,?)",
-                (item.name.strip(), item.phone.strip(), item.email.strip(),
+                (item.name.strip(), _normalize_phone(item.phone), item.email.strip(),
                  item.address_line1.strip(), item.address_line2.strip(), item.city.strip(),
                  item.state.strip(), item.postal_code.strip(), now()),
             )
@@ -274,7 +294,7 @@ def create_app(db_path: Path = DEFAULT_DB, backups_dir: Path = DEFAULT_BACKUPS_D
                 params.append(item.name.strip())
             if item.phone is not None:
                 fields.append("phone=?")
-                params.append(item.phone.strip())
+                params.append(_normalize_phone(item.phone))
             if item.email is not None:
                 fields.append("email=?")
                 params.append(item.email.strip())
@@ -595,4 +615,20 @@ def create_app(db_path: Path = DEFAULT_DB, backups_dir: Path = DEFAULT_BACKUPS_D
     return app
 
 
-app = create_app()
+def __getattr__(name: str):
+    """The module-level `app` is built on first access, not at import time.
+
+    `app = create_app()` at import meant that *any* import from this module
+    -- seed_mock_data pulling in DEFAULT_DB, say -- init_db()'d the default
+    database as a side effect. That's how `seed_mock_data --reset-only` on a
+    box with no database ended up printing "Previous database moved aside":
+    the import created a fresh empty db a moment before reset_db looked.
+
+    `uvicorn app.main:app` still works -- resolving the import string
+    triggers this hook. The instance is cached by assignment, so later
+    lookups find the real attribute and never come back here.
+    """
+    if name == "app":
+        globals()["app"] = create_app()
+        return globals()["app"]
+    raise AttributeError(name)

@@ -44,11 +44,16 @@ const order = {
 // failure paths (which must all just hide the dropdown) can be driven too.
 let suggestCalls = [];
 let suggestMode = "results"; // "results" | "empty" | "error"
+const customerPatchBodies = []; // what the editor actually saved
 
 const { w, doc, fetchLog, settle, ok, finish, rejections } = await boot({
   expose: ["state", "openVehicleDetail", "renderLastWorked", "activityLabel", "ACTIVITY_LABEL",
            "STALLED_AFTER_DAYS", "loadTasksView"],
-  fetch: async (url) => {
+  fetch: async (url, opts = {}) => {
+    if (url === "/api/customers/55" && opts.method === "PATCH") {
+      customerPatchBodies.push(JSON.parse(opts.body));
+      return { id: 55 };
+    }
     if (url.startsWith("/api/address-suggest")) {
       suggestCalls.push(decodeURIComponent(url.split("q=")[1] || ""));
       if (suggestMode === "error") return { __status: 502, body: { detail: "geocoder down" } };
@@ -320,6 +325,53 @@ await settle();
 ok(customerPatches() === 2, `empty state and ZIP should be allowed, saw ${customerPatches()} PATCHes`);
 
 doc.querySelector("#customer-edit-cancel")?.click();
+
+/* ------------------------------------------------------------------
+   Phone: masks as you type, saves only whole numbers -- but an untouched
+   legacy value (stored before the mask existed) must never block an
+   unrelated edit.
+   ------------------------------------------------------------------ */
+w.state.detail.item = { ...w.state.detail.item, customer_id: 55, customer_name: "Maria Alvarez", customer_phone: "555-0101" };
+doc.querySelector("#vd-edit-customer").click();
+const phoneEl = doc.querySelector("#customer-edit-phone");
+ok(phoneEl.value === "555-0101", `the editor should load the stored phone untouched, reads "${phoneEl.value}"`);
+
+// The legacy 7-digit value passes through untouched on save: the advisor
+// came to fix the address, not to be held up by a 1998-era phone record.
+submitForm();
+await settle();
+ok(customerPatches() === 3, `an untouched legacy phone blocked the save (saw ${customerPatches()} PATCHes)`);
+ok(customerPatchBodies[2].phone === "555-0101", `legacy phone should save as-is, sent "${customerPatchBodies[2].phone}"`);
+
+// The mask formats digits progressively and refuses everything else.
+w.state.detail.item = { ...w.state.detail.item, customer_id: 55, customer_name: "Maria Alvarez", customer_phone: "555-0101" };
+doc.querySelector("#vd-edit-customer").click();
+setField(phoneEl, "313");
+ok(phoneEl.value === "(313", `3 digits should read "(313", reads "${phoneEl.value}"`);
+setField(phoneEl, "313555");
+ok(phoneEl.value === "(313) 555", `6 digits should read "(313) 555", reads "${phoneEl.value}"`);
+setField(phoneEl, "3a1b3!555.0142");
+ok(phoneEl.value === "(313) 555-0142", `letters and punctuation should never land, reads "${phoneEl.value}"`);
+setField(phoneEl, "+1 (313) 555-0142");
+ok(phoneEl.value === "(313) 555-0142", `a +1 country code should fold away, reads "${phoneEl.value}"`);
+setField(phoneEl, "31355501429999");
+ok(phoneEl.value === "(313) 555-0142", `input should cap at 10 digits, reads "${phoneEl.value}"`);
+
+// A partial number is refused: toast, focus on the field, nothing PATCHed.
+setField(phoneEl, "313555");
+submitForm();
+await settle();
+ok(customerPatches() === 3, "a 6-digit phone still reached the customer PATCH");
+ok(toastEl.classList.contains("error") && /all 10 digits/.test(toastEl.textContent),
+   `expected the phone toast, got "${toastEl.textContent}"`);
+ok(doc.activeElement === phoneEl, "focus should land on the phone field after a partial number");
+
+// A complete number sails through, already in canonical shape.
+setField(phoneEl, "2195550100");
+submitForm();
+await settle();
+ok(customerPatches() === 4, `a valid phone should PATCH exactly once more, saw ${customerPatches()}`);
+ok(customerPatchBodies[3].phone === "(219) 555-0100", `phone should save masked, sent "${customerPatchBodies[3].phone}"`);
 
 ok(rejections.length === 0, `unhandled rejections during the run: ${rejections.map((e) => e && e.message).join(" | ")}`);
 

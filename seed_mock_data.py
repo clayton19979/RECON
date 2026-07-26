@@ -21,7 +21,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from fastapi.testclient import TestClient
 
 from app.db import connect, reset_db
-from app.main import DEFAULT_DB, app
+
+# Deliberately *not* importing `app` here: building the app init_db()s the
+# database, and the reset below has to happen first (otherwise --reset-only
+# on a fresh path "moves aside" a db that only exists because we imported).
+from app.main import DEFAULT_DB
 
 
 def post(client: TestClient, path: str, json: dict, expect: int = 201) -> dict:
@@ -162,6 +166,8 @@ def main() -> None:
     if "--reset-only" in sys.argv[1:]:
         print("Done (reset only, nothing seeded).")
         return
+    from app.main import app  # deferred: building the app init_db()s the database
+
     client = TestClient(app)
 
     print("Creating staff ...")
@@ -175,7 +181,7 @@ def main() -> None:
     print("Building retail repair orders ...")
 
     # 1. Fresh estimate, nothing decided yet.
-    cust, veh = customer_and_vehicle(client, "Maria Alvarez", "555-0101", "maria.alvarez@example.com",
+    cust, veh = customer_and_vehicle(client, "Maria Alvarez", "313-555-0101", "maria.alvarez@example.com",
                                       year=2017, make="Toyota", model="Camry", vin="4T1BF1FK5HU123456", mileage=78000)
     o1 = retail_order(client, cust, veh, "Check engine light, rough idle at stop")
     save_estimate(client, o1["id"], [
@@ -186,7 +192,7 @@ def main() -> None:
     note(client, o1["id"], "Customer waiting on a callback before approving.", actor="Dana Whitfield")
 
     # 2. Estimate sent, waiting on customer decision.
-    cust, veh = customer_and_vehicle(client, "Tyrell Banks", "555-0102", "tyrell.banks@example.com",
+    cust, veh = customer_and_vehicle(client, "Tyrell Banks", "313-555-0102", "tyrell.banks@example.com",
                                       year=2020, make="Chevrolet", model="Equinox", vin="3GNAXKEV4LS123456", mileage=41250)
     o2 = retail_order(client, cust, veh, "Front brakes squealing")
     save_estimate(client, o2["id"], [
@@ -198,7 +204,7 @@ def main() -> None:
     set_status(client, o2["id"], "pending_approval")
 
     # 3. Approved and in progress, parts already ordered.
-    cust, veh = customer_and_vehicle(client, "Janelle Osei", "555-0103", "janelle.osei@example.com",
+    cust, veh = customer_and_vehicle(client, "Janelle Osei", "313-555-0103", "janelle.osei@example.com",
                                       year=2019, make="Honda", model="CR-V", vin="5J6RW2H86KL123456", mileage=55400)
     o3 = retail_order(client, cust, veh, "AC blows warm, whining noise from belt area")
     save_estimate(client, o3["id"], [
@@ -213,7 +219,7 @@ def main() -> None:
     note(client, o3["id"], "Compressor and belt on order, ETA tomorrow.", actor="Ray Ortiz")
 
     # 4. Complete and paid in full.
-    cust, veh = customer_and_vehicle(client, "Devon Marsh", "555-0104", "devon.marsh@example.com",
+    cust, veh = customer_and_vehicle(client, "Devon Marsh", "313-555-0104", "devon.marsh@example.com",
                                       year=2016, make="Ford", model="F-150", vin="1FTEW1EG5GKE12345", mileage=112300)
     o4 = retail_order(client, cust, veh, "Oil change + tire rotation, 112k service")
     save_estimate(client, o4["id"], [
@@ -229,7 +235,7 @@ def main() -> None:
     post(client, f"/api/invoices/{invoice['id']}/payments", {"amount": invoice["total"], "method": "card", "actor": "advisor"})
 
     # 5. Complete, invoiced, only partially paid.
-    cust, veh = customer_and_vehicle(client, "Whitney Cole", "555-0105", "whitney.cole@example.com",
+    cust, veh = customer_and_vehicle(client, "Whitney Cole", "313-555-0105", "whitney.cole@example.com",
                                       year=2015, make="Subaru", model="Outback", vin="4S4BSANC5F3123456", mileage=98700)
     o5 = retail_order(client, cust, veh, "Head gasket replacement")
     save_estimate(client, o5["id"], [
@@ -244,7 +250,7 @@ def main() -> None:
     post(client, f"/api/invoices/{invoice5['id']}/payments", {"amount": round(invoice5["total"] / 2, 2), "method": "cash", "actor": "advisor"})
 
     # 6. Voided (customer backed out before any work started).
-    cust, veh = customer_and_vehicle(client, "Ken Ibarra", "555-0106", "ken.ibarra@example.com",
+    cust, veh = customer_and_vehicle(client, "Ken Ibarra", "313-555-0106", "ken.ibarra@example.com",
                                       year=2012, make="Nissan", model="Altima", vin="1N4AL2AP7CN123456", mileage=143200)
     o6 = retail_order(client, cust, veh, "Transmission slipping")
     save_estimate(client, o6["id"], [
@@ -253,7 +259,7 @@ def main() -> None:
     post(client, f"/api/orders/{o6['id']}/void", {"actor": "advisor"}, expect=200)
 
     # 7. Technician found extra issues -- draft lines waiting on advisor review.
-    cust, veh = customer_and_vehicle(client, "Priscilla Wong", "555-0107", "priscilla.wong@example.com",
+    cust, veh = customer_and_vehicle(client, "Priscilla Wong", "313-555-0107", "priscilla.wong@example.com",
                                       year=2021, make="Mazda", model="CX-5", vin="JM3KFBCM5M0123456", mileage=22100)
     o7 = retail_order(client, cust, veh, "Squeaking noise over bumps")
     save_estimate(client, o7["id"], [
@@ -321,7 +327,7 @@ def main() -> None:
         "mileage": 101500, "acquisition_source": "auction", "acquisition_date": "2026-06-05", "purchase_price": 2400,
         "notes": "Sold off the lot.",
     })
-    buyer, _ = customer_and_vehicle(client, "Ashley Pratt", "555-0210", "ashley.pratt@example.com",
+    buyer, _ = customer_and_vehicle(client, "Ashley Pratt", "313-555-0210", "ashley.pratt@example.com",
                                      year=2015, make="Chevrolet", model="Malibu")
     patch(client, f"/api/recon/vehicles/{r4['id']}", {
         "status": "sold", "sale_price": 6995.0, "sale_date": "2026-07-15", "sale_customer_id": buyer["id"],
@@ -338,7 +344,7 @@ def main() -> None:
 
     print("Building we-owe items ...")
 
-    cust, veh = customer_and_vehicle(client, "Jordan Whitfield", "555-0301", "jordan.whitfield@example.com",
+    cust, veh = customer_and_vehicle(client, "Jordan Whitfield", "313-555-0301", "jordan.whitfield@example.com",
                                       year=2020, make="Kia", model="Soul", vin="KNDJP3A50L7123456", mileage=31000)
     we1 = post(client, "/api/we-owe", {
         "customer_id": cust["id"], "vehicle_id": veh["id"], "description": "Install aftermarket running boards (customer supplied)",
@@ -358,7 +364,7 @@ def main() -> None:
     patch(client, f"/api/orders/{ro_we1['id']}/estimate/order-parts", {})
     set_status(client, ro_we1["id"], "in_progress")
 
-    cust, veh = customer_and_vehicle(client, "Renata Silva", "555-0302", "renata.silva@example.com",
+    cust, veh = customer_and_vehicle(client, "Renata Silva", "313-555-0302", "renata.silva@example.com",
                                       year=2019, make="Toyota", model="RAV4", vin="2T3P1RFV0KW123456", mileage=48200)
     we2 = post(client, "/api/we-owe", {
         "customer_id": cust["id"], "vehicle_id": veh["id"], "description": "Touch up paint on rear bumper from sale prep",
@@ -366,7 +372,7 @@ def main() -> None:
     })
     post(client, f"/api/we-owe/{we2['id']}/payments", {"amount": 50.0, "method": "cash", "note": "Deposit toward outside body shop cost", "actor": "advisor"})
 
-    cust, veh = customer_and_vehicle(client, "Marcus Doyle", "555-0303", "marcus.doyle@example.com",
+    cust, veh = customer_and_vehicle(client, "Marcus Doyle", "313-555-0303", "marcus.doyle@example.com",
                                       year=2018, make="Honda", model="Accord", vin="1HGCV1F34JA123456", mileage=52300)
     we3 = post(client, "/api/we-owe", {
         "customer_id": cust["id"], "vehicle_id": veh["id"], "description": "Second key fob",
@@ -374,7 +380,7 @@ def main() -> None:
     })
     patch(client, f"/api/we-owe/{we3['id']}", {"status": "fulfilled"})
 
-    cust, veh = customer_and_vehicle(client, "Iris Chandler", "555-0304", "iris.chandler@example.com",
+    cust, veh = customer_and_vehicle(client, "Iris Chandler", "313-555-0304", "iris.chandler@example.com",
                                       year=2017, make="Jeep", model="Cherokee", vin="1C4PJLDB4HW123456", mileage=67800)
     we4 = post(client, "/api/we-owe", {
         "customer_id": cust["id"], "vehicle_id": veh["id"], "description": "Repair minor dent, customer decided not to pursue",

@@ -417,3 +417,65 @@ def test_address_suggest_degrades_to_empty_on_any_provider_failure(client):
             res = client.get("/api/address-suggest?q=1600 Pennsylvania")
         assert res.status_code == 200, f"{type(boom).__name__} escaped as {res.status_code}"
         assert res.json() == []
+
+
+def test_customers_list_carries_visit_aggregates(client):
+    """The Customers screen sorts and filters on these counts server-side data,
+    so the list endpoint has to carry them: vehicles, unvoided orders, how many
+    of those are still open, and the newest order's timestamp."""
+    order = make_retail_order(client)  # creates "Retail Customer" + a Focus + 1 RO
+    customer_id = order["customer_id"]
+    # A second vehicle with no orders bumps vehicle_count only.
+    client.post("/api/vehicles", json={"customer_id": customer_id, "year": 2015, "make": "Jeep", "model": "Patriot"})
+
+    row = next(c for c in client.get("/api/customers").json() if c["id"] == customer_id)
+    assert row["vehicle_count"] == 2
+    assert row["order_count"] == 1
+    assert row["open_orders"] == 1
+    assert row["last_visit_at"] == order["created_at"]
+
+    # Completing the RO closes it but keeps it counted; voiding removes it
+    # from every aggregate including last_visit_at.
+    client.patch(f"/api/orders/{order['id']}/status", json={"status": "complete", "actor": "t"})
+    row = next(c for c in client.get("/api/customers").json() if c["id"] == customer_id)
+    assert (row["order_count"], row["open_orders"]) == (1, 0)
+
+    client.post(f"/api/orders/{order['id']}/void", json={"actor": "t"})
+    row = next(c for c in client.get("/api/customers").json() if c["id"] == customer_id)
+    assert (row["order_count"], row["open_orders"]) == (0, 0)
+    assert row["last_visit_at"] is None
+
+    # A customer with nothing at all reads zeros, not NULL-shaped surprises.
+    bare = client.post("/api/customers", json={"name": "No Car Yet"}).json()
+    row = next(c for c in client.get("/api/customers").json() if c["id"] == bare["id"])
+    assert (row["vehicle_count"], row["order_count"], row["open_orders"], row["last_visit_at"]) == (0, 0, 0, None)
+
+
+def test_customer_detail_groups_orders_under_vehicles(client):
+    order = make_retail_order(client)
+    customer_id, vehicle_id = order["customer_id"], order["vehicle_id"]
+    second = client.post("/api/vehicles", json={"customer_id": customer_id, "year": 2015, "make": "Jeep", "model": "Patriot"}).json()
+
+    detail = client.get(f"/api/customers/{customer_id}").json()
+    assert detail["name"] == "Retail Customer"
+    assert [v["id"] for v in detail["vehicles"]] == [second["id"], vehicle_id]  # newest first
+    by_id = {v["id"]: v for v in detail["vehicles"]}
+    assert by_id[second["id"]]["orders"] == []
+    (ro,) = by_id[vehicle_id]["orders"]
+    assert (ro["id"], ro["number"], ro["segment"], ro["voided"]) == (order["id"], order["number"], "retail", 0)
+
+    # Voided orders stay in the detail, flagged -- history shouldn't lose tickets.
+    client.post(f"/api/orders/{order['id']}/void", json={"actor": "t"})
+    detail = client.get(f"/api/customers/{customer_id}").json()
+    (ro,) = {v["id"]: v for v in detail["vehicles"]}[vehicle_id]["orders"]
+    assert ro["voided"] == 1
+
+
+def test_customer_detail_hides_shop_sentinel_and_404s_unknown(client):
+    assert client.get("/api/customers/999999").status_code == 404
+    # The shop-owned recon sentinel is not a customer; asking for it directly
+    # 404s the same as its absence from the list.
+    make_recon_vehicle(client)
+    from app.main import RECON_SHOP_CUSTOMER_ID
+
+    assert client.get(f"/api/customers/{RECON_SHOP_CUSTOMER_ID}").status_code == 404

@@ -1638,3 +1638,55 @@ Next time, in rough priority order:
      the Windows side could actually delete them.
   4. Email field could get the same treatment phone just did (loose
      validate-on-change, keep legacy).
+
+================================================================
+2026-07-26 (scheduled run) — Customers screen: the shop's rolodex
+================================================================
+
+* The carried idea from last run, built out fully: customers were only
+  reachable by remembering which car they own and going through the
+  board. New "Customers" rail view (Workflow group, under Vehicles):
+  every customer a ticket was written for, alphabetical like a phone
+  book, searchable by name/email/city/state and by phone *digits* (so
+  "313-555", "3135 55" and "(313) 555" all find the number however it
+  was stored). Four stat cards; With Open ROs and Missing Contact
+  (no phone AND no email) double as filters, same contract as the
+  board's cards. Rows expand in place -- caller's on hold, don't lose
+  the list -- showing tel:/mailto: links, the address, and every
+  vehicle with per-RO status chips. Live recon/we-owe chips jump to
+  vehicle detail; retail and voided ROs render inert (retail has no
+  page; voided stays visible, flagged). Full wireListKeyboard model:
+  arrows/Home/End cursor, Enter expands, layered Escape (expansion ->
+  filters -> cursor), type-to-search.
+
+* Backend: /api/customers now carries vehicle_count, order_count,
+  open_orders (both excluding voided), last_visit_at (newest unvoided
+  RO) via correlated subqueries. New /api/customers/{id}: customer +
+  vehicles each with their orders (voided included, flagged); 404s the
+  shop-owned sentinel like it 404s an unknown id.
+
+* The customer-edit dialog became a real shared component: wiring
+  (masks, autocomplete, validation, submit) happens once at init
+  (wireCustomerEditor), openCustomerEditor(customer, onSaved) stages a
+  plain row. Detail page passes its flattened customer_* fields;
+  Customers screen passes the real row and folds the PATCH result back
+  into the list without a reload. Expansion detail cache invalidated on
+  save and on every view load (and the open row collapses on load --
+  a row left expanded before jumping away used to come back as a
+  permanent "Loading…").
+
+* Tests: +3 python (aggregate matrix incl. void/complete transitions,
+  detail grouping, sentinel 404), new customers_smoke.mjs dom suite
+  (stats, filters, digit search, lazy expand + cache, chip jump,
+  editor round-trip, keyboard). "?" overlay documents the new screen.
+  255 python tests green, all 10 dom suites pass, uvicorn boots,
+  /, /api/customers, /api/orders, /api/staff all 200.
+
+Next time, in rough priority order:
+  1. Detail page Escape/keyboard could join wireListKeyboard. (Carried.)
+  2. Customers screen could link "customer since"/vehicles into a
+     "write a new RO for this person" action -- currently starting a
+     retail RO for an existing customer still goes through We-Owe/board
+     paths only.
+  3. Email field validation (loose, keep-legacy) to match phone's.
+  4. .git lock debris (dead28*.lock) still needs a Windows-side delete.

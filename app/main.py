@@ -265,8 +265,47 @@ def create_app(db_path: Path = DEFAULT_DB, backups_dir: Path = DEFAULT_BACKUPS_D
 
     @app.get("/api/customers")
     def list_customers():
+        # Enriched for the Customers screen: how many vehicles and (unvoided)
+        # repair orders each person has, how many of those ROs are still open,
+        # and when the shop last wrote them a ticket. Correlated subqueries
+        # rather than JOIN+GROUP BY so a customer with two vehicles and three
+        # orders doesn't multiply into six rows to aggregate back down.
         with connect() as db:
-            return [dict(row) for row in db.execute("SELECT * FROM customers WHERE is_shop_owned=0 ORDER BY id DESC")]
+            rows = db.execute(
+                """SELECT c.*,
+                       (SELECT count(*) FROM vehicles v WHERE v.customer_id=c.id) vehicle_count,
+                       (SELECT count(*) FROM orders o WHERE o.customer_id=c.id AND o.voided=0) order_count,
+                       (SELECT count(*) FROM orders o WHERE o.customer_id=c.id AND o.voided=0 AND o.status!='complete') open_orders,
+                       (SELECT max(o.created_at) FROM orders o WHERE o.customer_id=c.id AND o.voided=0) last_visit_at
+                   FROM customers c WHERE c.is_shop_owned=0 ORDER BY c.id DESC"""
+            )
+            return [dict(row) for row in rows]
+
+    @app.get("/api/customers/{customer_id}")
+    def get_customer(customer_id: int):
+        """One customer with their vehicles, each vehicle with its repair
+        orders (voided included, flagged -- history shouldn't silently lose
+        tickets). The shop-owned recon sentinel 404s here like it's absent
+        from the list: it isn't a customer."""
+        with connect() as db:
+            row = db.execute("SELECT * FROM customers WHERE id=? AND is_shop_owned=0", (customer_id,)).fetchone()
+            if not row:
+                raise HTTPException(404, "Customer not found")
+            detail = dict(row)
+            vehicles = [dict(v) for v in db.execute("SELECT * FROM vehicles WHERE customer_id=? ORDER BY id DESC", (customer_id,))]
+            orders = db.execute(
+                """SELECT id, number, vehicle_id, segment, status, voided, created_at,
+                          recon_vehicle_id, we_owe_id, concern
+                   FROM orders WHERE customer_id=? ORDER BY id DESC""",
+                (customer_id,),
+            )
+            by_vehicle: dict[int, list[dict]] = {}
+            for o in orders:
+                by_vehicle.setdefault(o["vehicle_id"], []).append(dict(o))
+            for v in vehicles:
+                v["orders"] = by_vehicle.get(v["id"], [])
+            detail["vehicles"] = vehicles
+            return detail
 
     @app.post("/api/customers", status_code=201)
     def create_customer(item: CustomerIn):

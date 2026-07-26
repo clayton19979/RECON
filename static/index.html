@@ -16,6 +16,10 @@
       <svg viewBox="0 0 24 24"><path d="M3 12l2-8h14l2 8M3 12v7a1 1 0 001 1h2a1 1 0 001-1v-2h10v2a1 1 0 001 1h2a1 1 0 001-1v-7M3 12h18M7 16h.01M17 16h.01"/></svg>
       <span>Vehicles</span>
     </button>
+    <button class="rail-item" data-view="customers">
+      <svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.2"/><path d="M2.8 19.5c.9-3.3 3.3-5.1 6.2-5.1s5.3 1.8 6.2 5.1M16.5 5.6a3 3 0 010 5M18.6 14.6c1.5.7 2.5 2 3 4"/></svg>
+      <span>Customers</span>
+    </button>
     <button class="rail-item" data-view="reports">
       <svg viewBox="0 0 24 24"><path d="M9 17H5a2 2 0 01-2-2V5a2 2 0 012-2h14a2 2 0 012 2v10a2 2 0 01-2 2h-4M9 17l3 4 3-4M9 17h6"/></svg>
       <span>Reports</span>
@@ -447,6 +451,41 @@
           <button type="button" class="details-handle" id="vd-details-handle" aria-label="Toggle details panel" title="Toggle details panel">
             <svg viewBox="0 0 24 24"><path d="M13 5l-6 7 6 7"/></svg>
           </button>
+        </div>
+      </section>
+
+      <!-- CUSTOMERS -->
+      <section class="view" id="view-customers">
+        <div class="page-head">
+          <div>
+            <h1>Customers</h1>
+            <p class="page-desc">Everyone the shop has written a ticket for — contact info, their vehicles, and where each repair order stands.</p>
+          </div>
+        </div>
+
+        <div class="stats stats-customers" id="customers-stats"></div>
+
+        <div class="filters">
+          <input id="customers-search" class="filters-search" placeholder="Search name, phone, email, city…" aria-label="Search customers" autocomplete="off">
+          <div class="filters-gap"></div>
+          <button type="button" class="btn btn-ghost btn-sm" id="customers-reset-view" hidden>Reset view</button>
+          <span class="filters-note" id="customers-count" aria-live="polite">0 customers</span>
+        </div>
+
+        <div class="panel">
+          <div class="table-wrap">
+            <table class="customers-table">
+              <thead><tr>
+                <th scope="col">Name</th>
+                <th scope="col">Contact</th>
+                <th scope="col">Location</th>
+                <th scope="col" class="num-col">Vehicles</th>
+                <th scope="col" class="num-col">Repair Orders</th>
+                <th scope="col">Last Visit</th>
+              </tr></thead>
+              <tbody id="customers-table"></tbody>
+            </table>
+          </div>
         </div>
       </section>
 
@@ -1238,6 +1277,14 @@
         <div class="shortcut-row"><span class="shortcut-keys"><kbd>Space</kbd></span><span>Select or deselect the cursor row</span></div>
         <div class="shortcut-row"><span class="shortcut-keys"><kbd>Shift</kbd>+click</span><span>Select a range of rows</span></div>
         <div class="shortcut-row"><span class="shortcut-keys"><kbd>Ctrl</kbd>+click</span><span>Toggle one row in or out of the selection</span></div>
+        <div class="shortcut-row"><span class="shortcut-keys">a&hellip;z <span class="shortcut-keys-note">0&hellip;9</span></span><span>Start typing to search — no click needed</span></div>
+      </div>
+      <div class="shortcut-group">
+        <p class="shortcut-group-title">Customers</p>
+        <div class="shortcut-row"><span class="shortcut-keys"><kbd>↑</kbd><kbd>↓</kbd></span><span>Move the cursor row</span></div>
+        <div class="shortcut-row"><span class="shortcut-keys"><kbd>Home</kbd><kbd>End</kbd></span><span>Jump to the first / last row</span></div>
+        <div class="shortcut-row"><span class="shortcut-keys"><kbd>Enter</kbd></span><span>Expand or collapse the cursor row</span></div>
+        <div class="shortcut-row"><span class="shortcut-keys"><kbd>Esc</kbd></span><span>Collapse the open row, then clear search and filters</span></div>
         <div class="shortcut-row"><span class="shortcut-keys">a&hellip;z <span class="shortcut-keys-note">0&hellip;9</span></span><span>Start typing to search — no click needed</span></div>
       </div>
       <div class="shortcut-group">

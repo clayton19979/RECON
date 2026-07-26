@@ -1502,6 +1502,70 @@ function moveVehicleCursor(delta) {
   if (tr && tr.scrollIntoView) tr.scrollIntoView({ block: "nearest" });
 }
 
+/* ==================================================================
+   SHARED LIST KEYBOARD MODEL
+
+   The board and the Tasks screen are the same shape of work -- a list you
+   triage -- so they share one keyboard contract: Arrows/Home/End move a
+   cursor row, Enter fires the row's primary action, Space selects it for
+   bulk work, "/" jumps to that screen's search box, Escape backs out one
+   layer at a time (selection first, then the cursor), and any plain
+   character typed while nothing has focus lands in the search box, so
+   starting to type before clicking it can never "type outside the box".
+   (Single-letter shortcuts like j/k don't exist for the same reason: a
+   keystroke either navigates or searches, never both depending on the
+   letter.)
+
+   One implementation instead of two hand-kept copies, because the copies
+   had already drifted: the board's didn't ignore keys while a modal
+   <dialog> was open (arrowing behind a confirm box moved the cursor under
+   it), and its Escape couldn't drop the cursor once the selection was
+   gone. Screens differ only in what move/open/select/clear-search mean,
+   and say so through the config:
+     view          -- "#view-..." selector; keys apply only while active
+     search        -- selector for this screen's search <input>
+     searchEscape(box) -- Escape pressed inside that box
+     move(d)       -- 1 | -1 | "first" | "last"
+     primary()     -- Enter; the callback guards on its own cursor
+     select()      -- Space; return false when there is no cursor so the
+                      key keeps its default (page scroll)
+     escape()      -- Escape outside the box: peel selection, then cursor
+
+   Registration order still matters per screen (the Tasks call sits after
+   wireShortcutsDialog so "?" reaches the overlay before type-to-search),
+   so each screen calls this where its old inline handler was wired. */
+function wireListKeyboard({ view, search, searchEscape, move, primary, select, escape }) {
+  document.addEventListener("keydown", (e) => {
+    if (!$(view).classList.contains("active")) return;
+    if (document.querySelector("dialog[open]")) return;
+    const tag = (e.target.tagName || "").toLowerCase();
+    const typing = tag === "input" || tag === "textarea" || tag === "select" || e.target.isContentEditable;
+    if (e.key === "/" && !typing) {
+      e.preventDefault();
+      const box = $(search);
+      box.focus();
+      box.select();
+      return;
+    }
+    if (typing) {
+      if (e.key === "Escape" && e.target.id === search.slice(1)) searchEscape(e.target);
+      return;
+    }
+    if (e.key === "ArrowDown") { e.preventDefault(); move(1); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); move(-1); }
+    else if (e.key === "Home") { e.preventDefault(); move("first"); }
+    else if (e.key === "End") { e.preventDefault(); move("last"); }
+    else if (e.key === "Enter") primary();
+    else if (e.key === " ") { if (select() !== false) e.preventDefault(); }
+    else if (e.key === "Escape") escape();
+    else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey && e.key !== " ") {
+      // Type-to-search: focus the box mid-keydown and let the browser's
+      // default action put this same character into it.
+      $(search).focus();
+    }
+  });
+}
+
 function wireVehiclesView() {
   // Scoped to this view's own chips. ".filters .chip" matched every chip in
   // the app -- the A/P date ranges, the cores and returns filters, the task
@@ -1699,48 +1763,36 @@ function wireVehiclesView() {
     openVehicleDetail(row.dataset.segment, Number(row.dataset.id));
   });
 
-  // Keyboard: the board is a work list, and a work list you can only drive
-  // with a mouse is slow to triage. Arrows move a cursor row, Enter opens it,
-  // Space selects it, "/" jumps to search -- and any plain letter or digit
-  // typed while nothing has focus goes straight into the search box, so
-  // starting to type before clicking it can never "type outside the box"
-  // (single-letter shortcuts like j/k are gone for the same reason: a
-  // keystroke either navigates or searches, never both depending on the
-  // letter).
-  document.addEventListener("keydown", (e) => {
-    if (!$("#view-vehicles").classList.contains("active")) return;
-    const tag = (e.target.tagName || "").toLowerCase();
-    const typing = tag === "input" || tag === "textarea" || tag === "select" || e.target.isContentEditable;
-    if (e.key === "/" && !typing) {
-      e.preventDefault();
-      $("#global-search").focus();
-      $("#global-search").select();
-      return;
-    }
-    if (typing) {
-      if (e.key === "Escape" && e.target.id === "global-search") clearGlobalSearch();
-      return;
-    }
-    if (e.key === "ArrowDown") { e.preventDefault(); moveVehicleCursor(1); }
-    else if (e.key === "ArrowUp") { e.preventDefault(); moveVehicleCursor(-1); }
-    else if (e.key === "Home") { e.preventDefault(); moveVehicleCursor("first"); }
-    else if (e.key === "End") { e.preventDefault(); moveVehicleCursor("last"); }
-    else if (e.key === "Enter" && state.vehicleCursor) {
+  // The shared triage-list keyboard model (see wireListKeyboard). Enter
+  // opens the cursor row's detail page -- on this screen a row is a door,
+  // where on Tasks it's the work itself.
+  wireListKeyboard({
+    view: "#view-vehicles",
+    search: "#global-search",
+    searchEscape: () => clearGlobalSearch(),
+    move: moveVehicleCursor,
+    primary: () => {
+      if (!state.vehicleCursor) return;
       const tr = $(`#vehicles-table tr[data-key="${cssEscape(state.vehicleCursor)}"]`);
       if (tr) openVehicleDetail(tr.dataset.segment, Number(tr.dataset.id));
-    } else if (e.key === " " && state.vehicleCursor) {
-      e.preventDefault();
+    },
+    select: () => {
+      if (!state.vehicleCursor) return false;
       setVehicleSelected(state.vehicleCursor, !state.vehicleSelection.has(state.vehicleCursor));
       state.vehicleAnchor = state.vehicleCursor;
       renderVehiclesTable();
-    } else if (e.key === "Escape" && state.vehicleSelection.size) {
-      state.vehicleSelection.clear();
-      renderVehiclesTable();
-    } else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey && e.key !== " ") {
-      // Type-to-search: focus the box mid-keydown and let the browser's
-      // default action put this same character into it.
-      $("#global-search").focus();
-    }
+    },
+    escape: () => {
+      if (state.vehicleSelection.size) {
+        state.vehicleSelection.clear();
+        renderVehiclesTable();
+      } else if (state.vehicleCursor) {
+        // Layered escape, same as Tasks: with nothing selected, drop the
+        // cursor itself. The board used to strand it on the row forever.
+        state.vehicleCursor = null;
+        applyVehicleCursor();
+      }
+    },
   });
 
   $$("#view-vehicles th.sortable").forEach((th) => {
@@ -5846,6 +5898,15 @@ function openTasksPerson(s) {
   return state.staffTasks.filter((t) => !t.done && !t.completed_at && (t.assigned_to || []).includes(s.name)).length;
 }
 
+// The one path from "this person's name" to "their open tasks" -- the
+// workload column's count links and the Assigned Tasks card's per-person
+// rows both land on the Tasks screen pre-filtered the same way.
+function openTasksAssignedTo(name) {
+  state.taskFilter = "";
+  state.taskAssignee = name;
+  $('.rail-item[data-view="tasks"]')?.click();
+}
+
 // Single writer for state.staffFilter, so the toolbar chips and the
 // Inactive stat card (which drives the same filter) can never fall out of
 // sync with each other.
@@ -5874,16 +5935,51 @@ function renderStaffStats() {
       <div class="stat-value">${advisors}</div>
       <div class="stat-sub">write and advise tickets</div>
     </div>
-    <button type="button" class="stat stat-action" data-staff-stat="tasks" aria-pressed="false" ${openTasks ? "" : "disabled"} title="${openTasks ? "Go to Tasks" : ""}">
-      <div class="stat-label">Assigned Tasks</div>
-      <div class="stat-value">${openTasks}</div>
-      <div class="stat-sub">open tasks with an owner</div>
-    </button>
+    ${assignedTasksCardHtml(openTasks)}
     <button type="button" class="stat stat-action" data-staff-stat="inactive" aria-pressed="${showingInactive ? "true" : "false"}" ${inactive || showingInactive ? "" : "disabled"} title="${showingInactive ? "Showing inactive — click to hide" : (inactive ? "Show inactive staff" : "")}">
       <div class="stat-label">Inactive</div>
       <div class="stat-value">${inactive}</div>
       <div class="stat-sub">${inactive ? "hidden from all dropdowns" : "nobody deactivated"}</div>
     </button>`;
+}
+
+/* The Assigned Tasks card, grown from a bare count into a per-person
+   breakdown: the number said three tasks have owners, but the question a
+   manager brings to this screen is *whose plate is full* -- and answering it
+   meant scanning the workload column row by row. The card now shows the
+   three busiest people with a bar scaled against the busiest, each row a
+   button that lands on the Tasks screen filtered to that person (same path
+   as the workload column's count links), with a "+N more" line when the
+   load spreads wider than three.
+
+   A <div role="button"> rather than the <button> the other action cards
+   use, because the person rows are buttons themselves and buttons can't
+   nest -- the card keeps its click (jump to Tasks unfiltered) on the
+   container, person rows stop propagation, and the staff-stats keydown
+   handler gives the div back Enter/Space. */
+function assignedTasksCardHtml(openTasks) {
+  const load = state.allStaff
+    .filter((s) => s.active)
+    .map((s) => ({ name: s.name, count: openTasksPerson(s) }))
+    .filter((p) => p.count)
+    .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+  const top = load.slice(0, 3);
+  const overflow = load.length - top.length;
+  const max = top.length ? top[0].count : 1;
+  const people = top.map((p) => `
+      <button type="button" class="stat-person" data-name="${esc(p.name)}" title="See ${esc(p.name)}'s open tasks">
+        <span class="stat-person-name">${esc(p.name)}</span>
+        <span class="stat-person-bar"><span style="width:${Math.max(8, Math.round((p.count / max) * 100))}%"></span></span>
+        <span class="stat-person-count">${p.count}</span>
+      </button>`).join("");
+  return `
+    <div class="stat${openTasks ? " stat-action stat-breakdown" : ""}" data-staff-stat="tasks" ${openTasks ? `role="button" tabindex="0" title="Go to Tasks" aria-label="Go to Tasks (${openTasks} open with an owner)"` : `aria-disabled="true"`}>
+      <div class="stat-label">Assigned Tasks</div>
+      <div class="stat-value">${openTasks}</div>
+      ${top.length
+        ? `<div class="stat-people">${people}</div>${overflow ? `<div class="stat-sub">+${overflow} more with open tasks</div>` : ""}`
+        : `<div class="stat-sub">no open task has an owner</div>`}
+    </div>`;
 }
 
 function staffRowHtml(s) {
@@ -6001,12 +6097,8 @@ function renderStaffTable() {
     });
   });
 
-  $$(".stf-task-link", $("#staff-table")).forEach((btn) => btn.addEventListener("click", () => {
-    state.taskFilter = "";
-    state.taskAssignee = btn.dataset.name;
-    const railItem = $('.rail-item[data-view="tasks"]');
-    if (railItem) railItem.click();
-  }));
+  $$(".stf-task-link", $("#staff-table")).forEach((btn) =>
+    btn.addEventListener("click", () => openTasksAssignedTo(btn.dataset.name)));
 
   $$(".stf-toggle", $("#staff-table")).forEach((btn) => btn.addEventListener("click", async () => {
     const tr = btn.closest("tr");
@@ -6067,13 +6159,28 @@ function wireStaffView() {
     chip.addEventListener("click", () => applyStaffFilter(chip.dataset.staffFilter));
   });
   $("#staff-stats").addEventListener("click", (e) => {
+    // A person row inside the Assigned Tasks card is the narrower target;
+    // it wins over the card's own jump-to-Tasks and doesn't also fire it.
+    const person = e.target.closest(".stat-person");
+    if (person) {
+      openTasksAssignedTo(person.dataset.name);
+      return;
+    }
     const btn = e.target.closest("[data-staff-stat]");
-    if (!btn || btn.disabled) return;
+    if (!btn || btn.disabled || btn.getAttribute("aria-disabled") === "true") return;
     if (btn.dataset.staffStat === "inactive") {
       applyStaffFilter(state.staffFilter === "all" ? "active" : "all");
     } else if (btn.dataset.staffStat === "tasks") {
       const railItem = $('.rail-item[data-view="tasks"]');
       if (railItem) railItem.click();
+    }
+  });
+  // The Assigned Tasks card is a <div role="button"> (buttons can't nest);
+  // this hands it back the Enter/Space a real button would have.
+  $("#staff-stats").addEventListener("keydown", (e) => {
+    if ((e.key === "Enter" || e.key === " ") && e.target.matches('[role="button"][data-staff-stat]')) {
+      e.preventDefault();
+      e.target.click();
     }
   });
   $("#staff-report-link").addEventListener("click", () => {
@@ -7098,51 +7205,34 @@ function wireTasksView() {
   wireTaskBulkActions();
   loadTaskPrefs();
 
-  // The same keyboard model the board has, because the two screens are the
-  // same shape of work: a list you triage. Arrows move a cursor row, Enter
-  // fires the row's primary action (here that's the done-check, not a detail
-  // page -- a task *is* its row), Space selects for bulk edit, "/" jumps to
-  // this screen's search, Escape backs out one layer at a time (selection
-  // first, then the cursor), and any plain character typed while nothing has
-  // focus lands in the search box. Registered after wireShortcutsDialog (see
-  // init order) so "?" reaches the overlay before type-to-search can eat it.
-  document.addEventListener("keydown", (e) => {
-    if (!$("#view-tasks").classList.contains("active")) return;
-    if (document.querySelector("dialog[open]")) return;
-    const tag = (e.target.tagName || "").toLowerCase();
-    const typing = tag === "input" || tag === "textarea" || tag === "select" || e.target.isContentEditable;
-    if (e.key === "/" && !typing) {
-      e.preventDefault();
-      const box = $("#task-search");
-      box.focus();
-      box.select();
-      return;
-    }
-    if (typing) {
-      // Escape in the search box clears it, matching the board's box. Other
-      // keys belong to whatever field is being typed in.
-      if (e.key === "Escape" && e.target.id === "task-search" && (e.target.value || state.taskSearch)) {
-        e.target.value = "";
-        state.taskSearch = "";
-        renderTasksList();
-      }
-      return;
-    }
-    if (e.key === "ArrowDown") { e.preventDefault(); moveTaskCursor(1); }
-    else if (e.key === "ArrowUp") { e.preventDefault(); moveTaskCursor(-1); }
-    else if (e.key === "Home") { e.preventDefault(); moveTaskCursor("first"); }
-    else if (e.key === "End") { e.preventDefault(); moveTaskCursor("last"); }
-    else if (e.key === "Enter" && state.taskCursor != null) {
-      // Through the row's own button rather than a parallel code path, so the
-      // keyboard can never mean something different from the click.
+  // The shared triage-list keyboard model (see wireListKeyboard). Enter
+  // fires the done-check, not a detail page -- a task *is* its row -- and
+  // goes through the row's own button rather than a parallel code path, so
+  // the keyboard can never mean something different from the click. Wired
+  // after wireShortcutsDialog (see init order) so "?" reaches the overlay
+  // before type-to-search can eat it.
+  wireListKeyboard({
+    view: "#view-tasks",
+    search: "#task-search",
+    searchEscape: (box) => {
+      if (!box.value && !state.taskSearch) return;
+      box.value = "";
+      state.taskSearch = "";
+      renderTasksList();
+    },
+    move: moveTaskCursor,
+    primary: () => {
+      if (state.taskCursor == null) return;
       $(`#tasks-list .task-row[data-id="${state.taskCursor}"] .task-check`)?.click();
-    } else if (e.key === " " && state.taskCursor != null) {
-      e.preventDefault();
+    },
+    select: () => {
+      if (state.taskCursor == null) return false;
       if (state.taskSelection.has(state.taskCursor)) state.taskSelection.delete(state.taskCursor);
       else state.taskSelection.add(state.taskCursor);
       state.taskAnchor = state.taskCursor;
       renderTasksList();
-    } else if (e.key === "Escape") {
+    },
+    escape: () => {
       if (state.taskSelection.size) {
         state.taskSelection.clear();
         state.taskAnchor = null;
@@ -7151,11 +7241,7 @@ function wireTasksView() {
         state.taskCursor = null;
         applyTaskCursor();
       }
-    } else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey && e.key !== " ") {
-      // Type-to-search: focus the box mid-keydown and let the browser's
-      // default action put this same character into it.
-      $("#task-search").focus();
-    }
+    },
   });
 }
 

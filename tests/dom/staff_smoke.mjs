@@ -96,6 +96,30 @@ ok(!$("#staff-stats .stat-value.crit"), "no card should be critical while techs 
 ok(!$('[data-staff-stat="tasks"]').disabled, "the Assigned Tasks card should be clickable when tasks exist");
 ok(!$('[data-staff-stat="inactive"]').disabled, "the Inactive card should be clickable when someone is inactive");
 
+/* ---------- the Assigned Tasks card breaks the load down per person ----------
+   Busiest first (Ray 2), ties alphabetical (Dana before Sam, both 1), the
+   shared task counting once per owner, Lee with zero open tasks absent.
+   Each row is a button that lands on Tasks filtered to that person -- the
+   same trip the workload column's count links make. */
+const personRows = $$('#staff-stats [data-staff-stat="tasks"] .stat-person');
+ok(personRows.length === 3, `expected 3 per-person rows on the card, got ${personRows.length}`);
+const personSummary = personRows.map((r) =>
+  `${r.querySelector(".stat-person-name")?.textContent.trim()} ${r.querySelector(".stat-person-count")?.textContent.trim()}`).join(" | ");
+ok(personSummary === "Ray Ortiz 2 | Dana Wu 1 | Sam Patel 1",
+   `breakdown should read busiest-first with alphabetical ties, reads "${personSummary}"`);
+// The bar scales against the busiest person: Ray full, the others half.
+const rayBar = personRows[0]?.querySelector(".stat-person-bar > span");
+const danaBar = personRows[1]?.querySelector(".stat-person-bar > span");
+ok(rayBar?.style.width === "100%", `the busiest bar should be full width, got "${rayBar?.style.width}"`);
+ok(danaBar?.style.width === "50%", `a half-load bar should be half width, got "${danaBar?.style.width}"`);
+personRows[1].click();
+await settle();
+ok($("#view-tasks").classList.contains("active"), "a per-person row should land on the Tasks screen");
+ok(w.state.taskAssignee === "Dana Wu",
+   `the Tasks screen should arrive pre-filtered to the clicked person, got "${w.state.taskAssignee}"`);
+w.showView("staff");
+await settle();
+
 /* ---------- default filter: active only, grouped by role ---------- */
 ok(row(1) && row(2) && row(3) && row(4), "the four active people didn't all render");
 ok(!row(5), "an inactive person is showing under the Active filter");

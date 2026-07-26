@@ -1550,3 +1550,45 @@ Next time, in rough priority order:
      before they cause the next mystery lock failure.
   5. Phone field in the customer editor could get the same
      normalize-and-validate treatment State/ZIP just did.
+
+================================================================
+Run: 2026-07-26 (afternoon) -- shared keyboard model + staff workload card
+================================================================
+
+* wireListKeyboard(): the board's and Tasks screen's document keydown
+  handlers -- two hand-kept copies of the same triage-list contract
+  (arrows/Home/End cursor, Enter primary, Space select, "/" search,
+  layered Escape, type-to-search) -- are now one helper both screens
+  configure. The copies had already drifted, and unifying them fixed
+  both drifts in the board's favor: keys no longer act on the list
+  behind an open <dialog> (arrowing under a confirm box), and Escape
+  with nothing selected now drops the cursor, matching Tasks. Each
+  call sits where its old inline handler was wired so listener order
+  (shortcuts overlay before type-to-search) is preserved. (Carried #1.)
+
+* Staff: the Assigned Tasks stat card grew a per-person breakdown --
+  top three people by open-task count, busiest first with alphabetical
+  ties, each row a name + bar (scaled against the busiest) + count and
+  a button that lands on Tasks pre-filtered to that person via the new
+  openTasksAssignedTo() (shared with the workload column's links).
+  Card is now a div[role=button] (buttons can't nest); Enter/Space
+  restored by a keydown handler, zero-open state keeps the quiet sub
+  line. staff_smoke covers order, tie-break, bar widths, and the
+  click-through. (Carried #2.)
+
+* Suite: 251 python tests green (foreground chunks from a /tmp mirror,
+  DISCOUNT_AUTO_OPS_DB=/tmp), all 9 dom suites pass (run from /tmp --
+  jsdom off the mount stays unusably slow), uvicorn boots, /,
+  /api/orders, /api/staff all 200. A live .git/index.lock was renamed
+  aside again before committing.
+
+Next time, in rough priority order:
+  1. seed_mock_data --reset-only's confusing "Previous database moved
+     aside" on a fresh path -- lazy app construction. (Carried.)
+  2. Phone field in the customer editor: normalize-and-validate like
+     State/ZIP got. (Carried.)
+  3. The detail page's own Escape/keyboard handling could join the
+     wireListKeyboard model where it makes sense (it's a form, not a
+     list, so only partially).
+  4. .git lock debris keeps growing (stale.* renames); a run from the
+     Windows side could actually delete them.

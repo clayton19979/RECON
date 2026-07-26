@@ -103,6 +103,54 @@ def test_retail_patch_updates_vehicle_info(client):
     assert again["mileage"] == 88123
 
 
+def test_retail_detail_lists_customers_other_vehicles(client):
+    customer, camry = _retail_setup(client)
+    truck = client.post(
+        "/api/vehicles",
+        json={"customer_id": customer["id"], "year": 2020, "make": "Ford", "model": "F-150", "plate": "TRK 42", "plate_state": "mi"},
+    ).json()
+    # Someone else's car must never show up in this customer's list.
+    other_customer, other_vehicle = _retail_setup(client, name="Sam Stranger")
+
+    open_ro = _retail_order(client, customer, truck, concern="Rattle over bumps")
+    done_ro = _retail_order(client, customer, truck, concern="Oil change")
+    client.patch(f"/api/orders/{done_ro['id']}/status", json={"status": "complete", "actor": "tester"})
+    voided = _retail_order(client, customer, truck, concern="Started by mistake")
+    client.post(f"/api/orders/{voided['id']}/void", json={"actor": "tester"})
+
+    detail = client.get(f"/api/retail/vehicles/{camry['id']}").json()
+    others = detail["other_vehicles"]
+    # The truck, and only the truck: not the page's own car, not a stranger's.
+    assert [v["id"] for v in others] == [truck["id"]]
+    row = others[0]
+    assert (row["year"], row["make"], row["model"]) == (2020, "Ford", "F-150")
+    # Counts answer "does this car have history / is something open" -- the
+    # voided ticket is nobody's history.
+    assert row["order_count"] == 2
+    assert row["open_orders"] == 1
+
+    # And symmetric from the truck's own page.
+    from_truck = client.get(f"/api/retail/vehicles/{truck['id']}").json()
+    assert [v["id"] for v in from_truck["other_vehicles"]] == [camry["id"]]
+    assert from_truck["other_vehicles"][0]["order_count"] == 0
+
+    # An only-car customer gets an empty list, not a missing key.
+    assert client.get(f"/api/retail/vehicles/{other_vehicle['id']}").json()["other_vehicles"] == []
+
+
+def test_add_second_vehicle_then_it_appears_as_other(client):
+    customer, camry = _retail_setup(client)
+    res = client.post(
+        "/api/vehicles",
+        json={"customer_id": customer["id"], "year": 2015, "make": "Honda", "model": "Odyssey", "vin": "5fnrl5h60fb000001"},
+    )
+    assert res.status_code == 201, res.text
+    van = res.json()
+    detail = client.get(f"/api/retail/vehicles/{camry['id']}").json()
+    assert [v["id"] for v in detail["other_vehicles"]] == [van["id"]]
+    assert detail["other_vehicles"][0]["vin"] == "5FNRL5H60FB000001"
+
+
 def test_task_linked_to_retail_order_is_jumpable(client):
     order = make_retail_order(client)
     task = client.post("/api/tasks", json={"title": "Call about brakes", "order_id": order["id"]}).json()

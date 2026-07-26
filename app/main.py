@@ -553,6 +553,20 @@ def create_app(db_path: Path = DEFAULT_DB, backups_dir: Path = DEFAULT_BACKUPS_D
         # uniformly (falsy = not archived, version ignored on save).
         detail["archived_at"] = ""
         detail["edit_version"] = 0
+        # The same customer's other cars, so a household's vehicles are one
+        # click apart on the page instead of a detour back through Customers.
+        # Counts are unvoided ROs of *any* segment -- "does this car have
+        # history / is something open on it" -- because that's the hop-or-not
+        # question; the money rollup above stays retail-only.
+        detail["other_vehicles"] = [
+            dict(v) for v in db.execute(
+                """SELECT v.id, v.year, v.make, v.model, v.vin, v.plate, v.plate_state,
+                          (SELECT count(*) FROM orders o WHERE o.vehicle_id=v.id AND o.voided=0) order_count,
+                          (SELECT count(*) FROM orders o WHERE o.vehicle_id=v.id AND o.voided=0 AND o.status!='complete') open_orders
+                   FROM vehicles v WHERE v.customer_id=? AND v.id!=? ORDER BY v.id DESC""",
+                (detail["customer_id"], vehicle_id),
+            )
+        ]
         return detail
 
     @app.get("/api/retail/vehicles/{vehicle_id}")

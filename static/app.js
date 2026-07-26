@@ -2154,6 +2154,7 @@ function renderDetailHead() {
     $("#vd-sub").textContent = [item.vin, item.mileage ? `${item.mileage.toLocaleString()} mi` : "", item.trim].filter(Boolean).join(" · ");
     $("#vd-customer-line").hidden = true;
     $("#vd-customer-info-card").style.display = "none";
+    $("#vd-other-vehicles-card").style.display = "none";
     $("#vd-we-owe-status-card").style.display = "none";
     $("#vd-deposits-card").style.display = "none";
     $("#vd-recon-purchase-price").value = item.purchase_price || 0;
@@ -2170,6 +2171,10 @@ function renderDetailHead() {
     customerLine.hidden = !item.customer_name;
     $("#vd-customer-info-card").style.display = "";
     renderCustomerInfoSummary();
+    // Other Vehicles is retail-only: a we-owe page is about the promise on
+    // *this* car, and its detail payload doesn't carry sibling vehicles.
+    $("#vd-other-vehicles-card").style.display = segment === "retail" ? "" : "none";
+    if (segment === "retail") renderOtherVehicles();
     if (segment === "we_owe") {
       $("#vd-we-owe-status-card").style.display = "";
       $("#vd-we-owe-status").value = item.status;
@@ -2231,6 +2236,38 @@ function renderCustomerInfoSummary() {
     ["Address", esc(address || "—")],
   ];
   $("#vd-customer-info-summary").innerHTML = rows.map(([label, value]) => `<div class="kv-row"><span class="kv-label">${label}</span><span class="kv-value">${value}</span></div>`).join("");
+}
+
+// Customer's Other Vehicles card (retail only). Each row jumps straight to
+// that car's retail page; the pill answers the hop-or-not question ("2 ROs ·
+// 1 open") before the click. The empty state still shows, because the card's
+// other job is the + Add Vehicle button.
+function renderOtherVehicles() {
+  const { item } = state.detail;
+  const box = $("#vd-other-vehicles");
+  const others = item.other_vehicles || [];
+  if (!others.length) {
+    box.innerHTML = '<div class="cust-sub" style="padding:12px 16px">No other vehicles on file.</div>';
+    return;
+  }
+  box.innerHTML = others.map((v) => {
+    const ros = v.order_count
+      ? `${v.order_count} RO${v.order_count === 1 ? "" : "s"}${v.open_orders ? ` · ${v.open_orders} open` : ""}`
+      : "no ROs yet";
+    const meta = [v.plate ? `${v.plate}${v.plate_state ? ` (${v.plate_state})` : ""}` : "", v.vin]
+      .map((s) => String(s || "").trim()).filter(Boolean).join(" · ");
+    return `
+      <div class="mini-item clickable" data-id="${v.id}" title="Open this vehicle's page">
+        <div class="mi-title">
+          <span>${esc([v.year, v.make, v.model].filter(Boolean).join(" "))}</span>
+          <span class="pill ${v.open_orders ? "" : "pill-inactive"}" style="font-size:9.5px">${esc(ros)}</span>
+        </div>
+        ${meta ? `<div class="mi-meta">${esc(meta)}</div>` : ""}
+      </div>`;
+  }).join("");
+  $$(".mini-item.clickable", box).forEach((row) => {
+    row.addEventListener("click", () => openVehicleDetail("retail", Number(row.dataset.id)));
+  });
 }
 
 /* ---------- address field validation (customer editor) ---------- */
@@ -2297,6 +2334,22 @@ function phoneFieldOk(el) {
   if (!value || el.value === (el.dataset.loadedValue || "")) return true;
   if (phoneDigits(value).length !== 10) {
     toast("Phone needs all 10 digits, like (313) 555-0142", true);
+    focusInvalidField(el);
+    return false;
+  }
+  return true;
+}
+
+// Email gets the same deal as phone: loose on purpose (name@domain.tld shape,
+// no spaces -- real validation is the mail bouncing; this only catches a
+// street address pasted into the wrong box), and keep-legacy via
+// dataset.loadedValue so a pre-validation record doesn't fail saving on an
+// unrelated edit until someone actually touches the email field.
+function emailFieldOk(el) {
+  const value = el.value.trim();
+  if (!value || el.value === (el.dataset.loadedValue || "")) return true;
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) {
+    toast("That email doesn't look right — needs a name@domain.com shape", true);
     focusInvalidField(el);
     return false;
   }
@@ -3907,6 +3960,17 @@ function wireVehicleDetail() {
       address_line1: item.customer_address_line1, address_line2: item.customer_address_line2,
       city: item.customer_city, state: item.customer_state, postal_code: item.customer_postal_code,
     }, () => loadVehicleDetail());
+  });
+
+  // Other Vehicles card (retail only): put the customer's second car on file
+  // and land on its page, where the natural next click is "Start Repair
+  // Order" -- the same landing the Customers screen's Write RO flow uses.
+  $("#vd-add-other-vehicle").addEventListener("click", () => {
+    const { item } = state.detail;
+    openAddVehicleDialog(item.customer_id, item.customer_name, (created) => {
+      delete state.customerDetails[item.customer_id]; // Customers expansion is stale now
+      openVehicleDetail("retail", created.id);
+    });
   });
 
   $("#vehicle-edit-form").addEventListener("submit", async (e) => {
@@ -6104,7 +6168,9 @@ function customerExpandRowHtml(c) {
           ${contact || '<span class="cust-sub">No contact info on file.</span>'}
           <button type="button" class="btn btn-ghost btn-sm cust-edit" data-id="${c.id}">Edit Customer</button>
         </div>
-        <div class="cust-vehicles">${vehicles}</div>
+        <div class="cust-vehicles">${vehicles}
+          <div><button type="button" class="btn btn-ghost btn-sm cust-add-vehicle" data-id="${c.id}" title="Put another of this customer's vehicles on file">+ Add Vehicle</button></div>
+        </div>
       </div>`;
   }
   return `<tr class="cust-expand-row" data-expand-for="${c.id}"><td colspan="${CUSTOMER_COLUMNS}">${body}</td></tr>`;
@@ -6201,6 +6267,24 @@ function wireCustomersView() {
     const newRo = e.target.closest(".cust-new-ro");
     if (newRo) {
       openRetailRoDialog(Number(newRo.dataset.vehicleId));
+      return;
+    }
+    const addVehicle = e.target.closest(".cust-add-vehicle");
+    if (addVehicle) {
+      const id = Number(addVehicle.dataset.id);
+      const row = state.customers.find((c) => c.id === id);
+      openAddVehicleDialog(id, row ? row.name : "", () => {
+        // Refetch the expansion (new car, no ROs yet) and bump the list
+        // row's vehicle count without a full-screen reload.
+        delete state.customerDetails[id];
+        state.customers = state.customers.map((c) => (c.id === id ? { ...c, vehicle_count: (c.vehicle_count || 0) + 1 } : c));
+        if (state.customerOpenId === id) {
+          state.customerOpenId = null;
+          toggleCustomerExpand(id);
+        } else {
+          renderCustomersTable();
+        }
+      });
       return;
     }
     const chip = e.target.closest(".cust-ro-chip[data-seg]");
@@ -6310,6 +6394,62 @@ function wireRetailRoDialog() {
   });
 }
 
+/* ---------- add a vehicle for an existing customer ----------
+   One dialog, two call sites: the retail vehicle page's Other Vehicles card
+   and a customer's expanded row on the Customers screen. The customer is
+   already chosen at both, so the form only asks about the car; what happens
+   after the POST differs per caller (jump to the new page vs. refresh the
+   expansion), which is what onCreated carries. */
+let addVehicleTarget = null; // { customerId, onCreated } while the dialog is open
+
+function openAddVehicleDialog(customerId, customerName, onCreated) {
+  addVehicleTarget = { customerId, onCreated };
+  $("#vehicle-add-customer").textContent = customerName || "";
+  ["year", "make", "model", "vin", "mileage", "plate", "plate-state", "color"]
+    .forEach((f) => { $(`#vehicle-add-${f}`).value = ""; });
+  $("#vehicle-add-dialog").showModal();
+  $("#vehicle-add-year").focus();
+}
+
+function wireAddVehicleDialog() {
+  $("#vehicle-add-cancel").addEventListener("click", () => $("#vehicle-add-dialog").close());
+  $("#vehicle-add-cancel-2").addEventListener("click", () => $("#vehicle-add-dialog").close());
+  // VIN/plate/plate-state uppercase as you type, same shapes the backend
+  // normalizes to -- so what the form shows is what the record will say.
+  [["#vehicle-add-vin", /[^A-Z0-9]/g, 17], ["#vehicle-add-plate", /[^A-Z0-9]/g, 8], ["#vehicle-add-plate-state", /[^A-Z]/g, 2]]
+    .forEach(([sel, strip, max]) => {
+      $(sel).addEventListener("input", (e) => {
+        e.target.value = e.target.value.toUpperCase().replace(strip, "").slice(0, max);
+      });
+    });
+  $("#vehicle-add-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    if (!addVehicleTarget) return;
+    const year = Number($("#vehicle-add-year").value);
+    const make = $("#vehicle-add-make").value.trim();
+    const model = $("#vehicle-add-model").value.trim();
+    if (!year || !make || !model) return toast("Year, make and model are required", true);
+    await withLoading(e.submitter, "Adding…", async () => {
+      try {
+        const created = await post("/api/vehicles", {
+          customer_id: addVehicleTarget.customerId,
+          year, make, model,
+          vin: $("#vehicle-add-vin").value.trim(),
+          mileage: Number($("#vehicle-add-mileage").value || 0),
+          plate: $("#vehicle-add-plate").value.trim(),
+          plate_state: $("#vehicle-add-plate-state").value.trim(),
+          color: $("#vehicle-add-color").value.trim(),
+        });
+        $("#vehicle-add-dialog").close();
+        toast("Vehicle added");
+        await addVehicleTarget.onCreated?.(created);
+      } catch (err) {
+        toast(err.message, true);
+      }
+    });
+  });
+}
+
 /* ---------- shared customer editor ----------
    One dialog, two call sites: the vehicle detail page ("Edit Customer" on
    the info card) and the Customers screen's expanded row. The dialog's
@@ -6326,6 +6466,8 @@ function openCustomerEditor(customer, onSaved) {
   // existed) doesn't fail validation on an unrelated edit -- see phoneFieldOk.
   $("#customer-edit-phone").dataset.loadedValue = $("#customer-edit-phone").value;
   $("#customer-edit-email").value = customer.email || "";
+  // Same keep-legacy contract for email -- see emailFieldOk.
+  $("#customer-edit-email").dataset.loadedValue = $("#customer-edit-email").value;
   $("#customer-edit-address1").value = customer.address_line1 || "";
   $("#customer-edit-address2").value = customer.address_line2 || "";
   $("#customer-edit-city").value = customer.city || "";
@@ -6366,6 +6508,7 @@ function wireCustomerEditor() {
       return void focusInvalidField(postalEl);
     }
     if (!phoneFieldOk($("#customer-edit-phone"))) return;
+    if (!emailFieldOk($("#customer-edit-email"))) return;
     if (!customerEditorTarget) return;
     try {
       const updated = await patch(`/api/customers/${customerEditorTarget.id}`, {
@@ -8002,6 +8145,7 @@ document.addEventListener("DOMContentLoaded", () => {
   wireVehiclesView();
   wireCustomersView();
   wireRetailRoDialog();
+  wireAddVehicleDialog();
   // Before wireVehicleDetail: the detail page's "Edit Customer" opens the
   // shared dialog this wires.
   wireCustomerEditor();

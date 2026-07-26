@@ -52,6 +52,7 @@ const DETAILS = {
 const detailFetches = [];
 const patches = [];
 const roPosts = [];
+const vehiclePosts = [];
 
 const { w, doc, settle, ok, finish, rejections } = await boot({
   expose: ["state", "showView", "loadCustomersView", "renderCustomersTable", "toggleCustomerExpand"],
@@ -71,11 +72,21 @@ const { w, doc, settle, ok, finish, rejections } = await boot({
     }
     // The we-owe chip jump loads the vehicle detail page.
     if (url === "/api/we-owe/71") return { id: 71, description: "Mirror", customer_id: 1, vehicle_id: 11, status: "open", archived_at: "", edit_version: 1 };
-    // The retail chip / Write RO jump loads the vehicle's retail page.
+    // The retail chip / Write RO jump loads the vehicle's retail page. The
+    // Patriot's payload carries the Soul as the customer's other vehicle so
+    // the Other Vehicles card has something to render (and to click).
     const retail = url.match(/^\/api\/retail\/vehicles\/(\d+)$/);
     if (retail) return { id: Number(retail[1]), customer_id: 1, customer_name: "Marta Alvarez", year: 2015, make: "Jeep", model: "Patriot",
       vin: "", mileage: 0, trim: "", color: "", archived_at: "", edit_version: 0, orders: [], total_cost: 0, quoted_cost: 0,
-      last_activity: { at: "2026-01-10T09:30:00", idle_days: 0, action: "", actor: "" } };
+      last_activity: { at: "2026-01-10T09:30:00", idle_days: 0, action: "", actor: "" },
+      other_vehicles: Number(retail[1]) === 12
+        ? [{ id: 11, year: 2020, make: "Kia", model: "Soul", plate: "ABC123", plate_state: "IN", vin: "VIN0001", order_count: 2, open_orders: 1 }]
+        : [] };
+    if (url === "/api/vehicles" && opts.method === "POST") {
+      const body = JSON.parse(opts.body);
+      vehiclePosts.push(body);
+      return { id: 77, ...body };
+    }
     if (url === "/api/orders" && opts.method === "POST") {
       const body = JSON.parse(opts.body);
       roPosts.push(body);
@@ -184,6 +195,42 @@ ok($("#vd-we-owe-status-card").style.display === "none" && $("#vd-deposits-card"
    "the we-owe promise cards stay hidden on a retail page");
 ok($("#vd-customer-info-card").style.display !== "none", "the customer card shows on a retail page");
 
+/* ---------- Other Vehicles card: the household's cars, one click apart ---------- */
+const otherCard = $("#vd-other-vehicles-card");
+ok(otherCard.style.display !== "none", "the Other Vehicles card shows on a retail page");
+const otherRow = $("#vd-other-vehicles .mini-item");
+ok(otherRow && otherRow.textContent.includes("Kia Soul"), "the card lists the customer's other car");
+ok(otherRow.textContent.includes("2 ROs · 1 open"),
+   `the pill answers hop-or-not with RO counts, got "${otherRow?.textContent.trim()}"`);
+ok(otherRow.textContent.includes("ABC123 (IN)") && otherRow.textContent.includes("VIN0001"),
+   "plate and VIN identify which car this is");
+click(w, otherRow);
+await settle();
+ok(w.state.detail.segment === "retail" && w.state.detail.id === 11,
+   `clicking the row should land on the Soul's retail page, got ${w.state.detail.segment}:${w.state.detail.id}`);
+ok($("#vd-other-vehicles").textContent.includes("No other vehicles on file"),
+   "an empty list still shows the card with its empty state (the Add button is its other job)");
+
+/* ---------- Add Vehicle from the retail page -> the new car's page ---------- */
+click(w, $("#vd-add-other-vehicle"));
+const addDialog = $("#vehicle-add-dialog");
+ok(addDialog && addDialog.open, "+ Add Vehicle opens the dialog");
+ok($("#vehicle-add-customer").textContent === "Marta Alvarez", "the dialog names the customer");
+input($("#vehicle-add-year"), "2020");
+input($("#vehicle-add-make"), "Ford");
+input($("#vehicle-add-model"), "F-150");
+input($("#vehicle-add-plate"), "trk 42");
+ok($("#vehicle-add-plate").value === "TRK42", "plate uppercases and strips as you type");
+input($("#vehicle-add-plate-state"), "mi");
+ok($("#vehicle-add-plate-state").value === "MI", "plate state uppercases");
+$("#vehicle-add-form").dispatchEvent(new w.Event("submit", { bubbles: true, cancelable: true }));
+await settle();
+ok(vehiclePosts.length === 1 && vehiclePosts[0].customer_id === 1 && vehiclePosts[0].make === "Ford" && vehiclePosts[0].plate === "TRK42",
+   `the POST carries the customer and the car, got ${JSON.stringify(vehiclePosts[0])}`);
+ok(!addDialog.open, "the dialog closes after adding");
+ok(w.state.detail.segment === "retail" && w.state.detail.id === 77,
+   "the advisor lands on the new car's page (where Start Repair Order is the next click)");
+
 /* ---------- Write RO: dialog -> POST -> the new ticket's page ---------- */
 w.showView("customers");
 await settle();
@@ -204,6 +251,27 @@ ok(w.state.detail.segment === "retail" && w.state.detail.id === 11,
    "the advisor lands on the new ticket's vehicle page");
 ok(!(1 in w.state.customerDetails), "the cached expansion is dropped -- its RO list is stale now");
 
+/* ---------- Add Vehicle from the Customers expansion ---------- */
+w.showView("customers");
+await settle();
+click(w, row(1));
+await settle();
+ok($("#customers-table .cust-add-vehicle"), "the expansion offers + Add Vehicle");
+click(w, $("#customers-table .cust-add-vehicle"));
+ok(addDialog.open, "it opens the same dialog");
+ok($("#vehicle-add-customer").textContent === "Marta Alvarez", "prefilled with the row's customer");
+ok($("#vehicle-add-make").value === "", "the form arrives blank, not with the last car's values");
+input($("#vehicle-add-year"), "2012");
+input($("#vehicle-add-make"), "Honda");
+input($("#vehicle-add-model"), "Odyssey");
+$("#vehicle-add-form").dispatchEvent(new w.Event("submit", { bubbles: true, cancelable: true }));
+await settle();
+ok(vehiclePosts.length === 2 && vehiclePosts[1].model === "Odyssey",
+   `the second POST carries the van, got ${JSON.stringify(vehiclePosts[1])}`);
+ok(row(1).querySelectorAll("td")[3].textContent.includes("3"),
+   "the list row's vehicle count bumps without a full reload");
+ok($('#customers-table tr[data-expand-for="1"]'), "the expansion stays open, refreshed");
+
 /* ---------- the shared editor, reachable without a vehicle ---------- */
 w.showView("customers");
 await settle();
@@ -214,10 +282,16 @@ const dialog = $("#customer-edit-dialog");
 ok(dialog && dialog.open, "Edit Customer opens the shared editor dialog");
 ok($("#customer-edit-name").value === "Marta Alvarez", "the editor arrives prefilled from the row");
 input($("#customer-edit-city"), "Hobart");
+// A mangled email must not save -- same deal as a bad phone or ZIP.
+input($("#customer-edit-email"), "marta at example");
 $("#customer-edit-form").dispatchEvent(new w.Event("submit", { bubbles: true, cancelable: true }));
 await settle();
-ok(patches.length === 1 && patches[0].id === 1 && patches[0].body.city === "Hobart",
-   "saving PATCHes the customer with the edited city");
+ok(patches.length === 0 && dialog.open, "an email without a name@domain shape blocks the save");
+input($("#customer-edit-email"), "marta@newmail.com");
+$("#customer-edit-form").dispatchEvent(new w.Event("submit", { bubbles: true, cancelable: true }));
+await settle();
+ok(patches.length === 1 && patches[0].id === 1 && patches[0].body.city === "Hobart" && patches[0].body.email === "marta@newmail.com",
+   "saving PATCHes the customer with the edited city and the corrected email");
 ok(!dialog.open, "the dialog closes on save");
 ok(row(1).textContent.includes("Hobart"), "the list row shows the new city without a full reload");
 

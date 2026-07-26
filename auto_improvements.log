@@ -1725,3 +1725,42 @@ Next time, in rough priority order:
      surface the customer's other cars like the Customers expansion does.
   3. Email field validation (loose, keep-legacy) to match phone's.
   4. .git lock debris (dead2*.lock) still needs a Windows-side delete.
+
+=== 2026-07-26 (run 31) ===
+The retail page learned about the rest of the household (carried idea #2,
+shipped whole), and email joined phone's validation model (idea #3):
+
+* GET /api/retail/vehicles/{id} now carries other_vehicles: the same
+  customer's other cars with unvoided any-segment RO counts ("2 ROs ·
+  1 open") -- the hop-or-not question -- while the money rollup stays
+  retail-only. Excludes the page's own car and strangers' cars.
+
+* New "Customer's Other Vehicles" card on the retail detail page: rows
+  jump to that car's retail page, the pill shows RO counts, empty state
+  still renders because the card's other job is + Add Vehicle.
+
+* Add Vehicle dialog (shared, like the customer editor): opened from
+  the retail page's card and from the Customers expansion. Customer is
+  already chosen; the form asks year/make/model (required) + VIN,
+  mileage, plate, plate state, color (VIN/plate/state uppercase-mask
+  as you type). From the retail page it lands on the new car's page --
+  where Start Repair Order is the natural next click; from Customers it
+  refreshes the expansion and bumps the row's vehicle count in place.
+
+* emailFieldOk: loose name@domain.tld shape, keep-legacy via
+  dataset.loadedValue, exact same contract as phoneFieldOk. Blocks the
+  editor save with a toast + focus, untouched legacy values still save.
+
+* Tests: 2 new python tests (other_vehicles filtering/counts/symmetry,
+  second-vehicle POST), customers dom suite grew Other Vehicles card,
+  both Add Vehicle entry points, and bad-then-good email coverage.
+  262 python tests green (chunked), all 10 dom suites green, uvicorn
+  boots.
+
+Next time, in rough priority order:
+  1. Detail page Escape/keyboard could join wireListKeyboard. (Carried
+     three runs now -- either do it or decide it's not worth it.)
+  2. Add Vehicle dialog could offer Decode VIN like the edit dialog does.
+  3. Other Vehicles rows could offer + Write RO directly (currently one
+     hop through the car's page).
+  4. .git lock debris (dead2*.lock) still needs a Windows-side delete.

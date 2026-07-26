@@ -588,6 +588,87 @@ ok(doc.querySelector("#tasks-list .empty-state"), "an empty filtered list render
 ok(/No tasks match/.test(doc.querySelector("#tasks-list").textContent),
    "the search empty state doesn't explain why the list is empty");
 
+/* ---------- keyboard model ----------
+   The same contract the board's suite pins down, because it's the same model:
+   arrows walk a cursor in *display* order (bucket by bucket, not array
+   order), Space selects, Enter fires the row's own done-check, "/" and bare
+   letters land in this screen's search box, and Escape backs out one layer
+   at a time. The cursor assertions read the DOM rather than the fixture so
+   they can't drift from what the grouping actually painted. */
+await typeSearch("");
+
+const openIds = () => rowsIn("#tasks-list").map((r) => Number(r.dataset.id));
+const cursorId = () => {
+  const r = doc.querySelector("#tasks-list .task-row.cursor");
+  return r ? Number(r.dataset.id) : null;
+};
+const searchBox = doc.querySelector("#task-search");
+
+const order = openIds();
+ok(order.length >= 3, `keyboard cases need at least 3 open rows, got ${order.length}`);
+
+press(w, "ArrowDown");
+ok(cursorId() === order[0], "the first ArrowDown didn't land on the first visible row");
+press(w, "ArrowDown");
+ok(cursorId() === order[1], "the second ArrowDown didn't move to the second visible row");
+press(w, "End");
+ok(cursorId() === order[order.length - 1], "End didn't jump to the last row");
+press(w, "ArrowDown");
+ok(cursorId() === order[order.length - 1], "ArrowDown past the end didn't clamp at the last row");
+press(w, "Home");
+ok(cursorId() === order[0], "Home didn't jump back to the first row");
+press(w, "ArrowUp");
+ok(cursorId() === order[0], "ArrowUp past the top didn't clamp at the first row");
+
+// Space selects, and the cursor has to survive the re-render selection causes.
+press(w, " ");
+await settle();
+ok(w.state.taskSelection.has(order[0]), "Space didn't select the cursor row");
+ok(cursorId() === order[0], "the cursor didn't survive the selection re-render");
+press(w, " ");
+await settle();
+ok(!w.state.taskSelection.has(order[0]), "Space on a selected row didn't deselect it");
+
+// Keys typed into a field belong to the field.
+press(w, "ArrowDown", { target: searchBox });
+ok(cursorId() === order[0], "an arrow key inside an input still moved the list cursor");
+
+// "/" and type-to-search both land in this screen's search box.
+press(w, "/");
+ok(doc.activeElement === searchBox, '"/" didn\'t focus the tasks search box');
+searchBox.blur();
+press(w, "g");
+ok(doc.activeElement === searchBox, "type-to-search didn't focus the search box");
+
+// Escape inside the box clears a pending search without leaving the box.
+searchBox.value = "civic";
+w.state.taskSearch = "civic";
+press(w, "Escape", { target: searchBox });
+await settle();
+ok(w.state.taskSearch === "" && searchBox.value === "", "Escape in the search box didn't clear it");
+searchBox.blur();
+
+// Escape backs out one layer at a time: selection first, then the cursor.
+press(w, " ");
+await settle();
+press(w, "Escape");
+await settle();
+ok(w.state.taskSelection.size === 0, "Escape didn't drop the selection");
+ok(cursorId() != null, "the first Escape dropped the cursor along with the selection");
+press(w, "Escape");
+ok(cursorId() === null && w.state.taskCursor === null, "the second Escape didn't drop the cursor");
+
+// Enter goes through the row's own done-check, so keyboard and click can
+// never mean different things.
+press(w, "ArrowDown");
+const enterTarget = cursorId();
+const patchesBeforeEnter = patchCalls.length;
+press(w, "Enter");
+await settle();
+ok(patchCalls.slice(patchesBeforeEnter).some((c) => c.id === enterTarget && c.body.done === true),
+   "Enter on the cursor row didn't PATCH it done");
+ok(!openIds().includes(enterTarget), "the Enter-completed row is still in the open list");
+
 ok(rejections.length === 0, `unhandled rejections during the run: ${rejections.map((e) => e && e.message).join(" | ")}`);
 
-finish("tasks: due-date grouping, stat-card filters, selection, bulk assign/due/urgent/delete, inline edits, vehicle link/unlink");
+finish("tasks: due-date grouping, stat-card filters, selection, bulk assign/due/urgent/delete, inline edits, vehicle link/unlink, keyboard cursor model");

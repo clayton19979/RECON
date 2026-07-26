@@ -1259,3 +1259,116 @@ Next time, in rough priority order:
      node_modules trap. (Carried.)
   5. The "?" overlay could list Tasks-screen keys once the tasks list grows
      cursor navigation like the board's -- worth building that model there.
+
+================================================================
+Run: 2026-07-26 ~09:00 (hourly auto-improvement)
+================================================================
+Note on commit 330eeb0: a concurrently-syncing session committed while this
+run's edits sat in the working tree, so that commit carries BOTH the message
+log/shortcuts work it describes AND this run's work, which it doesn't. For
+the record, this run's share of 330eeb0:
+
+  * cores_smoke.mjs (carried item 1, 9 runs -- DONE): full jsdom suite for
+    Cores & Returns. Combined outstanding/awaiting/credited stats across
+    both tables (incl. the 30d "crit" tone on stale pickups), three-state
+    filter chips, voided rows struck with no actions, pickup/undo PATCH
+    round-trips, the credit prompt (cancel is a no-op, blank number
+    refused), the forced vendor choice on an unresolvable return, the
+    post-to-A/P confirm naming vendor and amount, and bulk pickup: confirm
+    first, N PATCHes for N rows, selection cleared after.
+  * accounting_smoke.mjs finished and passing: stats vs voided money, PO
+    select rules (stock # as PO, completed ROs excluded), the invoice
+    editor's arithmetic contract (subtotal == countable lines == POST
+    payload; money-no-description blocks the post with a field-level flag),
+    held/duplicate feedback that preserves the user's vendor/PO picks, void
+    confirm with cancel-as-no-op, vendor chip edit flow.
+  * Bug fixed (surfaced by the cores suite): both cores/returns select-all
+    header checkboxes only updated on re-render -- hand-checking every row
+    left the header unchecked. The row-change handler now settles it.
+  * Bug fixed: form.name -> form.elements.name in vendor + staff forms
+    (form.name is the form's own name attribute wherever the
+    LegacyOverrideBuiltIns quirk isn't implemented; jsdom proved it).
+  * Enter-advance in the estimate grid (carried item 6 -- DONE): on the
+    grid's last line, Enter walks Description -> Qty -> Cost (-> Core on
+    parts) and from the last money field starts the next line with the
+    same guards as Tab (kind inherited, no chaining from an undescribed
+    row). Middle rows keep Enter's default meaning. Documented in the "?"
+    overlay. estimate_smoke.mjs covers the walk, the add, the guard, and
+    the middle-row non-hijack.
+  * harness.mjs: dialog showModal/close shim now covers every <dialog>,
+    not just #confirm-dialog -- the cores flows open two other dialogs.
+  * Verified after the sweep-in commit: all 257 python tests pass (9 dom
+    runner cases, all 8 jsdom suites), uvicorn boots, /, app.js,
+    /api/orders and /api/cores all 200.
+
+Sandbox notes, new this run:
+  * uv can't download its Python here (network-blocked) -- pip install
+    fastapi/uvicorn/httpx/pytest --break-system-packages onto system 3.10
+    works, and the whole suite passes on it despite requires-python >=3.12.
+  * The tmpdir-copy trick (carried note) is now the only way to run the
+    DOM suites: node + jsdom from the mount times out the 45s cap.
+  * OneDrive can sync ANOTHER session's commits into .git mid-run. Check
+    git log again before committing -- your diff may already be committed
+    out from under you, and the right move is to verify content, not
+    re-commit it.
+
+Next time, in rough priority order:
+  1. Customer-address autocomplete front-end coverage. (Carried.)
+  2. Split reset_db() out of seed_mock_data. (Carried.)
+  3. Staff screen jsdom coverage -- the only wired view with none now.
+  4. Tasks-screen cursor navigation like the board's, then list it in the
+     "?" overlay.
+  5. Estimate grid: Shift+Enter could walk backwards through the chain.
+
+================================================================
+Run: 2026-07-26 ~10:00 (hourly auto-improvement)
+================================================================
+Tasks screen keyboard model (carried item 4 -- DONE), mirroring the board's:
+
+  * Arrows/Home/End move a cursor row through the *open* list in display
+    order (the DOM is the source of truth, not visibleTasks() -- the list
+    renders grouped by due bucket, so array order and eye order differ, and
+    a cursor that jumped buckets mid-screen would feel broken).
+  * Enter fires the cursor row's own .task-check button -- a task has no
+    detail page, marking it done IS the primary action, and going through
+    the button means keyboard and click can never diverge.
+  * Space toggles bulk selection and sets the shift-click anchor; the
+    cursor class rides in taskRowHtml's markup so it survives re-renders.
+  * "/" and type-to-search focus #task-search ("/" previously did nothing
+    off the board despite the overlay filing it under "Anywhere"); Escape
+    inside the box clears a pending search, matching the board's box.
+  * Escape backs out one layer at a time: selection first, then cursor.
+    The old selection-only Escape handler was folded into the new one.
+  * applyTaskCursor() repaints the class without a full re-render, so
+    arrowing down a long list doesn't rebuild every row's listeners.
+  * CSS: .task-row.cursor is a ring (inset accent-strong shadow), distinct
+    from hover (lift) and selection (tint); cursor-on-selected shows both.
+  * "?" overlay: new "Tasks" group documenting all of it. Handler is
+    registered after wireShortcutsDialog so "?" still reaches the overlay
+    before type-to-search can eat it.
+  * tasks_smoke.mjs: +20 assertions -- cursor landing/clamping at both
+    ends, selection surviving the re-render, arrows inside inputs ignored,
+    "/"+type-to-search focus, Escape layering, Enter PATCHing done:true
+    and the row leaving the open list. All 8 suites + full python suite
+    (257) pass; uvicorn boots; /, assets and /api/{orders,tasks} all 200.
+
+Also committed: the previous run's auto_improvements.log entry, which was
+sitting uncommitted in the tree (the OneDrive-synced commit 330eeb0 landed
+without it).
+
+Sandbox notes, new this run:
+  * The 45s bash cap now bites on the full pytest run even in /tmp --
+    background processes do NOT survive between bash calls (each call is
+    its own group and gets reaped), and pgrep -f from a polling call
+    matches the polling call itself: a background "runner" can look alive
+    for ten minutes while long dead with an empty log. Run pytest in
+    per-file chunks under `timeout 42` instead; the dom suite splits fine
+    by test id.
+
+Next time, in rough priority order:
+  1. Customer-address autocomplete front-end coverage. (Carried.)
+  2. Split reset_db() out of seed_mock_data. (Carried.)
+  3. Staff screen jsdom coverage -- the only wired view with none now.
+  4. Estimate grid: Shift+Enter walking backwards through the chain.
+  5. Board + tasks cursors could share one moveCursor(listEl, state-key)
+     helper -- third screen that grows a list cursor should force it.

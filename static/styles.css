@@ -891,6 +891,11 @@ textarea { min-height: 70px; resize: vertical; font-family: inherit; }
 .task-select { width: auto; margin: 4px 0 0; flex-shrink: 0; opacity: .4; cursor: pointer; transition: opacity .12s; }
 .task-row:hover .task-select, .task-select:checked, .task-select:focus-visible { opacity: 1; }
 .task-row.selected { border-color: var(--accent); background: var(--accent-tint); }
+/* Same contract as the board: the keyboard cursor reads as a *different*
+   thing from hover (which lifts) and from selection (which tints) -- a ring,
+   so cursor-on-selected still shows both. */
+.task-row.cursor { border-color: var(--accent-strong); box-shadow: inset 0 0 0 1px var(--accent-strong); }
+.task-row.cursor:hover { border-color: var(--accent-strong); }
 .task-check {
   width: 23px; height: 23px; border-radius: 50%; border: 2px solid var(--ink-faint);
   background: none; cursor: pointer; flex-shrink: 0; margin-top: 1px; padding: 0;

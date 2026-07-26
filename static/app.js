@@ -493,6 +493,7 @@ const state = {
   taskUrgentOnly: false,
   taskSelection: new Set(),     // task ids, cleared whenever the visible set changes
   taskAnchor: null,             // last row clicked, for shift+click ranges
+  taskCursor: null,             // task id under the keyboard cursor, open list only
   newTaskAssignees: [],
   taskOrders: [],               // linkable orders, for the per-row vehicle picker
   showCompletedTasks: false,
@@ -6190,8 +6191,12 @@ function taskRowHtml(t) {
   const linkable = t.order_id && refId != null && (t.order_segment === "recon" || t.order_segment === "we_owe");
   const selected = state.taskSelection.has(t.id);
   const unassigned = !(t.assigned_to || []).length;
+  // The cursor class rides along in the row markup rather than being painted
+  // on afterwards, so it survives every re-render for free. Completed rows
+  // never carry it: the keyboard model only walks the open list.
+  const cursor = !t.done && state.taskCursor === t.id;
   return `
-    <div class="task-row ${t.urgent ? "urgent" : ""} ${t.done ? "done" : ""} ${selected ? "selected" : ""}" data-id="${t.id}">
+    <div class="task-row ${t.urgent ? "urgent" : ""} ${t.done ? "done" : ""} ${selected ? "selected" : ""} ${cursor ? "cursor" : ""}" data-id="${t.id}">
       ${t.done ? "" : `<input type="checkbox" class="task-select" ${selected ? "checked" : ""} title="Select for bulk edit" aria-label="Select ${esc(t.title)}">`}
       <button type="button" class="task-check" title="${t.done ? "Mark not done" : "Mark done"}" aria-pressed="${t.done ? "true" : "false"}" aria-label="Mark ${esc(t.title)} ${t.done ? "not done" : "done"}">
         <svg viewBox="0 0 24 24"><path d="M5 13l4 4L19 7"/></svg>
@@ -7020,16 +7025,91 @@ function wireTasksView() {
   wireTaskBulkActions();
   loadTaskPrefs();
 
-  // Escape drops the selection, matching the board. Scoped to this view so it
-  // doesn't fight the dialog's own Escape handling on any other screen.
+  // The same keyboard model the board has, because the two screens are the
+  // same shape of work: a list you triage. Arrows move a cursor row, Enter
+  // fires the row's primary action (here that's the done-check, not a detail
+  // page -- a task *is* its row), Space selects for bulk edit, "/" jumps to
+  // this screen's search, Escape backs out one layer at a time (selection
+  // first, then the cursor), and any plain character typed while nothing has
+  // focus lands in the search box. Registered after wireShortcutsDialog (see
+  // init order) so "?" reaches the overlay before type-to-search can eat it.
   document.addEventListener("keydown", (e) => {
-    if (e.key !== "Escape" || !state.taskSelection.size) return;
     if (!$("#view-tasks").classList.contains("active")) return;
     if (document.querySelector("dialog[open]")) return;
-    state.taskSelection.clear();
-    state.taskAnchor = null;
-    renderTasksList();
+    const tag = (e.target.tagName || "").toLowerCase();
+    const typing = tag === "input" || tag === "textarea" || tag === "select" || e.target.isContentEditable;
+    if (e.key === "/" && !typing) {
+      e.preventDefault();
+      const box = $("#task-search");
+      box.focus();
+      box.select();
+      return;
+    }
+    if (typing) {
+      // Escape in the search box clears it, matching the board's box. Other
+      // keys belong to whatever field is being typed in.
+      if (e.key === "Escape" && e.target.id === "task-search" && (e.target.value || state.taskSearch)) {
+        e.target.value = "";
+        state.taskSearch = "";
+        renderTasksList();
+      }
+      return;
+    }
+    if (e.key === "ArrowDown") { e.preventDefault(); moveTaskCursor(1); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); moveTaskCursor(-1); }
+    else if (e.key === "Home") { e.preventDefault(); moveTaskCursor("first"); }
+    else if (e.key === "End") { e.preventDefault(); moveTaskCursor("last"); }
+    else if (e.key === "Enter" && state.taskCursor != null) {
+      // Through the row's own button rather than a parallel code path, so the
+      // keyboard can never mean something different from the click.
+      $(`#tasks-list .task-row[data-id="${state.taskCursor}"] .task-check`)?.click();
+    } else if (e.key === " " && state.taskCursor != null) {
+      e.preventDefault();
+      if (state.taskSelection.has(state.taskCursor)) state.taskSelection.delete(state.taskCursor);
+      else state.taskSelection.add(state.taskCursor);
+      state.taskAnchor = state.taskCursor;
+      renderTasksList();
+    } else if (e.key === "Escape") {
+      if (state.taskSelection.size) {
+        state.taskSelection.clear();
+        state.taskAnchor = null;
+        renderTasksList();
+      } else if (state.taskCursor != null) {
+        state.taskCursor = null;
+        applyTaskCursor();
+      }
+    } else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey && e.key !== " ") {
+      // Type-to-search: focus the box mid-keydown and let the browser's
+      // default action put this same character into it.
+      $("#task-search").focus();
+    }
   });
+}
+
+/* Cursor movement over the open list in *display* order. The DOM is the
+   source of truth here, not visibleTasks(): the list renders grouped by due
+   bucket, so the array's sort order and the order your eyes travel are not
+   the same thing, and an ArrowDown that jumped buckets mid-screen would feel
+   broken even though it followed the data faithfully. */
+function moveTaskCursor(delta) {
+  const rows = $$("#tasks-list .task-row");
+  if (!rows.length) return;
+  const ids = rows.map((r) => Number(r.dataset.id));
+  const at = state.taskCursor != null ? ids.indexOf(state.taskCursor) : -1;
+  let next;
+  if (delta === "first") next = 0;
+  else if (delta === "last") next = ids.length - 1;
+  else next = at === -1 ? (delta > 0 ? 0 : ids.length - 1) : Math.min(ids.length - 1, Math.max(0, at + delta));
+  state.taskCursor = ids[next];
+  applyTaskCursor();
+  if (rows[next].scrollIntoView) rows[next].scrollIntoView({ block: "nearest" });
+}
+
+/* Repaints the cursor class without a full re-render -- arrowing down a long
+   list must not rebuild every row's listeners per keystroke. */
+function applyTaskCursor() {
+  $$("#tasks-list .task-row").forEach((r) =>
+    r.classList.toggle("cursor", Number(r.dataset.id) === state.taskCursor));
 }
 
 /* ==================================================================

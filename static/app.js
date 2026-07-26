@@ -2143,6 +2143,22 @@ function renderCustomerInfoSummary() {
   $("#vd-customer-info-summary").innerHTML = rows.map(([label, value]) => `<div class="kv-row"><span class="kv-label">${label}</span><span class="kv-value">${value}</span></div>`).join("");
 }
 
+/* ---------- address field validation (customer editor) ---------- */
+// The 50 states plus DC and the USPS-served territories/military codes.
+// State and ZIP are optional on a customer record, but a filled-in value has
+// to be real -- "Michigan" or "482O3" saved silently before this existed.
+const US_STATE_CODES = new Set([
+  "AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN","IA",
+  "KS","KY","LA","ME","MD","MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ",
+  "NM","NY","NC","ND","OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VT",
+  "VA","WA","WV","WI","WY","DC","PR","VI","GU","AS","MP","AA","AE","AP",
+]);
+
+function focusInvalidField(el) {
+  el.focus();
+  if (typeof el.select === "function") el.select();
+}
+
 /* ---------- address autocomplete (customer editor) ---------- */
 // As-you-type suggestions from /api/address-suggest (a server-side proxy to a
 // keyless geocoder). Picking a suggestion fills Street/City/State/ZIP. Every
@@ -2733,74 +2749,103 @@ function wireEstimateGrid() {
     estimateTypingTimer = setTimeout(() => { estimateTypingTimer = null; persistEstimate(); }, 800);
   });
 
-  // Spreadsheet-style row entry: Tab out of the last money field on the last
-  // line adds the next line of the same kind, instead of dumping focus onto
-  // the status pill. Only on the grid's final row, so tabbing through the
-  // middle of a long estimate still just moves along it.
-  box.addEventListener("keydown", (e) => {
-    if (e.key !== "Tab" || e.shiftKey || e.altKey || e.ctrlKey || e.metaKey) return;
-    const t = e.target;
-    if (!(t instanceof Element)) return;
-    const row = t.closest(".part-row:not(.head)");
-    if (!row) return;
-    // "Last money field" = Core when the row has one (parts), Cost otherwise.
-    const lastField = row.querySelector(".ei-core") || row.querySelector(".ei-cost");
-    if (t !== lastField || (lastField && lastField.disabled)) return;
-    const rows = $$(".part-row:not(.head)", box);
-    if (row !== rows[rows.length - 1]) return;
-    // Don't chain blank lines -- if this row hasn't been described yet,
-    // there's nothing to tab onward from.
-    if (!row.querySelector(".ei-desc")?.value.trim()) return;
-    e.preventDefault();
-    clearEstimateTypingTimer();
-    const jobIdRaw = row.closest(".job-group")?.dataset.jobId ?? row.dataset.jobId ?? "";
-    addEstimateRow(row.querySelector(".ei-kind")?.value || "part", {}, jobIdRaw ? Number(jobIdRaw) : null);
-  });
+  /* ----- keyboard entry: Tab / Enter / Shift+Enter, one handler -----
+     Spreadsheet-style row entry. The three keys share one definition of the
+     grid's geometry so their guards can't drift apart:
 
-  // Enter completes the spreadsheet feel Tab started: on the grid's last
-  // line it walks Description -> Qty -> Cost (-> Core on parts), and from
-  // the last money field starts the next line, so a whole estimate can be
-  // keyed in without touching Tab or the mouse. Deliberately last-row-only:
-  // a correction three lines up must not grow the estimate, so Enter keeps
-  // its default commit meaning everywhere else. Part # is skipped from the
-  // description on purpose (it's optional, and the fast path is the point);
-  // Enter *in* the Part # field still advances, for whoever fills it in.
-  const ENTER_CHAIN = {
-    "ei-desc": ["ei-qty", "ei-cost", "ei-core"],
-    "ei-part": ["ei-qty", "ei-cost", "ei-core"],
-    "ei-qty": ["ei-cost", "ei-core"],
-    "ei-cost": ["ei-core"],
-    "ei-core": [],
+     - EST_ENTRY_ORDER is the through-path along a line (Description -> Qty ->
+       Cost -> Core). Part # rides along at Description's slot: forwards it
+       advances the same way Description does (it's optional, and the fast
+       path is the point), backwards it steps to Description itself.
+     - Enter walks the chain forwards on the grid's last line only -- a
+       correction three lines up must not grow the estimate, so Enter keeps
+       its default commit meaning everywhere else. From the row's last money
+       field it starts the next line, same contract as Tab.
+     - Shift+Enter walks backwards from anywhere, crossing up into the
+       previous row's last enabled field (across job groups, the same order
+       the forward keys walk downwards). It never adds a line.
+     - Tab out of the last money field on the last described line adds the
+       next line of the same kind, instead of dumping focus onto the status
+       pill. */
+  const EST_ENTRY_ORDER = ["ei-desc", "ei-qty", "ei-cost", "ei-core"];
+  const estRows = () => $$(".part-row:not(.head)", box);
+  const rowField = (row, cls) => row.querySelector(`.${cls}`);
+  const focusField = (el) => {
+    el.focus();
+    if (typeof el.select === "function") el.select();
   };
-  box.addEventListener("keydown", (e) => {
-    if (e.key !== "Enter" || e.shiftKey || e.altKey || e.ctrlKey || e.metaKey) return;
-    const t = e.target;
-    if (!(t instanceof Element)) return;
-    const field = [...t.classList].find((c) => c in ENTER_CHAIN);
-    if (field === undefined) return;
-    const row = t.closest(".part-row:not(.head)");
-    if (!row) return;
-    const rows = $$(".part-row:not(.head)", box);
-    if (row !== rows[rows.length - 1]) return;
-    const next = ENTER_CHAIN[field]
-      .map((c) => row.querySelector(`.${c}`))
-      .find((el) => el && !el.disabled);
-    if (next) {
-      e.preventDefault();
-      next.focus();
-      if (typeof next.select === "function") next.select();
-      return;
-    }
-    // Nothing further along the row: same add-a-line contract as Tab above,
-    // guards and all -- only from the row's true last money field, and never
-    // chaining on from a line that hasn't been described yet.
-    const lastField = row.querySelector(".ei-core") || row.querySelector(".ei-cost");
-    if (t !== lastField || (lastField && lastField.disabled)) return;
-    if (!row.querySelector(".ei-desc")?.value.trim()) return;
-    e.preventDefault();
+  // Index of the target on the through-path, or -1 for non-entry fields.
+  // Part # sits between Description (0) and Qty (1): forward chains use
+  // floor -> 0 (next stop Qty), backward chains use ceil -> 1 (previous
+  // stop Description).
+  const entryIndex = (t, { back = false } = {}) => {
+    if (t.classList.contains("ei-part")) return back ? 1 : 0;
+    return EST_ENTRY_ORDER.findIndex((c) => t.classList.contains(c));
+  };
+  const firstEnabled = (row, classes) =>
+    classes.map((c) => rowField(row, c)).find((el) => el && !el.disabled);
+  // The add-a-line contract shared by Tab and Enter: only from the grid's
+  // final row, only out of that row's true last money field (Core when the
+  // row has one (parts), Cost otherwise), and never chaining on from a line
+  // that hasn't been described yet -- there's nothing to chain onward from.
+  const mayAddLineFrom = (row, t, rows) => {
+    if (row !== rows[rows.length - 1]) return false;
+    const lastField = rowField(row, "ei-core") || rowField(row, "ei-cost");
+    if (t !== lastField || (lastField && lastField.disabled)) return false;
+    return Boolean(rowField(row, "ei-desc")?.value.trim());
+  };
+  const addLineAfter = (row) => {
     clearEstimateTypingTimer();
     const jobIdRaw = row.closest(".job-group")?.dataset.jobId ?? row.dataset.jobId ?? "";
-    addEstimateRow(row.querySelector(".ei-kind")?.value || "part", {}, jobIdRaw ? Number(jobIdRaw) : null);
+    addEstimateRow(rowField(row, "ei-kind")?.value || "part", {}, jobIdRaw ? Number(jobIdRaw) : null);
+  };
+
+  box.addEventListener("keydown", (e) => {
+    if (e.altKey || e.ctrlKey || e.metaKey) return;
+    const t = e.target;
+    if (!(t instanceof Element)) return;
+    const row = t.closest(".part-row:not(.head)");
+    if (!row) return;
+
+    if (e.key === "Tab" && !e.shiftKey) {
+      if (!mayAddLineFrom(row, t, estRows())) return;
+      e.preventDefault();
+      return void addLineAfter(row);
+    }
+
+    if (e.key !== "Enter") return;
+
+    if (!e.shiftKey) {
+      // Enter: forwards along the last line, then the add-a-line contract.
+      const idx = entryIndex(t);
+      if (idx === -1) return;
+      const rows = estRows();
+      if (row !== rows[rows.length - 1]) return;
+      const next = firstEnabled(row, EST_ENTRY_ORDER.slice(idx + 1));
+      if (next) {
+        e.preventDefault();
+        return void focusField(next);
+      }
+      if (!mayAddLineFrom(row, t, rows)) return;
+      e.preventDefault();
+      return void addLineAfter(row);
+    }
+
+    // Shift+Enter: backwards along the line, then up into the previous row.
+    const idx = entryIndex(t, { back: true });
+    if (idx === -1) return;
+    const prev = firstEnabled(row, EST_ENTRY_ORDER.slice(0, idx).reverse());
+    if (prev) {
+      e.preventDefault();
+      return void focusField(prev);
+    }
+    const rows = estRows();
+    const prevRow = rows[rows.indexOf(row) - 1];
+    if (!prevRow) return; // first field of the first line: nowhere further back
+    const target = firstEnabled(prevRow, [...EST_ENTRY_ORDER].reverse());
+    if (!target) return;
+    e.preventDefault();
+    focusField(target);
   });
 
   box.addEventListener("click", (e) => {
@@ -3716,8 +3761,31 @@ function wireVehicleDetail() {
   $("#customer-edit-cancel").addEventListener("click", () => $("#customer-edit-dialog").close());
   $("#customer-edit-cancel-2").addEventListener("click", () => $("#customer-edit-dialog").close());
   setupAddressAutocomplete();
+  // State uppercases and strips non-letters as you type; ZIP keeps digits
+  // (and the ZIP+4 hyphen) only. Both are optional fields, but if filled in
+  // they must be real: a two-letter USPS code and a 5-digit (or 5+4) ZIP.
+  // Validated here rather than with pattern= so the autocomplete's fills and
+  // the error toasts behave the same in every browser (and in jsdom).
+  $("#customer-edit-state").addEventListener("input", (e) => {
+    e.target.value = e.target.value.toUpperCase().replace(/[^A-Z]/g, "").slice(0, 2);
+  });
+  $("#customer-edit-postal").addEventListener("input", (e) => {
+    e.target.value = e.target.value.replace(/[^\d-]/g, "").slice(0, 10);
+  });
   $("#customer-edit-form").addEventListener("submit", async (e) => {
     e.preventDefault();
+    const stateEl = $("#customer-edit-state");
+    const stateVal = stateEl.value.trim().toUpperCase();
+    if (stateVal && !US_STATE_CODES.has(stateVal)) {
+      toast(`"${stateVal}" isn't a state code — use the two-letter abbreviation (MI, OH…)`, true);
+      return void focusInvalidField(stateEl);
+    }
+    const postalEl = $("#customer-edit-postal");
+    const postalVal = postalEl.value.trim();
+    if (postalVal && !/^\d{5}(-\d{4})?$/.test(postalVal)) {
+      toast("ZIP should be 5 digits (or ZIP+4, like 48203-1234)", true);
+      return void focusInvalidField(postalEl);
+    }
     const { item } = state.detail;
     try {
       await patch(`/api/customers/${item.customer_id}`, {
@@ -5886,8 +5954,13 @@ function renderStaffTable() {
       const name = input.value.trim();
       if (!name || name === person.name) { input.value = person.name; return; }
       try {
-        await patch(`/api/staff/${tr.dataset.id}`, { name });
-        toast(`Renamed to ${name}`);
+        const updated = await patch(`/api/staff/${tr.dataset.id}`, { name });
+        // The server follows a rename through task assignments; surface how
+        // much actually moved so the rename doesn't look like a no-op.
+        const moved = updated?.tasks_moved || 0;
+        toast(moved
+          ? `Renamed to ${name} — ${moved} task${moved === 1 ? "" : "s"} moved with them`
+          : `Renamed to ${name}`);
         await loadStaffView();
       } catch (err) {
         toast(err.message, true);

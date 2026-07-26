@@ -40,10 +40,24 @@ const order = {
   quoted_cost: 0, actual_cost: 0,
 };
 
+// Address autocomplete: the suggest endpoint's behavior is switchable so the
+// failure paths (which must all just hide the dropdown) can be driven too.
+let suggestCalls = [];
+let suggestMode = "results"; // "results" | "empty" | "error"
+
 const { w, doc, fetchLog, settle, ok, finish, rejections } = await boot({
   expose: ["state", "openVehicleDetail", "renderLastWorked", "activityLabel", "ACTIVITY_LABEL",
            "STALLED_AFTER_DAYS", "loadTasksView"],
   fetch: async (url) => {
+    if (url.startsWith("/api/address-suggest")) {
+      suggestCalls.push(decodeURIComponent(url.split("q=")[1] || ""));
+      if (suggestMode === "error") return { __status: 502, body: { detail: "geocoder down" } };
+      if (suggestMode === "empty") return [];
+      return [
+        { label: "123 Main St, Springfield, IL 62701", line1: "123 Main St", city: "Springfield", state: "IL", postal_code: "62701" },
+        { label: "123 Maine Ave, Portland, ME 04101", line1: "123 Maine Ave", city: "Portland", state: "ME", postal_code: "04101" },
+      ];
+    }
     if (url.startsWith("/api/vehicles-board")) return [];
     if (/^\/api\/recon\/vehicles\/7$/.test(url)) return vehicle;
     // Plain /api/orders is what the Tasks screen builds its link dropdown
@@ -153,6 +167,160 @@ await w.openVehicleDetail("recon", 7);
 await settle();
 ok(!worked.querySelector("img") && !w.__pwned, "the last-worked line renders raw HTML out of an actor name");
 
+/* ------------------------------------------------------------------
+   Address autocomplete in the customer editor. As-you-type suggestions
+   from /api/address-suggest; picking one fills Street/City/State/ZIP;
+   every failure path just hides the dropdown and leaves manual entry.
+   ------------------------------------------------------------------ */
+const waitSuggest = () => new Promise((r) => setTimeout(r, 400)); // debounce is 250ms
+
+// The detail page is a recon vehicle, so give it a customer to edit and
+// open the editor the way an advisor would.
+w.state.detail.item = {
+  ...w.state.detail.item,
+  customer_id: 55, customer_name: "Maria Alvarez", customer_phone: "555-0101",
+  customer_email: "m@example.com", customer_address_line1: "", customer_address_line2: "",
+  customer_city: "", customer_state: "", customer_postal_code: "",
+};
+doc.querySelector("#vd-edit-customer").click();
+const addr1 = doc.querySelector("#customer-edit-address1");
+const suggBox = doc.querySelector("#customer-edit-address-suggestions");
+ok(addr1 && suggBox, "customer editor is missing the street field or its suggestion box");
+ok(suggBox.hidden, "the suggestion dropdown starts visible");
+
+const type = (value) => {
+  addr1.focus();
+  addr1.value = value;
+  addr1.dispatchEvent(new w.Event("input", { bubbles: true }));
+};
+
+// Under three characters: no request at all, dropdown stays down.
+type("12");
+await waitSuggest();
+await settle();
+ok(suggestCalls.length === 0, `a 2-character query hit the suggest endpoint (${suggestCalls.length} calls)`);
+ok(suggBox.hidden, "the dropdown opened for a 2-character query");
+
+// Keystrokes debounce into one request; results render as buttons.
+type("123 Ma");
+type("123 Mai");
+type("123 Main");
+await waitSuggest();
+await settle();
+ok(suggestCalls.length === 1, `three quick keystrokes should collapse to one request, made ${suggestCalls.length}`);
+ok(suggestCalls[0] === "123 Main", `the request should carry the latest text, sent "${suggestCalls[0]}"`);
+ok(!suggBox.hidden, "results arrived but the dropdown stayed hidden");
+const suggestions = [...suggBox.querySelectorAll(".addr-suggestion")];
+ok(suggestions.length === 2, `expected 2 rendered suggestions, found ${suggestions.length}`);
+ok(/123 Main St, Springfield/.test(suggestions[0].textContent), `first suggestion reads "${suggestions[0].textContent}"`);
+
+// Picking one fills Street + City/State/ZIP, closes the list, and moves
+// focus along to the second address line.
+suggestions[0].click();
+ok(addr1.value === "123 Main St", `street should be replaced by the pick, reads "${addr1.value}"`);
+ok(doc.querySelector("#customer-edit-city").value === "Springfield", "city was not filled from the pick");
+ok(doc.querySelector("#customer-edit-state").value === "IL", "state was not filled from the pick");
+ok(doc.querySelector("#customer-edit-postal").value === "62701", "ZIP was not filled from the pick");
+ok(suggBox.hidden, "the dropdown should close after a pick");
+ok(doc.activeElement === doc.querySelector("#customer-edit-address2"),
+   "focus should land on address line 2 after a pick");
+
+// Escape dismisses an open list.
+suggestCalls = [];
+type("456 Oak Street");
+await waitSuggest();
+await settle();
+ok(!suggBox.hidden, "the dropdown should reopen for a fresh query");
+addr1.dispatchEvent(new w.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+ok(suggBox.hidden, "Escape should dismiss the dropdown");
+
+// An empty answer and a failed request both just hide the list -- the
+// fields keep working as plain manual entry either way.
+suggestMode = "empty";
+type("789 Nowhere Lane");
+await waitSuggest();
+await settle();
+ok(suggBox.hidden, "an empty result set should hide the dropdown");
+suggestMode = "error";
+type("500 Broken Geocoder Way");
+await waitSuggest();
+await settle();
+ok(suggBox.hidden, "a failed request should hide the dropdown, not surface an error");
+ok(addr1.value === "500 Broken Geocoder Way", "a failed request clobbered the typed street");
+
+// A response that lands after the advisor has tabbed away must not pop
+// the dropdown back open over whatever they're doing now.
+suggestMode = "results";
+type("321 Elm");
+doc.querySelector("#customer-edit-address2").focus(); // tab away while the request is in flight
+await waitSuggest();
+await settle();
+ok(suggBox.hidden, "a stale response reopened the dropdown after focus left the street field");
+
+// City/State/ZIP validation. Both fields are optional, but filled-in values
+// have to be real: a two-letter USPS code and a 5-digit (or ZIP+4) ZIP. Bad
+// values are refused with an error toast, focus lands on the offending
+// field, and nothing is PATCHed.
+const stateEl = doc.querySelector("#customer-edit-state");
+const zipEl = doc.querySelector("#customer-edit-postal");
+const form = doc.querySelector("#customer-edit-form");
+const toastEl = doc.querySelector("#toast");
+const setField = (el, value) => {
+  el.value = value;
+  el.dispatchEvent(new w.Event("input", { bubbles: true }));
+};
+const submitForm = () => form.dispatchEvent(new w.Event("submit", { bubbles: true, cancelable: true }));
+const customerPatches = () => fetchLog.filter((f) => f.method === "PATCH" && f.url === "/api/customers/55").length;
+
+// The state box normalizes as you type: lowercase comes out upper, and
+// anything that isn't a letter never lands. Same idea for ZIP and digits.
+setField(stateEl, "mi");
+ok(stateEl.value === "MI", `state input should uppercase itself, reads "${stateEl.value}"`);
+setField(stateEl, "M1");
+ok(stateEl.value === "M", `state input should drop non-letters, reads "${stateEl.value}"`);
+setField(zipEl, "48z03");
+ok(zipEl.value === "4803", `ZIP input should drop non-digits, reads "${zipEl.value}"`);
+
+// Two letters that aren't a state: refused, focused, not saved.
+setField(stateEl, "XX");
+setField(zipEl, "48203");
+submitForm();
+await settle();
+ok(customerPatches() === 0, "a made-up state code still reached the customer PATCH");
+ok(toastEl.classList.contains("error") && /isn't a state code/.test(toastEl.textContent),
+   `expected the state-code toast, got "${toastEl.textContent}"`);
+ok(doc.activeElement === stateEl, "focus should land on the state field after a bad code");
+
+// Short ZIP: refused the same way.
+setField(stateEl, "MI");
+setField(zipEl, "482");
+submitForm();
+await settle();
+ok(customerPatches() === 0, "a 3-digit ZIP still reached the customer PATCH");
+ok(toastEl.classList.contains("error") && /ZIP should be 5 digits/.test(toastEl.textContent),
+   `expected the ZIP toast, got "${toastEl.textContent}"`);
+ok(doc.activeElement === zipEl, "focus should land on the ZIP field after a bad ZIP");
+
+// Valid values (including ZIP+4) sail through and close the dialog.
+setField(zipEl, "48203-1234");
+submitForm();
+await settle();
+ok(customerPatches() === 1, `a valid state+ZIP should PATCH exactly once, saw ${customerPatches()}`);
+ok(!doc.querySelector("#customer-edit-dialog").open, "the dialog should close after a valid save");
+
+// Empty is fine too -- both fields are optional. (The successful save above
+// reloaded the detail view, which rebuilt state.detail.item from the mock
+// vehicle -- put the customer back before reopening the editor.)
+w.state.detail.item = { ...w.state.detail.item, customer_id: 55, customer_name: "Maria Alvarez" };
+doc.querySelector("#vd-edit-customer").click();
+setField(stateEl, "");
+setField(zipEl, "");
+submitForm();
+await settle();
+ok(customerPatches() === 2, `empty state and ZIP should be allowed, saw ${customerPatches()} PATCHes`);
+
+doc.querySelector("#customer-edit-cancel")?.click();
+
 ok(rejections.length === 0, `unhandled rejections during the run: ${rejections.map((e) => e && e.message).join(" | ")}`);
 
-finish("vehicle detail: last-worked-on line, stalled nudge, activity labels");
+finish("vehicle detail: last-worked-on line, stalled nudge, activity labels, address autocomplete + validation");

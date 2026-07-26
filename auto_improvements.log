@@ -1496,3 +1496,57 @@ Next time, in rough priority order:
   5. seed_mock_data --reset-only prints a confusing "Previous database
      moved aside" even on a fresh path because app.main's import
      eagerly created the db; consider lazy app construction.
+
+================================================================
+2026-07-26 -- run 28
+
+  * Rescued the previous run's work first: it had finished and logged
+    but died on a stale .git/index.lock (dated 07:09, unremovable via
+    rm on the OneDrive mount -- an in-place rename to index.lock.dead
+    cleared it). Its backend/test files went in as their own
+    checkpoint commit.
+
+  * Estimate grid keyboard refactor (carried #1, top of the list):
+    the three stacked keydown listeners (Tab, Enter, Shift+Enter) with
+    duplicated guards are now one handler over shared grid geometry --
+    EST_ENTRY_ORDER as the single through-path, entryIndex() putting
+    Part # between Description and Qty (floor forwards, ceil
+    backwards, replacing the two hand-maintained chain maps),
+    mayAddLineFrom() as the one copy of the add-a-line contract Tab
+    and Enter share, firstEnabled()/focusField()/addLineAfter() as the
+    rest. Behavior-identical: the whole estimate_smoke keyboard
+    contract passes unchanged.
+
+  * Customer editor City/State/ZIP validation (carried #4): State and
+    ZIP normalize as you type (letters-only uppercased two chars;
+    digits + the ZIP+4 hyphen), and submit refuses a state code not in
+    the 54-entry USPS set or a ZIP that isn't 5 digits / ZIP+4 -- error
+    toast, focus on the offending field, no PATCH. Both stay optional
+    when empty. detail_smoke grew a validation section covering the
+    input filters, both refusal paths, the ZIP+4 happy path, and
+    empty-is-fine.
+
+  * Suite: 251 python tests green (run in per-file chunks -- see
+    below), all 9 dom suites pass, uvicorn boots, /, /api/orders,
+    /api/staff all 200.
+
+Sandbox notes this run: each bash call is its own PID namespace, so
+nohup+poll for a long pytest silently dies with the call that spawned
+it AND pgrep matches the wrapper's own cmdline, reporting RUNNING
+forever. Run pytest in foreground chunks of 3-5 test files (each
+~5-20s) instead. OneDrive mount refuses unlink but allows same-dir
+rename: that's the index.lock fix, and the source of harmless
+tmp_obj/HEAD.lock warnings during commits.
+
+Next time, in rough priority order:
+  1. Board + tasks cursors share-a-helper refactor. (Carried.)
+  2. Staff screen: Assigned Tasks stat card per-person breakdown.
+     (Carried.)
+  3. seed_mock_data --reset-only's confusing "Previous database moved
+     aside" on a fresh path -- lazy app construction. (Carried.)
+  4. .git has accumulated dead lock/tmp files (index.lock.dead,
+     HEAD.lock, maintenance.lock, tmp_obj_*) that the mount won't
+     unlink; a run from the Windows side or a git gc might clear them
+     before they cause the next mystery lock failure.
+  5. Phone field in the customer editor could get the same
+     normalize-and-validate treatment State/ZIP just did.

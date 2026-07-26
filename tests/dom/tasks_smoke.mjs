@@ -15,7 +15,15 @@
 import { boot, click, press } from "./harness.mjs";
 
 const NOW = Date.now();
-const iso = (n) => new Date(NOW + n * 86400000).toISOString().slice(0, 10);
+// Local calendar dates, NOT toISOString(): the app buckets due dates against
+// the *local* midnight (taskDueInfo parses `T00:00:00`), so a UTC-sliced
+// fixture goes stale for the hours around midnight UTC -- iso(0) would name
+// tomorrow, "due today" would land in the wrong group, and this suite would
+// fail only when run in the evening (US time). It did.
+const iso = (n) => {
+  const d = new Date(NOW + n * 86400000);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+};
 const stamp = (n) => new Date(NOW - n * 86400000).toISOString().slice(0, 19);
 
 const STAFF = [
@@ -46,6 +54,22 @@ let tasks = [
     order_id: null, created_by: "Clay", created_at: stamp(9), completed_at: stamp(1), order_label: null, order_segment: null,
     order_recon_vehicle_id: null, order_we_owe_id: null, order_number: null },
 ];
+
+// What the vehicle picker gets from /api/orders. The retail RO is here to be
+// excluded: it has no detail view to jump to, so the picker must not offer it.
+const ORDERS = [
+  { id: 42, segment: "recon", stock_number: "R-0981", year: 2019, make: "Ford", model: "Edge", customer_name: null, number: "RO-1042" },
+  { id: 55, segment: "we_owe", stock_number: null, year: 2021, make: "Kia", model: "Sorento", customer_name: "Maria Soto", number: "RO-1077" },
+  { id: 60, segment: "retail", stock_number: null, year: 2020, make: "Ford", model: "F-150", customer_name: "Bob Lang", number: "RO-1080" },
+];
+
+// The JOIN fields /api/tasks carries for each linkable order, so the PATCH
+// handler below can answer a link the way the real server would.
+const ORDER_JOIN = {
+  42: { order_label: "R-0981", order_segment: "recon", order_recon_vehicle_id: 7, order_we_owe_id: null, order_number: "RO-1042" },
+  55: { order_label: "Maria Soto", order_segment: "we_owe", order_recon_vehicle_id: null, order_we_owe_id: 9, order_number: "RO-1077" },
+};
+const NO_ORDER = { order_id: null, order_label: null, order_segment: null, order_recon_vehicle_id: null, order_we_owe_id: null, order_number: null };
 
 const bulkCalls = [];
 const patchCalls = [];
@@ -91,12 +115,20 @@ const { w, doc, fetchLog, settle, ok, finish, rejections } = await boot({
         const next = { ...t, ...body };
         if (body.urgent !== undefined) next.urgent = body.urgent ? 1 : 0;
         if (body.done !== undefined) next.done = body.done ? 1 : 0;
+        // Server semantics for the link: -1 clears, an id fills in the join
+        // fields the task list view is built from. A fixture that only echoed
+        // order_id back would let the UI pass while rendering a chip with no
+        // label and a jump that goes nowhere.
+        if (body.order_id !== undefined) {
+          if (body.order_id === -1) Object.assign(next, NO_ORDER);
+          else Object.assign(next, { order_id: body.order_id }, ORDER_JOIN[body.order_id] || {});
+        }
         return next;
       });
       return tasks.find((t) => t.id === id);
     }
     if (url.startsWith("/api/tasks/")) return tasks.find((t) => t.id === Number(url.split("/").pop())) || tasks[0];
-    if (url === "/api/orders" || url.startsWith("/api/orders?")) return [];
+    if (url === "/api/orders" || url.startsWith("/api/orders?")) return ORDERS;
     if (url.startsWith("/api/staff")) return STAFF;
     if (url.startsWith("/api/vehicles-board")) return [];
     return [];
@@ -115,6 +147,16 @@ const bucketOf = (id) => doc.querySelector(`.task-row[data-id="${id}"]`)?.closes
 // hidden), so an unscoped lookup would happily find a row the open list never
 // showed and every assertion below it would be testing the wrong element.
 const rowFor = (id) => doc.querySelector(`#tasks-list .task-row[data-id="${id}"]`);
+// The search box re-renders on a 120ms debounce, and settle() only spins
+// zero-length timers -- typing into it has to outwait the real timer or every
+// assertion after it reads the un-filtered list.
+const typeSearch = async (value) => {
+  const box = doc.querySelector("#task-search");
+  box.value = value;
+  box.dispatchEvent(new w.Event("input", { bubbles: true }));
+  await new Promise((r) => setTimeout(r, 150));
+  await settle();
+};
 
 /* ---------- grouping ---------- */
 ok(rowsIn("#tasks-list").length === 5, `expected the 5 open tasks, got ${rowsIn("#tasks-list").length}`);
@@ -173,16 +215,14 @@ ok(rowsIn("#tasks-list").length === 5, "clicking a lit card didn't clear the fil
 
 // Zero cards are disabled: "0 overdue" is good news and clicking it could only
 // ever produce an empty list.
-doc.querySelector("#task-search").value = "nothing matches this";
-doc.querySelector("#task-search").dispatchEvent(new w.Event("input", { bubbles: true }));
-await settle();
+await typeSearch("nothing matches this");
 ok(doc.querySelector('[data-task-card="today"]').disabled, "a zero-count card is still clickable");
-doc.querySelector("#task-search").value = "";
-doc.querySelector("#task-search").dispatchEvent(new w.Event("input", { bubbles: true }));
-await settle();
+await typeSearch("");
 
 /* ---------- selection ---------- */
-ok(doc.querySelector("#tasks-bulk-bar").style.display === "none", "the bulk bar is showing with nothing selected");
+// Visibility is the [hidden] attribute, not style.display -- asserting the
+// latter here quietly tested nothing (jsdom leaves style untouched either way).
+ok(doc.querySelector("#tasks-bulk-bar").hidden, "the bulk bar is showing with nothing selected");
 // Completed rows get no checkbox: every bulk action here is an edit to work
 // that still has to happen, and "reopen these six" isn't one of them.
 const doneRow = doc.querySelector('#tasks-completed-list .task-row[data-id="6"]');
@@ -191,7 +231,7 @@ ok(doneRow && !doneRow.querySelector(".task-select"), "a completed task offers a
 
 rowFor(3).querySelector(".task-select").click();
 await settle();
-ok(doc.querySelector("#tasks-bulk-bar").style.display !== "none", "the bulk bar stayed hidden after selecting a row");
+ok(!doc.querySelector("#tasks-bulk-bar").hidden, "the bulk bar stayed hidden after selecting a row");
 ok(/1 selected/.test(doc.querySelector("#tasks-bulk-count").textContent),
    `bulk bar reads "${doc.querySelector("#tasks-bulk-count").textContent}"`);
 ok(rowFor(3).classList.contains("selected"), "a selected row isn't marked as such");
@@ -217,7 +257,7 @@ ok(JSON.stringify([...w.state.taskSelection].sort()) === "[1,4,5]",
 press(w, "Escape");
 await settle();
 ok(w.state.taskSelection.size === 0, "Escape didn't clear the selection");
-ok(doc.querySelector("#tasks-bulk-bar").style.display === "none", "the bulk bar survived Escape");
+ok(doc.querySelector("#tasks-bulk-bar").hidden, "the bulk bar survived Escape");
 
 // Select-all covers exactly what's on screen -- not the whole table.
 doc.querySelector('[data-task-card="unassigned"]').click();
@@ -248,18 +288,13 @@ rowFor(3).querySelector(".task-select").click();
 rowFor(4).querySelector(".task-select").click();
 await settle();
 ok(w.state.taskSelection.size === 2, `expected 2 selected before narrowing, got ${w.state.taskSelection.size}`);
-const search = doc.querySelector("#task-search");
-search.value = "call John";           // matches task 3 only
-search.dispatchEvent(new w.Event("input", { bubbles: true }));
-await settle();
+await typeSearch("call John");        // matches task 3 only
 ok(rowsIn("#tasks-list").length === 1, `the search left ${rowsIn("#tasks-list").length} rows, expected 1`);
 ok(w.state.taskSelection.size === 1 && w.state.taskSelection.has(3),
    `the selection didn't follow the search down: ${JSON.stringify([...w.state.taskSelection])}`);
 ok(/1 selected/.test(doc.querySelector("#tasks-bulk-count").textContent),
    `bulk bar reads "${doc.querySelector("#tasks-bulk-count").textContent}" over 1 visible row`);
-search.value = "";
-search.dispatchEvent(new w.Event("input", { bubbles: true }));
-await settle();
+await typeSearch("");
 w.state.taskSelection.clear();
 w.renderTasksList();
 
@@ -442,6 +477,60 @@ ok(reopened && reopened.value.split("\n").length === 2,
 press(w, "Escape", { target: reopened });
 await settle();
 
+/* ---------- vehicle link / unlink ----------
+   The vehicle link was the last write-once field on this row. The API took
+   order_id via PATCH (with -1 as the clear sentinel) all along; the UI never
+   offered a control, so tasks created without a car could never gain one and
+   tasks created against the wrong car were stuck with it. */
+const linkedRow = rowFor(2);
+ok(linkedRow.querySelector(".task-order-link"), "a linked row lost its jump chip");
+ok(linkedRow.querySelector(".task-link-clear"), "a linked row offers no way to unlink");
+ok(!linkedRow.querySelector(".task-link-add"), "a linked row still offers the + vehicle slot");
+ok(rowFor(3).querySelector(".task-link-add"), "an unlinked row offers no + vehicle slot");
+// A done task's link is history, not a decision anyone should still be making.
+const doneRow2 = doc.querySelector('#tasks-completed-list .task-row[data-id="6"]');
+ok(doneRow2 && !doneRow2.querySelector(".task-link-add") && !doneRow2.querySelector(".task-link-clear"),
+   "a completed task still offers link editors");
+
+// Link: the slot swaps for a picker in place; choosing saves; the row
+// re-renders off what the server sent back, not an optimistic label.
+rowFor(3).querySelector(".task-link-add").click();
+await settle();
+const linkSelect = rowFor(3).querySelector(".task-link-edit");
+ok(linkSelect && linkSelect.tagName === "SELECT", "clicking + vehicle didn't swap in a picker");
+ok([...linkSelect.options].some((o) => /R-0981/.test(o.textContent)), "the picker is missing the recon vehicle");
+ok([...linkSelect.options].some((o) => /Maria Soto/.test(o.textContent)), "the picker is missing the we-owe vehicle");
+// Retail ROs have no vehicle-detail view to jump to -- offering one here
+// would mint dead-end chips. Same rule as the quick-add select.
+ok(![...linkSelect.options].some((o) => /F-150/.test(o.textContent)), "a retail RO leaked into the vehicle picker");
+linkSelect.value = "55";
+linkSelect.dispatchEvent(new w.Event("change", { bubbles: true }));
+await settle();
+const linkPatch = patchCalls.find((c) => c.id === 3 && c.body.order_id === 55);
+ok(linkPatch, "choosing a vehicle sent no PATCH");
+const newChip = rowFor(3).querySelector(".task-order-link");
+ok(newChip && /Maria Soto/.test(newChip.textContent), "the newly linked row didn't render its vehicle chip");
+ok(rowFor(3).querySelector(".task-link-clear"), "the newly linked row can't be unlinked");
+
+// Escape abandons silently -- same contract as every other editor on the row.
+const linkPatchesBefore = patchCalls.length;
+rowFor(1).querySelector(".task-link-add").click();
+await settle();
+const abandonedPicker = rowFor(1).querySelector(".task-link-edit");
+ok(abandonedPicker, "the second + vehicle slot didn't open a picker");
+press(w, "Escape", { target: abandonedPicker });
+await settle();
+ok(patchCalls.length === linkPatchesBefore, "Escape out of the vehicle picker still saved");
+ok(rowFor(1).querySelector(".task-link-add"), "Escape didn't put the + vehicle slot back");
+
+// Unlink: the × sends the API's -1 sentinel (null means "leave it alone",
+// since PATCH bodies simply omit untouched fields).
+rowFor(2).querySelector(".task-link-clear").click();
+await settle();
+ok(patchCalls.some((c) => c.id === 2 && c.body.order_id === -1), "the unlink × didn't send the -1 sentinel");
+ok(!rowFor(2).querySelector(".task-order-link"), "an unlinked row kept its vehicle chip");
+ok(rowFor(2).querySelector(".task-link-add"), "an unlinked row didn't get the + vehicle slot back");
+
 /* ---------- destructive actions confirm first ----------
    Both of these take the whole batch with them, so both ask. Written against
    #confirm-accept by id rather than a permissive "whichever button looks like
@@ -494,13 +583,11 @@ w.state.taskSelection.clear();
 w.renderTasksList();
 
 /* ---------- empty states still say something useful ---------- */
-doc.querySelector("#task-search").value = "zzzz-no-such-task";
-doc.querySelector("#task-search").dispatchEvent(new w.Event("input", { bubbles: true }));
-await settle();
+await typeSearch("zzzz-no-such-task");
 ok(doc.querySelector("#tasks-list .empty-state"), "an empty filtered list rendered nothing at all");
 ok(/No tasks match/.test(doc.querySelector("#tasks-list").textContent),
    "the search empty state doesn't explain why the list is empty");
 
 ok(rejections.length === 0, `unhandled rejections during the run: ${rejections.map((e) => e && e.message).join(" | ")}`);
 
-finish("tasks: due-date grouping, stat-card filters, selection, bulk assign/due/urgent/delete, inline edits");
+finish("tasks: due-date grouping, stat-card filters, selection, bulk assign/due/urgent/delete, inline edits, vehicle link/unlink");

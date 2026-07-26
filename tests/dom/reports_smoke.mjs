@@ -157,7 +157,8 @@ await settle();
 
 ok(fetchLog.at(-1).url.startsWith("/api/reports/technicians"), `switching report fetched ${fetchLog.at(-1).url}`);
 ok(doc.querySelector('[data-report-type="technicians"]').classList.contains("active"), "the chosen report isn't lit");
-ok(doc.querySelector('[data-report-type="vehicle-spend"]').getAttribute("aria-selected") === "false",
+// The segmented control is a radiogroup: state rides on aria-checked.
+ok(doc.querySelector('[data-report-type="vehicle-spend"]').getAttribute("aria-checked") === "false",
    "the previous report still reports itself as selected");
 
 const t = stats();

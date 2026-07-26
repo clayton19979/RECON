@@ -941,6 +941,26 @@ textarea { min-height: 70px; resize: vertical; font-family: inherit; }
   font-weight: 700; border: none; cursor: pointer; font-size: 11px;
 }
 .task-order-link:hover { text-decoration: underline; }
+/* Static variant: a link chip pointing at a record with no detail view to
+   jump to (retail ROs). Reads as a label, not a dead button. */
+.task-order-link.is-static { cursor: default; color: var(--ink-soft); background: var(--line-soft); }
+.task-order-link.is-static:hover { text-decoration: none; }
+/* Chip + its unlink × travel as one unit so wrapping can't strand the ×. */
+.task-order-wrap { display: inline-flex; align-items: center; gap: 2px; }
+.task-link-clear {
+  background: none; border: none; color: var(--ink-faint); cursor: pointer;
+  font-size: 13px; line-height: 1; padding: 2px 4px; border-radius: 5px;
+  opacity: 0; transition: opacity .12s, background .12s, color .12s;
+}
+.task-row:hover .task-link-clear, .task-link-clear:focus-visible { opacity: 1; }
+.task-link-clear:hover { color: var(--crit); background: var(--crit-tint); }
+/* Same dashed "open slot" family as "+ due date" and "+ note". */
+.task-link-add {
+  padding: 2px 9px; border-radius: 999px; background: none; border: 1px dashed var(--line);
+  color: var(--ink-faint); font-weight: 600; font-size: 11.5px; cursor: pointer;
+}
+.task-link-add:hover { color: var(--accent); border-color: var(--accent); border-style: solid; }
+.task-link-edit { width: auto; max-width: 260px; padding: 1px 7px; font-size: 11.5px; }
 .task-notes {
   font-size: 12.5px; color: var(--ink-soft); margin-top: 7px; white-space: pre-wrap; line-height: 1.5;
   display: block; width: 100%; text-align: left; background: none; border: none;

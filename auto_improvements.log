@@ -1110,3 +1110,52 @@ Next time, in rough priority order:
   7. Task rows still can't be linked to a vehicle after creation -- order_id
      is settable via PATCH and the API even has an unlink sentinel, but the
      UI offers no control. Last write-once field on that screen.
+
+=== Run: 2026-07-25 evening (tasks vehicle link/unlink + DOM suite repairs) ===
+Built this run:
+  * Tasks: the vehicle link is no longer write-once (carried item #7, done).
+    Unlinked open rows get a "+ vehicle" chip in the same dashed open-slot
+    style as "+ due date"; it swaps in place for the same recon/we-owe picker
+    the quick-add uses, saves via PATCH order_id, Escape/blur abandon. Linked
+    open rows get an unlink x that sends the API's -1 sentinel. Completed
+    rows keep the jump chip but lose both editors. A linked-but-unjumpable
+    chip (retail RO) now renders as a static label instead of vanishing.
+  * Reports bug: an empty vehicle-spend report drew an empty
+    <div class="board-chart"> shell instead of nothing; wrapper now only
+    renders when there is a chart to wrap.
+  * DOM suite repairs -- the jsdom suites had rotted while they were being
+    skipped (no jsdom in most environments):
+      - tasks_smoke: fixture due dates were UTC-sliced, so the whole suite
+        failed for the hours around midnight UTC (evenings, US). Now local.
+      - tasks_smoke/board_smoke: bulk-bar assertions checked style.display,
+        but visibility rides on [hidden] -- they tested nothing / failed.
+      - tasks_smoke: the 120ms search debounce was never awaited; new
+        typeSearch() helper outwaits it.
+      - board_smoke: three cost-sub assertions predated the toned-delta copy
+        ("$70.00 under the $2,700.00 quoted"); updated to match.
+      - reports_smoke: segmented control is a radiogroup now; assert
+        aria-checked, not aria-selected.
+    All five *_smoke.mjs suites now PASS (run from a local scratch copy --
+    see sandbox note below). New coverage: link/unlink/escape/retail-
+    exclusion for the tasks vehicle picker.
+  * Verified: 248 python tests pass (scratch DB), uvicorn boots on :8901,
+    /api/tasks and /assets/app.js both 200.
+
+Sandbox notes (all previous ones hold), new this run:
+  * uv can't download python 3.14 in the sandbox (github tunnel blocked) and
+    only python3.10 exists. `pip install --break-system-packages fastapi
+    uvicorn httpx pytest` then `python3 -m pytest` works fine.
+  * tests/dom/node_modules on the mount is OneDrive cloud-only; node hangs
+    resolving jsdom from it. Copy static/ + tests/dom/*.mjs to $HOME, npm
+    install jsdom somewhere local, symlink it as tests/dom/node_modules in
+    the copy, run there. Running node against the mount times out.
+
+Next time, in rough priority order:
+  1. Debounced input on the estimate's money/qty fields. (Carried.)
+  2. Tab out of the last estimate row should add a new line. (Carried.)
+  3. A/P and Cores/Returns still have no jsdom coverage. (Carried, 7th run.)
+  4. Customer-address autocomplete front-end coverage. (Carried.)
+  5. Persist the message log to localStorage, capped. (Carried.)
+  6. Split reset_db() out of seed_mock_data. (Carried.)
+  7. Consider wiring test_dom_smoke.py to skip the mount node_modules trap
+     (e.g. prefer NODE_PATH when set, or copy to tmpdir before running).

@@ -89,7 +89,9 @@ ok(dataRows()[0].children.length === headCells,
    `row has ${dataRows()[0].children.length} cells but the header has ${headCells}`);
 ok(dataRows().every((tr) => tr.dataset.key && tr.dataset.sig),
    "rows are missing the data-key/data-sig the incremental renderer keys off");
-ok(doc.querySelector("#vehicles-bulk-bar").style.display === "none", "bulk bar is showing with nothing selected");
+// Visibility is the [hidden] attribute, not style.display -- asserting the
+// latter tested nothing (jsdom leaves style untouched either way).
+ok(doc.querySelector("#vehicles-bulk-bar").hidden, "bulk bar is showing with nothing selected");
 
 /* ---------- summary cards ----------
    The cards summarize the rows on screen. Unfiltered, that's the whole
@@ -108,7 +110,8 @@ let c = cards();
 ok(c.count === "5", `Vehicles card reads "${c.count}", expected 5`);
 ok(c.split === "3 recon · 2 we-owe", `Vehicles sub reads "${c.split}"`);
 ok(c.cost === "$2,940.00", `Cost card reads "${c.cost}", expected $2,940.00`);
-ok(c.costSub === "of $3,000.00 quoted", `Cost sub reads "${c.costSub}"`);
+// The sub is a toned delta, not a flat restatement -- $60 under here.
+ok(c.costSub === "$60.00 under the $3,000.00 quoted", `Cost sub reads "${c.costSub}"`);
 ok(c.parts === "2", `Waiting on Parts reads "${c.parts}", expected 2 vehicles`);
 ok(c.partsSub === "$425.00 on order", `parts sub reads "${c.partsSub}", expected $425.00`);
 ok(c.over === "1", `Over Quote reads "${c.over}", expected 1 (the Camry is inside the 10% band)`);
@@ -208,7 +211,7 @@ c = cards();
 ok(c.count === "2", `filtered to We-Owe the Vehicles card should read 2, got "${c.count}"`);
 ok(c.split === "0 recon · 2 we-owe", `Vehicles sub reads "${c.split}" with the board filtered to We-Owe`);
 ok(c.cost === "$310.00", `Cost card reads "${c.cost}" for the We-Owe rows, expected $310.00 (not the lot's $2,940.00)`);
-ok(c.costSub === "of $300.00 quoted", `Cost sub reads "${c.costSub}"`);
+ok(c.costSub === "$10.00 over the $300.00 quoted", `Cost sub reads "${c.costSub}"`);
 ok(c.parts === "1" && c.partsSub === "$85.00 on order",
    `parts card reads "${c.parts}" / "${c.partsSub}" for We-Owe, expected 1 / $85.00 on order`);
 ok(c.over === "0" && c.overSub === "none past estimate",
@@ -218,8 +221,8 @@ ok(c.scope === "Showing vehicles: we-owe.", `scope line reads "${c.scope}"`);
 
 chip("recon").click();
 c = cards();
-ok(c.count === "3" && c.cost === "$2,630.00" && c.costSub === "of $2,700.00 quoted",
-   `Recon cards read ${c.count} / ${c.cost} / ${c.costSub}, expected 3 / $2,630.00 / of $2,700.00 quoted`);
+ok(c.count === "3" && c.cost === "$2,630.00" && c.costSub === "$70.00 under the $2,700.00 quoted",
+   `Recon cards read ${c.count} / ${c.cost} / ${c.costSub}, expected 3 / $2,630.00 / $70.00 under the $2,700.00 quoted`);
 ok(c.over === "1" && c.parts === "1" && c.partsSub === "$340.00 on order",
    `Recon cards read over=${c.over} parts=${c.parts} (${c.partsSub})`);
 
@@ -241,7 +244,7 @@ selectAll.checked = true;
 selectAll.dispatchEvent(new w.Event("change", { bubbles: true }));
 ok(w.state.vehicleSelection.size === 1,
    `select-all took ${w.state.vehicleSelection.size} rows -- it must respect the active filter`);
-ok(doc.querySelector("#vehicles-bulk-bar").style.display !== "none", "bulk bar stayed hidden with a row selected");
+ok(!doc.querySelector("#vehicles-bulk-bar").hidden, "bulk bar stayed hidden with a row selected");
 ok(doc.querySelector("#vehicles-bulk-count").textContent === "1 selected",
    `bulk count reads "${doc.querySelector("#vehicles-bulk-count").textContent}"`);
 doc.querySelector("#vehicles-bulk-clear").click();

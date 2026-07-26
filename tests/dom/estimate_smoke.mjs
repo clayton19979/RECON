@@ -176,6 +176,73 @@ ok(rowsD.length === 2, `delegated × button left ${rowsD.length} rows, expected 
 ok(rowsD[0].querySelector(".ei-desc").value === "R&R front brakes", "the wrong row was removed");
 
 /* ------------------------------------------------------------------
+   Keystroke-level behaviour: live totals, debounced autosave, and
+   Tab-out-of-the-last-row adding the next line.
+
+   Grid state here: two rows -- "R&R front brakes" (labor, 1.5 x $120
+   after the in-place-sync test above pushed 120 into it) and "Rotor"
+   (part, 2 x $60, fully received). Typing qty 3 into the labor line
+   makes quoted = 3*120 + 2*60 = $480, actual the same (rotor counts
+   its received qty, labor counts as logged).
+   ------------------------------------------------------------------ */
+const waitDebounce = () => new Promise((r) => setTimeout(r, 950)).then(() => settle());
+const estimatePosts = () => fetchLog.filter((f) => f.method === "POST" && /\/estimate$/.test(f.url)).length;
+
+// --- typing a qty updates every total immediately, with no save yet ---
+let postsBefore = estimatePosts();
+const laborQty = rowsD[0].querySelector(".ei-qty");
+laborQty.focus();
+laborQty.value = "3";
+laborQty.dispatchEvent(new w.Event("input", { bubbles: true }));
+ok(doc.querySelector("#vd-quoted-cost").textContent === "$480.00",
+   `live quoted total wrong after typing: ${doc.querySelector("#vd-quoted-cost").textContent}, expected $480.00`);
+ok(doc.querySelector("#vd-actual-cost").textContent === "$480.00",
+   `live actual total wrong after typing: ${doc.querySelector("#vd-actual-cost").textContent}`);
+ok(doc.querySelector("#vd-cost-delta").textContent === "On quote",
+   "live delta not recomputed on keystroke");
+ok(estimatePosts() === postsBefore, "a single keystroke fired an immediate save instead of debouncing");
+
+// --- after a pause in typing, the debounced save lands on its own ---
+stagedEstimate = JSON.parse(JSON.stringify(w.state.detail.order.estimate));
+stagedEstimate.items[0].quantity = 3;
+await waitDebounce();
+ok(estimatePosts() === postsBefore + 1,
+   `debounced autosave never fired (${estimatePosts() - postsBefore} saves after pause)`);
+
+// --- a row with its description cleared is never autosaved away ---
+postsBefore = estimatePosts();
+const descClear = rowsD[0].querySelector(".ei-desc");
+descClear.value = "";
+descClear.dispatchEvent(new w.Event("input", { bubbles: true }));
+await waitDebounce();
+ok(estimatePosts() === postsBefore,
+   "autosave fired while a description sat empty -- that save deletes the line");
+descClear.value = "R&R front brakes"; // put it back, no events
+
+// --- Tab in the middle of the grid just moves along it ---
+postsBefore = estimatePosts();
+const midTab = new w.KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true });
+rowsD[0].querySelector(".ei-cost").dispatchEvent(midTab);
+ok(!midTab.defaultPrevented, "Tab on a middle row was hijacked");
+ok(grid.querySelectorAll(".part-row:not(.head)").length === 2, "Tab on a middle row added a line");
+
+// --- Tab out of the last money field on the last row adds the next line ---
+stagedEstimate = JSON.parse(JSON.stringify(w.state.detail.order.estimate));
+stagedEstimate.items[0].quantity = 3;
+stagedEstimate.items.push({ id: 9, kind: "part", description: "New part", quantity: 1, unit_cost: 0, core_charge: 0, status: "quoted", received_quantity: 0, job_id: null });
+const lastRow = [...grid.querySelectorAll(".part-row:not(.head)")].at(-1);
+const lastField = lastRow.querySelector(".ei-core") || lastRow.querySelector(".ei-cost");
+ok(lastField, "last row has no money field to tab out of");
+const endTab = new w.KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true });
+lastField.dispatchEvent(endTab);
+ok(endTab.defaultPrevented, "Tab out of the last row was not intercepted");
+const rowsAfterTab = [...grid.querySelectorAll(".part-row:not(.head)")];
+ok(rowsAfterTab.length === 3, `Tab out of the last row left ${rowsAfterTab.length} rows, expected 3`);
+ok(rowsAfterTab.at(-1).querySelector(".ei-kind").value === "part",
+   "the tabbed-in line did not inherit the previous row's kind");
+await settle(); // let the add's save round-trip finish before moving on
+
+/* ------------------------------------------------------------------
    Message log: a toast that faded is still recoverable from the bell.
    ------------------------------------------------------------------ */
 const notifList = doc.querySelector("#notif-list");
@@ -208,4 +275,4 @@ if (fails.length) {
   console.error("FAIL\n" + fails.join("\n"));
   process.exit(1);
 }
-console.log("PASS -- estimate grid, autosave/focus behaviour, message log, confirm dialog and error boundary");
+console.log("PASS -- estimate grid, autosave/focus, live totals + debounce + tab-to-add, message log, confirm dialog and error boundary");

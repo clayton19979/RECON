@@ -425,6 +425,7 @@ const state = {
   taskSelection: new Set(),     // task ids, cleared whenever the visible set changes
   taskAnchor: null,             // last row clicked, for shift+click ranges
   newTaskAssignees: [],
+  taskOrders: [],               // linkable orders, for the per-row vehicle picker
   showCompletedTasks: false,
   showAllCompleted: false,
   suggestions: [],
@@ -2420,6 +2421,59 @@ function renderEstimateTotals(order) {
   }
 }
 
+// Debounce handle for keystroke-driven autosave (wired in wireEstimateGrid).
+let estimateTypingTimer = null;
+function clearEstimateTypingTimer() {
+  clearTimeout(estimateTypingTimer);
+  estimateTypingTimer = null;
+}
+
+// The live-typing counterpart to renderEstimateTotals: same math, but read
+// straight from the grid's inputs instead of state, so totals track each
+// keystroke without waiting for the save round-trip. A returned part's cost
+// input reads 0 (that's how it renders), which drops it from every figure
+// here exactly like the notReturned filter does server-side.
+function updateEstimateTotalsFromDom() {
+  const box = $("#vd-estimate-items");
+  if (!box) return;
+  const num = (el) => (el ? parseFloat(el.value || "0") || 0 : 0);
+  let quoted = 0;
+  let actual = 0;
+  for (const row of $$(".part-row:not(.head)", box)) {
+    const qty = num(row.querySelector(".ei-qty")) || 0;
+    const cost = num(row.querySelector(".ei-cost"));
+    quoted += qty * cost;
+    actual += row.querySelector(".ei-kind")?.value === "part"
+      ? (parseFloat(row.dataset.receivedQuantity || "0") || 0) * cost
+      : qty * cost;
+  }
+  $("#vd-quoted-cost").textContent = money(quoted);
+  $("#vd-actual-cost").textContent = money(actual);
+  const delta = $("#vd-cost-delta");
+  if (delta) {
+    if (!quoted) {
+      delta.hidden = true;
+    } else {
+      const diff = actual - quoted;
+      delta.hidden = false;
+      delta.className = `cost-delta ${diff > 0.005 ? "over" : Math.abs(diff) <= 0.005 ? "zero" : ""}`;
+      delta.textContent = Math.abs(diff) <= 0.005 ? "On quote"
+        : diff > 0 ? `${money(diff)} over quote`
+        : `${money(-diff)} under quote`;
+    }
+  }
+  // Job subtotals live in each group's header; keep them moving too.
+  for (const group of $$(".job-group", box)) {
+    const label = group.querySelector(".job-group-subtotal");
+    if (!label) continue;
+    let sub = 0;
+    for (const row of $$(".part-row:not(.head)", group)) {
+      sub += (num(row.querySelector(".ei-qty")) || 0) * num(row.querySelector(".ei-cost"));
+    }
+    label.textContent = money(sub);
+  }
+}
+
 /* ---------- estimate grid: applying a save without redrawing ----------
 
    Every field on the grid autosaves on change, and the save round-trips the
@@ -2578,10 +2632,59 @@ function wireEstimateGrid() {
     if (!(t instanceof Element)) return;
     // Every field autosaves on change -- there is no "forgot to click Save and
     // it silently vanished" window, because nothing is ever left DOM-only.
-    if (t.matches(".ei-kind, .ei-desc, .ei-part, .ei-qty, .ei-cost, .ei-core, .ei-job")) return void persistEstimate();
+    // A change (blur/Enter) supersedes any debounced keystroke save still
+    // waiting -- clear it so one edit doesn't post twice.
+    if (t.matches(".ei-kind, .ei-desc, .ei-part, .ei-qty, .ei-cost, .ei-core, .ei-job")) {
+      clearEstimateTypingTimer();
+      return void persistEstimate();
+    }
     if (t.matches(".ei-receive-check")) return void updateReceiveButtonState();
     if (t.matches(".ei-status")) return void onEstimateStatusChange(t);
     if (t.matches(".ei-job-tech")) return void onJobTechnicianChange(t);
+  });
+
+  // Keystroke-level feedback. The change handler above only fires on blur, so
+  // while a number was being typed every total on the page -- Quoted, Actual,
+  // the over/under delta, job subtotals -- sat stale until the advisor clicked
+  // somewhere else. Now money and qty edits recompute those figures locally on
+  // every keystroke, and the save itself follows after a short pause in typing
+  // (the blur save still exists as the backstop; the token in persistEstimate
+  // already keeps overlapping responses ordered).
+  box.addEventListener("input", (e) => {
+    const t = e.target;
+    if (!(t instanceof Element) || !t.matches(".ei-qty, .ei-cost, .ei-core, .ei-desc, .ei-part")) return;
+    if (t.matches(".ei-qty, .ei-cost, .ei-core")) updateEstimateTotalsFromDom();
+    clearEstimateTypingTimer();
+    // A row whose description is empty gets dropped by collectEstimateItems --
+    // saving mid-retype would delete the line out from under the advisor. Hold
+    // the autosave until the row would survive it.
+    const desc = t.closest(".part-row")?.querySelector(".ei-desc");
+    if (desc && !desc.value.trim()) return;
+    estimateTypingTimer = setTimeout(() => { estimateTypingTimer = null; persistEstimate(); }, 800);
+  });
+
+  // Spreadsheet-style row entry: Tab out of the last money field on the last
+  // line adds the next line of the same kind, instead of dumping focus onto
+  // the status pill. Only on the grid's final row, so tabbing through the
+  // middle of a long estimate still just moves along it.
+  box.addEventListener("keydown", (e) => {
+    if (e.key !== "Tab" || e.shiftKey || e.altKey || e.ctrlKey || e.metaKey) return;
+    const t = e.target;
+    if (!(t instanceof Element)) return;
+    const row = t.closest(".part-row:not(.head)");
+    if (!row) return;
+    // "Last money field" = Core when the row has one (parts), Cost otherwise.
+    const lastField = row.querySelector(".ei-core") || row.querySelector(".ei-cost");
+    if (t !== lastField || (lastField && lastField.disabled)) return;
+    const rows = $$(".part-row:not(.head)", box);
+    if (row !== rows[rows.length - 1]) return;
+    // Don't chain blank lines -- if this row hasn't been described yet,
+    // there's nothing to tab onward from.
+    if (!row.querySelector(".ei-desc")?.value.trim()) return;
+    e.preventDefault();
+    clearEstimateTypingTimer();
+    const jobIdRaw = row.closest(".job-group")?.dataset.jobId ?? row.dataset.jobId ?? "";
+    addEstimateRow(row.querySelector(".ei-kind")?.value || "part", {}, jobIdRaw ? Number(jobIdRaw) : null);
   });
 
   box.addEventListener("click", (e) => {
@@ -4192,7 +4295,10 @@ function renderReportChart(rows, shape) {
   }));
   // The tallest bar is the car you want to open -- every bar is a link to
   // its vehicle, same interaction language as the board's idle chart.
-  target.innerHTML = `<div class="board-chart">${barChart({
+  // The wrapper only exists when there's something to wrap: an empty report
+  // must leave this panel gone entirely, not draw an empty shell that holds
+  // the chart's slot open above the empty state.
+  const chart = barChart({
     title: "What we have in it",
     note: priced.length > CHART_LIMIT ? `Top ${CHART_LIMIT} of ${priced.length} vehicles with cost` : "Click a bar to open the vehicle",
     legend: `<span class="legend-item"><span class="legend-swatch"></span>Cost</span>
@@ -4200,7 +4306,8 @@ function renderReportChart(rows, shape) {
              <span class="legend-item"><span class="legend-swatch marker"></span>Quoted</span>`,
     items,
     rowAttrs: (i) => (i.refId != null ? `role="button" tabindex="0" data-seg="${esc(i.seg)}" data-ref-id="${i.refId}"` : ""),
-  }) || chartNothingToPlot(rows.length, "cost")}</div>`;
+  }) || chartNothingToPlot(rows.length, "cost");
+  target.innerHTML = chart ? `<div class="board-chart">${chart}</div>` : "";
 }
 
 /* ---------- table ---------- */
@@ -5921,6 +6028,30 @@ function taskBucket(t) {
 // every platform -- the board's own vehicle glyph replaces it.
 const TASK_VEHICLE_SVG = `<svg viewBox="0 0 24 24">${EMPTY_ICONS.vehicle}</svg>`;
 
+/* The vehicle link was the last write-once field on this row: settable in the
+   quick-add form (and by the board's bulk button), then frozen forever. The
+   API has taken order_id via PATCH -- with -1 as the unlink sentinel -- for a
+   long time; the UI just never offered a control. So: an unlinked open row
+   gets "+ vehicle" in the same dashed open-slot style as "+ due date", and a
+   linked open row grows a small × beside the jump chip. Completed rows keep
+   the jump chip but lose both editors -- a done task's link is history, not a
+   decision anyone should still be making.
+
+   A linked-but-unjumpable chip (retail RO, or a segment the detail view can't
+   open) renders as static text instead of vanishing, because the × needs
+   something to sit next to -- unlink is exactly what you want for a task
+   pointing at a record you can no longer visit. */
+function taskVehicleChip(t, linkable, refId) {
+  if (t.order_id) {
+    const label = esc(t.order_label || t.order_number || `#${t.order_id}`);
+    const jump = linkable
+      ? `<button type="button" class="task-order-link" data-segment="${t.order_segment}" data-ref-id="${refId}" title="Open this vehicle">${TASK_VEHICLE_SVG}${label}</button>`
+      : `<span class="task-order-link is-static">${TASK_VEHICLE_SVG}${label}</span>`;
+    return `<span class="task-order-wrap">${jump}${t.done ? "" : `<button type="button" class="task-link-clear" title="Unlink this vehicle" aria-label="Unlink ${label} from ${esc(t.title)}">×</button>`}</span>`;
+  }
+  return t.done ? "" : `<button type="button" class="task-link-add" title="Link this task to a vehicle">+ vehicle</button>`;
+}
+
 function taskRowHtml(t) {
   const due = taskDueInfo(t.due_date);
   const refId = t.order_recon_vehicle_id ?? t.order_we_owe_id;
@@ -5945,7 +6076,7 @@ function taskRowHtml(t) {
             : `<button type="button" class="task-due task-due-empty" data-due="" title="Set a due date">+ due date</button>`}
           <button type="button" class="task-flag ${t.urgent ? "on" : ""}" title="${t.urgent ? "Clear the urgent flag" : "Flag this urgent"}">${t.urgent ? "Urgent" : "Flag urgent"}</button>
           ${t.notes ? "" : `<button type="button" class="task-notes-add" title="Add a note">+ note</button>`}
-          ${linkable ? `<button type="button" class="task-order-link" data-segment="${t.order_segment}" data-ref-id="${refId}">${TASK_VEHICLE_SVG}${esc(t.order_label || t.order_number)}</button>` : ""}
+          ${taskVehicleChip(t, linkable, refId)}
           <span>by ${esc(t.created_by || "Unspecified")} · ${relativeTime(t.created_at)}${t.done && t.completed_at ? ` · done ${relativeTime(t.completed_at)}` : ""}</span>
         </div>
         ${t.notes ? `<button type="button" class="task-notes" title="Click to edit this note">${esc(t.notes)}</button>` : ""}
@@ -6081,8 +6212,48 @@ function wireTaskRowActions(container) {
       }
     });
   });
-  $$(".task-order-link", container).forEach((btn) => {
+  // [data-ref-id] keeps the static (unjumpable) variant of the chip out of
+  // the click wiring -- it renders as a span, but a selector is cheaper than
+  // trusting that stays true.
+  $$(".task-order-link[data-ref-id]", container).forEach((btn) => {
     btn.addEventListener("click", () => openVehicleDetail(btn.dataset.segment, Number(btn.dataset.refId)));
+  });
+  $$(".task-link-clear", container).forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const row = btn.closest(".task-row");
+      // -1 is the API's documented "clear the link" sentinel (null means
+      // "leave it alone", since PATCH bodies omit untouched fields).
+      await patchField(row.dataset.id, { order_id: -1 }, renderTasksList);
+    });
+  });
+  /* "+ vehicle" swaps in place for the same recon/we-owe picker the quick-add
+     form uses, built off the orders list loadTasksView already fetched. Same
+     editor contract as the due-date chip: save on change, put the chip back on
+     blur or Escape, and never save twice. */
+  $$(".task-link-add", container).forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const row = btn.closest(".task-row");
+      const linkables = (state.taskOrders || []).filter((o) => o.segment === "recon" || o.segment === "we_owe");
+      if (!linkables.length) return toast("No recon or customer vehicles to link yet", true);
+      const select = document.createElement("select");
+      select.className = "task-link-edit";
+      select.innerHTML = `<option value="">Pick a vehicle…</option>` + linkables.map((o) => {
+        const label = o.stock_number ? `${o.stock_number} — ${o.year} ${o.make} ${o.model}` : `${o.customer_name} — ${o.year} ${o.make} ${o.model}`;
+        return `<option value="${o.id}">${esc(label)}</option>`;
+      }).join("");
+      btn.replaceWith(select);
+      select.focus();
+      let saving = false;
+      select.addEventListener("change", async () => {
+        if (saving || !select.value) return;
+        saving = true;
+        await patchField(row.dataset.id, { order_id: Number(select.value) }, renderTasksList);
+      });
+      select.addEventListener("blur", () => { if (!saving) renderTasksList(); });
+      select.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") { saving = true; renderTasksList(); }
+      });
+    });
   });
   /* Due date was write-once: settable in the quick-add form and nowhere else,
      which is exactly backwards for the tasks the board creates in bulk (those
@@ -6593,6 +6764,9 @@ async function loadTasksView() {
     renderTaskAssigneeFilter();
     const [tasks, orders] = await Promise.all([get("/api/tasks"), get("/api/orders")]);
     state.tasks = tasks;
+    // Kept for the per-row "+ vehicle" picker, which builds its select from
+    // this list on demand rather than refetching orders on every row edit.
+    state.taskOrders = orders;
     renderTaskOrderSelect(orders);
     renderTasksList();
   } catch (err) {

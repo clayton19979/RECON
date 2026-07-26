@@ -1690,3 +1690,38 @@ Next time, in rough priority order:
      paths only.
   3. Email field validation (loose, keep-legacy) to match phone's.
   4. .git lock debris (dead28*.lock) still needs a Windows-side delete.
+
+=== 2026-07-26 (run 30) ===
+Retail ROs became first-class citizens (carried idea #2, shipped whole):
+
+* New backend pair GET/PATCH /api/retail/vehicles/{vehicle_id} -- a
+  customer's own car as a page, keyed by vehicles.id since there's no
+  container row. cost_rollup/last_activity(_detail) grew an optional
+  segment filter so the retail page's money can't absorb we-owe tickets
+  riding the same physical vehicle. Recon (shop-sentinel) vehicles 404.
+
+* Vehicle detail page speaks all three segments now: retail shows the
+  customer card, hides promise/deposit/archive machinery (an RO's status
+  is a retail car's whole lifecycle), back link + rail highlight point
+  at Customers, edits PATCH the retail endpoint, ticket prints as
+  "Customer Vehicle (Retail)".
+
+* Customers screen: per-vehicle "+ Write RO" button -> prefilled dialog
+  -> POST -> land on the new ticket. Retail chips jump; only voided
+  chips stay inert. This was the missing front door: writing a retail
+  ticket for an existing customer previously required no path at all.
+
+* Tasks, A/P, Returns, Cores: retail rows now carry order vehicle_id +
+  "Retail: <name>" labels and joined every jumpable/linkable set that
+  used to gate on recon|we_owe.
+
+* Tests: new tests/test_retail_vehicles.py (5), customers/tasks dom
+  suites extended (retail chip jump, Write RO dialog flow, task picker
+  offers retail). 260 python tests + 11 dom suites green, uvicorn boots.
+
+Next time, in rough priority order:
+  1. Detail page Escape/keyboard could join wireListKeyboard. (Carried.)
+  2. Retail page could offer "add another vehicle for this customer" /
+     surface the customer's other cars like the Customers expansion does.
+  3. Email field validation (loose, keep-legacy) to match phone's.
+  4. .git lock debris (dead2*.lock) still needs a Windows-side delete.

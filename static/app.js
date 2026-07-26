@@ -45,15 +45,55 @@ function toast(message, isError = false) {
    appended here, and the topbar bell opens the last 50 with timestamps.
 
    The unread dot counts *errors* only. A wall of successful saves shouldn't
-   be the thing nagging you to go look. */
+   be the thing nagging you to go look.
+
+   The log survives a reload (localStorage, same cap). The whole point of the
+   bell is the message you didn't see in time -- and "didn't see in time"
+   very often looks like closing the window and coming back later. The unread
+   error count rides along, so a failure from the last session still gets the
+   dot. */
 const MESSAGE_LOG_LIMIT = 50;
+const MESSAGE_LOG_KEY = "dao-message-log";
 const messageLog = [];
 let messageLogUnread = 0;
+
+function saveMessageLog() {
+  // Storage can be full or disabled; the in-memory log keeps working either way.
+  try {
+    localStorage.setItem(MESSAGE_LOG_KEY, JSON.stringify({
+      unread: messageLogUnread,
+      entries: messageLog.map((e) => ({ m: e.message, e: e.isError ? 1 : 0, at: e.at.getTime() })),
+    }));
+  } catch {}
+}
+
+function loadMessageLog() {
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem(MESSAGE_LOG_KEY) || "null"); } catch {}
+  if (!saved || !Array.isArray(saved.entries)) return;
+  for (const e of saved.entries.slice(0, MESSAGE_LOG_LIMIT)) {
+    const at = new Date(Number(e.at));
+    if (typeof e.m !== "string" || Number.isNaN(at.getTime())) continue; // one bad entry shouldn't dump the log
+    messageLog.push({ message: e.m, isError: !!e.e, at });
+  }
+  messageLogUnread = Math.max(0, Number(saved.unread) || 0);
+}
+
+// "2:14 PM" reads as *today's* 2:14 once yesterday's entries can still be on
+// the list after a reload, so anything older than today says which day.
+function messageLogTime(at) {
+  const time = at.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  const today = new Date();
+  return at.toDateString() === today.toDateString()
+    ? time
+    : `${at.toLocaleDateString("en-US", { month: "short", day: "numeric" })} · ${time}`;
+}
 
 function logMessage(message, isError) {
   messageLog.unshift({ message: String(message), isError: !!isError, at: new Date() });
   if (messageLog.length > MESSAGE_LOG_LIMIT) messageLog.length = MESSAGE_LOG_LIMIT;
   if (isError && !$("#notif-menu")?.classList.contains("open")) messageLogUnread += 1;
+  saveMessageLog();
   renderMessageLog();
 }
 
@@ -72,7 +112,7 @@ function renderMessageLog() {
   list.innerHTML = messageLog.map((entry) => `
     <div class="notif-item ${entry.isError ? "error" : ""}">
       <span class="notif-item-text">${esc(entry.message)}</span>
-      <span class="notif-item-time">${esc(entry.at.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }))}</span>
+      <span class="notif-item-time">${esc(messageLogTime(entry.at))}</span>
     </div>
   `).join("");
 }
@@ -86,8 +126,10 @@ function wireMessageLog() {
     menu.classList.toggle("open", open);
     toggle.setAttribute("aria-expanded", String(open));
     if (open) {
-      // Opening the panel *is* reading it.
+      // Opening the panel *is* reading it -- persisted, so a reload doesn't
+      // resurrect a dot for errors that were already looked at.
       messageLogUnread = 0;
+      saveMessageLog();
       renderMessageLog();
     }
   };
@@ -99,12 +141,14 @@ function wireMessageLog() {
   $("#notif-clear").addEventListener("click", () => {
     messageLog.length = 0;
     messageLogUnread = 0;
+    saveMessageLog();
     renderMessageLog();
   });
   document.addEventListener("click", () => setOpen(false));
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && menu.classList.contains("open")) setOpen(false);
   });
+  loadMessageLog();
   renderMessageLog();
 }
 /* ---------- confirm dialog ----------
@@ -157,6 +201,31 @@ function wireConfirmDialog() {
   // Esc / backdrop-dismiss fire `close` without going through either button.
   dlg.addEventListener("close", () => settleConfirm(false));
   dlg.addEventListener("click", (e) => { if (e.target === dlg) settleConfirm(false); });
+}
+
+/* ---------- keyboard shortcuts overlay ----------
+   The board grew a real keyboard model (cursor, selection, type-to-search)
+   and the estimate grid grew its own (Tab past the last money field starts
+   the next line) -- none of it discoverable beyond one hint line under one
+   table. "?" is where every keyboard-driven product keeps the map, so it
+   opens the map here too, from any view. */
+function wireShortcutsDialog() {
+  const dlg = $("#shortcuts-dialog");
+  if (!dlg) return;
+  $("#shortcuts-close").addEventListener("click", () => dlg.close());
+  dlg.addEventListener("click", (e) => { if (e.target === dlg) dlg.close(); });
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "?" || e.ctrlKey || e.metaKey || e.altKey) return;
+    const tag = (e.target.tagName || "").toLowerCase();
+    if (tag === "input" || tag === "textarea" || tag === "select" || e.target.isContentEditable) return;
+    e.preventDefault();
+    // This listener is registered before the board's type-to-search handler
+    // (see init order), and must also *stop* it -- otherwise the same "?"
+    // that opens the overlay would land in the search box behind it.
+    e.stopImmediatePropagation();
+    if (dlg.open) dlg.close();
+    else dlg.showModal();
+  });
 }
 
 /* A confirm with one required text field. Used only once the vendor's credit
@@ -2687,6 +2756,52 @@ function wireEstimateGrid() {
     addEstimateRow(row.querySelector(".ei-kind")?.value || "part", {}, jobIdRaw ? Number(jobIdRaw) : null);
   });
 
+  // Enter completes the spreadsheet feel Tab started: on the grid's last
+  // line it walks Description -> Qty -> Cost (-> Core on parts), and from
+  // the last money field starts the next line, so a whole estimate can be
+  // keyed in without touching Tab or the mouse. Deliberately last-row-only:
+  // a correction three lines up must not grow the estimate, so Enter keeps
+  // its default commit meaning everywhere else. Part # is skipped from the
+  // description on purpose (it's optional, and the fast path is the point);
+  // Enter *in* the Part # field still advances, for whoever fills it in.
+  const ENTER_CHAIN = {
+    "ei-desc": ["ei-qty", "ei-cost", "ei-core"],
+    "ei-part": ["ei-qty", "ei-cost", "ei-core"],
+    "ei-qty": ["ei-cost", "ei-core"],
+    "ei-cost": ["ei-core"],
+    "ei-core": [],
+  };
+  box.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter" || e.shiftKey || e.altKey || e.ctrlKey || e.metaKey) return;
+    const t = e.target;
+    if (!(t instanceof Element)) return;
+    const field = [...t.classList].find((c) => c in ENTER_CHAIN);
+    if (field === undefined) return;
+    const row = t.closest(".part-row:not(.head)");
+    if (!row) return;
+    const rows = $$(".part-row:not(.head)", box);
+    if (row !== rows[rows.length - 1]) return;
+    const next = ENTER_CHAIN[field]
+      .map((c) => row.querySelector(`.${c}`))
+      .find((el) => el && !el.disabled);
+    if (next) {
+      e.preventDefault();
+      next.focus();
+      if (typeof next.select === "function") next.select();
+      return;
+    }
+    // Nothing further along the row: same add-a-line contract as Tab above,
+    // guards and all -- only from the row's true last money field, and never
+    // chaining on from a line that hasn't been described yet.
+    const lastField = row.querySelector(".ei-core") || row.querySelector(".ei-cost");
+    if (t !== lastField || (lastField && lastField.disabled)) return;
+    if (!row.querySelector(".ei-desc")?.value.trim()) return;
+    e.preventDefault();
+    clearEstimateTypingTimer();
+    const jobIdRaw = row.closest(".job-group")?.dataset.jobId ?? row.dataset.jobId ?? "";
+    addEstimateRow(row.querySelector(".ei-kind")?.value || "part", {}, jobIdRaw ? Number(jobIdRaw) : null);
+  });
+
   box.addEventListener("click", (e) => {
     const btn = e.target instanceof Element ? e.target.closest("button") : null;
     if (!btn || !box.contains(btn)) return;
@@ -4779,14 +4894,21 @@ function openVendorForEdit(vendorId) {
   const vendor = state.vendors.find((v) => v.id === vendorId);
   if (!vendor) return;
   editingVendorId = vendorId;
+  // namedItem("name"), not .name: a <form>'s own `name` IDL attribute shadows
+  // the input named "name" (form.name is a string), and jsdom's form-controls
+  // collection has the same collision on *its* named getter -- elements.name
+  // hands back the collection's own property there, not the input. namedItem
+  // is the one lookup with no namespace to collide with, so vendorField uses
+  // it for every field rather than betting on which names are safe.
   const form = $("#vendor-form");
-  form.name.value = vendor.name;
-  form.aliases.value = vendor.aliases.join(", ");
-  form.account_number.value = vendor.account_number || "";
+  const vendorField = (n) => form.elements.namedItem(n);
+  vendorField("name").value = vendor.name;
+  vendorField("aliases").value = vendor.aliases.join(", ");
+  vendorField("account_number").value = vendor.account_number || "";
   $("#vendor-form-title").textContent = `Editing ${vendor.name}`;
   $("#vendor-form-submit").textContent = "Update Vendor";
   $("#vendor-form-cancel").style.display = "";
-  form.name.focus();
+  vendorField("name").focus();
 }
 function cancelVendorEdit() {
   editingVendorId = null;
@@ -5009,10 +5131,12 @@ function wireAccountingView() {
   $("#vendor-form").addEventListener("submit", async (e) => {
     e.preventDefault();
     const form = e.target;
+    // namedItem, not the named getter -- see openVendorForEdit.
+    const vendorField = (n) => form.elements.namedItem(n);
     const payload = {
-      name: form.name.value.trim(),
-      aliases: form.aliases.value.split(",").map((s) => s.trim()).filter(Boolean),
-      account_number: form.account_number.value.trim(),
+      name: vendorField("name").value.trim(),
+      aliases: vendorField("aliases").value.split(",").map((s) => s.trim()).filter(Boolean),
+      account_number: vendorField("account_number").value.trim(),
     };
     try {
       if (editingVendorId) {
@@ -5322,6 +5446,10 @@ function renderCoresTable() {
     box.addEventListener("change", () => {
       const id = Number(box.dataset.id);
       if (box.checked) state.coresSelected.add(id); else state.coresSelected.delete(id);
+      // The header checkbox has to follow row-by-row checks, not just full
+      // re-renders -- checking every row by hand used to leave it unchecked.
+      const boxes = $$(".cores-select", $("#cores-table"));
+      $("#cores-select-all").checked = boxes.length > 0 && boxes.every((b) => b.checked);
       syncCoresBulkBar();
     });
   });
@@ -5492,6 +5620,9 @@ function renderReturnsTable() {
     box.addEventListener("change", () => {
       const id = Number(box.dataset.id);
       if (box.checked) state.returnsSelected.add(id); else state.returnsSelected.delete(id);
+      // Same rule as the cores table: the header checkbox follows row checks.
+      const boxes = $$(".returns-select", $("#returns-table"));
+      $("#returns-select-all").checked = boxes.length > 0 && boxes.every((b) => b.checked);
       syncReturnsBulkBar();
     });
   });
@@ -5830,18 +5961,19 @@ function wireStaffView() {
   $("#staff-form").addEventListener("submit", async (e) => {
     e.preventDefault();
     const form = e.target;
-    const name = form.name.value.trim();
+    // namedItem, not the named getter -- see openVendorForEdit.
+    const name = form.elements.namedItem("name").value.trim();
     // Assignment pickers show names only, so two "Ray Ortiz" rows would be
     // indistinguishable forever -- catch it before the POST.
     if (state.allStaff.some((s) => s.name.toLowerCase() === name.toLowerCase())) {
       return toast("Someone with that name is already on staff", true);
     }
     try {
-      await post("/api/staff", { name, role: form.role.value });
+      await post("/api/staff", { name, role: form.elements.namedItem("role").value });
       form.reset();
       toast(`${name} added`);
       await loadStaffView();
-      form.name.focus();
+      form.elements.namedItem("name").focus();
     } catch (err) {
       toast(err.message, true);
     }
@@ -7101,6 +7233,10 @@ document.addEventListener("DOMContentLoaded", () => {
   initTheme();
   initCurrentUser();
   wireConfirmDialog();
+  // Before wireVehiclesView: both watch document-level keydown, and the "?"
+  // handler has to see (and swallow) the keystroke before the board's
+  // type-to-search does.
+  wireShortcutsDialog();
   wireInvoicePromptDialog();
   wireViewRetry();
   wireVehiclesView();

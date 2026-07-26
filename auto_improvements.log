@@ -1208,3 +1208,54 @@ Next time, in rough priority order:
      node_modules trap. (Carried.)
   6. Enter in the last row's description could also advance Qty -> Cost ->
      new line, completing the spreadsheet feel.
+
+================================================================
+Run: 2026-07-26 ~00:00 (hourly auto-improvement)
+================================================================
+First: recovered the previous run's work. It ended with a stale
+.git/index.lock and half its diff uncommitted; verified tests, cleared the
+lock, and committed the remainder (estimate debounce + tab-to-add and the
+estimate_smoke coverage rode in that recovery commit -- carried items 1 and
+2 are DONE, they just never got committed).
+
+This run:
+  * Message log persistence (carried item 5): the topbar bell's log now
+    survives a reload -- localStorage, same 50-entry cap, unread-error count
+    rides along so a failure from last session still gets the dot. Opening
+    the bell or clearing the log persists too. Entries older than today show
+    their date ("Jul 25 · 2:14 PM"), since "2:14 PM" alone reads as today's.
+  * Keyboard shortcuts overlay: "?" from any view opens a styled map of the
+    whole keyboard model (global, vehicles board, estimate grid). Wired
+    before the board's type-to-search listener and swallows the keystroke
+    with stopImmediatePropagation, so "?" opens help instead of landing in
+    the search box. Board-hint line now points at it.
+  * A/P jsdom coverage (half of carried item 3): accounting_smoke.mjs was
+    sitting untracked and broken -- a previous run wrote it but never
+    committed. Root cause was real app rot, not just test rot: jsdom 29's
+    form-controls collection has the same named-getter collision on
+    elements.name that form.name has, so openVendorForEdit crashed on
+    "Cannot create property 'value' on string". App code (vendor form,
+    staff form) and test now use elements.namedItem(), which has no
+    namespace to collide with. Suite passes and is committed.
+  * New notif_smoke.mjs: log fill/cap/persist/restore, unread dot
+    semantics, date-stamped old entries, corrupt-entry tolerance, and the
+    "?"-vs-type-to-search collision. Harness grew a beforeBoot(w) hook so a
+    test can stage localStorage before app.js init reads it.
+  * Verified: 248 python tests + 8 dom-runner tests pass, all 7 jsdom
+    suites pass standalone, uvicorn boots, /, app.js and index.html 200.
+
+Sandbox notes (previous ones hold), new this run:
+  * Background processes do NOT survive across bash calls here -- run
+    everything to completion inside one call, and split pytest into <40s
+    chunks (the full suite from /tmp/work takes ~90s).
+  * A stale .git/index.lock on the OneDrive mount can't be rm'd until file
+    deletion is enabled for the folder (allow_cowork_file_delete).
+
+Next time, in rough priority order:
+  1. Cores/Returns jsdom coverage (other half of carried item 3).
+  2. Customer-address autocomplete front-end coverage. (Carried.)
+  3. Split reset_db() out of seed_mock_data. (Carried.)
+  4. test_dom_smoke.py: prefer NODE_PATH / tmpdir copy to dodge the mount
+     node_modules trap. (Carried.)
+  5. The "?" overlay could list Tasks-screen keys once the tasks list grows
+     cursor navigation like the board's -- worth building that model there.

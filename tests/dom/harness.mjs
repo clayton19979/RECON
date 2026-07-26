@@ -29,9 +29,13 @@ export const STATIC_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.ur
  * @param {string[]} opts.expose  names from app.js's module scope to copy onto
  *        `window`. app.js is strict-mode, so an eval'd declaration does *not*
  *        become a global -- anything a test wants to call has to be listed.
+ * @param {(w: Window) => void} opts.beforeBoot  runs after the window exists
+ *        but before app.js does. The only way to stage localStorage the app
+ *        reads during init -- by the time boot() returns, init has already
+ *        run against whatever was (or wasn't) there.
  * @returns {Promise<object>} { dom, w, doc, fetchLog, settle, ok, fails, rejections, finish }
  */
-export async function boot({ fetch: handler, expose = [] } = {}) {
+export async function boot({ fetch: handler, expose = [], beforeBoot } = {}) {
   const html = fs.readFileSync(`${STATIC_DIR}/index.html`, "utf8");
   const js = fs.readFileSync(`${STATIC_DIR}/app.js`, "utf8");
   const dom = new JSDOM(html, { runScripts: "outside-only", url: "http://localhost/", pretendToBeVisual: true });
@@ -55,6 +59,8 @@ export async function boot({ fetch: handler, expose = [] } = {}) {
   const rejections = [];
   process.on("unhandledRejection", (err) => rejections.push(err));
 
+  if (beforeBoot) beforeBoot(w);
+
   const exposed = expose.length ? `\n;Object.assign(window, { ${expose.join(", ")} });` : "";
   w.eval(js + exposed);
 
@@ -71,11 +77,12 @@ export async function boot({ fetch: handler, expose = [] } = {}) {
   // jsdom implements <dialog> as an element but not showModal/close, and
   // confirmAction calls showModal(). Without this, any flow that asks before
   // acting dies in an unhandled rejection halfway through -- which reads as
-  // "the button did nothing" and hides what actually broke. Shimmed here
-  // rather than per-file because confirming before a destructive or bulk
-  // action is the house style and every screen has some.
-  const dlg = w.document.querySelector("#confirm-dialog");
-  if (dlg) {
+  // "the button did nothing" and hides what actually broke. Shimmed for
+  // every <dialog> (not just #confirm-dialog, as this originally was): the
+  // cores screen alone opens the invoice-prompt and post-return dialogs, and
+  // a shim that covers only the confirm box makes those flows die the same
+  // silent way the confirm flow used to.
+  for (const dlg of w.document.querySelectorAll("dialog")) {
     dlg.showModal = function () { this.open = true; };
     dlg.close = function () { this.open = false; this.dispatchEvent(new w.Event("close")); };
   }

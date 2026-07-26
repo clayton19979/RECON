@@ -1090,6 +1090,29 @@ dialog::backdrop { background: var(--backdrop); backdrop-filter: blur(2px); }
 #confirm-dialog.danger { border-top: 3px solid var(--crit); }
 #confirm-dialog.danger #confirm-eyebrow { color: var(--crit); }
 
+/* ---------- keyboard shortcuts overlay ("?") ----------
+   Two columns of keycap/description rows. The keycaps reuse the board-hint's
+   kbd look so the overlay and the inline hint read as the same vocabulary. */
+#shortcuts-dialog { width: min(520px, 92vw); }
+.shortcuts-body { display: flex; flex-direction: column; gap: 20px; }
+.shortcut-group-title {
+  margin: 0 0 4px; font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em;
+  font-weight: 700; color: var(--ink-faint);
+}
+.shortcut-row {
+  display: flex; align-items: baseline; gap: 14px; padding: 6px 0;
+  font-size: 13px; color: var(--ink-soft); border-bottom: 1px solid var(--line-soft);
+}
+.shortcut-group .shortcut-row:last-of-type { border-bottom: none; }
+.shortcut-keys { flex-shrink: 0; min-width: 108px; display: inline-flex; align-items: baseline; gap: 4px; color: var(--ink); }
+.shortcut-keys kbd {
+  font-family: "IBM Plex Mono", "Cascadia Mono", Consolas, monospace; font-size: 10.5px;
+  background: var(--paper-raise); border: 1px solid var(--line); border-bottom-width: 2px;
+  border-radius: 4px; padding: 1px 5px; color: var(--ink-soft);
+}
+.shortcut-keys-note { color: var(--ink-faint); }
+.shortcut-note { margin: 6px 0 0; font-size: 12px; line-height: 1.5; color: var(--ink-faint); }
+
 /* ---------- toast ---------- */
 #toast {
   position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%) translateY(12px);

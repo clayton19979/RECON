@@ -243,6 +243,61 @@ ok(rowsAfterTab.at(-1).querySelector(".ei-kind").value === "part",
 await settle(); // let the add's save round-trip finish before moving on
 
 /* ------------------------------------------------------------------
+   Enter completes the spreadsheet feel: on the last line it advances
+   Description -> Qty -> Cost -> Core, and from the last money field
+   starts the next line -- while Enter anywhere else keeps its default
+   meaning. Grid state: three rows, the last being "New part" (a part,
+   so it carries a Core field).
+   ------------------------------------------------------------------ */
+const pressEnter = (el) => {
+  const ev = new w.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+  el.dispatchEvent(ev);
+  return ev;
+};
+const gridRows = () => [...grid.querySelectorAll(".part-row:not(.head)")];
+
+// A middle row's Enter is not hijacked -- a correction upstream must not
+// grow the estimate or yank focus.
+const midEnter = pressEnter(gridRows()[0].querySelector(".ei-desc"));
+ok(!midEnter.defaultPrevented, "Enter on a middle row was hijacked");
+ok(gridRows().length === 3, "Enter on a middle row added a line");
+
+// Description -> Qty -> Cost -> Core, walking one keypress at a time.
+const enterRow = gridRows().at(-1);
+enterRow.querySelector(".ei-desc").focus();
+ok(pressEnter(enterRow.querySelector(".ei-desc")).defaultPrevented, "Enter in the last row's description fell through");
+ok(doc.activeElement === enterRow.querySelector(".ei-qty"),
+   "Enter from the description didn't land on Qty");
+pressEnter(enterRow.querySelector(".ei-qty"));
+ok(doc.activeElement === enterRow.querySelector(".ei-cost"),
+   "Enter from Qty didn't land on Cost");
+pressEnter(enterRow.querySelector(".ei-cost"));
+ok(doc.activeElement === enterRow.querySelector(".ei-core"),
+   "Enter from Cost on a part row didn't land on Core");
+
+// From the last money field, Enter starts the next line -- same contract
+// as Tab, including inheriting the kind and focusing the new description.
+stagedEstimate = JSON.parse(JSON.stringify(w.state.detail.order.estimate));
+stagedEstimate.items.push({ id: 10, kind: "part", description: "", quantity: 1, unit_cost: 0, core_charge: 0, status: "quoted", received_quantity: 0, job_id: null });
+ok(pressEnter(enterRow.querySelector(".ei-core")).defaultPrevented, "Enter out of the last money field fell through");
+ok(gridRows().length === 4, `Enter out of the last row left ${gridRows().length} rows, expected 4`);
+ok(gridRows().at(-1).querySelector(".ei-kind").value === "part",
+   "the Enter-added line did not inherit the previous row's kind");
+await settle(); // focus lands after the add's save round-trips
+ok(doc.activeElement === gridRows().at(-1).querySelector(".ei-desc"),
+   "the Enter-added line didn't take focus on its description");
+
+// And a last line whose description has been cleared refuses to chain on --
+// the same guard that keeps Tab from minting blank lines.
+const blankRow = gridRows().at(-1);
+blankRow.querySelector(".ei-desc").value = "";
+const blankLast = blankRow.querySelector(".ei-core") || blankRow.querySelector(".ei-cost");
+pressEnter(blankLast);
+ok(gridRows().length === 4, "Enter chained a new line on from an undescribed one");
+blankRow.querySelector(".ei-desc").value = "New part"; // put it back, no events
+await settle();
+
+/* ------------------------------------------------------------------
    Message log: a toast that faded is still recoverable from the bell.
    ------------------------------------------------------------------ */
 const notifList = doc.querySelector("#notif-list");

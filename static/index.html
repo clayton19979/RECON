@@ -229,7 +229,7 @@
           </div>
         </div>
         <p class="board-hint">
-          <kbd>↑</kbd><kbd>↓</kbd> move · <kbd>Enter</kbd> open · <kbd>Space</kbd> select · <kbd>Shift</kbd>+click for a range · <kbd>Ctrl</kbd>+click toggle · <kbd>/</kbd> search · <kbd>Esc</kbd> clear
+          <kbd>↑</kbd><kbd>↓</kbd> move · <kbd>Enter</kbd> open · <kbd>Space</kbd> select · <kbd>Shift</kbd>+click for a range · <kbd>Ctrl</kbd>+click toggle · <kbd>/</kbd> search · <kbd>Esc</kbd> clear · <kbd>?</kbd> all shortcuts
         </p>
       </section>
 
@@ -1211,6 +1211,41 @@
     <div class="modal-actions">
       <button class="btn btn-ghost" type="button" id="confirm-cancel">Cancel</button>
       <button class="btn btn-primary" type="button" id="confirm-accept">Confirm</button>
+    </div>
+  </div>
+</dialog>
+
+<!-- Keyboard shortcuts overlay: "?" from any view. The board-hint line under
+     the vehicles table documents that one table; this is the whole map. -->
+<dialog id="shortcuts-dialog">
+  <div class="modal shortcuts-modal">
+    <div class="modal-head">
+      <div><p class="eyebrow">KEYBOARD</p><h2>Shortcuts</h2></div>
+      <button class="icon-btn" type="button" id="shortcuts-close" aria-label="Close">×</button>
+    </div>
+    <div class="modal-body shortcuts-body">
+      <div class="shortcut-group">
+        <p class="shortcut-group-title">Anywhere</p>
+        <div class="shortcut-row"><span class="shortcut-keys"><kbd>/</kbd></span><span>Jump to search</span></div>
+        <div class="shortcut-row"><span class="shortcut-keys"><kbd>?</kbd></span><span>Open or close this list</span></div>
+        <div class="shortcut-row"><span class="shortcut-keys"><kbd>Esc</kbd></span><span>Close dialogs and menus, clear search or selection</span></div>
+      </div>
+      <div class="shortcut-group">
+        <p class="shortcut-group-title">Vehicles board</p>
+        <div class="shortcut-row"><span class="shortcut-keys"><kbd>↑</kbd><kbd>↓</kbd></span><span>Move the cursor row</span></div>
+        <div class="shortcut-row"><span class="shortcut-keys"><kbd>Home</kbd><kbd>End</kbd></span><span>Jump to the first / last row</span></div>
+        <div class="shortcut-row"><span class="shortcut-keys"><kbd>Enter</kbd></span><span>Open the cursor row's vehicle</span></div>
+        <div class="shortcut-row"><span class="shortcut-keys"><kbd>Space</kbd></span><span>Select or deselect the cursor row</span></div>
+        <div class="shortcut-row"><span class="shortcut-keys"><kbd>Shift</kbd>+click</span><span>Select a range of rows</span></div>
+        <div class="shortcut-row"><span class="shortcut-keys"><kbd>Ctrl</kbd>+click</span><span>Toggle one row in or out of the selection</span></div>
+        <div class="shortcut-row"><span class="shortcut-keys">a&hellip;z <span class="shortcut-keys-note">0&hellip;9</span></span><span>Start typing to search — no click needed</span></div>
+      </div>
+      <div class="shortcut-group">
+        <p class="shortcut-group-title">Parts &amp; Labor grid</p>
+        <div class="shortcut-row"><span class="shortcut-keys"><kbd>Tab</kbd></span><span>Past the last money field on the last line: adds the next line</span></div>
+        <div class="shortcut-row"><span class="shortcut-keys"><kbd>Enter</kbd></span><span>On the last line: next field — description, qty, cost, then a new line</span></div>
+        <p class="shortcut-note">Every field on the grid autosaves shortly after you stop typing — there is no save button to reach for.</p>
+      </div>
     </div>
   </div>
 </dialog>

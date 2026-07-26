@@ -1159,3 +1159,52 @@ Next time, in rough priority order:
   6. Split reset_db() out of seed_mock_data. (Carried.)
   7. Consider wiring test_dom_smoke.py to skip the mount node_modules trap
      (e.g. prefer NODE_PATH when set, or copy to tmpdir before running).
+
+=== 2026-07-25 (evening run) ===
+Estimate grid: keystroke-level feedback and spreadsheet-style row entry.
+  * Found the repo blocked by a stale .git/index.lock from ~19:29 -- the
+    previous run's verified-green work was sitting uncommitted. Removed the
+    lock and checkpointed it first (9dacb6c), so this run's commit carries
+    both halves of app.js changes.
+  * Live totals while typing (carried item #1): Quoted / Actual / the
+    over-under delta / per-job subtotals now recompute from the DOM on every
+    qty/cost/core keystroke (updateEstimateTotalsFromDom), instead of sitting
+    stale until blur. The save itself follows after an 800ms pause in typing;
+    blur/change still saves immediately and cancels the pending debounce so
+    one edit never posts twice. persistEstimate's existing token ordering
+    covers overlapping responses; syncEstimateInPlace already skips the
+    focused field, so a debounced save landing mid-keystroke clobbers
+    nothing.
+  * Guard that matters: a row whose description is empty is dropped by
+    collectEstimateItems, so a debounced save firing while an advisor was
+    retyping a description would have *deleted the line*. The input path
+    holds the autosave whenever the edited row's description is empty.
+  * Tab-to-add (carried item #2): Tab out of the last money field (Core on
+    parts, Cost otherwise) of the grid's last row adds the next line of the
+    same kind and focuses its description -- spreadsheet-style continuous
+    entry instead of dumping focus onto the status pill. Middle rows, blank
+    rows, and returned (disabled-cost) rows don't trigger it.
+  * estimate_smoke.mjs: new section covering all of the above -- live total
+    math ($480 case), no save on a lone keystroke, debounced save after a
+    pause, empty-description hold, Tab mid-grid is untouched, Tab on the
+    last row adds an inheriting-kind row. All 5 DOM suites PASS.
+  * Verified: 254 python tests pass (run in 4 chunks; 45s sandbox cap can't
+    fit one full run), uvicorn boots on :8903, / + /assets/app.js + 
+    /api/orders all 200.
+
+Sandbox notes, new this run:
+  * Backgrounded processes do not survive the end of a bash call (nohup
+    included) -- the "full pytest in background" trick silently dies ~60%
+    in. Chunk the suite into <45s pieces instead.
+  * A stale .git/index.lock on the OneDrive mount can't be rm'd until the
+    cowork file-delete permission is granted (allow_cowork_file_delete).
+
+Next time, in rough priority order:
+  1. A/P and Cores/Returns still have no jsdom coverage. (Carried, 8th run.)
+  2. Customer-address autocomplete front-end coverage. (Carried.)
+  3. Persist the message log to localStorage, capped. (Carried.)
+  4. Split reset_db() out of seed_mock_data. (Carried.)
+  5. test_dom_smoke.py: prefer NODE_PATH / tmpdir copy to dodge the mount
+     node_modules trap. (Carried.)
+  6. Enter in the last row's description could also advance Qty -> Cost ->
+     new line, completing the spreadsheet feel.

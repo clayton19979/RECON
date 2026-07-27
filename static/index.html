@@ -6,6 +6,7 @@
 <title>RECON — Discount Auto Repair</title>
 <link rel="stylesheet" href="/assets/fonts.css">
 <link rel="stylesheet" href="/assets/styles.css">
+<link rel="stylesheet" href="/assets/help.css">
 </head>
 <body>
 <div class="app">
@@ -50,6 +51,10 @@
     <button class="rail-item" data-view="backup">
       <svg viewBox="0 0 24 24"><path d="M12 4v12m0 0l-4-4m4 4l4-4M4 20h16"/></svg>
       <span>Backup</span>
+    </button>
+    <button class="rail-item" data-view="help">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.6 9.4a2.5 2.5 0 114.15 2.2c-.9.7-1.75 1.2-1.75 2.4M12 17.2h.01"/></svg>
+      <span>Help</span>
     </button>
     <div class="rail-spacer"></div>
     <div class="theme-picker">
@@ -103,6 +108,9 @@
           <div class="notif-list" id="notif-list"></div>
         </div>
       </div>
+      <button class="notif-toggle" id="help-open-btn" type="button" aria-label="Help" title="Help (F1)">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.6 9.4a2.5 2.5 0 114.15 2.2c-.9.7-1.75 1.2-1.75 2.4M12 17.2h.01"/></svg>
+      </button>
       <label class="whoami">
         Working as
         <select id="current-user"><option value="">Unspecified</option></select>
@@ -947,6 +955,25 @@
         </div>
       </section>
 
+      <!-- HELP -->
+      <section class="view" id="view-help">
+        <div class="page-head">
+          <div>
+            <h1>Help</h1>
+            <p class="page-desc">How everything in RECON works, in the order you'd meet it. Press <kbd>F1</kbd> from any screen to search this without leaving what you're doing.</p>
+          </div>
+          <div class="page-head-actions">
+            <button type="button" class="btn btn-ghost" id="help-print" title="Print the whole guide">Print Guide</button>
+          </div>
+        </div>
+
+        <div class="help-filter-wrap">
+          <input id="help-filter" class="filters-search" type="search" placeholder="Filter — try “core”, “we owe”, “backup”…" aria-label="Filter help topics" autocomplete="off">
+        </div>
+
+        <div id="help-topics"></div>
+      </section>
+
     </div>
   </div>
 </div>
@@ -1318,6 +1345,28 @@
   </div>
 </dialog>
 
+<!-- Help overlay: F1 from any view. Opens scoped to whichever screen you're
+     on, because "what is this page for" is the question people actually have
+     mid-task; clearing the box searches everything. Separate key from "?"
+     because they answer different questions -- that one is which key does a
+     thing, this one is how a thing works. -->
+<dialog id="help-dialog">
+  <div class="modal help-modal">
+    <div class="help-modal-head">
+      <div style="flex:1">
+        <h2>Help</h2>
+        <input id="help-search" class="filters-search" type="search" placeholder="What are you trying to do?" aria-label="Search help" autocomplete="off">
+        <p class="help-modal-hint" id="help-scope"></p>
+      </div>
+      <button class="icon-btn" type="button" id="help-close" aria-label="Close">×</button>
+    </div>
+    <div class="help-results" id="help-results"></div>
+    <div style="padding:0 20px 16px">
+      <button type="button" class="btn btn-ghost btn-sm" id="help-browse-all">Browse the full guide</button>
+    </div>
+  </div>
+</dialog>
+
 <!-- Keyboard shortcuts overlay: "?" from any view. The board-hint line under
      the vehicles table documents that one table; this is the whole map. -->
 <dialog id="shortcuts-dialog">
@@ -1331,6 +1380,7 @@
         <p class="shortcut-group-title">Anywhere</p>
         <div class="shortcut-row"><span class="shortcut-keys"><kbd>/</kbd></span><span>Jump to search</span></div>
         <div class="shortcut-row"><span class="shortcut-keys"><kbd>?</kbd></span><span>Open or close this list</span></div>
+        <div class="shortcut-row"><span class="shortcut-keys"><kbd>F1</kbd></span><span>Search the help — how a feature works, not which key presses it</span></div>
         <div class="shortcut-row"><span class="shortcut-keys"><kbd>Esc</kbd></span><span>Close dialogs and menus, clear search or selection</span></div>
       </div>
       <div class="shortcut-group">
@@ -1374,5 +1424,8 @@
 <div id="toast"></div>
 <div id="print-report" class="print-only"></div>
 <script src="/assets/app.js"></script>
+<!-- After app.js: help.js calls showView() and expects the views to exist. -->
+<script src="/assets/help-content.js"></script>
+<script src="/assets/help.js"></script>
 </body>
 </html>

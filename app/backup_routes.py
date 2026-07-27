@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
 
 from . import backup as backup_module
+from . import usb_backup
 from .backup import backup_database, list_backups, most_recent_backup_age_hours, prune_backups, restore_database
 
 BACKUP_RETENTION_COUNT = 14
@@ -48,6 +49,11 @@ def build_backup_router(db_path: Path, backups_dir: Path) -> APIRouter:
             "retention": BACKUP_RETENTION_COUNT,
             "backups_dir": str(backups_dir),
             "last_age_hours": most_recent_backup_age_hours(backups_dir),
+            # None until a removable drive has been chosen as a mirror target
+            # and a backup has run since; otherwise the last attempt and
+            # whether it landed, so "is the off-site copy actually happening"
+            # is answerable without reading tray.log.
+            "usb_mirror": usb_backup.last_mirror(),
         }
 
     @router.post("/run")

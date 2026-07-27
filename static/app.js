@@ -496,7 +496,6 @@ const state = {
   reportStart: "",
   reportEnd: "",
   reportSort: { key: "cost", dir: "desc" },
-  reportOverOnly: false,                // "Over Quote" card toggle -- vehicle-spend shape only
   report: null,                         // { rows, type, start, end } -- what's on screen, for print/CSV
   tasks: [],
   taskFilter: "",
@@ -4489,12 +4488,7 @@ function sortReportRows(rows, shape, { key, dir }) {
 function visibleReportRows() {
   if (!state.report) return [];
   const shape = reportShape(state.report.type);
-  let rows = state.report.rows;
-  // Same rule as the board's own Over Quote card: the filter keeps exactly
-  // the rows it counts, so the card's own number reads the same whether it's
-  // on or off -- no separate "count ignoring this filter" pool needed.
-  if (shape === "vehicle-spend" && state.reportOverOnly) rows = rows.filter(overQuote);
-  return sortReportRows(rows, shape, state.reportSort);
+  return sortReportRows(state.report.rows, shape, state.reportSort);
 }
 
 function reportSortHeader(shape, key, extraClass = "") {
@@ -4507,60 +4501,27 @@ function reportSortHeader(shape, key, extraClass = "") {
 }
 
 /* ---------- summary cards ----------
-   The four numbers a manager reads a spend report for, above the table
-   rather than buried in its footer. They describe exactly the rows below
-   them -- same range, same segment -- so there's nothing to reconcile. */
+   The numbers a manager reads a spend report for, above the table rather
+   than buried in its footer. They describe exactly the rows below them --
+   same range, same segment -- so there's nothing to reconcile. */
 function renderReportStats(rows, shape) {
   const cards = shape === "technicians" ? technicianStatCards(rows) : vehicleSpendStatCards(rows);
-  $("#report-stats").innerHTML = cards.map((c) => {
-    if (!c.action) {
-      return `
+  $("#report-stats").innerHTML = cards.map((c) => `
       <div class="stat">
         <div class="stat-label">${esc(c.label)}</div>
         <div class="stat-value${c.tone ? ` ${c.tone}` : ""}">${esc(c.value)}</div>
         <div class="stat-sub">${esc(c.sub)}</div>
-      </div>`;
-    }
-    // Same convention as the board's filtering cards: pressed state and
-    // disabled-when-zero both come from state, and the card is the filter --
-    // clicking it again clears it rather than needing a separate control.
-    const active = state.reportOverOnly;
-    const count = Number(c.value) || 0;
-    return `
-      <button type="button" class="stat stat-action" data-report-filter="over-quote" aria-pressed="${active ? "true" : "false"}" ${!count && !active ? "disabled" : ""} title="${active ? "Showing only these — click to clear" : (count ? "Show only vehicles past their estimate" : "")}">
-        <div class="stat-label">${esc(c.label)}</div>
-        <div class="stat-value${c.tone ? ` ${c.tone}` : ""}">${esc(c.value)}</div>
-        <div class="stat-sub">${esc(c.sub)}</div>
-      </button>`;
-  }).join("");
+      </div>`).join("");
 }
-
-// A car counts as over quote on the same >10% rule the board colors Cost
-// with, so the two screens can't disagree about which cars are running hot.
-// This was a second copy of that rule, differing from the board's in whether
-// it tested actual_cost -- the two happened to agree, but only by accident,
-// and the comment above was claiming a guarantee nothing enforced. Report
-// rows carry the same quoted_cost/actual_cost fields board rows do, so they
-// go through the same predicate now.
-const overQuote = isOverQuote;
 
 function vehicleSpendStatCards(rows) {
   const recon = rows.filter((r) => r.segment === "recon").length;
   const total = rows.reduce((s, r) => s + r.actual_cost, 0);
   const quoted = rows.reduce((s, r) => s + (r.quoted_cost || 0), 0);
-  const over = rows.filter(overQuote);
-  const overBy = over.reduce((s, r) => s + (r.actual_cost - r.quoted_cost), 0);
   return [
     { label: "Vehicles", value: String(rows.length), sub: `${recon} recon · ${rows.length - recon} we-owe` },
     { label: "Total Cost", value: money(total), sub: "received parts + labor" },
     { label: "Average Per Vehicle", value: money(rows.length ? total / rows.length : 0), sub: quoted ? `${money(quoted)} quoted overall` : "nothing quoted in this range" },
-    {
-      // Zero over quote is the good news a manager opens this screen hoping
-      // to read -- it earns the green, not a neutral grey.
-      label: "Over Quote", value: String(over.length), tone: over.length ? "warn" : (quoted ? "good" : ""),
-      sub: over.length ? `${money(overBy)} past estimate` : "every quoted car came in on budget",
-      action: true,
-    },
   ];
 }
 
@@ -4644,7 +4605,6 @@ function renderReportChart(rows, shape) {
     display: money(r.actual_cost),
     marker: r.quoted_cost || 0,
     markerLabel: r.quoted_cost ? `Quoted ${money(r.quoted_cost)}` : "",
-    tone: overQuote(r) ? "over" : "",
     seg: r.segment,
     refId: r.segment === "recon" ? r.recon_id : r.we_owe_id,
   }));
@@ -4657,7 +4617,6 @@ function renderReportChart(rows, shape) {
     title: "What we have in it",
     note: priced.length > CHART_LIMIT ? `Top ${CHART_LIMIT} of ${priced.length} vehicles with cost` : "Click a bar to open the vehicle",
     legend: `<span class="legend-item"><span class="legend-swatch"></span>Cost</span>
-             <span class="legend-item"><span class="legend-swatch over"></span>Over quote</span>
              <span class="legend-item"><span class="legend-swatch marker"></span>Quoted</span>`,
     items,
     rowAttrs: (i) => (i.refId != null ? `role="button" tabindex="0" data-seg="${esc(i.seg)}" data-ref-id="${i.refId}"` : ""),
@@ -4729,7 +4688,7 @@ function renderReportTable(rows, shape) {
       const clickable = refId != null;
       return `<tr${clickable ? ` class="clickable" data-seg="${esc(r.segment)}" data-ref-id="${refId}" tabindex="0" title="Open this vehicle"` : ""}><td class="num">${esc(r.stock_number || "—")}</td><td>${esc(r.vehicle)}${r.customer_name ? ` <span class="cell-sub">(${esc(r.customer_name)})</span>` : ""}</td>
     <td>${r.segment === "recon" ? "Recon" : "We-Owe"}</td><td><span class="pill ${vehicleStatusPillClass(r)}">${esc(STATUS_LABEL[r.status] || r.status)}</span></td>
-    <td>${esc((r.technicians || []).join(", ")) || "—"}</td><td class="num-col${overQuote(r) ? " over-quote" : ""}" ${overQuote(r) ? `title="${money(r.actual_cost - r.quoted_cost)} over the ${money(r.quoted_cost)} quote"` : ""}>${money(r.actual_cost)}</td>${hasDeposits ? `<td class="num-col">${r.customer_paid ? money(r.customer_paid) : "—"}</td><td class="num-col">${r.customer_paid ? money(r.net_cost) : "—"}</td>` : ""}</tr>`;
+    <td>${esc((r.technicians || []).join(", ")) || "—"}</td><td class="num-col">${money(r.actual_cost)}</td>${hasDeposits ? `<td class="num-col">${r.customer_paid ? money(r.customer_paid) : "—"}</td><td class="num-col">${r.customer_paid ? money(r.net_cost) : "—"}</td>` : ""}</tr>`;
     }).join("")}</tbody>
     <tfoot><tr><td colspan="5">Total (${rows.length} vehicle${rows.length === 1 ? "" : "s"})</td><td class="num-col">${money(totalActual)}</td>${hasDeposits ? `<td class="num-col">${money(totalPaid)}</td><td class="num-col">${money(totalActual - totalPaid)}</td>` : ""}</tr></tfoot>
     </table></div></div>`;
@@ -4756,9 +4715,8 @@ function renderPrintReport(rows, type, start, end) {
   const cards = shape === "technicians" ? technicianStatCards(rows) : vehicleSpendStatCards(rows);
   const summary = `<div class="print-summary">${cards.map((c) => `
     <div><div class="ps-label">${esc(c.label)}</div><div class="ps-value">${esc(c.value)}</div><div class="ps-sub">${esc(c.sub)}</div></div>`).join("")}</div>`;
-  // The paper must say what the screen knew: row count, sort order, and any
-  // active filter. A filtered printout that doesn't declare itself becomes
-  // indistinguishable from the full report the moment it's filed.
+  // The paper must say what the screen knew: row count and sort order, so a
+  // filed printout can still be told apart from one taken at another moment.
   const sortSpec = REPORT_SORTS[shape][state.reportSort.key] || REPORT_SORTS[shape].cost;
   const dirWord = sortSpec.type === "number"
     ? (state.reportSort.dir === "desc" ? "high to low" : "low to high")
@@ -4766,7 +4724,6 @@ function renderPrintReport(rows, type, start, end) {
   const scope = `<div class="print-scope">
     <span class="scope-count">${rows.length} row${rows.length === 1 ? "" : "s"}</span>
     <span>· sorted by ${esc(sortSpec.label)}, ${dirWord}</span>
-    ${shape === "vehicle-spend" && state.reportOverOnly ? `<span class="scope-flag">Over-quote vehicles only</span>` : ""}
   </div>`;
   let body;
   if (shape === "technicians") {
@@ -4788,19 +4745,17 @@ function renderPrintReport(rows, type, start, end) {
     const totalActual = rows.reduce((s, r) => s + r.actual_cost, 0);
     const totalPaid = rows.reduce((s, r) => s + (r.customer_paid || 0), 0);
     const hasDeposits = totalPaid > 0;
-    const over = rows.filter(overQuote);
-    const overBy = over.reduce((s, r) => s + (r.actual_cost - r.quoted_cost), 0);
     body = `
       <table class="print-table report">
         <thead><tr><th>Stock #</th><th>Vehicle</th><th>Type</th><th>Status</th><th>Technician(s)</th><th class="num-col">Cost</th>${hasDeposits ? `<th class="num-col">Customer Paid</th><th class="num-col">Net to Shop</th>` : ""}</tr></thead>
         <tbody>${rows.map((r) => `<tr><td class="num">${esc(r.stock_number || "—")}</td><td>${esc(r.vehicle)}${r.customer_name ? ` <span class="print-dim">(${esc(r.customer_name)})</span>` : ""}</td>
         <td>${r.segment === "recon" ? "Recon" : "We-Owe"}</td><td>${esc(STATUS_LABEL[r.status] || r.status)}</td>
-        <td>${esc((r.technicians || []).join(", ")) || "—"}</td><td class="num-col${overQuote(r) ? " over-quote-mark" : ""}">${money(r.actual_cost)}<span class="oq-slot">${overQuote(r) ? "*" : ""}</span></td>${hasDeposits ? `<td class="num-col">${r.customer_paid ? money(r.customer_paid) : "—"}</td><td class="num-col">${r.customer_paid ? money(r.net_cost) : "—"}</td>` : ""}</tr>`).join("")}</tbody>
+        <td>${esc((r.technicians || []).join(", ")) || "—"}</td><td class="num-col">${money(r.actual_cost)}</td>${hasDeposits ? `<td class="num-col">${r.customer_paid ? money(r.customer_paid) : "—"}</td><td class="num-col">${r.customer_paid ? money(r.net_cost) : "—"}</td>` : ""}</tr>`).join("")}</tbody>
         <tfoot>
-          <tr><td colspan="4">Report Total (${rows.length} vehicle${rows.length === 1 ? "" : "s"})</td><td class="num-col"></td><td class="num-col">${money(totalActual)}<span class="oq-slot"></span></td>${hasDeposits ? `<td class="num-col">${money(totalPaid)}</td><td class="num-col">${money(totalActual - totalPaid)}</td>` : ""}</tr>
+          <tr><td colspan="4">Report Total (${rows.length} vehicle${rows.length === 1 ? "" : "s"})</td><td class="num-col"></td><td class="num-col">${money(totalActual)}</td>${hasDeposits ? `<td class="num-col">${money(totalPaid)}</td><td class="num-col">${money(totalActual - totalPaid)}</td>` : ""}</tr>
           <tr class="tfoot-space" aria-hidden="true"><td colspan="${hasDeposits ? 8 : 6}"></td></tr>
         </tfoot>
-      </table>${over.length ? `<p class="print-note">* ${over.length} vehicle${over.length === 1 ? "" : "s"} more than 10% over quote — ${money(overBy)} past estimates combined</p>` : ""}`;
+      </table>`;
   }
   return `
     <header class="print-letterhead">
@@ -4936,16 +4891,8 @@ function wireReportsView() {
     const btn = e.target.closest("[data-report-type]");
     if (!btn || btn.dataset.reportType === state.reportType) return;
     state.reportType = btn.dataset.reportType;
-    state.reportOverOnly = false; // the technicians shape has no over-quote concept
     syncReportControls();
     refreshReport();
-  });
-
-  $("#report-stats").addEventListener("click", (e) => {
-    const btn = e.target.closest('[data-report-filter="over-quote"]');
-    if (!btn || btn.disabled) return;
-    state.reportOverOnly = !state.reportOverOnly;
-    renderReport();
   });
 
   // Delegated on the view, so the "Show all time" button inside an empty

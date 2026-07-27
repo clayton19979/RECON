@@ -14,7 +14,7 @@ import pystray
 import uvicorn
 from PIL import Image, ImageDraw
 
-from app import discovery
+from app import discovery, usb_backup
 from app.backup import backup_database, list_backups, most_recent_backup_age_hours, prune_backups, restore_database, set_auto_backup_running
 from app.main import DATA_ROOT, DEFAULT_BACKUPS_DIR, DEFAULT_DB, NETWORK_FLAG, create_app
 
@@ -51,9 +51,36 @@ def pick_backup_file(initial_dir: Path) -> Path | None:
         root.destroy()
     return Path(chosen) if chosen else None
 
+
+def pick_backup_destination(initial_dir: Path) -> Path | None:
+    """Native folder picker for where a backup should be written -- a USB
+    stick, a share on another shop PC, anywhere off this machine's disk.
+    Backups sitting next to the database survive a bad edit or a corrupted
+    file; they don't survive the drive dying, which is what this is for."""
+    import tkinter
+    from tkinter import filedialog
+
+    root = tkinter.Tk()
+    root.withdraw()
+    root.attributes("-topmost", True)
+    try:
+        chosen = filedialog.askdirectory(
+            parent=root,
+            title="Choose where to save the RECON backup",
+            initialdir=str(initial_dir),
+            mustexist=True,
+        )
+    finally:
+        root.destroy()
+    return Path(chosen) if chosen else None
+
 PORT = 8787
 AUTO_BACKUP_INTERVAL_HOURS = 24
 BACKUP_RETENTION_COUNT = 14
+# Remembers the last "Backup To..." folder -- both so a USB stick doesn't
+# have to be re-navigated every time, and so the automatic backups know
+# where to mirror a copy once it's plugged in.
+DESTINATION_FILE = DATA_ROOT / "backup_destination.json"
 
 CHROME_CANDIDATES = [
     Path(os.environ.get("PROGRAMFILES", r"C:\Program Files")) / "Google" / "Chrome" / "Application" / "chrome.exe",
@@ -245,9 +272,79 @@ class TrayApp:
             log.exception("Backup failed")
             if notify and self.icon is not None:
                 self.icon.notify(f"Backup failed: {exc}", "RECON")
+            return
+        self._mirror_backup(destination, notify)
+
+    def _mirror_backup(self, backup_path: Path, notify: bool) -> None:
+        """Puts a copy of the backup just written onto the removable drive
+        chosen with "Backup To...", whenever that drive is plugged in.
+
+        An unplugged stick is the normal case, not a failure -- it gets a log
+        line and nothing else, because a toast every hour saying "your USB
+        isn't in" trains you to ignore the toasts that matter. A stick that
+        *is* plugged in but rejects the copy is the opposite: that's the one
+        case where the off-site copy silently isn't happening, so it's said
+        out loud even during an automatic run."""
+        record = usb_backup.load(DESTINATION_FILE)
+        if record is None:
+            return
+        label = record.get("label")
+        target = usb_backup.resolve(record)
+        if target is None:
+            log.info("Mirror target %s (%s) not attached -- skipped", record.get("path"), label)
+            usb_backup.record_mirror(None, label, error="not attached")
+            return
+        try:
+            copied = usb_backup.mirror_backup(backup_path, target)
+        except Exception as exc:
+            log.exception("Mirroring backup to %s failed", target)
+            usb_backup.record_mirror(None, label, error=str(exc))
+            if self.icon is not None:
+                self.icon.notify(f"Backup copy to {label or target} failed: {exc}", "RECON")
+            return
+        log.info("Backup mirrored to %s", copied)
+        usb_backup.record_mirror(copied, label)
+        if notify and self.icon is not None:
+            self.icon.notify(f"Also copied to {label or target}", "RECON")
 
     def backup_now(self, _icon: pystray.Icon, _item: pystray.MenuItem) -> None:
         self._run_backup(notify=True)
+
+    def _remembered_destination(self) -> Path:
+        """Where the last "Backup To..." went, for the picker to open on.
+        Falls back to the local backups folder when nothing has been chosen
+        yet, or when that drive isn't plugged in right now."""
+        return usb_backup.resolve(usb_backup.load(DESTINATION_FILE)) or DEFAULT_BACKUPS_DIR
+
+    def backup_to_location(self, _icon: pystray.Icon, _item: pystray.MenuItem) -> None:
+        """A one-off backup written wherever you point it, which also becomes
+        the standing mirror target: every later backup, automatic ones
+        included, lands here too whenever this drive is plugged in.
+
+        Deliberately does not prune_backups() the way the local automatic
+        ones do -- a USB stick is the archive, and the act of adding a copy
+        to it must never be the thing that deletes older copies off it."""
+        DEFAULT_BACKUPS_DIR.mkdir(parents=True, exist_ok=True)
+        chosen = pick_backup_destination(self._remembered_destination())
+        if chosen is None:
+            return
+        try:
+            destination = backup_database(DEFAULT_DB, chosen)
+        except Exception as exc:
+            log.exception("Backup to %s failed", chosen)
+            if self.icon is not None:
+                self.icon.notify(f"Backup failed: {exc}", "RECON")
+            return
+        try:
+            record = usb_backup.save(DESTINATION_FILE, chosen)
+        except OSError:
+            log.warning("Could not remember backup destination %s", chosen)
+            record = {"label": None}
+        usb_backup.record_mirror(destination, record.get("label"))
+        log.info("Backup written to %s (mirror target set)", destination)
+        if self.icon is not None:
+            name = record.get("label") or chosen
+            self.icon.notify(f"Backup saved to {name}.\nFuture backups will copy here too.", "RECON")
 
     def _restore_from_path(self, backup_path: Path) -> None:
         if not confirm(
@@ -355,6 +452,9 @@ class TrayApp:
             pystray.MenuItem("Show Server Address", self.show_server_address, visible=lambda _item: self.mode == "master"),
             pystray.MenuItem(
                 "Backup Now (entire database)", self.backup_now, visible=lambda _item: self.mode == "master"
+            ),
+            pystray.MenuItem(
+                "Backup To USB or Folder...", self.backup_to_location, visible=lambda _item: self.mode == "master"
             ),
             pystray.MenuItem(
                 "Restore Latest Backup", self.restore_latest_backup, visible=lambda _item: self.mode == "master"

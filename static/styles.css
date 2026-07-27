@@ -1223,12 +1223,11 @@ dialog::backdrop { background: var(--backdrop); backdrop-filter: blur(2px); }
   .print-meta-line { font-size: 10px; color: #333; }
   .print-generated { font-size: 8.5px; color: #555; margin-top: 3px; }
 
-  /* Scope line: what's actually in the table below (row count, sort, any
-     filter). A filtered printout that doesn't declare itself on paper is
-     indistinguishable from the full report the moment it's filed. */
+  /* Scope line: what's actually in the table below (row count, sort order),
+     so a filed printout can still be told apart from one taken at another
+     moment. */
   .print-scope { display: flex; align-items: baseline; gap: 6px; font-size: 10px; color: #333; margin: -8px 0 14px; }
   .print-scope .scope-count { font-weight: 700; color: #000; }
-  .print-scope .scope-flag { margin-left: auto; font-size: 8.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: #000; border: 0.75pt solid #000; padding: 1px 6px; }
 
   /* Summary strip: one open band, not four bordered boxes -- boxes read
      as blank form fields in ink. */
@@ -1293,12 +1292,6 @@ dialog::backdrop { background: var(--backdrop); backdrop-filter: blur(2px); }
      the screen's row muting. */
   .print-table.report tbody tr:nth-child(even) td { background: #f2f2f2; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   .print-table.report tbody tr.idle td { color: #555; }
-
-  /* Color alone (.over-quote on screen) doesn't survive to paper. Bold
-     plus an asterisk in a fixed-width slot carries the signal without
-     shifting the cents column out of alignment. */
-  .print-table .oq-slot { display: inline-block; width: 8px; text-align: left; font-weight: 700; }
-  .print-table .over-quote-mark { font-weight: 700; }
 
   .print-subhead { font-family: Bahnschrift, "Segoe UI Semibold", "Space Grotesk", sans-serif; font-size: 15px; font-weight: 700; color: #000; margin: 18px 0 6px; break-after: avoid; }
   .print-notes { font-size: 13px; color: #000; line-height: 1.6; }
@@ -1643,7 +1636,6 @@ tbody tr.skeleton-row:hover { background: none; }
 .chart-legend { display: flex; gap: 16px; margin-top: 12px; font-size: 11.5px; color: var(--ink-faint); }
 .legend-item { display: inline-flex; align-items: center; gap: 6px; }
 .legend-swatch { width: 12px; height: 8px; border-radius: 2px; background: var(--accent); }
-.legend-swatch.over { background: var(--crit); }
 .legend-swatch.marker { width: 2px; height: 12px; border-radius: 0; background: var(--ink); opacity: .55; }
 
 /* A technician with nothing in the range still belongs on the roster, but

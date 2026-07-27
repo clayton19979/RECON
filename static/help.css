@@ -1,0 +1,145 @@
+/* Help screen, help overlay, and the per-screen "?" buttons.
+
+   A separate stylesheet rather than more of styles.css: everything here is
+   one self-contained feature, and it uses only the theme variables every
+   theme block already defines, so it inherits all six themes for free. */
+
+/* ── the "?" button that sits in each screen's header ─────────────── */
+
+.help-page-btn {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  background: var(--paper-raise);
+  color: var(--ink-soft);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.help-page-btn:hover { color: var(--ink); border-color: var(--accent); }
+.help-page-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.page-head-actions .help-page-btn { margin-left: 0; }
+
+/* ── the Help screen ──────────────────────────────────────────────── */
+
+.help-filter-wrap { margin: 0 0 18px; }
+#help-filter { width: 100%; max-width: 420px; }
+
+.help-group { margin-bottom: 26px; }
+.help-group-title {
+  font-size: 12px;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  margin: 0 0 10px;
+}
+
+.help-topic {
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius);
+  background: var(--paper-raise);
+  margin-bottom: 8px;
+  overflow: hidden;
+}
+.help-topic > summary {
+  padding: 12px 16px;
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.help-topic > summary::-webkit-details-marker { display: none; }
+.help-topic > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.help-topic[open] { border-color: var(--line); }
+.help-topic[open] > summary { border-bottom: 1px solid var(--line-soft); }
+.help-topic-title { font-weight: 600; color: var(--ink); }
+.help-topic-summary { font-size: 13px; color: var(--ink-soft); }
+
+.help-topic-body { padding: 14px 16px 16px; }
+.help-steps { margin: 0 0 12px; padding-left: 20px; }
+.help-steps li { font-size: 13.5px; color: var(--ink-soft); margin-bottom: 7px; line-height: 1.5; }
+.help-steps li::marker { color: var(--ink-faint); }
+
+.help-topic-foot { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.help-related-label { font-size: 12px; color: var(--ink-faint); }
+.help-related {
+  font-size: 12.5px;
+  color: var(--accent-strong);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  text-decoration: underline;
+}
+.help-related:hover { color: var(--ink); }
+
+/* ── the F1 overlay ───────────────────────────────────────────────── */
+
+#help-dialog { max-width: 680px; }
+.help-modal { display: flex; flex-direction: column; max-height: 82vh; }
+.help-modal-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 16px 20px 12px;
+  border-bottom: 1px solid var(--line);
+}
+.help-modal-head h2 { font-size: 17px; margin: 0 0 8px; }
+#help-search { width: 100%; }
+.help-modal-hint { font-size: 12px; color: var(--ink-faint); margin: 6px 0 0; }
+.help-results { padding: 8px 12px 16px; overflow-y: auto; }
+
+.help-result {
+  width: 100%;
+  text-align: left;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: none;
+  color: inherit;
+  padding: 9px 12px;
+  cursor: pointer;
+  display: block;
+}
+.help-result:hover, .help-result.cursor {
+  background: var(--accent-tint);
+  border-color: var(--line);
+}
+.help-result:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.help-result-title { font-weight: 600; font-size: 14px; color: var(--ink); }
+.help-result-summary { font-size: 12.5px; color: var(--ink-soft); margin-top: 2px; }
+.help-result-where { font-size: 11.5px; color: var(--ink-faint); margin-top: 3px; }
+
+.help-detail { padding: 4px 12px 8px; }
+.help-detail-back {
+  background: none;
+  border: none;
+  color: var(--ink-faint);
+  font-size: 12.5px;
+  cursor: pointer;
+  padding: 6px 0;
+}
+.help-detail-back:hover { color: var(--ink); }
+.help-detail h3 { font-size: 15px; margin: 4px 0 4px; }
+.help-detail-summary { font-size: 13px; color: var(--ink-soft); margin: 0 0 10px; }
+
+.help-empty { padding: 22px 12px; text-align: center; color: var(--ink-faint); font-size: 13px; }
+
+/* ── printing: the tape-it-to-the-desk copy ───────────────────────── */
+
+@media print {
+  .help-page-btn, .help-filter-wrap, .help-topic-foot { display: none !important; }
+  /* <details> normally prints only what's open on screen; the printed guide
+     has to be the whole thing regardless of what was expanded. */
+  .help-topic > summary { list-style: none; }
+  .help-topic-body { display: block !important; }
+  .help-topic { break-inside: avoid; border-color: #999; }
+  .help-group-title { color: #000; }
+}

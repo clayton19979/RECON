@@ -297,7 +297,10 @@ def test_rail_views_all_have_a_loader_or_are_static(html: str, js: str) -> None:
     fetches anything."""
     nav_targets = set(re.findall(r'class="rail-item[^"]*"\s+data-view="([^"]+)"', html))
     loaders = set(re.findall(r'^\s{2}(\w+): \(\) => load', js[js.index("const VIEW_LOADERS"):js.index("/* ---------- render error boundary")], re.M))
-    STATIC_VIEWS: set[str] = set()  # every rail view fetches something on open
+    # Help is genuinely static: its content is HELP_TOPICS, shipped in the
+    # page, so help.js builds the whole screen once at load and there is
+    # nothing to fetch or to fail. Every other rail view hits the server.
+    STATIC_VIEWS: set[str] = {"help"}
     assert nav_targets - loaders <= STATIC_VIEWS, f"rail views with no loader: {sorted(nav_targets - loaders - STATIC_VIEWS)}"
 
 

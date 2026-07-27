@@ -20,7 +20,7 @@ const veh = (over) => ({
 });
 
 // Costs chosen so every summary number is checkable by hand:
-//   total 3000, 4 vehicles -> avg 750; one car (B204) is over quote by 550.
+//   total 3000, 4 vehicles -> avg 750.
 // The Camry is quoted at 2000 against 1000 of actual cost, which makes the
 // largest *quote* larger than the largest *bar* -- the case where a chart
 // scaled to its bars alone pushes the quote marker off the end.
@@ -83,14 +83,11 @@ ok(doc.querySelector("#report-output .skeleton-row") === null, "loading skeleton
 
 /* ---------- summary cards ---------- */
 const s = stats();
-ok(s.length === 4, `expected 4 summary cards, got ${s.length}`);
+ok(s.length === 3, `expected 3 summary cards, got ${s.length}`);
 ok(s[0].value === "4", `Vehicles card reads ${s[0].value}, expected 4`);
 ok(s[0].sub === "3 recon · 1 we-owe", `segment split reads "${s[0].sub}"`);
 ok(s[1].value === "$3,000.00", `Total Cost reads ${s[1].value}, expected $3,000.00`);
 ok(s[2].value === "$750.00", `Average Per Vehicle reads ${s[2].value}, expected $750.00`);
-ok(s[3].value === "1", `Over Quote reads ${s[3].value}, expected 1 (only B204 is >10% past quote)`);
-ok(s[3].sub.includes("$550.00"), `over-quote amount reads "${s[3].sub}", expected $550.00`);
-ok(doc.querySelector("#report-stats .stat-value.warn"), "an over-quote count of 1 isn't flagged");
 
 // The cards describe the same rows as the table below them -- the whole
 // reason they live on this screen rather than being a second lot-wide
@@ -114,8 +111,6 @@ const markers = bars().map((b) => parseFloat(b.querySelector(".bar-marker").styl
 ok(near(markers[0], (900 / CHART_MAX) * 100), `F-150 quote marker at ${markers[0]}%, expected ${(900 / CHART_MAX) * 100}%`);
 ok(near(markers[1], 100), `the largest quote should sit at the end of the track, got ${markers[1]}%`);
 ok(markers[1] > widths[1], "the Camry's quote marker isn't past its cost bar, so the chart can't show it came in under");
-ok(bars()[0].querySelector(".bar-fill").classList.contains("over"), "the over-quote vehicle's bar isn't flagged");
-ok(!bars()[1].querySelector(".bar-fill").classList.contains("over"), "an under-budget vehicle's bar is flagged as over quote");
 
 /* ---------- sorting ---------- */
 const costCol = col("cost");

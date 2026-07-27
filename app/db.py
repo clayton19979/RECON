@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -488,7 +489,12 @@ def _migrate(db: sqlite3.Connection) -> None:
 
 def init_db(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(path) as db:
+    # `closing` is doing real work here: sqlite3.Connection.__exit__ commits or
+    # rolls back but leaves the handle OPEN. Windows then refuses to rename or
+    # unlink the file -- which is exactly how reset_db used to die with
+    # "WinError 32: being used by another process". The trailing `, db` keeps
+    # the commit-on-success transaction the plain `with` gave us.
+    with closing(sqlite3.connect(path)) as db, db:
         db.executescript(SCHEMA)
         _migrate(db)
         db.execute(
@@ -497,8 +503,25 @@ def init_db(path: Path) -> None:
         )
 
 
+class _ClosingConnection(sqlite3.Connection):
+    """A connection that actually closes when its `with` block ends.
+
+    Stock sqlite3.Connection.__exit__ commits or rolls back and then leaves the
+    handle open, so the database file stays locked until the object happens to
+    be collected -- the trap that made init_db's rename fail on Windows. Every
+    caller here is `with connect() as db:` and reads its rows inside the block,
+    so closing at the end of it is what the code already assumed was happening.
+    """
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        try:
+            return super().__exit__(exc_type, exc_value, traceback)
+        finally:
+            self.close()
+
+
 def connect(path: Path) -> sqlite3.Connection:
-    db = sqlite3.connect(path)
+    db = sqlite3.connect(path, factory=_ClosingConnection)
     db.row_factory = sqlite3.Row
     db.execute("PRAGMA foreign_keys=ON")
     return db

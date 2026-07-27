@@ -12,9 +12,9 @@ from pathlib import Path
 
 import pystray
 import uvicorn
-from PIL import Image, ImageDraw
+from PIL import Image
 
-from app import discovery, usb_backup
+from app import discovery, mark, usb_backup
 from app.backup import backup_database, list_backups, most_recent_backup_age_hours, prune_backups, restore_database, set_auto_backup_running
 from app.main import DATA_ROOT, DEFAULT_BACKUPS_DIR, DEFAULT_DB, NETWORK_FLAG, create_app
 
@@ -144,16 +144,14 @@ logging.basicConfig(
 log = logging.getLogger("tray")
 
 
-def make_icon(color: str) -> Image.Image:
-    image = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(image)
-    draw.ellipse((2, 2, 62, 62), fill=color)
-    draw.text((16, 18), "DA", fill="white")
-    return image
+def make_icon(top, bottom) -> Image.Image:
+    """The RECON mark at tray size, tinted to carry the up/down signal. Same
+    geometry as the favicon and the exe icon -- see app/mark.py."""
+    return mark.render(64, body_top=top, body_bottom=bottom, supersample=4)
 
 
-ICON_OK = make_icon("#234a6b")
-ICON_DOWN = make_icon("#a6392e")
+ICON_OK = make_icon(mark.AZURE_LT, mark.AZURE)
+ICON_DOWN = make_icon(mark.CRIT_LT, mark.CRIT)
 
 
 class TrayApp:

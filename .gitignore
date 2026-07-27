@@ -10,6 +10,9 @@ backup_destination.json
 build/
 dist/
 *.spec
+# ...but THIS spec is the build definition, not a throwaway: it carries the
+# onefile mode, the bundled static/, and the exe icon. Losing it loses the build.
+!DiscountAutoOps.spec
 *.log
 # ...but the automated improvement run's changelog is a tracked project
 # document, not a throwaway runtime log.

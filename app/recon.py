@@ -466,29 +466,6 @@ def build_recon_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
             )
             return recon_detail(db, recon_cur.lastrowid)
 
-    @router.get("/recon/summary")
-    def recon_summary():
-        with connect() as db:
-            rows = db.execute("SELECT * FROM recon_vehicles").fetchall()
-            counts: dict[str, int] = {}
-            total_purchase = total_cost = total_quoted = total_sale = 0.0
-            for row in rows:
-                counts[row["status"]] = counts.get(row["status"], 0) + 1
-                total_purchase += row["purchase_price"] or 0
-                rollup = cost_rollup(db, "recon_vehicle_id", row["id"])
-                total_cost += rollup["total_cost"]
-                total_quoted += rollup["quoted_cost"]
-                if row["sale_price"] is not None:
-                    total_sale += row["sale_price"]
-            return {
-                "counts": counts,
-                "total_purchase_cost": round(total_purchase, 2),
-                "total_repair_cost": round(total_cost, 2),
-                "total_quoted_cost": round(total_quoted, 2),
-                "total_sale_revenue": round(total_sale, 2),
-                "net_profit": round(total_sale - total_purchase - total_cost, 2),
-            }
-
     @router.get("/recon/vehicles/{recon_id}")
     def get_recon_vehicle(recon_id: int):
         with connect() as db:
@@ -594,18 +571,6 @@ def build_recon_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
                 (item.customer_id, item.vehicle_id, item.description.strip(), item.category.strip() or "other", ts, item.target_date.strip(), item.sale_reference.strip(), item.lot_stock_number.strip().upper(), ts, ts),
             )
             return we_owe_detail(db, cur.lastrowid)
-
-    @router.get("/we-owe/summary")
-    def we_owe_summary():
-        with connect() as db:
-            rows = db.execute("SELECT * FROM we_owe_items").fetchall()
-            rollups = [cost_rollup(db, "we_owe_id", row["id"]) for row in rows]
-            return {
-                "open_count": sum(1 for row in rows if row["status"] == "open"),
-                "total_count": len(rows),
-                "total_fulfillment_cost": round(sum(r["total_cost"] for r in rollups), 2),
-                "total_quoted_cost": round(sum(r["quoted_cost"] for r in rollups), 2),
-            }
 
     @router.get("/we-owe/{we_owe_id}")
     def get_we_owe_item(we_owe_id: int):

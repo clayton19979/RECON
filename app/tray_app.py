@@ -4,19 +4,19 @@ import ctypes
 import logging
 import os
 import socket
-import subprocess
 import threading
 import time
-import webbrowser
 from pathlib import Path
 
 import pystray
 import uvicorn
 from PIL import Image
 
-from app import discovery, mark, usb_backup
+from app import deployment, discovery, mark, paths, usb_backup
 from app.backup import backup_database, list_backups, most_recent_backup_age_hours, prune_backups, restore_database, set_auto_backup_running
 from app.main import DATA_ROOT, DEFAULT_BACKUPS_DIR, DEFAULT_DB, NETWORK_FLAG, create_app
+from app.single_instance import SingleInstance
+from app.window import AppWindow
 
 
 def confirm(title: str, message: str) -> bool:
@@ -82,18 +82,6 @@ BACKUP_RETENTION_COUNT = 14
 # where to mirror a copy once it's plugged in.
 DESTINATION_FILE = DATA_ROOT / "backup_destination.json"
 
-CHROME_CANDIDATES = [
-    Path(os.environ.get("PROGRAMFILES", r"C:\Program Files")) / "Google" / "Chrome" / "Application" / "chrome.exe",
-    Path(os.environ.get("PROGRAMFILES(X86)", r"C:\Program Files (x86)")) / "Google" / "Chrome" / "Application" / "chrome.exe",
-    Path(os.environ.get("LOCALAPPDATA", "")) / "Google" / "Chrome" / "Application" / "chrome.exe",
-]
-
-EDGE_CANDIDATES = [
-    Path(os.environ.get("PROGRAMFILES(X86)", r"C:\Program Files (x86)")) / "Microsoft" / "Edge" / "Application" / "msedge.exe",
-    Path(os.environ.get("PROGRAMFILES", r"C:\Program Files")) / "Microsoft" / "Edge" / "Application" / "msedge.exe",
-]
-
-
 def network_mode_enabled() -> bool:
     return NETWORK_FLAG.is_file()
 
@@ -121,21 +109,8 @@ def local_url() -> str:
     return f"http://{host}:{PORT}"
 
 
-def open_app_window(url: str) -> None:
-    """Opens the UI in a chromeless Chrome/Edge "app mode" window instead of
-    a normal browser tab -- no address bar, no tabs, its own taskbar entry,
-    so it looks and behaves like a standalone program. Reusing a fixed
-    profile dir means clicking "Open RECON" again focuses the existing
-    window instead of spawning a duplicate. Falls back to whatever the OS
-    default handler resolves to if neither browser is installed."""
-    browser_path = next((p for p in CHROME_CANDIDATES + EDGE_CANDIDATES if p.is_file()), None)
-    if browser_path is not None:
-        profile_dir = DATA_ROOT / "app-window-profile"
-        subprocess.Popen([str(browser_path), f"--app={url}", f"--user-data-dir={profile_dir}"])
-        return
-    webbrowser.open(url)
-
 DATA_ROOT.mkdir(parents=True, exist_ok=True)
+paths.migrate_legacy_data(DATA_ROOT)
 logging.basicConfig(
     filename=DATA_ROOT / "tray.log",
     level=logging.INFO,
@@ -155,19 +130,63 @@ ICON_DOWN = make_icon(mark.CRIT_LT, mark.CRIT)
 
 
 class TrayApp:
-    def __init__(self) -> None:
+    def __init__(self, guard: SingleInstance | None = None) -> None:
         self.server: uvicorn.Server | None = None
         self.thread: threading.Thread | None = None
         self.icon: pystray.Icon | None = None
-        self.mode: str = "master"
+        self.mode: str = deployment.MASTER
         self.master_ip: str | None = None
         self._responder_stop = threading.Event()
         self._responder_thread: threading.Thread | None = None
+        self._guard = guard
+        self._quitting = False
+        self.window = AppWindow(on_retry=self._retry_from_window, on_closing=self._on_window_closing)
+
+    def _retry_from_window(self) -> str | None:
+        """Offline screen's Retry: returns the URL to navigate to, or None so
+        the page can put its button back and let them try again."""
+        return self.effective_url() if self.retry_master() else None
 
     def effective_url(self) -> str:
-        if self.mode == "client" and self.master_ip:
+        if self.mode == deployment.CLIENT and self.master_ip:
             return f"http://{self.master_ip}:{PORT}"
         return local_url()
+
+    def locate_master(self, configured_host: str | None = None) -> str | None:
+        """Where the shop PC is. A host pinned by the installer wins -- it
+        survives the shop PC being off at the moment this workstation boots,
+        which a broadcast does not. Otherwise ask the LAN."""
+        if configured_host:
+            log.info("Using master host %s from config", configured_host)
+            return configured_host
+        log.info("Looking for the shop PC on the network...")
+        found = discovery.find_master(PORT)
+        log.info("Shop PC %s", f"answered from {found}" if found else "did not answer")
+        return found
+
+    def master_reachable(self, host: str | None = None) -> bool:
+        """Can we actually open a socket to it right now? Discovery answering
+        once at boot says nothing about the shop PC still being on."""
+        target = host or self.master_ip
+        if not target:
+            return False
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(1.5)
+        try:
+            return sock.connect_ex((target, PORT)) == 0
+        except OSError:
+            return False
+        finally:
+            sock.close()
+
+    def retry_master(self) -> str | None:
+        """Behind the Retry button on the workstation's offline screen."""
+        self.master_ip = self.locate_master(deployment.load().get("master_host"))
+        if self.master_ip and not self.master_reachable():
+            self.master_ip = None
+        if self.icon is not None:
+            self.icon.icon = ICON_OK if self.master_ip else ICON_DOWN
+        return self.master_ip
 
     def _start_responder(self) -> None:
         if self._responder_thread is not None and self._responder_thread.is_alive():
@@ -214,18 +233,29 @@ class TrayApp:
         if self.icon is not None:
             self.icon.icon = ICON_OK if ok else ICON_DOWN
 
-    def open_app(self, _icon: pystray.Icon, _item: pystray.MenuItem) -> None:
-        open_app_window(self.effective_url())
+    def open_app(self, _icon: pystray.Icon | None = None, _item: pystray.MenuItem | None = None) -> None:
+        """'Open RECON' from the tray -- surfaces the existing window rather
+        than spawning anything new."""
+        if self.mode == deployment.CLIENT and not self.master_reachable():
+            self.retry_master()
+        self.window.show()
 
     def promote_to_master(self, icon: pystray.Icon, _item: pystray.MenuItem) -> None:
-        """Manual fallback for when the real master goes offline (closed,
-        rebooted, unplugged from the network): lets this PC take over as
-        master instead of being stuck pointed at a master that's gone."""
-        if self.mode == "master":
+        """Escape hatch for when the shop PC is off and work cannot wait for
+        it. Deliberately manual: an automatic takeover is exactly what caused
+        two PCs to each start their own database.
+
+        The new role is persisted, so a PC promoted at 8am is still the master
+        after lunch. Whoever promoted it owns merging the records back."""
+        if self.mode == deployment.MASTER:
             return
-        log.info("Promoting this PC to master (was pointed at %s)", self.master_ip)
-        self.mode = "master"
+        log.warning("Promoting this PC to master (was pointed at %s)", self.master_ip)
+        self.mode = deployment.MASTER
         self.master_ip = None
+        try:
+            deployment.save(deployment.MASTER)
+        except OSError:
+            log.exception("Promoted, but could not persist the role -- it will revert on restart")
         if not NETWORK_FLAG.is_file():
             NETWORK_FLAG.write_text("enabled")
         ok = self.start_server()
@@ -407,32 +437,57 @@ class TrayApp:
                 log.exception("Auto-backup check failed")
             time.sleep(3600)
 
-    def quit_app(self, icon: pystray.Icon, _item: pystray.MenuItem) -> None:
-        log.info("Exit requested from tray")
+    def quit_app(self, icon: pystray.Icon | None = None, _item: pystray.MenuItem | None = None) -> None:
+        log.info("Exit requested")
+        self._quitting = True
         self._stop_responder()
         self.stop_server()
-        icon.stop()
+        if self._guard is not None:
+            self._guard.stop()
+        if icon is not None:
+            icon.stop()
+        elif self.icon is not None:
+            self.icon.stop()
+        # Tears down the GUI loop, which releases main() and ends the process.
+        self.window.destroy()
+
+    def _on_window_closing(self) -> bool:
+        """The X button. On the shop PC this must not stop the server -- every
+        workstation is talking to it -- so the window hides to the tray and the
+        process stays up. A workstation has nothing to keep alive, so it exits.
+        """
+        if self._quitting:
+            return True
+        if self.mode == deployment.MASTER:
+            log.info("Window closed -- staying resident so workstations keep working")
+            if self.icon is not None:
+                self.icon.notify("RECON is still running so other PCs can reach it.", "RECON")
+            self.window.hide()
+            return False
+        self.quit_app()
+        return True
 
     def _on_ready(self, icon: pystray.Icon) -> None:
         icon.visible = True
-        self.open_app(icon, None)
 
     def run(self) -> None:
-        log.info("Looking for an existing master on the LAN...")
-        master_ip = discovery.find_master(PORT)
-        if master_ip:
-            self.mode = "client"
-            self.master_ip = master_ip
-            icon_state = ICON_OK
-            log.info("Found master at %s -- running as client", master_ip)
+        config = deployment.load()
+        self.mode = config["role"]
+        if not config["configured"]:
+            log.info("No %s found -- running standalone as master", deployment.CONFIG_NAME)
+
+        if self.mode == deployment.CLIENT:
+            # A workstation never starts a server. It finds the shop PC, or it
+            # says so plainly; it does not quietly start a second database.
+            self.master_ip = self.locate_master(config.get("master_host"))
+            icon_state = ICON_OK if self.master_ip else ICON_DOWN
         else:
-            self.mode = "master"
             ok = self.start_server()
             icon_state = ICON_OK if ok else ICON_DOWN
             if network_mode_enabled():
                 self._start_responder()
             threading.Thread(target=self._auto_backup_loop, daemon=True).start()
-            log.info("No master found -- this PC is the master")
+            log.info("This PC is the master (role fixed at install)")
 
         menu = pystray.Menu(
             pystray.MenuItem("Open RECON", self.open_app, default=True),
@@ -440,38 +495,60 @@ class TrayApp:
                 "Allow other PCs on this network",
                 self.toggle_network_mode,
                 checked=lambda _item: network_mode_enabled(),
-                visible=lambda _item: self.mode == "master",
+                visible=lambda _item: self.mode == deployment.MASTER,
             ),
             pystray.MenuItem(
                 lambda _item: f"Connected to master at {self.master_ip} (click to become master)",
                 self.promote_to_master,
-                visible=lambda _item: self.mode == "client",
+                visible=lambda _item: self.mode == deployment.CLIENT,
             ),
-            pystray.MenuItem("Show Server Address", self.show_server_address, visible=lambda _item: self.mode == "master"),
+            pystray.MenuItem("Show Server Address", self.show_server_address, visible=lambda _item: self.mode == deployment.MASTER),
             pystray.MenuItem(
-                "Backup Now (entire database)", self.backup_now, visible=lambda _item: self.mode == "master"
-            ),
-            pystray.MenuItem(
-                "Backup To USB or Folder...", self.backup_to_location, visible=lambda _item: self.mode == "master"
+                "Backup Now (entire database)", self.backup_now, visible=lambda _item: self.mode == deployment.MASTER
             ),
             pystray.MenuItem(
-                "Restore Latest Backup", self.restore_latest_backup, visible=lambda _item: self.mode == "master"
+                "Backup To USB or Folder...", self.backup_to_location, visible=lambda _item: self.mode == deployment.MASTER
             ),
             pystray.MenuItem(
-                "Restore From File...", self.restore_from_file, visible=lambda _item: self.mode == "master"
+                "Restore Latest Backup", self.restore_latest_backup, visible=lambda _item: self.mode == deployment.MASTER
             ),
             pystray.MenuItem(
-                "Show Backups Folder", self.show_backups_folder, visible=lambda _item: self.mode == "master"
+                "Restore From File...", self.restore_from_file, visible=lambda _item: self.mode == deployment.MASTER
             ),
-            pystray.MenuItem("Restart Server", self.restart, visible=lambda _item: self.mode == "master"),
+            pystray.MenuItem(
+                "Show Backups Folder", self.show_backups_folder, visible=lambda _item: self.mode == deployment.MASTER
+            ),
+            pystray.MenuItem("Restart Server", self.restart, visible=lambda _item: self.mode == deployment.MASTER),
             pystray.MenuItem("Exit", self.quit_app),
         )
-        self.icon = pystray.Icon("discount-auto-ops", icon_state, "RECON", menu)
-        self.icon.run(setup=self._on_ready)
+        self.icon = pystray.Icon("recon", icon_state, "RECON", menu)
+        # Detached, because pywebview must own the main thread on Windows.
+        self.icon.run_detached(setup=self._on_ready)
+
+        if self._guard is not None:
+            self._guard.listen(self.window.show)
+
+        # A workstation that can't see the shop PC opens on the offline screen
+        # rather than a connection error; the Retry button lives there.
+        url = self.effective_url() if self.mode == deployment.MASTER or self.master_ip else None
+        if url and self.mode == deployment.CLIENT and not self.master_reachable():
+            log.warning("Shop PC did not answer on %s -- opening the offline screen", self.master_ip)
+            url = None
+
+        self.window.start(url, on_ready=lambda: log.info("Window ready (%s)", self.mode))
+        # webview.start() returned, so the window is really gone: shut down.
+        if not self._quitting:
+            self.quit_app()
 
 
 def main() -> None:
-    TrayApp().run()
+    guard = SingleInstance("RECON")
+    if guard.already_running:
+        # Don't start a second server -- surface the copy already running.
+        guard.signal_existing()
+        log.info("Another copy is already running; asked it to show its window")
+        return
+    TrayApp(guard).run()
 
 
 if __name__ == "__main__":

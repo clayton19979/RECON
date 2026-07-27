@@ -3,7 +3,6 @@ from __future__ import annotations
 import os
 import re
 import sqlite3
-import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
@@ -15,6 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+from . import paths
 from .accounting import build_accounting_router
 from .backup_routes import build_backup_router
 from .db import RECON_SHOP_CUSTOMER_ID, connect as db_connect, init_db, now
@@ -34,27 +34,8 @@ from .workflow import (
 )
 
 
-def _bundle_root() -> Path:
-    """Where bundled read-only assets (static/) live. A PyInstaller onefile
-    build extracts into a temp dir given by sys._MEIPASS; running from
-    source uses the repo root."""
-    if getattr(sys, "frozen", False):
-        return Path(getattr(sys, "_MEIPASS", Path(sys.executable).resolve().parent))
-    return Path(__file__).resolve().parent.parent
-
-
-def _data_root() -> Path:
-    """Where the database/backups live -- must be a stable, writable
-    location that survives restarts, never the PyInstaller extraction
-    temp dir, which is deleted when the process exits."""
-    if getattr(sys, "frozen", False):
-        base = os.getenv("LOCALAPPDATA") or str(Path.home())
-        return Path(base) / "DiscountAutoOps"
-    return Path(__file__).resolve().parent.parent
-
-
-ROOT = _bundle_root()
-DATA_ROOT = _data_root()
+ROOT = paths.bundle_root()
+DATA_ROOT = paths.data_root()
 DEFAULT_DB = Path(os.getenv("DISCOUNT_AUTO_OPS_DB", DATA_ROOT / "data" / "shop.db"))
 DEFAULT_BACKUPS_DIR = Path(os.getenv("DISCOUNT_AUTO_OPS_BACKUPS_DIR", DATA_ROOT / "backups"))
 

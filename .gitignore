@@ -4,15 +4,21 @@ __pycache__/
 data/
 run/
 backups/
+# WebView2's profile/cache. Frozen builds put this under ProgramData; running
+# from source it lands next to the repo.
+webview/
+deployment.json
 *.pyc
 # Runtime note of the chosen USB mirror target, written next to the DB.
 backup_destination.json
 build/
 dist/
+# Fetched by build_installer.ps1 at build time, not ours to vendor.
+installers/MicrosoftEdgeWebview2Setup.exe
 *.spec
 # ...but THIS spec is the build definition, not a throwaway: it carries the
 # onefile mode, the bundled static/, and the exe icon. Losing it loses the build.
-!DiscountAutoOps.spec
+!RECON.spec
 *.log
 # ...but the automated improvement run's changelog is a tracked project
 # document, not a throwaway runtime log.

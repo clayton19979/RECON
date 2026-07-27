@@ -67,7 +67,14 @@ Filename: "{app}\{#AppExe}"; Description: "Start {#AppName} now"; Flags: nowait 
 
 [UninstallRun]
 ; Take the firewall holes back out. Without this an uninstalled app leaves
-; two open ports behind it forever.
+; open ports behind it forever.
+;
+; Deleting by program path, not just by name, is the important part: the first
+; time RECON binds its port Windows silently adds its OWN rules, named from the
+; exe's FileDescription rather than ours. Matching on name alone left those
+; behind after every uninstall.
+Filename: "netsh"; Parameters: "advfirewall firewall delete rule name=all program=""{app}\{#AppExe}"""; \
+  Flags: runhidden; RunOnceId: "DelFwByProgram"
 Filename: "netsh"; Parameters: "advfirewall firewall delete rule name=""RECON (app)"""; \
   Flags: runhidden; RunOnceId: "DelFwApp"
 Filename: "netsh"; Parameters: "advfirewall firewall delete rule name=""RECON (discovery)"""; \

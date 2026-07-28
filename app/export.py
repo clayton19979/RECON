@@ -8,8 +8,9 @@ from typing import Callable, Literal
 
 from fastapi import APIRouter, Response
 
+from .db import normalize_vin
 from .recon import vehicle_board_rows
-from .reports import technician_productivity_rows
+from .reports import technician_productivity_rows, vehicle_profit_rows
 from .workflow import STATUS_LABEL
 
 
@@ -113,6 +114,37 @@ def build_export_router(connect: Callable[[], sqlite3.Connection], now_fn: Calla
                 for row in rows
             ],
             f"vehicle-spend-{segment}" if segment else "vehicle-spend",
+        )
+
+    @router.get("/export/report/vehicle-profit.csv")
+    def export_vehicle_profit_csv(start: str | None = None, end: str | None = None, vin: str | None = None):
+        """The bookkeeper's version of the profit report: one row per physical
+        car, with the three costs kept as separate columns so the arithmetic
+        behind the profit figure is auditable rather than a single number to
+        be taken on faith."""
+        with connect() as db:
+            rows = vehicle_profit_rows(db, start, end, normalize_vin(vin))
+        return _csv_response(
+            ["Stock #", "Vehicle", "VIN", "Labor Hours", "Purchase Price", "Recon Cost", "We-Owe Cost",
+             "Customer Paid", "Total Invested", "Sale Price", "Profit", "Margin %"],
+            [
+                [
+                    row["stock_number"],
+                    row["vehicle"],
+                    row["vin"],
+                    f"{row['labor_hours']:.2f}",
+                    f"{row['purchase_price']:.2f}",
+                    f"{row['recon_cost']:.2f}",
+                    f"{row['we_owe_cost']:.2f}",
+                    f"{row['we_owe_customer_paid']:.2f}",
+                    f"{row['total_invested']:.2f}",
+                    "" if row["sale_price"] is None else f"{row['sale_price']:.2f}",
+                    "" if row["profit"] is None else f"{row['profit']:.2f}",
+                    "" if row["margin_pct"] is None else f"{row['margin_pct']:.1f}",
+                ]
+                for row in rows
+            ],
+            "vehicle-profit",
         )
 
     @router.get("/export/report/technicians.csv")

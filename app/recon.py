@@ -7,7 +7,7 @@ from typing import Callable, Literal
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from .db import RECON_SHOP_CUSTOMER_ID
+from .db import RECON_SHOP_CUSTOMER_ID, normalize_vin
 
 
 def age_days(created_at: str) -> int:
@@ -107,6 +107,7 @@ class RecondVehicleIn(BaseModel):
     model: str = Field(min_length=1)
     vin: str = ""
     mileage: int = Field(default=0, ge=0)
+    odometer_broken: bool = False
     trim: str = ""
     engine: str = ""
     color: str = ""
@@ -133,6 +134,7 @@ class RecondVehiclePatch(BaseModel):
     engine: str | None = None
     color: str | None = None
     mileage: int | None = Field(default=None, ge=0)
+    odometer_broken: bool | None = None
     expected_version: int | None = None
 
 
@@ -144,6 +146,12 @@ class WeOweIn(BaseModel):
     target_date: str = ""
     sale_reference: str = ""
     lot_stock_number: str = ""
+    # A we-owe car was very often bought and recon'd before it was ever in
+    # RECON -- the promise is the first time the shop writes it down. Without
+    # somewhere to put what the car cost, its profit can never be worked out,
+    # so the intake accepts it and it lands on the unit, not on the promise.
+    purchase_price: float | None = Field(default=None, ge=0)
+    sale_price: float | None = Field(default=None, ge=0)
 
 
 class WeOwePatch(BaseModel):
@@ -162,6 +170,9 @@ class WeOwePatch(BaseModel):
     engine: str | None = None
     color: str | None = None
     mileage: int | None = Field(default=None, ge=0)
+    odometer_broken: bool | None = None
+    purchase_price: float | None = Field(default=None, ge=0)
+    sale_price: float | None = Field(default=None, ge=0)
     expected_version: int | None = None
 
 
@@ -196,6 +207,11 @@ def cost_rollup(db: sqlite3.Connection, column: str, ref_id: int, segment: str |
         f"""SELECT o.id, o.number, o.status, o.voided,
                coalesce(sum(CASE WHEN ei.kind='part' AND ei.part_returned=0 THEN ei.received_quantity*ei.unit_cost ELSE 0 END),0) parts_cost,
                coalesce(sum(CASE WHEN ei.kind='labor' THEN ei.quantity*ei.unit_cost ELSE 0 END),0) labor_cost,
+               -- Hours in their own right, not just as an input to cost. On
+               -- recon and we-owe the labor rate is always 0 (in-house time
+               -- isn't money out the door), so labor_cost is permanently 0
+               -- and the hours the techs flagged were invisible everywhere.
+               coalesce(sum(CASE WHEN ei.kind='labor' THEN ei.quantity ELSE 0 END),0) labor_hours,
                coalesce(sum(CASE WHEN ei.kind='fee'   THEN ei.quantity*ei.unit_cost ELSE 0 END),0) fee_cost,
                coalesce(sum(ei.quantity*ei.unit_cost),0) quoted_cost,
                coalesce(sum(CASE WHEN ei.kind='part' AND ei.status='ordered' AND ei.part_returned=0 THEN 1 ELSE 0 END),0) parts_pending,
@@ -223,8 +239,147 @@ def cost_rollup(db: sqlite3.Connection, column: str, ref_id: int, segment: str |
         "orders": orders,
         "total_cost": round(sum(o["total_cost"] for o in countable), 2),
         "quoted_cost": round(sum(o["quoted_cost"] for o in countable), 2),
+        "labor_hours": round(sum(o["labor_hours"] for o in countable), 2),
         "parts_pending": int(sum(o["parts_pending"] for o in countable)),
         "parts_pending_value": round(sum(o["parts_pending_value"] for o in countable), 2),
+    }
+
+
+def resolve_unit(db: sqlite3.Connection, vehicle_id: int, vin: str | None, ts: str) -> int:
+    """Attach a vehicle row to the physical car it describes, found by VIN.
+
+    This is the single point where the recon half and the we-owe half of one
+    car's life meet. A car recon'd under the shop's own account and later sold
+    and brought back on a we-owe is two `vehicles` rows by necessity (that
+    table carries a NOT NULL customer_id), and matching their VINs here is what
+    lets the money from both halves land on one ledger.
+
+    A vehicle with no VIN still gets a unit, just a private one -- the app has
+    to keep working for a car someone entered in a hurry.
+    """
+    key = normalize_vin(vin)
+    if key:
+        found = db.execute("SELECT id FROM vehicle_units WHERE vin_key=?", (key,)).fetchone()
+        if found:
+            db.execute("UPDATE vehicles SET unit_id=? WHERE id=?", (found["id"], vehicle_id))
+            return found["id"]
+    unit_id = db.execute(
+        "INSERT INTO vehicle_units(vin_key,created_at,updated_at) VALUES(?,?,?)", (key, ts, ts)
+    ).lastrowid
+    db.execute("UPDATE vehicles SET unit_id=? WHERE id=?", (unit_id, vehicle_id))
+    return unit_id
+
+
+def unit_id_for_vehicle(db: sqlite3.Connection, vehicle_id: int, ts: str) -> int:
+    """The unit a vehicle belongs to, creating it if this row predates units."""
+    row = db.execute("SELECT id, unit_id, vin FROM vehicles WHERE id=?", (vehicle_id,)).fetchone()
+    if row is None:
+        raise HTTPException(404, "Vehicle not found")
+    if row["unit_id"]:
+        return row["unit_id"]
+    return resolve_unit(db, vehicle_id, row["vin"], ts)
+
+
+def relink_unit(db: sqlite3.Connection, vehicle_id: int, new_vin: str | None, ts: str) -> int:
+    """Re-point a vehicle at the right unit after its VIN was corrected.
+
+    A VIN typed wrong at intake and fixed later is exactly the case where a
+    car would otherwise stay stranded on a unit of its own forever, so the
+    correction has to move it. Any economics already entered against the old
+    private unit come along, rather than being silently abandoned -- but only
+    into blanks, so a figure already recorded on the shared unit wins.
+    """
+    current = db.execute("SELECT unit_id FROM vehicles WHERE id=?", (vehicle_id,)).fetchone()
+    old_unit_id = current["unit_id"] if current else None
+    new_unit_id = resolve_unit(db, vehicle_id, new_vin, ts)
+    if not old_unit_id or old_unit_id == new_unit_id:
+        return new_unit_id
+
+    old = db.execute("SELECT * FROM vehicle_units WHERE id=?", (old_unit_id,)).fetchone()
+    new = db.execute("SELECT * FROM vehicle_units WHERE id=?", (new_unit_id,)).fetchone()
+    if old and new:
+        merged = {
+            "purchase_price": new["purchase_price"] or old["purchase_price"],
+            "purchase_source": new["purchase_source"] or old["purchase_source"],
+            "purchase_date": new["purchase_date"] or old["purchase_date"],
+            "sale_price": new["sale_price"] if new["sale_price"] is not None else old["sale_price"],
+            "sale_date": new["sale_date"] or old["sale_date"],
+        }
+        db.execute(
+            """UPDATE vehicle_units SET purchase_price=?,purchase_source=?,purchase_date=?,
+                                        sale_price=?,sale_date=?,updated_at=? WHERE id=?""",
+            (*merged.values(), ts, new_unit_id),
+        )
+    # Only drop the vacated unit if nothing else still points at it.
+    still_used = db.execute("SELECT 1 FROM vehicles WHERE unit_id=? LIMIT 1", (old_unit_id,)).fetchone()
+    if not still_used:
+        db.execute("DELETE FROM vehicle_units WHERE id=?", (old_unit_id,))
+    return new_unit_id
+
+
+def unit_lifetime(db: sqlite3.Connection, unit_id: int) -> dict:
+    """Everything one physical car cost and earned, across its whole life.
+
+    This is the number the owner is actually after: not "what did recon cost"
+    but "what is this car up to, counting the we-owe work that landed weeks
+    after it was sold and quietly ate the margin". So it sums every ticket
+    reachable from every recon episode AND every we-owe promise on this VIN,
+    then nets out whatever the customer chipped in on the we-owe side.
+
+    profit is None when there's no sale price -- an unsold car has a cost, not
+    a profit, and showing 0 or a negative would read as a loss it hasn't taken.
+    """
+    unit = db.execute("SELECT * FROM vehicle_units WHERE id=?", (unit_id,)).fetchone()
+    if unit is None:
+        raise HTTPException(404, "Vehicle unit not found")
+
+    recon_ids = [r["id"] for r in db.execute(
+        "SELECT rv.id FROM recon_vehicles rv JOIN vehicles v ON v.id=rv.vehicle_id WHERE v.unit_id=?", (unit_id,)
+    )]
+    we_owe_ids = [r["id"] for r in db.execute(
+        "SELECT w.id FROM we_owe_items w JOIN vehicles v ON v.id=w.vehicle_id WHERE v.unit_id=?", (unit_id,)
+    )]
+
+    recon_rollups = [cost_rollup(db, "recon_vehicle_id", rid) for rid in recon_ids]
+    we_owe_rollups = [cost_rollup(db, "we_owe_id", wid) for wid in we_owe_ids]
+    recon_cost = sum(r["total_cost"] for r in recon_rollups)
+    we_owe_cost = sum(r["total_cost"] for r in we_owe_rollups)
+    # Every hour any tech flagged on this car, across both halves of its life.
+    # On recon and we-owe the rate is 0, so this is the only measure of the
+    # work that actually went into it.
+    labor_hours = round(sum(r["labor_hours"] for r in recon_rollups + we_owe_rollups), 2)
+    customer_paid = 0.0
+    if we_owe_ids:
+        placeholders = ",".join("?" for _ in we_owe_ids)
+        customer_paid = db.execute(
+            f"SELECT coalesce(sum(amount),0) FROM we_owe_payments WHERE we_owe_id IN ({placeholders})", we_owe_ids
+        ).fetchone()[0]
+
+    purchase_price = unit["purchase_price"] or 0.0
+    we_owe_net = round(we_owe_cost - customer_paid, 2)
+    total_invested = round(purchase_price + recon_cost + we_owe_net, 2)
+    sale_price = unit["sale_price"]
+    profit = round(sale_price - total_invested, 2) if sale_price is not None else None
+    return {
+        "unit_id": unit_id,
+        "vin": unit["vin_key"] or "",
+        "purchase_price": round(purchase_price, 2),
+        "purchase_source": unit["purchase_source"],
+        "purchase_date": unit["purchase_date"],
+        "recon_cost": round(recon_cost, 2),
+        "we_owe_cost": round(we_owe_cost, 2),
+        "labor_hours": labor_hours,
+        "we_owe_customer_paid": round(customer_paid, 2),
+        "we_owe_net_cost": we_owe_net,
+        "total_invested": total_invested,
+        "sale_price": sale_price,
+        "sale_date": unit["sale_date"],
+        "profit": profit,
+        # Margin is against the sale price, which is how a lot talks about it
+        # ("we made 12 points on that car"), not against what was put in.
+        "margin_pct": round(profit / sale_price * 100, 1) if profit is not None and sale_price else None,
+        "recon_count": len(recon_ids),
+        "we_owe_count": len(we_owe_ids),
     }
 
 
@@ -280,8 +435,11 @@ def vehicle_board_rows(db: sqlite3.Connection, start: str | None = None, end: st
     result = []
     if segment in (None, "recon"):
         rows = db.execute(
-            """SELECT rv.*, v.year, v.make, v.model, v.vin, v.mileage FROM recon_vehicles rv
+            """SELECT rv.*, v.year, v.make, v.model, v.vin, v.mileage, v.unit_id,
+                      u.purchase_price unit_purchase_price, u.sale_price unit_sale_price
+               FROM recon_vehicles rv
                JOIN vehicles v ON v.id=rv.vehicle_id
+               LEFT JOIN vehicle_units u ON u.id=v.unit_id
                WHERE (:start IS NULL OR rv.created_at>=:start) AND (:end IS NULL OR rv.created_at<=:end)
                  AND (rv.archived_at != '') = :archived
                ORDER BY rv.created_at DESC""",
@@ -307,9 +465,15 @@ def vehicle_board_rows(db: sqlite3.Connection, start: str | None = None, end: st
                 "vin": row["vin"],
                 "status": display_status,
                 "status_bucket": "finished" if (active_order is None and has_closed_order) else "in_progress",
-                "purchase_price": row["purchase_price"],
+                # From the unit, not recon_vehicles' legacy column of the same
+                # name -- one car, one purchase price, whichever half of its
+                # life you happen to be looking at.
+                "purchase_price": row["unit_purchase_price"] or 0,
+                "sale_price": row["unit_sale_price"],
+                "unit_id": row["unit_id"],
                 "actual_cost": rollup["total_cost"],
                 "quoted_cost": rollup["quoted_cost"],
+                "labor_hours": rollup["labor_hours"],
                 "parts_pending": rollup["parts_pending"],
                 "parts_pending_value": rollup["parts_pending_value"],
                 "technicians": technician_names(db, order_ids),
@@ -326,8 +490,11 @@ def vehicle_board_rows(db: sqlite3.Connection, start: str | None = None, end: st
             })
     if segment in (None, "we_owe"):
         rows = db.execute(
-            """SELECT w.*, c.name customer_name, v.year, v.make, v.model, v.vin FROM we_owe_items w
+            """SELECT w.*, c.name customer_name, v.year, v.make, v.model, v.vin, v.unit_id,
+                      u.purchase_price unit_purchase_price, u.sale_price unit_sale_price
+               FROM we_owe_items w
                JOIN customers c ON c.id=w.customer_id JOIN vehicles v ON v.id=w.vehicle_id
+               LEFT JOIN vehicle_units u ON u.id=v.unit_id
                WHERE (:start IS NULL OR w.created_at>=:start) AND (:end IS NULL OR w.created_at<=:end)
                  AND (w.archived_at != '') = :archived
                ORDER BY w.created_at DESC""",
@@ -361,8 +528,15 @@ def vehicle_board_rows(db: sqlite3.Connection, start: str | None = None, end: st
                 "description": row["description"],
                 "status": display_status,
                 "status_bucket": "finished" if row["status"] in ("fulfilled", "waived") else "in_progress",
+                # A we-owe car has a purchase price too -- it's just usually
+                # entered here, because the shop bought and recon'd it long
+                # before RECON ever saw it.
+                "purchase_price": row["unit_purchase_price"] or 0,
+                "sale_price": row["unit_sale_price"],
+                "unit_id": row["unit_id"],
                 "actual_cost": rollup["total_cost"],
                 "quoted_cost": rollup["quoted_cost"],
+                "labor_hours": rollup["labor_hours"],
                 "parts_pending": rollup["parts_pending"],
                 "parts_pending_value": rollup["parts_pending_value"],
                 "customer_paid": customer_paid,
@@ -391,7 +565,8 @@ def build_recon_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
 
     def recon_row(db: sqlite3.Connection, recon_id: int) -> sqlite3.Row:
         row = db.execute(
-            """SELECT rv.*, v.year, v.make, v.model, v.vin, v.mileage, v.trim, v.engine, v.color
+            """SELECT rv.*, v.year, v.make, v.model, v.vin, v.mileage, v.odometer_broken,
+                      v.trim, v.engine, v.color, v.unit_id
                FROM recon_vehicles rv JOIN vehicles v ON v.id=rv.vehicle_id WHERE rv.id=?""",
             (recon_id,),
         ).fetchone()
@@ -400,14 +575,28 @@ def build_recon_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
         return row
 
     def recon_detail(db: sqlite3.Connection, recon_id: int) -> dict:
-        detail = dict(recon_row(db, recon_id))
+        row = recon_row(db, recon_id)
+        detail = dict(row)
         rollup = cost_rollup(db, "recon_vehicle_id", recon_id)
         detail["orders"] = rollup["orders"]
         detail["total_cost"] = rollup["total_cost"]
         detail["quoted_cost"] = rollup["quoted_cost"]
+        detail["labor_hours"] = rollup["labor_hours"]
+        # Purchase and sale price come off the unit, which is what makes them
+        # survive the car being sold and coming back on a we-owe. The legacy
+        # recon_vehicles columns of the same name are no longer authoritative.
+        unit_id = unit_id_for_vehicle(db, row["vehicle_id"], now_fn())
+        lifetime = unit_lifetime(db, unit_id)
+        detail["purchase_price"] = lifetime["purchase_price"]
+        detail["sale_price"] = lifetime["sale_price"]
+        detail["sale_date"] = lifetime["sale_date"] or detail["sale_date"]
+        detail["lifetime"] = lifetime
+        # This vehicle's own profit still counts only its own recon spend, so
+        # the recon screen keeps meaning what it always did; `lifetime` is
+        # where the whole-car picture (we-owe work included) lives.
         detail["profit"] = (
-            round(detail["sale_price"] - detail["purchase_price"] - rollup["total_cost"], 2)
-            if detail["sale_price"] is not None
+            round(lifetime["sale_price"] - lifetime["purchase_price"] - rollup["total_cost"], 2)
+            if lifetime["sale_price"] is not None
             else None
         )
         detail["last_activity"] = last_activity_detail(db, "recon_vehicle_id", recon_id, detail["created_at"])
@@ -418,7 +607,8 @@ def build_recon_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
             """SELECT w.*, c.name customer_name, c.phone customer_phone, c.email customer_email,
                       c.address_line1 customer_address_line1, c.address_line2 customer_address_line2,
                       c.city customer_city, c.state customer_state, c.postal_code customer_postal_code,
-                      v.year, v.make, v.model, v.vin, v.mileage, v.trim, v.engine, v.color
+                      v.year, v.make, v.model, v.vin, v.mileage, v.odometer_broken,
+                      v.trim, v.engine, v.color, v.unit_id
                FROM we_owe_items w JOIN customers c ON c.id=w.customer_id JOIN vehicles v ON v.id=w.vehicle_id
                WHERE w.id=?""",
             (we_owe_id,),
@@ -428,17 +618,23 @@ def build_recon_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
         return row
 
     def we_owe_detail(db: sqlite3.Connection, we_owe_id: int) -> dict:
-        detail = dict(we_owe_row(db, we_owe_id))
+        row = we_owe_row(db, we_owe_id)
+        detail = dict(row)
         rollup = cost_rollup(db, "we_owe_id", we_owe_id)
         detail["orders"] = rollup["orders"]
         detail["total_cost"] = rollup["total_cost"]
         detail["quoted_cost"] = rollup["quoted_cost"]
-        payments = [dict(row) for row in db.execute(
+        detail["labor_hours"] = rollup["labor_hours"]
+        payments = [dict(p) for p in db.execute(
             "SELECT * FROM we_owe_payments WHERE we_owe_id=? ORDER BY id DESC", (we_owe_id,)
         )]
         detail["payments"] = payments
         detail["customer_paid"] = round(sum(p["amount"] for p in payments), 2)
         detail["net_cost"] = round(detail["total_cost"] - detail["customer_paid"], 2)
+        # The whole-car picture. On a we-owe this is the point: the promise
+        # itself is a cost, and what it does to the car's profit is only
+        # visible once the purchase price and the recon spend are alongside it.
+        detail["lifetime"] = unit_lifetime(db, unit_id_for_vehicle(db, row["vehicle_id"], now_fn()))
         detail["last_activity"] = last_activity_detail(db, "we_owe_id", we_owe_id, detail["created_at"])
         return detail
 
@@ -457,12 +653,20 @@ def build_recon_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
                 raise HTTPException(409, "Stock number already in use")
             ts = now_fn()
             vehicle_cur = db.execute(
-                "INSERT INTO vehicles(customer_id,year,make,model,vin,mileage,plate,plate_state,trim,engine,color,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
-                (RECON_SHOP_CUSTOMER_ID, item.year, item.make.strip(), item.model.strip(), item.vin.strip().upper(), item.mileage, "", "", item.trim.strip(), item.engine.strip(), item.color.strip(), ts),
+                "INSERT INTO vehicles(customer_id,year,make,model,vin,mileage,odometer_broken,plate,plate_state,trim,engine,color,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (RECON_SHOP_CUSTOMER_ID, item.year, item.make.strip(), item.model.strip(), item.vin.strip().upper(), item.mileage, int(item.odometer_broken), "", "", item.trim.strip(), item.engine.strip(), item.color.strip(), ts),
             )
             recon_cur = db.execute(
                 "INSERT INTO recon_vehicles(vehicle_id,stock_number,acquisition_source,acquisition_date,purchase_price,notes,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",
                 (vehicle_cur.lastrowid, stock_number, item.acquisition_source.strip(), item.acquisition_date.strip(), item.purchase_price, item.notes.strip(), ts, ts),
+            )
+            # What the car cost belongs to the car, not to this recon episode:
+            # the same VIN coming back on a we-owe months later has to find
+            # this number waiting for it.
+            unit_id = resolve_unit(db, vehicle_cur.lastrowid, item.vin, ts)
+            db.execute(
+                "UPDATE vehicle_units SET purchase_price=?,purchase_source=?,purchase_date=?,updated_at=? WHERE id=?",
+                (item.purchase_price, item.acquisition_source.strip(), item.acquisition_date.strip(), ts, unit_id),
             )
             return recon_detail(db, recon_cur.lastrowid)
 
@@ -534,13 +738,35 @@ def build_recon_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
                 if value is not None:
                     vehicle_fields.append(f"{name}=?")
                     vehicle_params.append(value)
+            ts = now_fn()
             if vehicle_fields:
                 vehicle_params.append(row["vehicle_id"])
                 db.execute(f"UPDATE vehicles SET {','.join(vehicle_fields)} WHERE id=?", vehicle_params)
 
+            # A corrected VIN can mean this car is the same one already on file
+            # from the other side of its life, so the unit has to be re-resolved
+            # rather than left pointing where the typo put it.
+            if item.vin is not None:
+                unit_id = relink_unit(db, row["vehicle_id"], item.vin, ts)
+            else:
+                unit_id = unit_id_for_vehicle(db, row["vehicle_id"], ts)
+
+            unit_fields, unit_params = [], []
+            for name, value in (
+                ("purchase_price", item.purchase_price),
+                ("sale_price", item.sale_price),
+                ("sale_date", item.sale_date.strip() if item.sale_date is not None else None),
+            ):
+                if value is not None:
+                    unit_fields.append(f"{name}=?")
+                    unit_params.append(value)
+            if unit_fields:
+                unit_params += [ts, unit_id]
+                db.execute(f"UPDATE vehicle_units SET {','.join(unit_fields)},updated_at=? WHERE id=?", unit_params)
+
             if fields or vehicle_fields:
                 fields.append("updated_at=?")
-                params.append(now_fn())
+                params.append(ts)
                 fields.append("edit_version=edit_version+1")
                 params.append(recon_id)
                 db.execute(f"UPDATE recon_vehicles SET {','.join(fields)} WHERE id=?", params)
@@ -570,6 +796,22 @@ def build_recon_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
                 "INSERT INTO we_owe_items(customer_id,vehicle_id,description,category,promised_at,target_date,sale_reference,lot_stock_number,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
                 (item.customer_id, item.vehicle_id, item.description.strip(), item.category.strip() or "other", ts, item.target_date.strip(), item.sale_reference.strip(), item.lot_stock_number.strip().upper(), ts, ts),
             )
+            # A we-owe is very often the first time a car is written down at
+            # all -- bought and recon'd before RECON ever saw it. Recording
+            # what it cost here is what makes its profit answerable later.
+            # Only fills blanks: if this VIN already has a purchase price from
+            # its recon life, that one is the record and stands.
+            unit_id = unit_id_for_vehicle(db, item.vehicle_id, ts)
+            if item.purchase_price is not None:
+                db.execute(
+                    "UPDATE vehicle_units SET purchase_price=?,updated_at=? WHERE id=? AND purchase_price=0",
+                    (item.purchase_price, ts, unit_id),
+                )
+            if item.sale_price is not None:
+                db.execute(
+                    "UPDATE vehicle_units SET sale_price=?,updated_at=? WHERE id=? AND sale_price IS NULL",
+                    (item.sale_price, ts, unit_id),
+                )
             return we_owe_detail(db, cur.lastrowid)
 
     @router.get("/we-owe/{we_owe_id}")
@@ -633,17 +875,36 @@ def build_recon_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
                 ("engine", item.engine.strip() if item.engine is not None else None),
                 ("color", item.color.strip() if item.color is not None else None),
                 ("mileage", item.mileage),
+                ("odometer_broken", int(item.odometer_broken) if item.odometer_broken is not None else None),
             ):
                 if value is not None:
                     vehicle_fields.append(f"{name}=?")
                     vehicle_params.append(value)
+            ts = now_fn()
             if vehicle_fields:
                 vehicle_params.append(row["vehicle_id"])
                 db.execute(f"UPDATE vehicles SET {','.join(vehicle_fields)} WHERE id=?", vehicle_params)
 
+            # A VIN filled in after the fact is how a we-owe car finds the
+            # recon record it already had -- so the unit is re-resolved and
+            # the two halves of the car's life join up from that moment on.
+            if item.vin is not None:
+                unit_id = relink_unit(db, row["vehicle_id"], item.vin, ts)
+            else:
+                unit_id = unit_id_for_vehicle(db, row["vehicle_id"], ts)
+
+            unit_fields, unit_params = [], []
+            for name, value in (("purchase_price", item.purchase_price), ("sale_price", item.sale_price)):
+                if value is not None:
+                    unit_fields.append(f"{name}=?")
+                    unit_params.append(value)
+            if unit_fields:
+                unit_params += [ts, unit_id]
+                db.execute(f"UPDATE vehicle_units SET {','.join(unit_fields)},updated_at=? WHERE id=?", unit_params)
+
             if fields or vehicle_fields:
                 fields.append("updated_at=?")
-                params.append(now_fn())
+                params.append(ts)
                 fields.append("edit_version=edit_version+1")
                 params.append(we_owe_id)
                 db.execute(f"UPDATE we_owe_items SET {','.join(fields)} WHERE id=?", params)

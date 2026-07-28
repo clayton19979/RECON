@@ -298,6 +298,9 @@
             <button class="btn btn-ghost btn-sm" id="vd-add-task" style="display:none">+ Task</button>
             <button class="btn btn-ghost btn-sm" id="vd-archive-vehicle" style="display:none">Send to History</button>
             <button class="btn btn-primary btn-sm" id="vd-reopen-vehicle" style="display:none">Reopen</button>
+            <!-- A ticket written up on the wrong side used to be unfixable
+                 except by deleting it and losing the estimate with it. -->
+            <button class="btn btn-ghost btn-sm" id="vd-move-segment" style="display:none" title="Move this ticket to the other side — recon or we-owe">Move Ticket</button>
             <button class="btn btn-ghost btn-sm btn-danger-ghost" id="vd-void-order" style="display:none">Void Ticket</button>
             <button class="btn btn-ghost btn-sm btn-danger-ghost" id="vd-delete" style="display:none">Delete</button>
           </div>
@@ -540,6 +543,7 @@
             <button type="button" class="seg-btn active" data-report-type="vehicle-spend" role="radio" aria-checked="true">All Vehicles</button>
             <button type="button" class="seg-btn" data-report-type="vehicle-spend-recon" role="radio" aria-checked="false">Recon</button>
             <button type="button" class="seg-btn" data-report-type="vehicle-spend-we_owe" role="radio" aria-checked="false">We-Owe</button>
+            <button type="button" class="seg-btn" data-report-type="vehicle-profit" role="radio" aria-checked="false">Profit</button>
             <button type="button" class="seg-btn" data-report-type="technicians" role="radio" aria-checked="false">Technicians</button>
           </div>
           <div class="report-bar-gap"></div>
@@ -586,7 +590,16 @@
                   <label>Vendor<select id="ap-vendor" required></select></label>
                   <label>Invoice #<input id="ap-invoice-number" required placeholder="INV-1234"></label>
                 </div>
-                <label>PO # (Repair Order)<select id="ap-po" required></select></label>
+                <!-- PO # used to be a required dropdown of repair orders, so
+                     an invoice with no ticket behind it (shop supplies, a
+                     bulk oil delivery, a tool bill) could not be posted at
+                     all without inventing a ticket for it. Now the reference
+                     is free text and the ticket is a separate, optional
+                     choice. -->
+                <div class="form-row">
+                  <label style="flex:1">PO / Reference<input id="ap-po" placeholder="Vendor's PO, counter ticket, or delivery note"></label>
+                  <label style="flex:1">Repair Order<select id="ap-order"><option value="">No ticket — general expense</option></select></label>
+                </div>
                 <div class="table-wrap">
                   <table>
                     <thead><tr><th>Type</th><th>Part #</th><th>Description</th><th class="num-col">Qty</th><th class="num-col">Cost</th><th class="num-col">Line</th><th><span class="sr-only">Remove</span></th></tr></thead>
@@ -604,7 +617,13 @@
                   <div class="cost-line"><span>Subtotal</span><span class="num" id="ap-subtotal">$0.00</span></div>
                   <div class="cost-line"><span>Tax</span><input id="ap-tax" type="number" min="0" step="0.01" value="0" aria-label="Tax"></div>
                   <div class="cost-line total"><span>Total</span><span class="num" id="ap-total">$0.00</span></div>
-                  <span class="ap-over-threshold" id="ap-over-threshold" hidden>Over $500 — will be held for manual approval before posting.</span>
+                  <!-- This used to read "will be held for manual approval
+                       before posting", and it meant it: anything over $500
+                       went to review_required instead of posting. The hold
+                       was removed at the shop's request (the people posting
+                       invoices are the people who approve them), so the line
+                       is now a plain nudge rather than a promise of a gate. -->
+                  <span class="ap-over-threshold" id="ap-over-threshold" hidden>Over $500 — worth double-checking the invoice before you post it.</span>
                 </div>
                 <div class="form-row" style="margin-top:12px">
                   <button class="btn btn-primary" type="submit" style="align-self:flex-start">Post Invoice</button>
@@ -901,6 +920,8 @@
           <input id="suggestion-search" class="filters-search" placeholder="Search ideas…" aria-label="Search ideas" autocomplete="off">
           <div class="filters-gap"></div>
           <span class="filters-note" id="suggestions-count" aria-live="polite">0 open</span>
+          <button type="button" class="btn btn-ghost btn-sm" id="suggestions-copy-all"
+                  title="Copy every open idea shown, as a numbered list">Copy All</button>
         </div>
 
         <div id="suggestions-list" class="suggestion-list"></div>
@@ -915,7 +936,7 @@
         <div class="page-head">
           <div>
             <h1>Backup &amp; Restore</h1>
-            <p class="page-desc" id="backup-policy-desc">A full database backup (.db) is made automatically every 24 hours and the last 14 are kept. Make one manually any time, and download, restore, or delete any backup below.</p>
+            <p class="page-desc" id="backup-policy-desc">A full database backup (.db) is made automatically every few minutes when something has changed, and older ones thin out over time. Make one manually any time, and download, restore, or delete any backup below.</p>
           </div>
           <div class="page-head-actions">
             <button type="button" class="btn btn-primary" id="backup-run-btn">Create Backup Now</button>
@@ -957,7 +978,8 @@
           </div>
         </div>
         <div class="panel" style="padding:14px 20px">
-          <a class="btn btn-ghost btn-sm" href="/api/export/vehicles.csv" download>Export Vehicles CSV</a>
+          <a class="btn btn-ghost btn-sm" href="/api/export/vehicles.csv" download
+             title="Every vehicle on the board — stock #/customer, VIN, status, age, what's in it, and the vendor invoices behind it — as a spreadsheet">Export Vehicles CSV</a>
         </div>
       </section>
 
@@ -1014,6 +1036,10 @@
       </div>
       <div class="form-row">
         <label>Mileage<input id="recon-mileage" type="number" value="0"></label>
+        <label class="checkbox-inline" style="align-self:flex-end;margin-bottom:12px">
+          <input type="checkbox" id="recon-odo-broken">
+          Odometer broken
+        </label>
         <label>Purchase price<input id="recon-price" type="number" min="0" step="0.01" value="0"></label>
       </div>
       <div class="form-row">
@@ -1052,9 +1078,29 @@
           <label>Model<input id="we-owe-new-model" placeholder="Soul"></label>
         </div>
         <div class="form-row">
-          <label style="flex:2">VIN<input id="we-owe-new-vin" placeholder="Optional"></label>
+          <!-- The VIN is what joins this car to the rest of its life in the
+               shop -- an earlier recon record, its purchase price, everything
+               already spent on it. Without one the car is stranded on a
+               record of its own and its profit can never be worked out, so
+               it's asked for properly rather than marked "optional". -->
+          <label style="flex:2">VIN<input id="we-owe-new-vin" placeholder="17-character VIN"></label>
           <button type="button" class="btn btn-ghost" id="we-owe-decode-vin" style="align-self:flex-end;margin-bottom:12px">Decode VIN</button>
         </div>
+        <div class="form-row">
+          <label style="flex:1">Mileage<input id="we-owe-new-mileage" type="number" min="0" placeholder="e.g. 84500"></label>
+          <label class="checkbox-inline" style="align-self:flex-end;margin-bottom:12px">
+            <input type="checkbox" id="we-owe-new-odo-broken">
+            Odometer broken
+          </label>
+        </div>
+        <div class="form-row">
+          <!-- A we-owe car was bought too, usually recon'd somewhere else and
+               never written down here. This is the only chance to record what
+               it cost, and without it the car's profit is unanswerable. -->
+          <label style="flex:1">Purchase price (our cost)<input id="we-owe-new-purchase-price" type="number" min="0" step="0.01" placeholder="Optional"></label>
+          <label style="flex:1">Sale price<input id="we-owe-new-sale-price" type="number" min="0" step="0.01" placeholder="Optional"></label>
+        </div>
+        <p class="field-note" id="we-owe-vin-match" hidden></p>
       </div>
       <label>Description<input id="we-owe-description" required placeholder="e.g. Replace missing passenger mirror"></label>
       <div class="form-row">
@@ -1162,6 +1208,25 @@
 </dialog>
 
 <!-- Edit Vehicle Dialog -->
+<!-- Move Ticket Dialog -->
+<dialog id="move-segment-dialog">
+  <form class="modal" id="move-segment-form">
+    <div class="modal-head">
+      <div><p class="eyebrow">MOVE TICKET</p><h2>Move To Another Vehicle</h2></div>
+      <button class="icon-btn" formnovalidate type="button" id="move-segment-cancel">×</button>
+    </div>
+    <div class="modal-body">
+      <p class="page-desc" id="move-segment-desc"></p>
+      <label>Move to<select id="move-segment-target"></select></label>
+      <p class="field-note">Everything on this ticket — its estimate, parts, vendor invoices and history — moves with it, and its cost comes off the vehicle it's leaving.</p>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" formnovalidate type="button" id="move-segment-cancel-2">Cancel</button>
+      <button class="btn btn-primary" type="submit">Move Ticket</button>
+    </div>
+  </form>
+</dialog>
+
 <dialog id="vehicle-edit-dialog">
   <form class="modal" id="vehicle-edit-form">
     <div class="modal-head">

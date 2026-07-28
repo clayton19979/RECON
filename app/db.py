@@ -9,6 +9,18 @@ from pathlib import Path
 RECON_SHOP_CUSTOMER_ID = -1
 RECON_SHOP_CUSTOMER_NAME = "Discount Auto — Shop-Owned Recon Inventory"
 
+
+def normalize_vin(vin: str | None) -> str | None:
+    """The key two records of the same car have to agree on.
+
+    Upper-cased with separators and spaces stripped, because the same VIN gets
+    typed off a dash plate one day and pasted from a title the next. Returns
+    None for anything empty -- a blank VIN must never collide with another
+    blank VIN, or two unrelated cars would share one unit.
+    """
+    cleaned = "".join((vin or "").split()).replace("-", "").upper()
+    return cleaned or None
+
 SCHEMA = """
 PRAGMA journal_mode=WAL;
 PRAGMA foreign_keys=ON;
@@ -27,14 +39,42 @@ CREATE TABLE IF NOT EXISTS customers (
   created_at TEXT NOT NULL
 );
 
+/* One physical car, across every owner it ever has.
+ *
+ * `vehicles` cannot play this role: it carries a NOT NULL customer_id, so the
+ * same car recon'd under the shop's own account and then sold and brought back
+ * on a we-owe is necessarily TWO vehicles rows with the same VIN and no link
+ * between them. That split is why lifetime profit was unanswerable -- the
+ * purchase price sat on one half and the post-sale repair cost on the other.
+ *
+ * A unit is found by VIN, so both halves resolve to the same row and the money
+ * follows the car rather than the paperwork. Cars with no VIN on file still get
+ * a unit of their own (vin_key NULL, excluded from the unique index), so
+ * nothing depends on a VIN being present to work at all.
+ */
+CREATE TABLE IF NOT EXISTS vehicle_units (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  vin_key TEXT,
+  purchase_price REAL NOT NULL DEFAULT 0,
+  purchase_source TEXT NOT NULL DEFAULT '',
+  purchase_date TEXT NOT NULL DEFAULT '',
+  sale_price REAL,
+  sale_date TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS vehicle_units_vin ON vehicle_units(vin_key) WHERE vin_key IS NOT NULL;
+
 CREATE TABLE IF NOT EXISTS vehicles (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   customer_id INTEGER NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+  unit_id INTEGER REFERENCES vehicle_units(id),
   year INTEGER NOT NULL,
   make TEXT NOT NULL,
   model TEXT NOT NULL,
   vin TEXT NOT NULL DEFAULT '',
   mileage INTEGER NOT NULL DEFAULT 0,
+  odometer_broken INTEGER NOT NULL DEFAULT 0,
   plate TEXT NOT NULL DEFAULT '',
   plate_state TEXT NOT NULL DEFAULT '',
   trim TEXT NOT NULL DEFAULT '',
@@ -275,7 +315,12 @@ CREATE TABLE IF NOT EXISTS vendors (
 CREATE TABLE IF NOT EXISTS ap_invoices (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   vendor_id INTEGER NOT NULL REFERENCES vendors(id),
-  order_id INTEGER NOT NULL REFERENCES orders(id),
+  /* Nullable: not every vendor invoice belongs to a repair order. Shop
+     supplies, a bulk oil delivery, a tool bill -- these are real money owed
+     to a real vendor with no ticket to hang them on, and requiring one meant
+     either inventing a ticket or keeping them out of RECON entirely. An
+     invoice with no order simply doesn't roll into any vehicle's cost. */
+  order_id INTEGER REFERENCES orders(id),
   invoice_number TEXT NOT NULL,
   normalized_invoice_number TEXT NOT NULL,
   po_number TEXT NOT NULL,
@@ -486,6 +531,101 @@ def _migrate(db: sqlite3.Connection) -> None:
         if column not in customer_columns:
             db.execute(f"ALTER TABLE customers ADD COLUMN {column} TEXT NOT NULL DEFAULT ''")
 
+    vehicle_columns = {row[1] for row in db.execute("PRAGMA table_info(vehicles)")}
+    if "unit_id" not in vehicle_columns:
+        db.execute("ALTER TABLE vehicles ADD COLUMN unit_id INTEGER REFERENCES vehicle_units(id)")
+    # Mileage of 0 used to mean two different things -- "the odometer is
+    # broken" and "nobody was asked" -- which made every zero unreadable after
+    # the fact. The flag makes an unknown reading a deliberate, recorded state.
+    if "odometer_broken" not in vehicle_columns:
+        db.execute("ALTER TABLE vehicles ADD COLUMN odometer_broken INTEGER NOT NULL DEFAULT 0")
+
+    # Give every vehicle row a unit, matching on VIN so the recon-side and
+    # we-owe-side rows for one physical car land on the same one. Scoped to
+    # unit_id IS NULL, so this is a no-op on every start after the first and
+    # picks up exactly the rows a restored older backup brings with it.
+    ts = now()
+    for vehicle_id, vin in db.execute("SELECT id, vin FROM vehicles WHERE unit_id IS NULL").fetchall():
+        key = normalize_vin(vin)
+        existing = db.execute("SELECT id FROM vehicle_units WHERE vin_key=?", (key,)).fetchone() if key else None
+        if existing:
+            unit_id = existing[0]
+        else:
+            unit_id = db.execute(
+                "INSERT INTO vehicle_units(vin_key,created_at,updated_at) VALUES(?,?,?)", (key, ts, ts)
+            ).lastrowid
+        db.execute("UPDATE vehicles SET unit_id=? WHERE id=?", (unit_id, vehicle_id))
+
+    # Move the recon record's economics onto the unit that now owns them.
+    # Guarded on the unit still being blank, so a purchase price entered
+    # through the new path is never overwritten by the old column it replaced.
+    for unit_id, price, source, date, sale_price, sale_date in db.execute(
+        """SELECT u.id, rv.purchase_price, rv.acquisition_source, rv.acquisition_date, rv.sale_price, rv.sale_date
+           FROM recon_vehicles rv
+           JOIN vehicles v ON v.id = rv.vehicle_id
+           JOIN vehicle_units u ON u.id = v.unit_id
+           WHERE u.purchase_price = 0 AND u.sale_price IS NULL AND u.purchase_date = '' AND u.sale_date = ''"""
+    ).fetchall():
+        db.execute(
+            """UPDATE vehicle_units SET purchase_price=?, purchase_source=?, purchase_date=?,
+                                        sale_price=?, sale_date=?, updated_at=? WHERE id=?""",
+            (price, source, date, sale_price, sale_date, ts, unit_id),
+        )
+
+
+def _relax_ap_invoice_order_link(path: Path) -> None:
+    """Let a vendor invoice exist without a repair order behind it.
+
+    `ap_invoices.order_id` shipped as NOT NULL, so every invoice had to belong
+    to a ticket -- there was no way to record a bill for shop supplies, a bulk
+    oil delivery or a tool purchase without inventing a repair order to hang
+    it on. SQLite can't relax a column constraint in place, so the table is
+    rebuilt once, on databases still carrying the old shape.
+
+    This runs on its OWN connection with foreign keys off, and that is
+    load-bearing: `ap_invoice_items` references `ap_invoices` with ON DELETE
+    CASCADE, and DROP TABLE fires cascades when foreign keys are enabled --
+    dropping the old table mid-rebuild would silently take every invoice line
+    item in the database with it.
+    """
+    with closing(sqlite3.connect(path)) as db:
+        columns = {row[1]: row[3] for row in db.execute("PRAGMA table_info(ap_invoices)")}
+        if columns.get("order_id") != 1:
+            return  # already nullable, or the table doesn't exist yet
+        db.execute("PRAGMA foreign_keys=OFF")
+        db.execute("BEGIN")
+        try:
+            db.execute("""CREATE TABLE ap_invoices_rebuilt (
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  vendor_id INTEGER NOT NULL REFERENCES vendors(id),
+                  order_id INTEGER REFERENCES orders(id),
+                  invoice_number TEXT NOT NULL,
+                  normalized_invoice_number TEXT NOT NULL,
+                  po_number TEXT NOT NULL,
+                  subtotal REAL NOT NULL,
+                  tax REAL NOT NULL,
+                  total REAL NOT NULL,
+                  status TEXT NOT NULL,
+                  source TEXT NOT NULL,
+                  posted_at TEXT NOT NULL,
+                  UNIQUE(vendor_id, normalized_invoice_number)
+                )""")
+            db.execute("""INSERT INTO ap_invoices_rebuilt
+                          SELECT id,vendor_id,order_id,invoice_number,normalized_invoice_number,
+                                 po_number,subtotal,tax,total,status,source,posted_at
+                          FROM ap_invoices""")
+            db.execute("DROP TABLE ap_invoices")
+            db.execute("ALTER TABLE ap_invoices_rebuilt RENAME TO ap_invoices")
+            violations = db.execute("PRAGMA foreign_key_check").fetchall()
+            if violations:
+                raise RuntimeError(f"A/P invoice migration would orphan rows: {violations[:3]}")
+            db.execute("COMMIT")
+        except Exception:
+            db.execute("ROLLBACK")
+            raise
+        finally:
+            db.execute("PRAGMA foreign_keys=ON")
+
 
 def init_db(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -494,6 +634,10 @@ def init_db(path: Path) -> None:
     # unlink the file -- which is exactly how reset_db used to die with
     # "WinError 32: being used by another process". The trailing `, db` keeps
     # the commit-on-success transaction the plain `with` gave us.
+    # Before _migrate: it needs its own connection with foreign keys off, and
+    # SCHEMA's CREATE TABLE IF NOT EXISTS won't reshape a table that already
+    # exists, so an upgraded database still arrives here with the old one.
+    _relax_ap_invoice_order_link(path)
     with closing(sqlite3.connect(path)) as db, db:
         db.executescript(SCHEMA)
         _migrate(db)

@@ -13,7 +13,17 @@ import uvicorn
 from PIL import Image
 
 from app import deployment, discovery, mark, paths, usb_backup
-from app.backup import backup_database, list_backups, most_recent_backup_age_hours, prune_backups, restore_database, set_auto_backup_running
+from app.backup import (
+    AUTO_BACKUP_INTERVAL_MINUTES,
+    backup_database,
+    backup_timestamp,
+    database_changed_since,
+    list_backups,
+    most_recent_backup_age_hours,
+    prune_backups_tiered,
+    restore_database,
+    set_auto_backup_running,
+)
 from app.main import DATA_ROOT, DEFAULT_BACKUPS_DIR, DEFAULT_DB, NETWORK_FLAG, create_app
 from app.single_instance import SingleInstance
 from app.window import AppWindow
@@ -75,8 +85,6 @@ def pick_backup_destination(initial_dir: Path) -> Path | None:
     return Path(chosen) if chosen else None
 
 PORT = 8787
-AUTO_BACKUP_INTERVAL_HOURS = 24
-BACKUP_RETENTION_COUNT = 14
 # Remembers the last "Backup To..." folder -- both so a USB stick doesn't
 # have to be re-navigated every time, and so the automatic backups know
 # where to mirror a copy once it's plugged in.
@@ -292,7 +300,7 @@ class TrayApp:
     def _run_backup(self, notify: bool) -> None:
         try:
             destination = backup_database(DEFAULT_DB, DEFAULT_BACKUPS_DIR)
-            removed = prune_backups(DEFAULT_BACKUPS_DIR, keep=BACKUP_RETENTION_COUNT)
+            removed = prune_backups_tiered(DEFAULT_BACKUPS_DIR)
             log.info("Backup written to %s (pruned %d old backups)", destination, len(removed))
             if notify and self.icon is not None:
                 self.icon.notify(f"Backup saved: {destination.name}", "RECON")
@@ -421,21 +429,30 @@ class TrayApp:
         os.startfile(DEFAULT_BACKUPS_DIR)
 
     def _auto_backup_loop(self) -> None:
-        """Runs for the life of the process: backs up automatically if the
-        last backup is stale, then checks again once an hour. Protects
-        against data loss without Clay having to remember to click
-        Backup Now."""
+        """Runs for the life of the process: snapshots the database whenever
+        the last one has gone stale, then checks again shortly after. Protects
+        against data loss without Clay having to remember to click Backup Now.
+
+        Skips the snapshot when nothing has been written since the last one --
+        at a five-minute cadence an idle weekend would otherwise mint hundreds
+        of identical files and push the ones that actually differ out of the
+        dense retention tier."""
         # The API serves in this same process (uvicorn runs on a thread), so
         # this flag is what /api/backup/status reports as auto_enabled.
         set_auto_backup_running(True)
+        interval_hours = AUTO_BACKUP_INTERVAL_MINUTES / 60
         while True:
             try:
                 age = most_recent_backup_age_hours(DEFAULT_BACKUPS_DIR)
-                if age is None or age >= AUTO_BACKUP_INTERVAL_HOURS:
-                    self._run_backup(notify=False)
+                if age is None or age >= interval_hours:
+                    # Unparseable names have no timestamp to compare against;
+                    # ignoring them here just means "back up anyway".
+                    stamps = [s for s in map(backup_timestamp, list_backups(DEFAULT_BACKUPS_DIR)) if s]
+                    if database_changed_since(DEFAULT_DB, max(stamps) if stamps else None):
+                        self._run_backup(notify=False)
             except Exception:
                 log.exception("Auto-backup check failed")
-            time.sleep(3600)
+            time.sleep(AUTO_BACKUP_INTERVAL_MINUTES * 60)
 
     def quit_app(self, icon: pystray.Icon | None = None, _item: pystray.MenuItem | None = None) -> None:
         log.info("Exit requested")

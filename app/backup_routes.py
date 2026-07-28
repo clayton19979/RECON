@@ -8,10 +8,20 @@ from fastapi.responses import FileResponse
 
 from . import backup as backup_module
 from . import usb_backup
-from .backup import backup_database, list_backups, most_recent_backup_age_hours, prune_backups, restore_database
-
-BACKUP_RETENTION_COUNT = 14
-AUTO_BACKUP_INTERVAL_HOURS = 24
+from .backup import (
+    AUTO_BACKUP_INTERVAL_MINUTES,
+    KEEP_DAILY_DAYS,
+    KEEP_EVERY_SNAPSHOT_HOURS,
+    KEEP_HOURLY_HOURS,
+    KEEP_MONTHLY_MONTHS,
+    backup_database,
+    backup_timestamp,
+    database_changed_since,
+    list_backups,
+    most_recent_backup_age_hours,
+    prune_backups_tiered,
+    restore_database,
+)
 
 
 def _entry(path: Path) -> dict:
@@ -39,14 +49,27 @@ def build_backup_router(db_path: Path, backups_dir: Path) -> APIRouter:
     @router.get("/status")
     def status():
         """The truth behind the Backup page's health strip: whether anything
-        is actually running the auto-backup loop in this process, how stale
-        the newest backup is, and where the files live on disk (so they can
-        be copied off-machine, which is what makes any of this real disaster
-        protection)."""
+        is actually running the auto-backup loop in this process, whether any
+        work is currently sitting unbacked-up, and where the files live on
+        disk (so they can be copied off-machine, which is what makes any of
+        this real disaster protection)."""
+        stamps = [s for s in map(backup_timestamp, list_backups(backups_dir)) if s]
         return {
             "auto_enabled": backup_module.AUTO_BACKUP_RUNNING,
-            "interval_hours": AUTO_BACKUP_INTERVAL_HOURS,
-            "retention": BACKUP_RETENTION_COUNT,
+            "interval_minutes": AUTO_BACKUP_INTERVAL_MINUTES,
+            # Age alone stopped meaning anything once the loop began skipping
+            # snapshots that would be byte-identical: a backup from eight hours
+            # ago is perfect protection if nobody has written since. What the
+            # page actually needs to say is whether there is unsaved work, so
+            # the server answers that directly rather than making the strip
+            # infer it from a timestamp.
+            "pending_changes": database_changed_since(db_path, max(stamps) if stamps else None),
+            "retention": {
+                "every_snapshot_hours": KEEP_EVERY_SNAPSHOT_HOURS,
+                "hourly_hours": KEEP_HOURLY_HOURS,
+                "daily_days": KEEP_DAILY_DAYS,
+                "monthly_months": KEEP_MONTHLY_MONTHS,
+            },
             "backups_dir": str(backups_dir),
             "last_age_hours": most_recent_backup_age_hours(backups_dir),
             # None until a removable drive has been chosen as a mirror target
@@ -60,7 +83,7 @@ def build_backup_router(db_path: Path, backups_dir: Path) -> APIRouter:
     def run_backup():
         try:
             destination = backup_database(db_path, backups_dir)
-            prune_backups(backups_dir, keep=BACKUP_RETENTION_COUNT)
+            prune_backups_tiered(backups_dir)
         except Exception as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
         return _entry(destination)

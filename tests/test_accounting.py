@@ -1,6 +1,52 @@
 from __future__ import annotations
 
+import sqlite3
+
+from app.db import init_db
 from tests.helpers import make_recon_order, make_recon_vehicle, save_estimate
+
+
+def test_ap_order_link_migration_keeps_every_line_item(tmp_path):
+    """ap_invoice_items references ap_invoices with ON DELETE CASCADE, and
+    DROP TABLE fires cascades while foreign keys are on -- rebuilding the
+    table the obvious way would silently delete every invoice line in the
+    database. This is the regression test for that."""
+    path = tmp_path / "legacy.db"
+    init_db(path)
+
+    # Put the table back into its pre-migration shape, with data behind it.
+    con = sqlite3.connect(path)
+    con.executescript("""
+        PRAGMA foreign_keys=OFF;
+        DROP TABLE ap_invoices;
+        CREATE TABLE ap_invoices (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          vendor_id INTEGER NOT NULL REFERENCES vendors(id),
+          order_id INTEGER NOT NULL REFERENCES orders(id),
+          invoice_number TEXT NOT NULL, normalized_invoice_number TEXT NOT NULL,
+          po_number TEXT NOT NULL, subtotal REAL NOT NULL, tax REAL NOT NULL,
+          total REAL NOT NULL, status TEXT NOT NULL, source TEXT NOT NULL,
+          posted_at TEXT NOT NULL, UNIQUE(vendor_id, normalized_invoice_number));
+        INSERT INTO customers(id,name,phone,email,is_shop_owned,created_at) VALUES(9,'C','','',0,'t');
+        INSERT INTO vehicles(id,customer_id,year,make,model,created_at) VALUES(9,9,2020,'Kia','Soul','t');
+        INSERT INTO orders(id,number,customer_id,vehicle_id,concern,created_at) VALUES(9,'RO-9',9,9,'x','t');
+        INSERT INTO vendors(id,name,normalized_name,aliases,created_at) VALUES(9,'V','v','[]','t');
+        INSERT INTO ap_invoices VALUES(1,9,9,'INV-1','inv1','PO',10,0,10,'posted','ui','t');
+        INSERT INTO ap_invoice_items(ap_invoice_id,part_number,description,quantity,unit_cost,line_total)
+          VALUES(1,'P1','Part one',1,10,10),(1,'P2','Part two',2,5,10);
+    """)
+    con.commit()
+    con.close()
+
+    init_db(path)
+    init_db(path)  # idempotent: a second start must not rebuild again
+
+    con = sqlite3.connect(path)
+    assert con.execute("SELECT count(*) FROM ap_invoice_items").fetchone()[0] == 2
+    assert con.execute("SELECT count(*) FROM ap_invoices").fetchone()[0] == 1
+    assert con.execute("PRAGMA foreign_key_check").fetchall() == []
+    order_id_notnull = {r[1]: r[3] for r in con.execute("PRAGMA table_info(ap_invoices)")}["order_id"]
+    assert order_id_notnull == 0, "order_id must be nullable after the migration"
 
 
 def post_invoice(client, **overrides):
@@ -46,12 +92,81 @@ def test_vendor_update_unknown_404s(client):
     assert res.status_code == 404
 
 
-def test_process_invoice_unknown_vendor_and_po(client):
+def test_process_invoice_unknown_vendor_is_still_held(client):
     res = post_invoice(client)
     body = res.json()
     assert body["status"] == "review_required"
     assert any("Vendor" in issue for issue in body["issues"])
-    assert any("PO" in issue for issue in body["issues"])
+
+
+def test_unmatched_po_no_longer_holds_an_invoice(client):
+    """A PO reference that doesn't name a repair order used to send the whole
+    invoice to review. Plenty of real vendor bills -- shop supplies, a bulk
+    oil delivery, a tool purchase -- have no ticket behind them at all, so an
+    unmatched reference posts as a general expense instead of being blocked."""
+    client.post("/api/vendors", json={"name": "WorldPac"})
+    body = post_invoice(client, po_number="COUNTER-4471").json()
+
+    assert body["status"] == "posted"
+    assert body["order_id"] is None
+    assert body["issues"] == []
+
+
+def test_invoice_with_no_reference_at_all_posts(client):
+    client.post("/api/vendors", json={"name": "WorldPac"})
+    body = post_invoice(client, po_number="").json()
+    assert body["status"] == "posted", body
+
+
+def test_ticketless_invoice_shows_up_in_the_ap_list(client):
+    """An inner join on orders used to hide these entirely -- money owed to a
+    vendor that appeared nowhere on the A/P screen."""
+    client.post("/api/vendors", json={"name": "WorldPac"})
+    post_invoice(client, po_number="SHOP-SUPPLIES")
+
+    rows = client.get("/api/ap/invoices").json()
+    assert len(rows) == 1
+    assert rows[0]["order_id"] is None
+    assert rows[0]["vehicle_label"] == "No ticket"
+    assert rows[0]["total"] == 45
+
+
+def test_ticketless_invoice_can_be_voided(client):
+    """Voiding writes to the per-ticket activity log, which a ticketless
+    invoice has no place in -- it must not blow up on the way through."""
+    client.post("/api/vendors", json={"name": "WorldPac"})
+    posted = post_invoice(client, po_number="SHOP-SUPPLIES").json()
+
+    res = client.patch(f"/api/ap/invoices/{posted['ap_invoice_id']}/void", json={"actor": "clay"})
+    assert res.status_code == 200, res.text
+    assert res.json()["status"] == "voided"
+
+
+def test_explicit_order_id_beats_a_misleading_reference(client):
+    """A chosen ticket is a statement of fact; a reference number that happens
+    to look like another RO must not override it."""
+    client.post("/api/vendors", json={"name": "WorldPac"})
+    vehicle = make_recon_vehicle(client, stock_number="R-6001")
+    order = make_recon_order(client, vehicle["id"])
+
+    body = post_invoice(client, order_id=order["id"], po_number="SOME-OTHER-REF").json()
+    assert body["status"] == "posted", body
+    assert body["order_id"] == order["id"]
+
+
+def test_large_invoice_no_longer_needs_approval(client):
+    """The $500 ceiling used to push any larger invoice to review_required
+    instead of posting it. Removed at the shop's request."""
+    client.post("/api/vendors", json={"name": "WorldPac"})
+    vehicle = make_recon_vehicle(client, stock_number="R-6002")
+    order = make_recon_order(client, vehicle["id"])
+
+    body = post_invoice(
+        client, order_id=order["id"], subtotal=1750, total=1750,
+        items=[{"part_number": "TRANS-1", "description": "Transmission", "quantity": 1, "unit_cost": 1750, "kind": "part"}],
+    ).json()
+    assert body["status"] == "posted", body
+    assert body["issues"] == []
 
 
 def test_process_invoice_keeps_part_and_labor_separate_when_codes_collide(client):

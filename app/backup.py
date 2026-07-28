@@ -119,6 +119,111 @@ def prune_backups(destination_dir: Path, keep: int = 14) -> list[Path]:
     return removed
 
 
+# How often the tray's loop takes a snapshot, and how long each resolution of
+# history survives pruning.
+#
+# A flat "keep the newest N" cap and a short interval are actively dangerous
+# together: at one snapshot every 5 minutes, keeping 14 files means the entire
+# backup history is the last 70 minutes. Corrupt something at 9am, notice it at
+# noon, and every surviving backup is already poisoned. So the interval got
+# short *and* the retention got tiered -- recent snapshots stay dense, older
+# ones thin out to hourly, then daily, then monthly. Roughly 110 files, about
+# 20 MB at the current database size.
+AUTO_BACKUP_INTERVAL_MINUTES = 5
+KEEP_EVERY_SNAPSHOT_HOURS = 2
+KEEP_HOURLY_HOURS = 48
+KEEP_DAILY_DAYS = 30
+KEEP_MONTHLY_MONTHS = 12
+
+_STAMP_FORMAT = "%Y%m%dT%H%M%SZ"
+
+
+def backup_timestamp(path: Path) -> datetime | None:
+    """The moment a backup was taken, read from its own filename.
+
+    File mtime would be wrong here: copying backups to a flash drive or
+    restoring a folder rewrites mtimes, and retention decisions have to
+    survive that. The name is the record.
+    """
+    stem = path.name[len("discount-auto-ops-"):-len(".db")] if path.name.endswith(".db") else ""
+    try:
+        return datetime.strptime(stem, _STAMP_FORMAT).replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
+def prune_backups_tiered(destination_dir: Path, now: datetime | None = None) -> list[Path]:
+    """Thin out backup history by age instead of capping the count.
+
+    Keeps every snapshot for the first couple of hours, then the newest of
+    each hour, then the newest of each day, then the newest of each month.
+    Anything that isn't the survivor of some bucket is deleted, and anything
+    older than the last tier goes too.
+
+    Files whose names don't parse as a timestamp are left strictly alone --
+    an unrecognised name is far more likely to be someone's hand-kept copy
+    than something safe to delete.
+    """
+    if not destination_dir.is_dir():
+        return []
+    now = now or datetime.now(timezone.utc)
+
+    dated: list[tuple[datetime, Path]] = []
+    for path in destination_dir.glob("discount-auto-ops-*.db"):
+        stamp = backup_timestamp(path)
+        if stamp is not None:
+            dated.append((stamp, path))
+    dated.sort(key=lambda pair: pair[0], reverse=True)
+
+    keep: set[Path] = set()
+    seen_buckets: set[tuple[str, tuple]] = set()
+    for stamp, path in dated:
+        age = now - stamp
+        hours, days = age.total_seconds() / 3600, age.days
+        if hours <= KEEP_EVERY_SNAPSHOT_HOURS:
+            keep.add(path)
+            continue
+        if hours <= KEEP_HOURLY_HOURS:
+            bucket = ("hour", (stamp.year, stamp.month, stamp.day, stamp.hour))
+        elif days <= KEEP_DAILY_DAYS:
+            bucket = ("day", (stamp.year, stamp.month, stamp.day))
+        elif days <= KEEP_MONTHLY_MONTHS * 31:
+            bucket = ("month", (stamp.year, stamp.month))
+        else:
+            continue  # past every tier -- let it go
+        # Sorted newest-first, so the first file to claim a bucket is the one
+        # that represents it.
+        if bucket not in seen_buckets:
+            seen_buckets.add(bucket)
+            keep.add(path)
+
+    removed = []
+    for _stamp, path in dated:
+        if path not in keep:
+            path.unlink(missing_ok=True)
+            removed.append(path)
+    return removed
+
+
+def database_changed_since(db_path: Path, moment: datetime | None) -> bool:
+    """Whether the live database has been touched since `moment`.
+
+    At a 5-minute cadence a quiet Saturday would otherwise mint ~288 byte
+    identical snapshots and push the genuinely different ones out of the
+    dense tier. WAL mode means the interesting writes often land in the
+    sidecar rather than the main file, so all three are consulted.
+    """
+    if moment is None:
+        return True
+    newest = 0.0
+    for candidate in (db_path, db_path.with_name(db_path.name + "-wal"), db_path.with_name(db_path.name + "-shm")):
+        try:
+            newest = max(newest, candidate.stat().st_mtime)
+        except OSError:
+            continue
+    return newest > moment.timestamp()
+
+
 # Set by whichever process actually runs the 24-hour auto-backup loop
 # (tray_app). The Backup page asks /api/backup/status so it can stop
 # promising automatic backups when nothing is running them -- e.g. a bare

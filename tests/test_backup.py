@@ -1,9 +1,28 @@
 from __future__ import annotations
 
 import sqlite3
+from datetime import datetime, timedelta, timezone
 
-from app.backup import backup_database, list_backups, most_recent_backup_age_hours, prune_backups, restore_database
+from app.backup import (
+    backup_database,
+    backup_timestamp,
+    database_changed_since,
+    list_backups,
+    most_recent_backup_age_hours,
+    prune_backups,
+    prune_backups_tiered,
+    restore_database,
+)
 from app.db import init_db
+
+NOW = datetime(2026, 7, 27, 12, 0, 0, tzinfo=timezone.utc)
+
+
+def _make_backup_at(destination_dir, moment):
+    destination_dir.mkdir(parents=True, exist_ok=True)
+    path = destination_dir / f"discount-auto-ops-{moment:%Y%m%dT%H%M%SZ}.db"
+    path.write_text("fake")
+    return path
 
 
 def test_backup_database_creates_verified_copy(tmp_path):
@@ -46,6 +65,81 @@ def test_prune_backups_keeps_only_the_most_recent(tmp_path):
 
 def test_prune_backups_empty_dir_is_a_no_op(tmp_path):
     assert prune_backups(tmp_path / "nonexistent", keep=5) == []
+
+
+def test_backup_timestamp_reads_the_name_not_the_mtime(tmp_path):
+    path = _make_backup_at(tmp_path / "backups", NOW)
+    assert backup_timestamp(path) == NOW
+
+
+def test_backup_timestamp_none_for_unparseable_names(tmp_path):
+    (tmp_path).mkdir(parents=True, exist_ok=True)
+    stray = tmp_path / "discount-auto-ops-clays-copy.db"
+    stray.write_text("fake")
+    assert backup_timestamp(stray) is None
+
+
+def test_tiered_prune_keeps_every_recent_snapshot(tmp_path):
+    """The whole point of a 5-minute cadence: the last couple of hours stay
+    dense, so "undo the last twenty minutes" is actually possible."""
+    destination_dir = tmp_path / "backups"
+    recent = [_make_backup_at(destination_dir, NOW - timedelta(minutes=n)) for n in range(0, 120, 5)]
+
+    prune_backups_tiered(destination_dir, now=NOW)
+
+    assert all(p.is_file() for p in recent)
+
+
+def test_tiered_prune_thins_older_history_without_erasing_it(tmp_path):
+    """A flat "keep the newest N" cap at this cadence would leave barely an
+    hour of history. Older snapshots must survive, just thinned."""
+    destination_dir = tmp_path / "backups"
+    # Two full days at 5-minute spacing.
+    for n in range(0, 2 * 24 * 60, 5):
+        _make_backup_at(destination_dir, NOW - timedelta(minutes=n))
+
+    prune_backups_tiered(destination_dir, now=NOW)
+    survivors = sorted(backup_timestamp(p) for p in list_backups(destination_dir))
+
+    oldest = min(survivors)
+    assert (NOW - oldest) >= timedelta(hours=40), "two days of history must not collapse into one hour"
+    # Beyond the dense window, at most one per hour survives.
+    hourly = [s for s in survivors if (NOW - s) > timedelta(hours=2)]
+    buckets = {(s.year, s.month, s.day, s.hour) for s in hourly}
+    assert len(hourly) == len(buckets)
+
+
+def test_tiered_prune_drops_backups_past_every_tier(tmp_path):
+    destination_dir = tmp_path / "backups"
+    ancient = _make_backup_at(destination_dir, NOW - timedelta(days=800))
+    keeper = _make_backup_at(destination_dir, NOW)
+
+    removed = prune_backups_tiered(destination_dir, now=NOW)
+
+    assert ancient in removed and not ancient.is_file()
+    assert keeper.is_file()
+
+
+def test_tiered_prune_never_touches_unrecognised_files(tmp_path):
+    """An unfamiliar name is far likelier to be someone's hand-kept copy than
+    something safe to delete."""
+    destination_dir = tmp_path / "backups"
+    _make_backup_at(destination_dir, NOW)
+    stray = destination_dir / "discount-auto-ops-before-the-big-restore.db"
+    stray.write_text("precious")
+
+    prune_backups_tiered(destination_dir, now=NOW)
+
+    assert stray.is_file()
+
+
+def test_database_changed_since_detects_writes(tmp_path):
+    source = tmp_path / "shop.db"
+    init_db(source)
+    assert database_changed_since(source, None) is True
+    # Nothing written since a moment in the future.
+    assert database_changed_since(source, NOW + timedelta(days=3650)) is False
+    assert database_changed_since(source, datetime(2000, 1, 1, tzinfo=timezone.utc)) is True
 
 
 def test_most_recent_backup_age_hours_none_when_no_backups(tmp_path):

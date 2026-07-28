@@ -8,6 +8,7 @@ from typing import Callable, Literal
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
+from .db import RECON_SHOP_CUSTOMER_ID
 from .recon import assert_vehicle_editable
 
 
@@ -74,6 +75,17 @@ class AuthorizationIn(BaseModel):
     actor: str = "ui"
 
 
+class SegmentMoveIn(BaseModel):
+    """Which side of the shop the ticket should belong to, and which record
+    on that side it attaches to. Retail is deliberately not a destination:
+    a retail ticket is a customer's own car with no lot record behind it, so
+    there's nothing for the cost to move onto."""
+    segment: Literal["recon", "we_owe"]
+    recon_vehicle_id: int | None = None
+    we_owe_id: int | None = None
+    actor: str = "ui"
+
+
 class ActorIn(BaseModel):
     actor: str = "ui"
 
@@ -101,6 +113,8 @@ STATUS_LABEL = {
     "in_progress": "In Progress",
     "complete": "Complete",
 }
+
+SEGMENT_LABEL = {"recon": "recon", "we_owe": "we-owe", "retail": "retail"}
 
 
 def cents(value: float | str | Decimal) -> int:
@@ -395,6 +409,62 @@ def build_workflow_router(connect: Callable[[], sqlite3.Connection], now_fn: Cal
             db.execute("UPDATE orders SET concern=? WHERE id=?", (concern, order_id))
             record_activity(db, order_id, "concern_updated", item.actor, {"from": current_row["concern"], "to": concern}, now_fn)
             return {"id": order_id, "concern": concern}
+
+    @router.patch("/orders/{order_id}/segment")
+    def move_order_segment(order_id: int, item: SegmentMoveIn):
+        """Move a ticket to the other side of the shop.
+
+        A car gets written up as recon and turns out to be a we-owe the lot
+        already sold, or the reverse. Before this the only way out was to
+        delete the ticket and start again, which threw away its estimate, its
+        history and any vendor invoice already posted against it -- so in
+        practice people kept the wrong one and the cost landed on the wrong
+        vehicle.
+
+        Moving it re-points the ticket at the other record and takes its cost
+        with it: `cost_rollup` walks from `recon_vehicle_id`/`we_owe_id`, so
+        the money leaves the old vehicle's total and joins the new one the
+        moment this returns. The estimate, the parts, the A/P invoices and the
+        activity log all reference the order itself and simply follow it.
+        """
+        with connect() as db:
+            current_row = order(db, order_id)
+            assert_vehicle_editable(db, current_row)
+            if current_row["segment"] == item.segment:
+                raise HTTPException(409, f"This ticket is already a {SEGMENT_LABEL[item.segment]} ticket")
+
+            if item.segment == "recon":
+                if item.recon_vehicle_id is None:
+                    raise HTTPException(422, "recon_vehicle_id is required to move a ticket to recon")
+                target = db.execute(
+                    "SELECT vehicle_id, archived_at FROM recon_vehicles WHERE id=?", (item.recon_vehicle_id,)
+                ).fetchone()
+                if not target:
+                    raise HTTPException(404, "Recon vehicle not found")
+                customer_id, vehicle_id = RECON_SHOP_CUSTOMER_ID, target["vehicle_id"]
+                recon_vehicle_id, we_owe_id = item.recon_vehicle_id, None
+            else:
+                if item.we_owe_id is None:
+                    raise HTTPException(422, "we_owe_id is required to move a ticket to we-owe")
+                target = db.execute(
+                    "SELECT customer_id, vehicle_id, archived_at FROM we_owe_items WHERE id=?", (item.we_owe_id,)
+                ).fetchone()
+                if not target:
+                    raise HTTPException(404, "We-owe item not found")
+                customer_id, vehicle_id = target["customer_id"], target["vehicle_id"]
+                recon_vehicle_id, we_owe_id = None, item.we_owe_id
+            if target["archived_at"]:
+                raise HTTPException(409, "That vehicle is archived to History -- reopen it before moving a ticket onto it")
+
+            db.execute(
+                "UPDATE orders SET segment=?,recon_vehicle_id=?,we_owe_id=?,customer_id=?,vehicle_id=? WHERE id=?",
+                (item.segment, recon_vehicle_id, we_owe_id, customer_id, vehicle_id, order_id),
+            )
+            record_activity(
+                db, order_id, "segment_changed", item.actor,
+                {"from": current_row["segment"], "to": item.segment}, now_fn,
+            )
+            return dict(db.execute("SELECT * FROM orders WHERE id=?", (order_id,)).fetchone())
 
     @router.post("/orders/{order_id}/void")
     def void_order(order_id: int, item: ActorIn):

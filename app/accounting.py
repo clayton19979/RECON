@@ -52,7 +52,15 @@ class InvoiceItemIn(BaseModel):
 class InvoiceIn(BaseModel):
     vendor_name: str = Field(min_length=1)
     invoice_number: str = Field(min_length=1)
-    po_number: str = Field(min_length=1)
+    # Free text, and no longer required to name a repair order. It stays the
+    # vendor's own reference for the order -- often a real RO number, often a
+    # counter ticket or a delivery note for something with no ticket at all.
+    po_number: str = ""
+    # Set when the invoice really does belong to a ticket. Explicit beats
+    # inferring it from po_number: an operator who picked a ticket said so,
+    # and a bill for shop supplies shouldn't get attached to a vehicle because
+    # its reference number happened to look like an RO.
+    order_id: int | None = None
     subtotal: float = Field(ge=0)
     tax: float = Field(ge=0)
     total: float = Field(ge=0)
@@ -69,7 +77,7 @@ def create_ap_invoice_record(
     now_fn: Callable[[], str],
     *,
     vendor_id: int,
-    order_id: int,
+    order_id: int | None,
     invoice_number: str,
     po_number: str,
     items: list[InvoiceItemIn],
@@ -161,7 +169,10 @@ def build_accounting_router(connect: Callable[[], sqlite3.Connection], now: Call
                        rv.stock_number, wc.name we_owe_customer_name, oc.name order_customer_name
                    FROM ap_invoices a
                    JOIN vendors v ON v.id=a.vendor_id
-                   JOIN orders o ON o.id=a.order_id
+                   -- LEFT: an invoice with no repair order behind it (shop
+                   -- supplies, a bulk delivery) must still appear in the A/P
+                   -- list. An inner join silently hid them entirely.
+                   LEFT JOIN orders o ON o.id=a.order_id
                    LEFT JOIN recon_vehicles rv ON rv.id=o.recon_vehicle_id
                    LEFT JOIN we_owe_items wi ON wi.id=o.we_owe_id
                    LEFT JOIN customers wc ON wc.id=wi.customer_id
@@ -179,6 +190,10 @@ def build_accounting_router(connect: Callable[[], sqlite3.Connection], now: Call
                     value["vehicle_label"] = f"We-Owe: {value['we_owe_customer_name']}"
                 elif value["order_customer_name"]:
                     value["vehicle_label"] = f"Retail: {value['order_customer_name']}"
+                elif value["order_id"] is None:
+                    # No ticket by design, not a broken link -- say so plainly
+                    # rather than mislabelling it as a retail job.
+                    value["vehicle_label"] = "No ticket"
                 else:
                     value["vehicle_label"] = "Retail"
                 result.append(value)
@@ -205,7 +220,11 @@ def build_accounting_router(connect: Callable[[], sqlite3.Connection], now: Call
             # same real invoice number.
             freed_number = f"{invoice['normalized_invoice_number']}-voided-{invoice_id}"
             db.execute("UPDATE ap_invoices SET status='voided', normalized_invoice_number=? WHERE id=?", (freed_number, invoice_id))
-            record_activity(db, invoice["order_id"], "ap_invoice_voided", item.actor, {"invoice_id": invoice_id, "invoice_number": invoice["invoice_number"]}, now)
+            # The activity log is per-ticket, so an invoice that belongs to no
+            # ticket has nowhere to log to. The void is still recorded on the
+            # invoice row itself, which is where anyone would look for it.
+            if invoice["order_id"] is not None:
+                record_activity(db, invoice["order_id"], "ap_invoice_voided", item.actor, {"invoice_id": invoice_id, "invoice_number": invoice["invoice_number"]}, now)
             return dict(db.execute("SELECT * FROM ap_invoices WHERE id=?", (invoice_id,)).fetchone())
 
     @router.get("/accounting/audits")
@@ -251,7 +270,6 @@ def build_accounting_router(connect: Callable[[], sqlite3.Connection], now: Call
         )
 
     RECEIVABLE_ORDER_STATUSES = {"estimate", "pending_approval", "in_progress"}
-    LARGE_INVOICE_THRESHOLD = 500.0
 
     @router.post("/agent/invoices/process")
     def process_invoice(invoice: InvoiceIn, request: Request):
@@ -259,23 +277,42 @@ def build_accounting_router(connect: Callable[[], sqlite3.Connection], now: Call
         issues: list[str] = []
         with connect() as db:
             vendor = find_vendor(db, invoice.vendor_name)
-            order = find_order(db, invoice.po_number)
             vendor_id = vendor["id"] if vendor else None
+
+            # An explicitly chosen ticket is a decision and is honoured as-is.
+            # Otherwise the PO text is still matched against RO numbers, which
+            # is what the automated ingestion path relies on -- but failing to
+            # match no longer holds the invoice back. A bill that belongs to no
+            # ticket is an ordinary thing (shop supplies, a bulk oil delivery,
+            # a tool purchase); it simply posts without rolling into any
+            # vehicle's cost.
+            if invoice.order_id is not None:
+                order = db.execute("SELECT * FROM orders WHERE id=?", (invoice.order_id,)).fetchone()
+                if not order:
+                    raise HTTPException(404, "Repair order not found")
+            else:
+                order = find_order(db, invoice.po_number) if invoice.po_number.strip() else None
             order_id = order["id"] if order else None
 
             if not vendor:
                 issues.append(f"Vendor '{invoice.vendor_name}' did not exactly match a configured vendor or alias")
-            if not order:
-                issues.append(f"PO '{invoice.po_number}' did not exactly match a repair order number")
-            elif order["status"] not in RECEIVABLE_ORDER_STATUSES:
+            if order and order["status"] not in RECEIVABLE_ORDER_STATUSES:
                 issues.append(f"Repair order '{order['number']}' has status '{order['status']}' and cannot receive parts")
             if vendor and db.execute("SELECT id FROM ap_invoices WHERE vendor_id=? AND normalized_invoice_number=?", (vendor_id, normalize(invoice.invoice_number))).fetchone():
                 duplicate_issues = ["Vendor invoice number was already posted"]
                 audit(db, invoice, "duplicate", duplicate_issues, order_id, vendor_id)
                 return {"status": "duplicate", "issues": duplicate_issues, "vendor_id": vendor_id, "order_id": order_id}
 
-            if invoice.total > LARGE_INVOICE_THRESHOLD:
-                issues.append(f"Invoice total ${invoice.total:.2f} exceeds ${LARGE_INVOICE_THRESHOLD:.2f} threshold -- requires manual approval")
+            # There used to be a $500 ceiling here that pushed any larger
+            # invoice to review_required instead of posting it. Removed at the
+            # shop's request: a $500 parts bill is an ordinary Tuesday, the
+            # people posting invoices are the same people who approve them,
+            # and the hold achieved nothing except a second trip through the
+            # Control Log. Every invoice is still logged, still attributed,
+            # and still voidable, so the audit trail is unchanged -- what's
+            # gone is only the gate. The genuine correctness checks below
+            # (duplicate number, unknown vendor, arithmetic that doesn't add
+            # up, over-receipt) all still hold an invoice back.
 
             line_subtotal = round(sum(item.quantity * item.unit_cost for item in invoice.items), 2)
             if abs(line_subtotal - invoice.subtotal) > 0.02:
@@ -320,6 +357,37 @@ def build_accounting_router(connect: Callable[[], sqlite3.Connection], now: Call
                 audit(db, invoice, "review_required", issues, order_id, vendor_id)
                 return {"status": "review_required", "issues": issues, "vendor_id": vendor_id, "order_id": order_id}
 
+            received_parts: list[dict[str, Any]] = []
+            added_parts: list[dict[str, Any]] = []
+            added_labor: list[dict[str, Any]] = []
+
+            # Everything below writes the invoice's lines onto a ticket's
+            # estimate. With no ticket there is nothing to write them to, and
+            # nothing should be invented: the invoice is recorded as money
+            # owed to the vendor and stops there, which is exactly what a bill
+            # for shop supplies is.
+            if order is None:
+                result = create_ap_invoice_record(
+                    db, now,
+                    vendor_id=vendor_id, order_id=None,
+                    invoice_number=invoice.invoice_number, po_number=invoice.po_number,
+                    items=invoice.items, subtotal=invoice.subtotal, tax=invoice.tax, total=invoice.total,
+                    source=invoice.source,
+                )
+                if result["status"] == "duplicate":
+                    duplicate_issues = ["Vendor invoice number was already posted"]
+                    audit(db, invoice, "duplicate", duplicate_issues, None, vendor_id)
+                    return {"status": "duplicate", "issues": duplicate_issues, "vendor_id": vendor_id, "order_id": None}
+                audit(db, invoice, "posted", [], None, vendor_id)
+                return {
+                    "status": "posted",
+                    "ap_invoice_id": result["ap_invoice_id"],
+                    "vendor_id": vendor_id,
+                    "order_id": None,
+                    "received_parts": [], "added_parts": [], "added_labor": [],
+                    "issues": [],
+                }
+
             if not estimate:
                 cur = db.execute(
                     "INSERT INTO estimates(order_id,labor_rate,tax_rate,subtotal,tax,total,status,created_at) VALUES(?,?,?,?,?,?,?,?)",
@@ -328,9 +396,6 @@ def build_accounting_router(connect: Callable[[], sqlite3.Connection], now: Call
                 estimate_id = cur.lastrowid
                 estimate = db.execute("SELECT * FROM estimates WHERE id=?", (estimate_id,)).fetchone()
             estimate_id = estimate["id"]
-            received_parts: list[dict[str, Any]] = []
-            added_parts: list[dict[str, Any]] = []
-            added_labor: list[dict[str, Any]] = []
             for (_kind, part_key), item in merged_items.items():
                 if item.kind == "labor":
                     # At-cost shop: no markup, unit_price is just unit_cost.

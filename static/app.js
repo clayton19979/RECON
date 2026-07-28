@@ -25,6 +25,13 @@ const post = (path, body) => api(path, { method: "POST", body: JSON.stringify(bo
 const put = (path, body) => api(path, { method: "PUT", body: JSON.stringify(body) });
 const patch = (path, body) => api(path, { method: "PATCH", body: body === undefined ? undefined : JSON.stringify(body) });
 
+// Hours read as hours, not as a raw float: 6 not 6.00, 6.5 not 6.50.
+function fmtHours(value) {
+  const n = Number(value) || 0;
+  const shown = Math.round(n * 100) / 100;
+  return `${shown} ${shown === 1 ? "hr" : "hrs"}`;
+}
+
 let toastTimer = null;
 function toast(message, isError = false) {
   logMessage(message, isError);
@@ -36,6 +43,95 @@ function toast(message, isError = false) {
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => el.classList.remove("show"), 3200);
 }
+
+/* ---------- clipboard ----------
+   navigator.clipboard is unavailable outside a secure context, and the shop's
+   other workstations reach RECON over plain http on the LAN -- so on exactly
+   the machines that aren't the server, the modern API is missing. The old
+   execCommand path is the fallback that keeps copy working there. */
+async function copyText(text, what = "Copied") {
+  const value = String(text ?? "").trim();
+  if (!value) return toast("Nothing to copy", true);
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(value);
+      return toast(`${what} copied`);
+    }
+  } catch {
+    // Fall through -- a rejected permission is still a reason to try the
+    // fallback rather than tell the user it simply didn't work.
+  }
+  const scratch = document.createElement("textarea");
+  scratch.value = value;
+  // Off-screen rather than hidden: a display:none textarea can't be selected.
+  scratch.setAttribute("aria-hidden", "true");
+  scratch.style.cssText = "position:fixed;top:-1000px;left:-1000px;opacity:0";
+  document.body.appendChild(scratch);
+  scratch.select();
+  let ok = false;
+  try {
+    ok = document.execCommand("copy");
+  } catch {
+    ok = false;
+  }
+  scratch.remove();
+  toast(ok ? `${what} copied` : "Could not copy — select the text and use Ctrl+C", !ok);
+}
+
+/* ---------- downloads ----------
+   RECON normally runs in its own WebView2 window, and there a plain
+   `<a download>` does nothing whatsoever -- no file, no error, no clue that
+   anything was even attempted. Every download in the app went through one, so
+   backups, the vehicles CSV and the report CSV all looked equally broken.
+
+   In the window they route through pywebview instead, which gets the operator
+   a real folder picker: the whole point of downloading a backup is putting it
+   somewhere deliberate, usually a flash drive, not burying it in Downloads.
+   On a workstation using a plain browser tab there is no pywebview and the
+   anchor already works on its own, so this steps aside entirely. */
+function desktopSaver() {
+  const api = window.pywebview && window.pywebview.api;
+  if (!api) return null;
+  // pywebview exposes the Python name; a couple of builds also camelCase it.
+  const fn = api.save_file || api.saveFile;
+  return typeof fn === "function" ? fn.bind(api) : null;
+}
+
+async function saveViaDesktop(anchor) {
+  const save = desktopSaver();
+  if (!save) return;
+  const url = new URL(anchor.href, window.location.href);
+  const suggested = anchor.getAttribute("download") || url.pathname.split("/").pop() || "recon-download";
+  let result;
+  try {
+    result = await save(url.pathname + url.search, suggested);
+  } catch (err) {
+    toast(`Could not save that file: ${err.message || err}`, true);
+    return;
+  }
+  // Backing out of the picker is a decision, not a failure -- say nothing.
+  if (!result || result.cancelled) return;
+  if (!result.ok) return toast(result.error || "Could not save that file", true);
+  toast(`Saved to ${result.path}`);
+}
+
+// Any element carrying data-copy is a copy button, wherever it renders.
+document.addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-copy]");
+  if (!btn) return;
+  e.preventDefault();
+  copyText(btn.dataset.copy, btn.dataset.copyLabel || "Copied");
+});
+
+document.addEventListener("click", (e) => {
+  const anchor = e.target.closest("a[download]");
+  // Same-origin only, and only when there's a picker to route to; anything
+  // else falls through to the browser's own handling unchanged.
+  if (!anchor || !desktopSaver()) return;
+  if (new URL(anchor.href, window.location.href).origin !== window.location.origin) return;
+  e.preventDefault();
+  saveViaDesktop(anchor);
+});
 
 /* ---------- message log ----------
    A toast lives for 3.2 seconds and then is gone for good. That's fine for
@@ -549,6 +645,22 @@ const STATUS_PILL_CLASS = {
 };
 const KIND_GROUP_ORDER = ["part", "labor", "fee"];
 const KIND_GROUP_LABEL = { part: "Parts", labor: "Labor", fee: "Fees" };
+
+/* The same three database columns mean different things per line kind, and an
+   RO is read by people who know what a labor line looks like. estimate_items
+   stores quantity + unit_cost for everything, but on labor those ARE hours and
+   an hourly rate, and on a fee the "cost" is just the amount. Showing "Qty"
+   and "Cost" over a labor line -- next to a Part # box that has no business
+   being there at all -- is how you get a ticket nobody trusts.
+
+   An empty label means the column doesn't apply to that kind and renders as a
+   blank spacer rather than a captioned empty box. */
+const KIND_FIELD_LABELS = {
+  part:  { part: "Part #", qty: "Qty",   cost: "Cost",   core: "Core" },
+  labor: { part: "",       qty: "Hours", cost: "Rate",   core: "" },
+  fee:   { part: "",       qty: "Qty",   cost: "Amount", core: "" },
+};
+const fieldLabels = (kind) => KIND_FIELD_LABELS[kind] || KIND_FIELD_LABELS.part;
 // Print-surface label maps. Value domains match the backend enums:
 // estimate-item status (quoted/ordered/received), estimate-authorization
 // method (workflow.py AuthorizationIn), we-owe payment method (recon.py
@@ -2199,6 +2311,12 @@ function renderCostSummary() {
   const box = $("#vd-cost-summary");
   let lines = `<div class="cost-line"><span>Total Quote</span><span class="num">${money(item.quoted_cost)}</span></div>`;
   lines += `<div class="cost-line total"><span>Actual Cost</span><span class="num">${money(item.total_cost)}</span></div>`;
+  // Hours stand on their own line rather than hiding inside cost. On recon and
+  // we-owe the labor rate is 0, so every hour a tech flags contributes nothing
+  // to the money column -- this is the only place the work itself shows up.
+  if (item.labor_hours) {
+    lines += `<div class="cost-line"><span>Labor logged</span><span class="num">${fmtHours(item.labor_hours)}</span></div>`;
+  }
   if (state.detail.segment !== "recon" && item.customer_paid) {
     lines += `<div class="cost-line"><span>Customer paid</span><span class="num">${money(item.customer_paid)}</span></div>`;
     lines += `<div class="cost-line total"><span>Net to shop</span><span class="num">${money(item.net_cost)}</span></div>`;
@@ -2209,15 +2327,25 @@ function renderCostSummary() {
 // Compact read-only summary replacing the old always-open inline edit form --
 // the full form still exists verbatim, just relocated into #vehicle-edit-dialog.
 function renderVehicleInfoSummary() {
-  const { segment, item } = state.detail;
+  const { item } = state.detail;
+  const lifetime = item.lifetime;
   const rows = [
-    ["VIN", esc(item.vin || "—")],
-    ["Mileage", item.mileage ? item.mileage.toLocaleString() : "—"],
+    // A VIN gets retyped into parts catalogues and vendor sites all day long,
+    // and it's 17 characters where one wrong digit is silent.
+    ["VIN", item.vin
+      ? `${esc(item.vin)} <button type="button" class="copy-btn" data-copy="${esc(item.vin)}" data-copy-label="VIN" title="Copy VIN" aria-label="Copy VIN">⧉</button>`
+      : "—"],
+    // A mileage of 0 with a broken odometer is a recorded fact, not a blank.
+    ["Mileage", item.odometer_broken
+      ? `<span title="Recorded as unreadable at intake">Odometer broken</span>`
+      : item.mileage ? item.mileage.toLocaleString() : "—"],
     ["Year/Make/Model", esc([item.year, item.make, item.model].filter(Boolean).join(" "))],
     ["Trim", esc(item.trim || "—")],
     ["Color", esc(item.color || "—")],
   ];
-  if (segment === "recon") rows.push(["Purchase price", money(item.purchase_price || 0)]);
+  // Purchase price belongs to the car, so it shows on both segments now --
+  // a we-owe car was bought too, usually long before RECON ever saw it.
+  if (lifetime) rows.push(["Purchase price", money(lifetime.purchase_price || 0)]);
   $("#vd-vehicle-info-summary").innerHTML = rows.map(([label, value]) => `<div class="kv-row"><span class="kv-label">${label}</span><span class="kv-value">${value}</span></div>`).join("");
 }
 
@@ -2514,6 +2642,10 @@ function renderOrderPanel() {
   $("#vd-print-ticket").style.display = "";
   $("#vd-add-task").style.display = "";
   $("#vd-void-order").style.display = order.voided ? "none" : "";
+  // Retail tickets have no lot record behind them, so there's nothing on the
+  // other side for the cost to move onto -- only recon and we-owe can swap.
+  const movable = !order.voided && (order.segment === "recon" || order.segment === "we_owe");
+  $("#vd-move-segment").style.display = movable ? "" : "none";
 }
 
 function renderStatusCard(order) {
@@ -2544,12 +2676,17 @@ function renderEstimate(order) {
   // the data-label becomes the field's visible caption. Before this, the row
   // was a hardcoded 11-column grid whose header was display:none -- so Qty,
   // Cost and Core were unlabelled boxes that squeezed to a few pixels wide.
+  // data-label is what the narrow-screen layout prints above each field
+  // (.pr-cell::before). An empty cell must not carry one, or a labor line
+  // shows a "Part #"/"Core" caption with no field under it.
   const cell = (cls, label, inner) =>
-    `<div class="pr-cell pr-${cls}${inner ? "" : " pr-spacer"}"${label ? ` data-label="${label}"` : ""}>${inner}</div>`;
+    `<div class="pr-cell pr-${cls}${inner ? "" : " pr-spacer"}"${label && inner ? ` data-label="${label}"` : ""}>${inner}</div>`;
 
   const rowHtml = (item, i) => {
     const remaining = (item.quantity ?? 0) - (item.received_quantity ?? 0);
     const receivable = item.kind === "part" && item.id && remaining > 0.001;
+    const isPart = item.kind === "part";
+    const L = fieldLabels(item.kind);
     return `
     <div class="part-row" draggable="true" data-index="${i}" data-id="${item.id || ""}" data-source="${item.source || "manual"}" data-received-quantity="${item.received_quantity ?? 0}">
       ${cell("handle", "", `<span class="row-drag-handle" title="Drag to reorder">⋮⋮</span>`)}
@@ -2560,13 +2697,17 @@ function renderEstimate(order) {
         <option value="fee" ${item.kind === "fee" ? "selected" : ""}>Fee</option>
       </select>`)}
       ${cell("desc", "Description", `<input class="ei-desc" value="${esc(item.description || "")}" placeholder="Description">`)}
-      ${cell("part", "Part #", `<input class="ei-part" value="${esc(item.part_number || "")}" placeholder="Part #">`)}
-      ${cell("qty", "Qty", `<input class="ei-qty" type="number" min="0.01" step="0.01" value="${item.quantity ?? 1}">`)}
-      ${cell("cost", "Cost", item.part_returned
+      ${cell("part", L.part, `<input class="ei-part" value="${esc(item.part_number || "")}" placeholder="Part #"${isPart ? "" : " hidden"}>`)}
+      ${cell("qty", L.qty, `<input class="ei-qty" type="number" min="0.01" step="0.01" value="${item.quantity ?? 1}"${item.kind === "labor" ? ` title="Hours"` : ""}>`)}
+      ${cell("cost", L.cost, item.part_returned
         ? `<input class="ei-cost" type="number" value="0" disabled title="Returned to the vendor -- no longer counted" data-real-cost="${item.unit_cost ?? 0}">`
-        : `<input class="ei-cost" type="number" min="0" step="0.01" value="${item.unit_cost ?? 0}">`)}
-      ${cell("core", "Core", item.kind === "part"
-        ? `<input class="ei-core" type="number" min="0" step="0.01" placeholder="0.00" title="Core deposit owed back from the vendor" value="${item.core_charge ?? 0}">`
+        : `<input class="ei-cost" type="number" min="0" step="0.01" value="${item.unit_cost ?? 0}"${item.kind === "labor" ? ` title="Hourly rate"` : ""}>`)}
+      ${cell("core", L.core, item.kind === "part"
+        ? `<label class="core-toggle" title="Tick only if this part carries a core deposit the vendor owes back">
+             <input type="checkbox" class="ei-core-on" ${(item.core_charge ?? 0) > 0 ? "checked" : ""} aria-label="This part has a core charge">
+             <span>Core</span>
+           </label>
+           <input class="ei-core" type="number" min="0" step="0.01" placeholder="0.00" title="Core deposit owed back from the vendor" value="${item.core_charge ?? 0}" ${(item.core_charge ?? 0) > 0 ? "" : "hidden"}>`
         : "")}
       ${jobs.length ? cell("job", "Job", `<select class="ei-job">${jobOptionsHtml(item.job_id ?? null)}</select>`) : ""}
       ${cell("status", "Status", item.id
@@ -2590,20 +2731,28 @@ function renderEstimate(order) {
   // block the first column reads "Parts" instead of "Kind", so one thin row
   // does the work that a separate section label plus a hidden header row
   // used to do.
-  const headRow = (leadLabel = "Kind", extraClass = "") => `<div class="part-row head ${extraClass}">
+  // `kind` is set when this header captions a single-kind section (the job
+  // view splits Parts and Labor into their own blocks), so Labor reads
+  // "Hours / Rate" with no Part # or Core column at all. The flat mixed list
+  // passes nothing and keeps the generic captions, since one header there has
+  // to serve every kind at once.
+  const headRow = (leadLabel = "Kind", extraClass = "", kind = null) => {
+    const L = fieldLabels(kind);
+    return `<div class="part-row head ${extraClass}">
     <span class="pr-cell pr-handle"></span>
     <span class="pr-cell pr-check"></span>
     <span class="pr-cell pr-kind">${esc(leadLabel)}</span>
     <span class="pr-cell pr-desc">Description</span>
-    <span class="pr-cell pr-part">Part #</span>
-    <span class="pr-cell pr-qty">Qty</span>
-    <span class="pr-cell pr-cost">Cost</span>
-    <span class="pr-cell pr-core">Core</span>
+    <span class="pr-cell pr-part">${esc(L.part)}</span>
+    <span class="pr-cell pr-qty">${esc(L.qty)}</span>
+    <span class="pr-cell pr-cost">${esc(L.cost)}</span>
+    <span class="pr-cell pr-core">${esc(L.core)}</span>
     ${jobs.length ? `<span class="pr-cell pr-job">Job</span>` : ""}
     <span class="pr-cell pr-status">Status</span>
     <span class="pr-cell pr-move"></span>
     <span class="pr-cell pr-remove"></span>
   </div>`;
+  };
 
   if (!jobs.length) {
     // Unchanged flat list -- grouping only appears once a job exists, so the
@@ -2646,7 +2795,7 @@ function renderEstimate(order) {
           </div>
           ${kindGroups.length ? kindGroups.map((g) => `
             <div class="kind-subgroup" data-kind="${g.kind}">
-              ${headRow(KIND_GROUP_LABEL[g.kind])}
+              ${headRow(KIND_GROUP_LABEL[g.kind], "", g.kind)}
               ${g.kindItems.map(rowHtml).join("")}
             </div>
           `).join("") : `<div class="ei-empty">${emptyState({ icon: "invoice", title: "No lines in this job yet", compact: true })}</div>`}
@@ -2660,6 +2809,7 @@ function renderEstimate(order) {
   // costs exactly one innerHTML swap -- it used to cost twelve
   // addEventListener calls per row plus three more per job, every time any
   // single field changed.
+  $$(".part-row:not(.head)", box).forEach(syncRowKindFields);
   updateReceiveButtonState();
   renderEstimateTotals(order);
   lastEstimateShape = estimateShape(order);
@@ -2910,6 +3060,50 @@ function restoreEstimateFocus(snap) {
    replaced -- only its contents do. Everything the grid renders (rows, job
    headers, the transient row addEstimateRow paints before its save lands) is
    live the instant it exists, and re-rendering binds nothing. */
+/* A part number and a core charge only mean something on a part line. The
+   estimate stores all three kinds in one table with one shared part_number
+   column, so before this the Part # box sat there on a labor line inviting
+   someone to fill it in, and the core box sat on every part line at 0.00 with
+   nothing marking it as optional -- close enough to the cost box that typing
+   the part's cost into it created a deposit the shop would later chase a
+   vendor for. Both now appear only where they apply. */
+function syncRowKindFields(row) {
+  if (!row) return;
+  const kind = row.querySelector(".ei-kind")?.value || "part";
+  const isPart = kind === "part";
+  const L = fieldLabels(kind);
+
+  // The captions come off data-label (.pr-cell::before draws them once the
+  // grid reflows to stacked cards), so they have to be retargeted here as
+  // well as at render time -- otherwise switching a line to Labor leaves it
+  // captioned "Part #" and "Qty" until the save round-trips.
+  const relabel = (cls, label) => {
+    const box = row.querySelector(`.pr-${cls}`);
+    if (!box) return;
+    if (label) box.setAttribute("data-label", label);
+    else box.removeAttribute("data-label");
+    box.classList.toggle("pr-spacer", !label);
+  };
+  relabel("part", L.part);
+  relabel("qty", L.qty);
+  relabel("cost", L.cost);
+  relabel("core", L.core);
+
+  const partInput = row.querySelector(".ei-part");
+  if (partInput) {
+    partInput.hidden = !isPart;
+    if (!isPart) partInput.value = "";
+  }
+  const coreToggle = row.querySelector(".core-toggle");
+  const coreAmount = row.querySelector(".ei-core");
+  if (coreToggle) coreToggle.hidden = !isPart;
+  if (coreAmount) {
+    const on = isPart && row.querySelector(".ei-core-on")?.checked;
+    coreAmount.hidden = !on;
+    if (!on) coreAmount.value = "0";
+  }
+}
+
 function wireEstimateGrid() {
   const box = $("#vd-estimate-items");
   if (!box) return;
@@ -2917,6 +3111,23 @@ function wireEstimateGrid() {
   box.addEventListener("change", (e) => {
     const t = e.target;
     if (!(t instanceof Element)) return;
+    // Ticking Core reveals the amount; unticking clears it, so the box can't
+    // keep a figure the line no longer claims.
+    if (t.matches(".ei-core-on")) {
+      const row = t.closest(".part-row");
+      const amount = row?.querySelector(".ei-core");
+      if (amount) {
+        amount.hidden = !t.checked;
+        if (!t.checked) amount.value = "0";
+        else amount.focus();
+      }
+      updateEstimateTotalsFromDom();
+      clearEstimateTypingTimer();
+      return void persistEstimate();
+    }
+    // Switching a line to Labor takes away the fields that only mean
+    // something on a part, rather than leaving them there to be filled in.
+    if (t.matches(".ei-kind")) syncRowKindFields(t.closest(".part-row"));
     // Every field autosaves on change -- there is no "forgot to click Save and
     // it silently vanished" window, because nothing is ever left DOM-only.
     // A change (blur/Enter) supersedes any debounced keystroke save still
@@ -3223,16 +3434,25 @@ function collectEstimateItems() {
       ? parseFloat(costInput.dataset.realCost)
       : parseFloat(costInput.value || "0");
     const coreInput = row.querySelector(".ei-core");
+    // The core amount only counts when the line is explicitly marked as
+    // carrying a core. An unticked row reports 0 no matter what is sitting in
+    // the box, so a stray figure can't quietly become a deposit the shop then
+    // chases a vendor for.
+    const coreOn = row.querySelector(".ei-core-on")?.checked;
+    const kind = row.querySelector(".ei-kind").value;
     const jobSelect = row.querySelector(".ei-job");
     return {
       id: row.dataset.id ? Number(row.dataset.id) : null,
-      kind: row.querySelector(".ei-kind").value,
+      kind,
       description: row.querySelector(".ei-desc").value.trim(),
-      part_number: row.querySelector(".ei-part").value.trim(),
+      // Labor has no part number -- the column is shared across line kinds,
+      // so anything typed there before the kind was switched is dropped
+      // rather than saved against a labor line.
+      part_number: kind === "part" ? row.querySelector(".ei-part").value.trim() : "",
       quantity: parseFloat(row.querySelector(".ei-qty").value || "1"),
       unit_cost: cost,
       unit_price: cost,
-      core_charge: coreInput ? parseFloat(coreInput.value || "0") : 0,
+      core_charge: coreOn && coreInput ? parseFloat(coreInput.value || "0") : 0,
       source: row.dataset.source || "manual",
       // A freshly-added row (addEstimateRow) has no .ei-job select yet --
       // just the data-job-id it was created with -- so fall back to that.
@@ -3320,9 +3540,9 @@ function addEstimateRow(kind, defaults = {}, jobId = null) {
       <option value="fee" ${kind === "fee" ? "selected" : ""}>Fee</option>
     </select></div>
     <div class="pr-cell pr-desc" data-label="Description"><input class="ei-desc" placeholder="Description" value="${esc(defaults.description || `New ${label.toLowerCase()}`)}"></div>
-    <div class="pr-cell pr-part" data-label="Part #"><input class="ei-part" placeholder="Part #" value="${esc(defaults.part_number || "")}"></div>
-    <div class="pr-cell pr-qty" data-label="Qty"><input class="ei-qty" type="number" min="0.01" step="0.01" value="${defaults.quantity ?? 1}"></div>
-    <div class="pr-cell pr-cost" data-label="Cost"><input class="ei-cost" type="number" min="0" step="0.01" value="${defaults.unit_cost ?? 0}"></div>
+    <div class="pr-cell pr-part"${fieldLabels(kind).part ? ` data-label="${fieldLabels(kind).part}"` : ""}><input class="ei-part" placeholder="Part #" value="${esc(defaults.part_number || "")}"></div>
+    <div class="pr-cell pr-qty" data-label="${fieldLabels(kind).qty}"><input class="ei-qty" type="number" min="0.01" step="0.01" value="${defaults.quantity ?? 1}"></div>
+    <div class="pr-cell pr-cost" data-label="${fieldLabels(kind).cost}"><input class="ei-cost" type="number" min="0" step="0.01" value="${defaults.unit_cost ?? 0}"></div>
     <div class="pr-cell pr-core pr-spacer"></div>
     ${box.classList.contains("has-jobs") ? `<div class="pr-cell pr-job pr-spacer"></div>` : ""}
     <div class="pr-cell pr-status" data-label="Status"><span class="status-pill sp-quoted">Saving…</span></div>
@@ -3332,6 +3552,9 @@ function addEstimateRow(kind, defaults = {}, jobId = null) {
   // No listener wiring: the delegated handler on #vd-estimate-items already
   // covers this row's × button the moment it lands in the DOM.
   targetContainer.appendChild(row);
+  // A brand-new Labor line shouldn't flash a Part # box for the half-second
+  // before the save round-trips and re-renders it.
+  syncRowKindFields(row);
   // Persist immediately -- this is a real line on the RO from the moment it
   // appears, matching a one-click "add at cost" flow rather than a draft
   // that silently disappears if the advisor clicks anything else first.
@@ -3461,6 +3684,7 @@ function renderNotes(order) {
 const ACTIVITY_LABEL = {
   order_created: "Ticket opened",
   status_changed: "Status changed",
+  segment_changed: "Moved to another vehicle",
   concern_updated: "Concern updated",
   assignment_updated: "Assignment changed",
   note_added: "Note added",
@@ -3504,8 +3728,16 @@ function renderAssignment(order) {
   const techs = state.staff.filter((s) => s.role === "technician");
   const advisors = state.staff.filter((s) => s.role === "advisor" || s.role === "manager");
   const a = order.assignment;
+  /* The ticket already knows who you are -- "Working as" is set in the top
+     right and stamps your name on everything you do here. Asking again which
+     advisor owns the ticket was the same fact requested twice, so an
+     unassigned ticket now defaults to whoever is working it, provided they're
+     an advisor or manager. It's a pre-selection, not a lock: the dropdown
+     still opens and anyone in it can be picked. */
+  const selfAdvisor = advisors.find((s) => s.name === state.currentUser);
+  const advisorId = (a && a.advisor_id) || (selfAdvisor ? selfAdvisor.id : null);
   $("#vd-technician").innerHTML = `<option value="">Unassigned</option>` + techs.map((t) => `<option value="${t.id}" ${a && a.technician_id === t.id ? "selected" : ""}>${esc(t.name)}</option>`).join("");
-  $("#vd-advisor").innerHTML = `<option value="">Unassigned</option>` + advisors.map((t) => `<option value="${t.id}" ${a && a.advisor_id === t.id ? "selected" : ""}>${esc(t.name)}</option>`).join("");
+  $("#vd-advisor").innerHTML = `<option value="">Unassigned</option>` + advisors.map((t) => `<option value="${t.id}" ${advisorId === t.id ? "selected" : ""}>${esc(t.name)}</option>`).join("");
   $("#vd-date-in").value = (a && a.date_in) || "";
   $("#vd-odometer").value = (a && a.odometer_in) || "";
   const promised = $("#vd-promised");
@@ -3802,6 +4034,8 @@ function wireVehicleDetail() {
     }
   });
 
+  $("#vd-move-segment").addEventListener("click", openMoveSegmentDialog);
+
   $("#vd-void-order").addEventListener("click", async () => {
     if (!(await confirmAction({
       eyebrow: "VOID TICKET",
@@ -4043,6 +4277,76 @@ function wireVehicleDetail() {
 }
 
 /* ==================================================================
+   MOVE TICKET BETWEEN RECON AND WE-OWE
+   ==================================================================
+   A car gets written up as recon and turns out to be a we-owe the lot already
+   sold, or the reverse. The only previous fix was deleting the ticket and
+   starting again, which threw away the estimate, the parts and any vendor
+   invoice posted against it -- so the wrong ticket got kept and its cost sat
+   on the wrong vehicle. */
+async function openMoveSegmentDialog() {
+  const order = state.detail.order;
+  const movingTo = order.segment === "recon" ? "we_owe" : "recon";
+  const select = $("#move-segment-target");
+  select.innerHTML = `<option value="">Loading…</option>`;
+  $("#move-segment-desc").textContent = order.segment === "recon"
+    ? `${order.number} is on a recon vehicle. Pick the we-owe it really belongs to.`
+    : `${order.number} is on a we-owe. Pick the recon vehicle it really belongs to.`;
+  $("#move-segment-dialog").showModal();
+
+  try {
+    // The live board only -- a ticket must not be moved onto a vehicle that's
+    // already been sent to History, which the server rejects anyway.
+    const rows = await get(`/api/vehicles-board?segment=${movingTo}`);
+    if (!rows.length) {
+      select.innerHTML = `<option value="">No ${movingTo === "recon" ? "recon vehicles" : "we-owe items"} to move to</option>`;
+      return;
+    }
+    select.innerHTML = rows.map((r) => {
+      const id = movingTo === "recon" ? r.recon_id : r.we_owe_id;
+      const label = movingTo === "recon"
+        ? `${r.stock_number || "—"} · ${r.vehicle}`
+        : `${r.customer_name || "—"} · ${r.vehicle}${r.description ? ` · ${r.description}` : ""}`;
+      return `<option value="${id}">${esc(label)}</option>`;
+    }).join("");
+  } catch (err) {
+    select.innerHTML = `<option value="">Could not load vehicles</option>`;
+    toast(err.message, true);
+  }
+}
+
+function wireMoveSegmentDialog() {
+  const dialog = $("#move-segment-dialog");
+  const close = () => dialog.close();
+  $("#move-segment-cancel").addEventListener("click", close);
+  $("#move-segment-cancel-2").addEventListener("click", close);
+  $("#move-segment-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const targetId = $("#move-segment-target").value;
+    if (!targetId) return toast("Pick a vehicle to move this ticket to", true);
+    const order = state.detail.order;
+    const movingTo = order.segment === "recon" ? "we_owe" : "recon";
+    await withLoading(e.submitter, "Moving…", async () => {
+      try {
+        await patch(`/api/orders/${order.id}/segment`, {
+          segment: movingTo,
+          [movingTo === "recon" ? "recon_vehicle_id" : "we_owe_id"]: Number(targetId),
+          actor: currentActor(),
+        });
+        dialog.close();
+        toast("Ticket moved");
+        // The ticket now belongs to a different vehicle, so the page we're
+        // standing on no longer owns it -- go back to the board rather than
+        // showing a detail view for a ticket that has left.
+        showView("vehicles");
+      } catch (err) {
+        toast(err.message, true);
+      }
+    });
+  });
+}
+
+/* ==================================================================
    NEW RECON VEHICLE DIALOG
    ================================================================== */
 function openReconDialog() {
@@ -4101,6 +4405,7 @@ function wireReconDialog() {
           engine: $("#recon-engine").value.trim(),
           color: $("#recon-color").value.trim(),
           mileage: Number($("#recon-mileage").value || 0),
+          odometer_broken: $("#recon-odo-broken").checked,
           purchase_price: Number($("#recon-price").value || 0),
           acquisition_source: $("#recon-source").value.trim(),
           acquisition_date: $("#recon-date").value,
@@ -4180,6 +4485,29 @@ function wireWeOweDialog() {
       toast(err.message, true);
     }
   });
+  /* The moment a VIN is entered, say whether this car is already known.
+     This is the case that prompted the whole thing: a car recon'd and sold
+     months ago comes back on a we-owe, and without this the advisor has no
+     way of knowing the shop already has a purchase price and a repair
+     history on file for it -- so they'd type a second, conflicting one. */
+  $("#we-owe-new-vin").addEventListener("blur", async () => {
+    const note = $("#we-owe-vin-match");
+    const vin = $("#we-owe-new-vin").value.trim();
+    if (vin.length < 11) return void (note.hidden = true);
+    try {
+      const [match] = await get(`/api/reports/vehicle-profit?vin=${encodeURIComponent(vin)}`);
+      if (!match) return void (note.hidden = true);
+      const bits = [`Already on file${match.stock_number ? ` as ${match.stock_number}` : ""}`];
+      if (match.purchase_price) bits.push(`bought for ${money(match.purchase_price)}`);
+      if (match.recon_cost) bits.push(`${money(match.recon_cost)} of recon in it`);
+      note.textContent = `${bits.join(" · ")}. Its purchase price carries over — you don't need to re-enter it.`;
+      note.hidden = false;
+      // Its history is the record; don't invite a second, conflicting figure.
+      $("#we-owe-new-purchase-price").placeholder = "Already on file";
+    } catch {
+      note.hidden = true;  // a failed lookup is not worth interrupting intake over
+    }
+  });
   $("#we-owe-form").addEventListener("submit", async (e) => {
     e.preventDefault();
     await withLoading(e.submitter, "Saving…", async () => {
@@ -4195,20 +4523,33 @@ function wireWeOweDialog() {
           customerId = Number(customerId);
         }
         let vehicleId = $("#we-owe-vehicle").value;
-        if (vehicleId === "__new__") {
+        const isNewVehicle = vehicleId === "__new__";
+        if (isNewVehicle) {
           const make = $("#we-owe-new-make").value.trim();
           const model = $("#we-owe-new-model").value.trim();
           if (!make || !model) return toast("Enter the vehicle's make and model", true);
+          const odoBroken = $("#we-owe-new-odo-broken").checked;
+          const mileage = Number($("#we-owe-new-mileage").value || 0);
+          // Mileage is asked for, and "the odometer is broken" is a real
+          // answer to that question -- but silence isn't. Without one or the
+          // other a zero is unreadable a month from now.
+          if (!odoBroken && !mileage) {
+            return toast("Enter the mileage, or tick Odometer broken", true);
+          }
           const vehicle = await post("/api/vehicles", {
             customer_id: customerId,
             year: Number($("#we-owe-new-year").value),
             make, model,
             vin: $("#we-owe-new-vin").value.trim(),
+            mileage,
+            odometer_broken: odoBroken,
           });
           vehicleId = vehicle.id;
         } else {
           vehicleId = Number(vehicleId);
         }
+        const purchasePrice = $("#we-owe-new-purchase-price").value.trim();
+        const salePrice = $("#we-owe-new-sale-price").value.trim();
         await post("/api/we-owe", {
           customer_id: customerId,
           vehicle_id: vehicleId,
@@ -4217,6 +4558,11 @@ function wireWeOweDialog() {
           target_date: $("#we-owe-target").value,
           sale_reference: $("#we-owe-sale-ref").value.trim(),
           lot_stock_number: $("#we-owe-lot-stock").value.trim(),
+          // Left out entirely when blank: the server only fills a gap, so an
+          // empty box must not arrive as a 0 that overwrites a real price
+          // already on file from this car's recon life.
+          ...(purchasePrice === "" ? {} : { purchase_price: Number(purchasePrice) }),
+          ...(salePrice === "" ? {} : { sale_price: Number(salePrice) }),
         });
         $("#we-owe-dialog").close();
         toast("We-owe item added");
@@ -4341,6 +4687,7 @@ const REPORT_TITLES = {
   "vehicle-spend": "All Vehicles (Combined)",
   "vehicle-spend-recon": "Recon Vehicles Only",
   "vehicle-spend-we_owe": "We-Owe Only",
+  "vehicle-profit": "Profit by Vehicle",
   technicians: "Technician Productivity",
 };
 
@@ -4349,8 +4696,30 @@ const REPORT_SEGMENT = {
   "vehicle-spend-we_owe": "we_owe",
 };
 
-// The two table/chart/summary shapes. Four report types, two renderings.
-const reportShape = (type) => (type === "technicians" ? "technicians" : "vehicle-spend");
+/* Three table/chart/summary shapes across five report types.
+
+   Profit is its own shape rather than more columns on the spend table,
+   because it counts something different: the spend table has one row per
+   recon record and one per we-owe promise, so a car that was recon'd, sold,
+   and came back appears twice. Profit is per physical car -- one row, both
+   halves of its life, no double-counting. */
+const reportShape = (type) =>
+  type === "technicians" ? "technicians"
+  : type === "vehicle-profit" ? "vehicle-profit"
+  : "vehicle-spend";
+
+// Which /api/reports/… and /api/export/report/… each shape is backed by.
+const REPORT_ENDPOINT = {
+  "vehicle-spend": "vehicle-spend",
+  "vehicle-profit": "vehicle-profit",
+  technicians: "technicians",
+};
+
+const REPORT_STAT_CARDS = {
+  "vehicle-spend": (rows) => vehicleSpendStatCards(rows),
+  "vehicle-profit": (rows) => vehicleProfitStatCards(rows),
+  technicians: (rows) => technicianStatCards(rows),
+};
 
 const REPORT_PREFS_KEY = "dao-report-view";
 
@@ -4437,7 +4806,7 @@ function reportParams() {
 // changes on the back end.
 function reportCsvHref() {
   const params = reportParams();
-  const path = reportShape(state.reportType) === "technicians" ? "technicians" : "vehicle-spend";
+  const path = REPORT_ENDPOINT[reportShape(state.reportType)];
   const query = params.toString();
   return `/api/export/report/${path}.csv${query ? `?${query}` : ""}`;
 }
@@ -4458,6 +4827,17 @@ const REPORT_SORTS = {
     cost:    { label: "Cost",          type: "number", value: (r) => r.actual_cost },
     paid:    { label: "Customer Paid", type: "number", value: (r) => r.customer_paid || 0 },
     net:     { label: "Net to Shop",   type: "number", value: (r) => (r.customer_paid ? r.net_cost : r.actual_cost) },
+  },
+  "vehicle-profit": {
+    stock:    { label: "Stock #",     type: "text",   value: (r) => r.stock_number || "" },
+    vehicle:  { label: "Vehicle",     type: "text",   value: (r) => r.vehicle || "" },
+    vin:      { label: "VIN",         type: "text",   value: (r) => r.vin || "" },
+    hours:    { label: "Hours",       type: "number", value: (r) => r.labor_hours || 0 },
+    purchase: { label: "Purchase",    type: "number", value: (r) => r.purchase_price },
+    cost:     { label: "Total In",    type: "number", value: (r) => r.total_invested },
+    sale:     { label: "Sold For",    type: "number", value: (r) => r.sale_price || 0 },
+    profit:   { label: "Profit",      type: "number", value: (r) => r.profit || 0 },
+    margin:   { label: "Margin",      type: "number", value: (r) => r.margin_pct || 0 },
   },
   technicians: {
     technician: { label: "Technician",  type: "text",   value: (r) => r.technician || "" },
@@ -4505,7 +4885,7 @@ function reportSortHeader(shape, key, extraClass = "") {
    than buried in its footer. They describe exactly the rows below them --
    same range, same segment -- so there's nothing to reconcile. */
 function renderReportStats(rows, shape) {
-  const cards = shape === "technicians" ? technicianStatCards(rows) : vehicleSpendStatCards(rows);
+  const cards = (REPORT_STAT_CARDS[shape] || REPORT_STAT_CARDS["vehicle-spend"])(rows);
   $("#report-stats").innerHTML = cards.map((c) => `
       <div class="stat">
         <div class="stat-label">${esc(c.label)}</div>
@@ -4522,6 +4902,33 @@ function vehicleSpendStatCards(rows) {
     { label: "Vehicles", value: String(rows.length), sub: `${recon} recon · ${rows.length - recon} we-owe` },
     { label: "Total Cost", value: money(total), sub: "received parts + labor" },
     { label: "Average Per Vehicle", value: money(rows.length ? total / rows.length : 0), sub: quoted ? `${money(quoted)} quoted overall` : "nothing quoted in this range" },
+  ];
+}
+
+/* The owner's four numbers. Sold and unsold are kept apart deliberately: an
+   unsold car has money in it and no profit yet, and averaging those zeros
+   into the margin would make a good month look like a bad one. */
+function vehicleProfitStatCards(rows) {
+  const sold = rows.filter((r) => r.profit !== null && r.profit !== undefined);
+  const invested = rows.reduce((s, r) => s + (r.total_invested || 0), 0);
+  const profit = sold.reduce((s, r) => s + r.profit, 0);
+  const revenue = sold.reduce((s, r) => s + (r.sale_price || 0), 0);
+  const weOwe = rows.reduce((s, r) => s + (r.we_owe_net_cost || 0), 0);
+  return [
+    { label: "Vehicles", value: String(rows.length), sub: `${sold.length} sold · ${rows.length - sold.length} still in stock` },
+    { label: "Total Invested", value: money(invested), sub: "purchase + recon + we-owe" },
+    {
+      label: "Profit On Sold",
+      value: money(profit),
+      sub: revenue ? `${(profit / revenue * 100).toFixed(1)}% margin on ${money(revenue)}` : "nothing sold in this range",
+      tone: sold.length && profit < 0 ? "crit" : "",
+    },
+    {
+      label: "We-Owe Cost",
+      value: money(weOwe),
+      sub: weOwe ? "came off the above, net of customer payments" : "no we-owe work in this range",
+      tone: weOwe > 0 ? "warn" : "",
+    },
   ];
 }
 
@@ -4598,6 +5005,25 @@ function renderReportChart(rows, shape) {
     }) || chartNothingToPlot(rows.length, "labor cost");
     return;
   }
+  if (shape === "vehicle-profit") {
+    // Only sold cars can be charted by profit -- one still on the lot has no
+    // bar to draw, and plotting it at zero would read as breaking even.
+    const sold = rows.filter((r) => r.profit !== null && r.profit !== undefined)
+      .sort((a, b) => b.profit - a.profit);
+    const items = sold.slice(0, CHART_LIMIT).map((r) => ({
+      label: `${r.stock_number || "—"} · ${r.vehicle}`,
+      value: Math.max(r.profit, 0),
+      display: money(r.profit),
+    }));
+    target.innerHTML = barChart({
+      title: "Profit by vehicle",
+      note: sold.length > CHART_LIMIT
+        ? `Top ${CHART_LIMIT} of ${sold.length} sold vehicles`
+        : (items.length ? `${items.length} sold vehicle${items.length === 1 ? "" : "s"}` : ""),
+      items,
+    }) || chartNothingToPlot(rows.length, "sold vehicles");
+    return;
+  }
   const priced = rows.filter((r) => r.actual_cost > 0).sort((a, b) => b.actual_cost - a.actual_cost);
   const items = priced.slice(0, CHART_LIMIT).map((r) => ({
     label: `${r.stock_number || r.customer_name || "—"} · ${r.vehicle}`,
@@ -4657,7 +5083,58 @@ function reportHeaderRow(shape, hasDeposits) {
   if (shape === "technicians") {
     return `${reportSortHeader("technicians", "technician")}${reportSortHeader("technicians", "ros", "num-col")}${reportSortHeader("technicians", "completed", "num-col")}${reportSortHeader("technicians", "hours", "num-col")}${reportSortHeader("technicians", "cost", "num-col")}`;
   }
+  if (shape === "vehicle-profit") {
+    return ["stock", "vehicle", "vin"].map((k) => reportSortHeader("vehicle-profit", k)).join("")
+      + ["hours", "purchase", "cost", "sale", "profit", "margin"].map((k) => reportSortHeader("vehicle-profit", k, "num-col")).join("");
+  }
   return `${reportSortHeader("vehicle-spend", "stock")}${reportSortHeader("vehicle-spend", "vehicle")}${reportSortHeader("vehicle-spend", "segment")}${reportSortHeader("vehicle-spend", "status")}${reportSortHeader("vehicle-spend", "tech")}${reportSortHeader("vehicle-spend", "cost", "num-col")}${hasDeposits ? reportSortHeader("vehicle-spend", "paid", "num-col") + reportSortHeader("vehicle-spend", "net", "num-col") : ""}`;
+}
+
+/* One row per physical car, whatever mix of recon records and we-owe
+   promises it accumulated. The we-owe column is the one the owner is really
+   looking for: work done after the sale, which comes straight off the margin
+   and until now was invisible on any profit number the shop could produce. */
+function renderProfitTable(rows) {
+  const sum = (fn) => rows.reduce((s, r) => s + (fn(r) || 0), 0);
+  const sold = rows.filter((r) => r.profit !== null && r.profit !== undefined);
+  const totalProfit = sold.reduce((s, r) => s + r.profit, 0);
+  const cell = (r) => {
+    // An unsold car has no profit yet -- a dash, not a zero and not a loss.
+    const unsold = r.profit === null || r.profit === undefined;
+    const tone = unsold ? "" : r.profit < 0 ? " class=\"num-col money-bad\"" : " class=\"num-col money-good\"";
+    // Deliberately not click-to-open: a row here can stand for a recon record
+    // AND one or more we-owe promises, so there is no single vehicle page it
+    // could honestly navigate to. The VIN (with its copy button) is the handle.
+    return `<tr title="${esc([
+      `${money(r.purchase_price)} purchase`,
+      `${money(r.recon_cost)} recon`,
+      r.we_owe_count ? `${r.we_owe_count} we-owe promise${r.we_owe_count === 1 ? "" : "s"} costing ${money(r.we_owe_net_cost)} net` : "no we-owe work",
+    ].join(" · "))}">
+      <td class="num">${esc(r.stock_number || "—")}</td>
+      <td>${esc(r.vehicle || "—")}</td>
+      <td class="num cell-vin">${r.vin ? `${esc(r.vin)} <button type="button" class="copy-btn" data-copy="${esc(r.vin)}" data-copy-label="VIN" title="Copy VIN" aria-label="Copy VIN">⧉</button>` : "—"}</td>
+      <td class="num-col" title="Hours flagged by techs on this car">${r.labor_hours ? fmtHours(r.labor_hours) : "—"}</td>
+      <td class="num-col">${money(r.purchase_price)}</td>
+      <td class="num-col" title="${esc(`${money(r.purchase_price)} purchase + ${money(r.recon_cost)} recon + ${money(r.we_owe_net_cost)} we-owe`)}">${money(r.total_invested)}</td>
+      <td class="num-col">${r.sale_price != null ? money(r.sale_price) : "—"}</td>
+      <td${tone}>${unsold ? "—" : money(r.profit)}</td>
+      <td class="num-col">${r.margin_pct != null ? `${r.margin_pct}%` : "—"}</td>
+    </tr>`;
+  };
+  return `<div class="panel"><div class="table-wrap table-scroll"><table class="sticky-head"><thead><tr>
+    ${reportHeaderRow("vehicle-profit")}
+    </tr></thead>
+    <tbody>${rows.map(cell).join("")}</tbody>
+    <tfoot><tr>
+      <td colspan="3">Total (${rows.length} vehicle${rows.length === 1 ? "" : "s"}, ${sold.length} sold)</td>
+      <td class="num-col">${fmtHours(sum((r) => r.labor_hours))}</td>
+      <td class="num-col">${money(sum((r) => r.purchase_price))}</td>
+      <td class="num-col">${money(sum((r) => r.total_invested))}</td>
+      <td class="num-col">${money(sum((r) => r.sale_price))}</td>
+      <td class="num-col">${money(totalProfit)}</td>
+      <td class="num-col">—</td>
+    </tr></tfoot>
+    </table></div></div>`;
 }
 
 function renderReportTable(rows, shape) {
@@ -4675,6 +5152,7 @@ function renderReportTable(rows, shape) {
       <tfoot><tr><td>Total (${working} working)</td><td class="num-col">${totRos}</td><td class="num-col">${totDone}</td><td class="num-col">${totHours}</td><td class="num-col">${money(totCost)}</td></tr></tfoot>
       </table></div></div>`;
   }
+  if (shape === "vehicle-profit") return renderProfitTable(rows);
   const totalActual = rows.reduce((s, r) => s + r.actual_cost, 0);
   const totalPaid = rows.reduce((s, r) => s + (r.customer_paid || 0), 0);
   const hasDeposits = totalPaid > 0;
@@ -4712,7 +5190,7 @@ function renderPrintReport(rows, type, start, end) {
   // The printout keeps the screen's reading order: summary numbers first,
   // then the table -- a spend report with no total line is a worse artifact
   // than the screen it came from.
-  const cards = shape === "technicians" ? technicianStatCards(rows) : vehicleSpendStatCards(rows);
+  const cards = (REPORT_STAT_CARDS[shape] || REPORT_STAT_CARDS["vehicle-spend"])(rows);
   const summary = `<div class="print-summary">${cards.map((c) => `
     <div><div class="ps-label">${esc(c.label)}</div><div class="ps-value">${esc(c.value)}</div><div class="ps-sub">${esc(c.sub)}</div></div>`).join("")}</div>`;
   // The paper must say what the screen knew: row count and sort order, so a
@@ -4739,6 +5217,26 @@ function renderPrintReport(rows, type, start, end) {
         <tfoot>
           <tr><td>Report Total (${working} of ${rows.length} working)</td><td class="num-col">${totRos}</td><td class="num-col">${totDone}</td><td class="num-col">${Math.round(totalHours * 100) / 100}</td><td class="num-col">${money(totalCost)}</td></tr>
           <tr class="tfoot-space" aria-hidden="true"><td colspan="5"></td></tr>
+        </tfoot>
+      </table>`;
+  } else if (shape === "vehicle-profit") {
+    const sum = (fn) => rows.reduce((s, r) => s + (fn(r) || 0), 0);
+    const sold = rows.filter((r) => r.profit !== null && r.profit !== undefined);
+    body = `
+      <table class="print-table report">
+        <thead><tr><th>Stock #</th><th>Vehicle</th><th>VIN</th><th class="num-col">Hours</th><th class="num-col">Purchase</th><th class="num-col">Total In</th><th class="num-col">Sold For</th><th class="num-col">Profit</th><th class="num-col">Margin</th></tr></thead>
+        <tbody>${rows.map((r) => `<tr><td class="num">${esc(r.stock_number || "—")}</td><td>${esc(r.vehicle || "—")}</td><td class="num">${esc(r.vin || "—")}</td>
+        <td class="num-col">${r.labor_hours ? fmtHours(r.labor_hours) : "—"}</td>
+        <td class="num-col">${money(r.purchase_price)}</td><td class="num-col">${money(r.total_invested)}</td>
+        <td class="num-col">${r.sale_price != null ? money(r.sale_price) : "—"}</td>
+        <td class="num-col">${r.profit != null ? money(r.profit) : "—"}</td>
+        <td class="num-col">${r.margin_pct != null ? `${r.margin_pct}%` : "—"}</td></tr>`).join("")}</tbody>
+        <tfoot>
+          <tr><td colspan="3">Report Total (${rows.length} vehicle${rows.length === 1 ? "" : "s"}, ${sold.length} sold)</td>
+            <td class="num-col">${fmtHours(sum((r) => r.labor_hours))}</td>
+            <td class="num-col">${money(sum((r) => r.purchase_price))}</td><td class="num-col">${money(sum((r) => r.total_invested))}</td>
+            <td class="num-col">${money(sum((r) => r.sale_price))}</td><td class="num-col">${money(sold.reduce((s, r) => s + r.profit, 0))}</td><td class="num-col"></td></tr>
+          <tr class="tfoot-space" aria-hidden="true"><td colspan="9"></td></tr>
         </tfoot>
       </table>`;
   } else {
@@ -4854,7 +5352,7 @@ async function generateReport() {
   const end = state.reportEnd || undefined;
   $("#report-csv").href = reportCsvHref();
   showReportPlaceholders();
-  const path = shape === "technicians" ? "technicians" : "vehicle-spend";
+  const path = REPORT_ENDPOINT[shape];
   const rows = await get(`/api/reports/${path}?${reportParams()}`);
   if (seq !== reportSeq) return; // superseded by a newer request
   state.report = { rows, type, start, end };
@@ -4992,12 +5490,12 @@ async function loadAccountingView() {
     // whatever the user had picked (a held-for-review invoice must not be
     // silently re-pointed at the wrong vendor or RO).
     const keepVendor = $("#ap-vendor").value;
-    const keepPo = $("#ap-po").value;
+    const keepOrder = $("#ap-order").value;
     renderVendorSelect();
     renderVendorChips();
     renderPoSelect();
     if (keepVendor && [...$("#ap-vendor").options].some((o) => o.value === keepVendor)) $("#ap-vendor").value = keepVendor;
-    if (keepPo && [...$("#ap-po").options].some((o) => o.value === keepPo)) $("#ap-po").value = keepPo;
+    if (keepOrder && [...$("#ap-order").options].some((o) => o.value === keepOrder)) $("#ap-order").value = keepOrder;
     renderAuditList(audits);
     if (!$("#ap-invoice-items").children.length) addApLine();
   } catch (err) {
@@ -5104,16 +5602,20 @@ function cancelVendorEdit() {
   $("#vendor-form-submit").textContent = "Save Vendor";
   $("#vendor-form-cancel").style.display = "none";
 }
+/* The ticket picker is now optional and posts an order id outright, instead
+   of a PO string the server had to reverse-match to a repair order. Choosing
+   a ticket is a statement of fact; guessing from a reference number was not.
+   Picking one still fills the PO box with the stock number, because that's
+   the reference the vendor was actually given. */
 function renderPoSelect() {
   const open = state.orders.filter((o) => o.status !== "complete");
-  // The PO# you actually give a vendor is the stock number, not the
-  // internal RO-2607-0012 format -- submit that as the value so a vendor
-  // invoice referencing "R-1042" matches straight back to this order.
-  $("#ap-po").innerHTML = open.map((o) => {
-    const poValue = o.stock_number || o.number;
-    const label = o.stock_number ? `${o.stock_number} · ${o.number} · ${o.year} ${o.make} ${o.model}` : `${o.number} · ${o.customer_name} · ${o.year} ${o.make} ${o.model}`;
-    return `<option value="${esc(poValue)}">${esc(label)}</option>`;
-  }).join("") || `<option value="">No open repair orders</option>`;
+  const options = open.map((o) => {
+    const label = o.stock_number
+      ? `${o.stock_number} · ${o.number} · ${o.year} ${o.make} ${o.model}`
+      : `${o.number} · ${o.customer_name} · ${o.year} ${o.make} ${o.model}`;
+    return `<option value="${o.id}" data-po="${esc(o.stock_number || o.number)}">${esc(label)}</option>`;
+  }).join("");
+  $("#ap-order").innerHTML = `<option value="">No ticket — general expense</option>` + options;
 }
 function renderApTable(invoices) {
   const liveTotal = invoices.filter((a) => a.status !== "voided").reduce((s, a) => s + (a.total || 0), 0);
@@ -5220,8 +5722,8 @@ function recalcApTotals() {
   const total = subtotal + tax;
   $("#ap-subtotal").textContent = money(subtotal);
   $("#ap-total").textContent = money(total);
-  // Matches LARGE_INVOICE_THRESHOLD server-side -- say it before the post,
-  // not after.
+  // No longer a gate -- the server-side $500 hold is gone. Purely a nudge to
+  // look twice at a big number before it becomes a posted liability.
   $("#ap-over-threshold").hidden = total <= 500;
 }
 
@@ -5275,6 +5777,13 @@ function clearApInvoiceForm() {
 
 function wireAccountingView() {
   $("#ap-add-line").addEventListener("click", addApLine);
+  // Picking a ticket fills in the reference the vendor was actually given
+  // (the stock number), unless something has already been typed there.
+  $("#ap-order").addEventListener("change", (e) => {
+    const option = e.target.selectedOptions[0];
+    const po = $("#ap-po");
+    if (option && option.dataset.po && !po.value.trim()) po.value = option.dataset.po;
+  });
   $("#ap-tax").addEventListener("input", recalcApTotals);
   $("#ap-clear-invoice").addEventListener("click", clearApInvoiceForm);
   // A stale warning must never sit under a corrected invoice.
@@ -5368,10 +5877,12 @@ function wireAccountingView() {
     const tax = parseFloat($("#ap-tax").value || "0");
     await withLoading(e.submitter, "Posting…", async () => {
       try {
+        const orderId = $("#ap-order").value;
         const res = await post("/api/agent/invoices/process", {
           vendor_name: $("#ap-vendor").value,
           invoice_number: $("#ap-invoice-number").value.trim(),
-          po_number: $("#ap-po").value,
+          po_number: $("#ap-po").value.trim(),
+          order_id: orderId ? Number(orderId) : null,
           subtotal: Math.round(subtotal * 100) / 100,
           tax,
           total: Math.round((subtotal + tax) * 100) / 100,
@@ -7894,6 +8405,7 @@ function suggestionCardHtml(s) {
         <span title="${esc(fmtDate(s.created_at))}">${author ? `${esc(author)} · ` : ""}${esc(relativeTime(s.created_at))}</span>
         ${s.resolved ? `<span class="pill pill-done">Done</span>${s.updated_at && s.updated_at !== s.created_at ? `<span title="${esc(fmtDate(s.updated_at))}">done ${esc(relativeTime(s.updated_at))}</span>` : ""}` : ""}
         <div class="suggestion-actions">
+          <button type="button" class="btn btn-ghost btn-sm" data-copy="${esc(s.text)}" data-copy-label="Idea" title="Copy this idea">Copy</button>
           ${s.resolved ? "" : `<button type="button" class="btn btn-ghost btn-sm suggestion-make-task">Make a Task</button>`}
           <button type="button" class="btn btn-ghost btn-sm suggestion-toggle">${s.resolved ? "Reopen" : "Mark Done"}</button>
           <button type="button" class="rm-btn suggestion-delete" title="Delete" aria-label="Delete idea">×</button>
@@ -8072,6 +8584,20 @@ function wireSuggestionsView() {
     state.showResolvedSuggestions = !state.showResolvedSuggestions;
     renderSuggestionsList();
   });
+  /* Copies exactly what's on screen -- open ideas, filtered by whatever is
+     in the search box. Copying the whole table regardless of the filter
+     would quietly hand over ideas the user had just filtered away. */
+  $("#suggestions-copy-all").addEventListener("click", () => {
+    const query = (state.suggestionSearch || "").toLowerCase();
+    const shown = state.suggestions
+      .filter((s) => !s.resolved)
+      .filter((s) => !query || s.text.toLowerCase().includes(query) || (s.author || "").toLowerCase().includes(query));
+    if (!shown.length) return toast("No open ideas to copy", true);
+    const text = shown
+      .map((s, i) => `${i + 1}. ${s.text}${s.author ? ` — ${s.author}` : ""}`)
+      .join("\n");
+    copyText(text, `${shown.length} idea${shown.length === 1 ? "" : "s"}`);
+  });
 }
 
 /* ==================================================================
@@ -8100,6 +8626,7 @@ document.addEventListener("DOMContentLoaded", () => {
   wireEstimateGrid();
   wireReconDialog();
   wireWeOweDialog();
+  wireMoveSegmentDialog();
   wireReceiveDialog();
   wireJobDialog();
   wireMoveItemDialog();
@@ -8285,18 +8812,32 @@ function renderBackupStats(backups, status) {
   const box = $("#backup-stats");
   if (!box) return;
   const newest = backups[0];
-  const interval = status?.interval_hours ?? 24;
+  const intervalMinutes = status?.interval_minutes ?? 5;
   // status.last_age_hours is the server's own computation off the same
   // files this page lists -- prefer it over recomputing client-side, and
   // fall back only if the /status fetch itself failed.
   const ageHours = status?.last_age_hours ?? (newest ? (Date.now() / 1000 - newest.modified_at) / 3600 : null);
-  // Thresholds scale with the real policy instead of a hardcoded 26/48 --
-  // a shop whose interval is ever tuned away from 24h shouldn't leave the
-  // health strip quietly judging against the wrong number.
-  const ageTone = ageHours == null ? "crit" : ageHours > interval * 2 ? "crit" : ageHours > interval + 2 ? "warn" : "";
-  const health = ageHours == null ? "None" : ageHours > interval * 2 ? "Stale" : ageHours > interval + 2 ? "Aging" : "Healthy";
+  /* Health is about unsaved work, not about age. The auto-backup loop skips
+     snapshots that would be byte-identical, so on a quiet night the newest
+     backup legitimately gets old while protection stays perfect -- judging by
+     age alone would cry "Stale" every morning and train everyone to ignore
+     the strip. `pending_changes` is the server's direct answer to "is there
+     anything not backed up yet", and only once something *is* pending does
+     how long it's been pending start to matter. */
+  const pending = status ? !!status.pending_changes : true;
+  const graceHours = Math.max(0.5, (intervalMinutes * 4) / 60);
+  const tone = ageHours == null ? "crit"
+    : !pending ? ""
+    : ageHours > graceHours * 4 ? "crit"
+    : ageHours > graceHours ? "warn" : "";
+  const ageTone = tone;
+  const health = ageHours == null ? "None"
+    : !pending ? "Healthy"
+    : tone === "crit" ? "Stale" : tone === "warn" ? "Aging" : "Healthy";
+  const healthSub = ageHours == null ? "take one now"
+    : !pending ? "everything is backed up"
+    : tone ? "changes are waiting to be backed up" : "changes will be picked up shortly";
   const totalBytes = backups.reduce((s, b) => s + b.size_bytes, 0);
-  const retention = status?.retention ?? 14;
   const autoOn = !!status?.auto_enabled;
   box.innerHTML = `
     <div class="stat">
@@ -8307,17 +8848,17 @@ function renderBackupStats(backups, status) {
     <div class="stat">
       <div class="stat-label">Protection</div>
       <div class="stat-value${ageTone ? ` ${ageTone}` : ""}">${health}</div>
-      <div class="stat-sub">${ageHours == null ? "take one now" : ageTone ? `older than the ${interval}-hour policy` : `within the ${interval}-hour policy`}</div>
+      <div class="stat-sub">${healthSub}</div>
     </div>
     <div class="stat">
       <div class="stat-label">Auto-Backup</div>
       <div class="stat-value${autoOn ? "" : " warn"}">${autoOn ? "On" : "Off"}</div>
-      <div class="stat-sub">${autoOn ? `runs every ${interval}h` : "click Create Backup Now instead"}</div>
+      <div class="stat-sub">${autoOn ? `checks every ${intervalMinutes} min` : "click Create Backup Now instead"}</div>
     </div>
     <div class="stat">
       <div class="stat-label">Backups Kept</div>
       <div class="stat-value">${backups.length}</div>
-      <div class="stat-sub">of ${retention} before pruning</div>
+      <div class="stat-sub">${esc(retentionSummary(status))}</div>
     </div>
     <div class="stat">
       <div class="stat-label">Total Size</div>
@@ -8342,8 +8883,20 @@ function renderBackupStats(backups, status) {
   // real policy. Now it reads the same status payload the cards do.
   const policyDesc = $("#backup-policy-desc");
   if (policyDesc && status) {
-    policyDesc.textContent = `A full database backup (.db) is made automatically every ${interval} hours and the last ${retention} are kept. Make one manually any time, and download, restore, or delete any backup below.`;
+    policyDesc.textContent = `A full database backup (.db) is made automatically every ${intervalMinutes} minutes when something has changed, and older ones thin out over time — ${retentionSummary(status)}. Make one manually any time, and download, restore, or delete any backup below.`;
   }
+}
+
+/* Retention is no longer a single number, because a flat cap and a short
+   interval destroy each other: keeping "the newest 14" at one snapshot every
+   five minutes means the whole backup history is the last 70 minutes. The
+   tiers keep recent work dense and let older history thin out, so this
+   describes them in the shop's words rather than showing a count. */
+function retentionSummary(status) {
+  const r = status?.retention;
+  if (!r) return "older ones are pruned";
+  return `every snapshot for ${r.every_snapshot_hours}h, hourly for ${r.hourly_hours}h, `
+    + `daily for ${r.daily_days} days, monthly for ${r.monthly_months} months`;
 }
 
 async function loadBackupView() {

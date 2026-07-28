@@ -21,7 +21,7 @@ from .db import RECON_SHOP_CUSTOMER_ID, connect as db_connect, init_db, now
 from .export import build_export_router
 from .jobs import build_jobs_router
 from .parts import build_parts_router
-from .recon import assert_vehicle_editable, build_recon_router, cost_rollup, last_activity_detail, vehicle_board_rows
+from .recon import assert_vehicle_editable, build_recon_router, cost_rollup, last_activity_detail, resolve_unit, vehicle_board_rows
 from .reports import build_reports_router
 from .tasks import build_tasks_router
 from .workflow import (
@@ -114,6 +114,10 @@ class VehicleIn(BaseModel):
     model: str = Field(min_length=1)
     vin: str = ""
     mileage: int = Field(default=0, ge=0)
+    # A broken odometer is a real, recordable state. Without it, a mileage of
+    # 0 means both "the clock is dead" and "nobody was asked", and after the
+    # fact there is no telling which -- so every zero becomes unreadable.
+    odometer_broken: bool = False
     plate: str = ""
     plate_state: str = ""
     trim: str = ""
@@ -424,10 +428,15 @@ def create_app(db_path: Path = DEFAULT_DB, backups_dir: Path = DEFAULT_BACKUPS_D
         with connect() as db:
             if not db.execute("SELECT 1 FROM customers WHERE id=?", (item.customer_id,)).fetchone():
                 raise HTTPException(404, "Customer not found")
+            ts = now()
             cur = db.execute(
-                "INSERT INTO vehicles(customer_id,year,make,model,vin,mileage,plate,plate_state,trim,engine,color,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
-                (item.customer_id, item.year, item.make.strip(), item.model.strip(), item.vin.strip().upper(), item.mileage, item.plate.replace(" ", "").upper(), item.plate_state.strip().upper(), item.trim.strip(), item.engine.strip(), item.color.strip(), now()),
+                "INSERT INTO vehicles(customer_id,year,make,model,vin,mileage,odometer_broken,plate,plate_state,trim,engine,color,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (item.customer_id, item.year, item.make.strip(), item.model.strip(), item.vin.strip().upper(), item.mileage, int(item.odometer_broken), item.plate.replace(" ", "").upper(), item.plate_state.strip().upper(), item.trim.strip(), item.engine.strip(), item.color.strip(), ts),
             )
+            # Attach it to the physical car straight away, so a VIN that's
+            # already been through the shop finds its own history immediately
+            # rather than only once someone edits the record.
+            resolve_unit(db, cur.lastrowid, item.vin, ts)
             return rowdict(db.execute("SELECT * FROM vehicles WHERE id=?", (cur.lastrowid,)).fetchone())
 
     @app.post("/api/vehicles/decode-plate")

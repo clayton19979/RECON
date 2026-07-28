@@ -5,7 +5,52 @@ from typing import Callable, Literal
 
 from fastapi import APIRouter
 
-from .recon import vehicle_board_rows
+from .db import normalize_vin
+from .recon import unit_lifetime, vehicle_board_rows
+
+
+def vehicle_profit_rows(db: sqlite3.Connection, start: str | None, end: str | None, vin: str | None = None) -> list[dict]:
+    """One row per physical car: what it cost, what it sold for, what's left.
+
+    Keyed on the unit rather than on a recon record or a we-owe promise, which
+    is the only way the answer survives the car's own history -- a car bought,
+    recon'd, sold, and then brought back weeks later on a we-owe has its
+    purchase price on one record and that last repair bill on another, and
+    the owner's question ("what did we actually make on it?") spans both.
+
+    The date range filters on when the car was acquired or first written down,
+    not on when each cost landed: a car bought in March whose we-owe work
+    lands in May still belongs to March's numbers, because that's the car
+    whose margin the range is asking about.
+    """
+    end_bound = f"{end}T23:59:59" if end else None
+    rows = db.execute(
+        """SELECT DISTINCT u.id, u.created_at,
+                  (SELECT v.year || ' ' || v.make || ' ' || v.model FROM vehicles v
+                    WHERE v.unit_id = u.id ORDER BY v.id LIMIT 1) description,
+                  (SELECT v.vin FROM vehicles v WHERE v.unit_id = u.id AND v.vin != '' ORDER BY v.id LIMIT 1) vin,
+                  (SELECT rv.stock_number FROM recon_vehicles rv JOIN vehicles v ON v.id = rv.vehicle_id
+                    WHERE v.unit_id = u.id ORDER BY rv.id LIMIT 1) stock_number
+             FROM vehicle_units u
+             JOIN vehicles vv ON vv.unit_id = u.id
+            WHERE (:start IS NULL OR u.created_at >= :start)
+              AND (:end IS NULL OR u.created_at <= :end)
+              AND (:vin IS NULL OR u.vin_key = :vin)
+            ORDER BY u.created_at DESC""",
+        {"start": start, "end": end_bound, "vin": vin},
+    ).fetchall()
+
+    result = []
+    for row in rows:
+        lifetime = unit_lifetime(db, row["id"])
+        result.append({
+            **lifetime,
+            "vin": row["vin"] or lifetime["vin"],
+            "stock_number": row["stock_number"] or "",
+            "vehicle": row["description"] or "",
+            "acquired_at": row["created_at"],
+        })
+    return result
 
 
 def technician_productivity_rows(db: sqlite3.Connection, start: str | None, end: str | None) -> list[dict]:
@@ -52,6 +97,11 @@ def build_reports_router(connect: Callable[[], sqlite3.Connection]) -> APIRouter
     def vehicle_spend(start: str | None = None, end: str | None = None, segment: Literal["recon", "we_owe"] | None = None):
         with connect() as db:
             return vehicle_board_rows(db, start, end, segment)
+
+    @router.get("/reports/vehicle-profit")
+    def vehicle_profit(start: str | None = None, end: str | None = None, vin: str | None = None):
+        with connect() as db:
+            return vehicle_profit_rows(db, start, end, normalize_vin(vin))
 
     @router.get("/reports/technicians")
     def technician_productivity(start: str | None = None, end: str | None = None):

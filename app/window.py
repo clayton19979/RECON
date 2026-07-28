@@ -14,11 +14,19 @@ in a window RECON owns. WebView2 ships with Windows 11 and arrives on Windows
 from __future__ import annotations
 
 import logging
+import urllib.request
+from pathlib import Path
 from typing import Callable
+from urllib.parse import urlsplit, urlunsplit
 
 from app import paths
 
 log = logging.getLogger("tray")
+
+# How long to wait on the shop PC for the bytes behind a download. Backups are
+# small (a few hundred KB) and the server is on the LAN, so anything past this
+# means the server is wedged, not that the file is big.
+DOWNLOAD_TIMEOUT_SECONDS = 60
 
 MIN_WIDTH = 980
 MIN_HEIGHT = 640
@@ -87,10 +95,20 @@ OFFLINE_HTML = """<!doctype html>
 
 
 class Api:
-    """Exposed to the offline page as `window.pywebview.api`."""
+    """Exposed to the page as `window.pywebview.api`.
 
-    def __init__(self, on_retry: Callable[[], str | None]) -> None:
+    `retry` is what the offline screen calls; `save_file` is what every
+    download in the app routes through when RECON is running in its own
+    window rather than a browser tab.
+    """
+
+    def __init__(self, on_retry: Callable[[], str | None], current_url: Callable[[], str | None]) -> None:
         self._on_retry = on_retry
+        self._current_url = current_url
+        self._window = None
+
+    def bind(self, window) -> None:
+        self._window = window
 
     def retry(self) -> str | None:
         try:
@@ -98,6 +116,75 @@ class Api:
         except Exception:
             log.exception("Retry from the offline screen failed")
             return None
+
+    def _absolute(self, path: str) -> str:
+        """Turn an app-relative download path into a URL on the server this
+        window is already talking to.
+
+        Deliberately refuses anything that carries its own scheme or host: the
+        page drives this method, so restricting it to the origin the window was
+        opened with keeps it a download helper rather than a general-purpose
+        "fetch any URL and write it to disk" primitive.
+        """
+        if not path.startswith("/") or path.startswith("//"):
+            raise ValueError("Only same-origin paths can be saved")
+        base = self._current_url()
+        if not base:
+            raise ValueError("Not connected to the shop PC")
+        parts = urlsplit(base)
+        target = urlsplit(path)
+        return urlunsplit((parts.scheme, parts.netloc, target.path, target.query, ""))
+
+    def save_file(self, path: str, suggested_name: str) -> dict:
+        """Fetch a download from the server and let the operator choose where
+        it lands, with a real folder picker.
+
+        WebView2 downloads are off by default in pywebview, which is why every
+        `<a download>` in the app did nothing at all. Turning them on (see
+        `start()`) makes them work, but drops the file in the machine's
+        Downloads folder -- and the whole point of downloading a backup is to
+        put it somewhere deliberate, usually a flash drive. So the app asks
+        here instead, and only falls back to the browser's own handling when
+        there is no pywebview to ask (a workstation using a browser tab).
+        """
+        import webview
+
+        if self._window is None:
+            return {"ok": False, "error": "No window to prompt from"}
+        try:
+            url = self._absolute(path)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+
+        safe_name = Path(suggested_name or "").name or "recon-download"
+        try:
+            destination = self._window.create_file_dialog(
+                webview.SAVE_DIALOG,
+                directory=str(Path.home() / "Downloads"),
+                save_filename=safe_name,
+            )
+        except Exception:
+            log.exception("Could not open the save dialog")
+            return {"ok": False, "error": "Could not open the save dialog"}
+
+        # Cancelled: older builds return an empty tuple, newer ones None.
+        if not destination:
+            return {"ok": False, "cancelled": True}
+        chosen = Path(destination[0] if isinstance(destination, (list, tuple)) else destination)
+
+        try:
+            with urllib.request.urlopen(url, timeout=DOWNLOAD_TIMEOUT_SECONDS) as response:
+                payload = response.read()
+        except Exception as exc:
+            log.exception("Download failed: %s", url)
+            return {"ok": False, "error": f"Could not download from the shop PC: {exc}"}
+
+        try:
+            chosen.write_bytes(payload)
+        except OSError as exc:
+            log.exception("Could not write %s", chosen)
+            return {"ok": False, "error": f"Could not write that file: {exc}"}
+        return {"ok": True, "path": str(chosen), "bytes": len(payload)}
 
 
 class AppWindow:
@@ -112,6 +199,8 @@ class AppWindow:
         self._on_closing = on_closing
         self._window = None
         self._started = False
+        self._url: str | None = None
+        self._api = Api(self._on_retry, lambda: self._url)
 
     def _create(self, url: str | None):
         import webview
@@ -122,12 +211,17 @@ class AppWindow:
             height=DEFAULT_HEIGHT,
             min_size=(MIN_WIDTH, MIN_HEIGHT),
             background_color="#0c1118",
+            # Both windows get the api: the offline screen needs `retry`, and
+            # the app itself needs `save_file` for every download link.
+            js_api=self._api,
         )
+        self._url = url
         if url:
             window = webview.create_window(url=url, **kwargs)
         else:
-            window = webview.create_window(html=OFFLINE_HTML, js_api=Api(self._on_retry), **kwargs)
+            window = webview.create_window(html=OFFLINE_HTML, **kwargs)
         window.events.closing += self._handle_closing
+        self._api.bind(window)
         return window
 
     def _handle_closing(self) -> bool:
@@ -145,6 +239,13 @@ class AppWindow:
         import webview
 
         set_app_user_model_id()
+        # Off by default in pywebview, which silently swallowed every
+        # `<a download>` in the app -- backup downloads, the vehicles CSV and
+        # the report CSV all appeared to do nothing at all. The app routes
+        # downloads through `Api.save_file` so the operator gets a folder
+        # picker, but this stays on as the fallback for anything that reaches
+        # the webview directly.
+        webview.settings["ALLOW_DOWNLOADS"] = True
         self._window = self._create(url)
         self._started = True
         icon = paths.bundle_root() / "static" / "favicon.ico"
@@ -179,6 +280,7 @@ class AppWindow:
 
     def load(self, url: str) -> None:
         if self._window is not None:
+            self._url = url
             self._window.load_url(url)
 
     def destroy(self) -> None:

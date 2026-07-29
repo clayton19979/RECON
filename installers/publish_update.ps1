@@ -32,8 +32,18 @@ if ($LASTEXITCODE -ne 0) { throw "GitHub CLI is not signed in. Run:  gh auth log
 # A version that's already out is a wall, not a warning: shop PCs compare
 # numbers, so re-releasing 1.1.0 with different bits means some machines
 # "on 1.1.0" run code other machines on 1.1.0 don't have.
-gh release view "v$version" 2>$null | Out-Null
-if ($LASTEXITCODE -eq 0) {
+#
+# The stderr redirect is deliberately NOT `2>$null`: under Windows PowerShell
+# 5.1 with $ErrorActionPreference = "Stop", redirecting a native command's
+# stderr wraps its first stderr line in an ErrorRecord and throws -- and
+# "release not found" is written to stderr, so the script would die on
+# exactly the normal case (publishing a version that doesn't exist yet).
+$eap = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
+gh release view "v$version" 2>&1 | Out-Null
+$releaseExists = ($LASTEXITCODE -eq 0)
+$ErrorActionPreference = $eap
+if ($releaseExists) {
     throw "Release v$version already exists. Bump the version (app\version.py, version_info.txt, installers\RECON.iss) first."
 }
 

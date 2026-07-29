@@ -12,7 +12,7 @@ import pystray
 import uvicorn
 from PIL import Image
 
-from app import deployment, discovery, mark, paths, updates, usb_backup
+from app import deployment, discovery, mark, online_updates, paths, updates, usb_backup
 from app.backup import (
     AUTO_BACKUP_INTERVAL_MINUTES,
     backup_database,
@@ -85,6 +85,10 @@ def pick_backup_destination(initial_dir: Path) -> Path | None:
     return Path(chosen) if chosen else None
 
 PORT = 8787
+# Daily is the tempo updates actually happen at -- a build published from
+# home tonight is on the shop PC before tomorrow's first ticket. The tray
+# menu covers "I just published it, get it now".
+ONLINE_UPDATE_CHECK_HOURS = 24
 # Remembers the last "Backup To..." folder -- both so a USB stick doesn't
 # have to be re-navigated every time, and so the automatic backups know
 # where to mirror a copy once it's plugged in.
@@ -269,6 +273,7 @@ class TrayApp:
         ok = self.start_server()
         self._start_responder()
         threading.Thread(target=self._auto_backup_loop, daemon=True).start()
+        threading.Thread(target=self._online_update_loop, daemon=True).start()
         if icon is not None:
             icon.icon = ICON_OK if ok else ICON_DOWN
             icon.notify("This PC is now the master. Other PCs can connect to it.", "RECON")
@@ -440,6 +445,60 @@ class TrayApp:
         updates_dir.mkdir(parents=True, exist_ok=True)
         os.startfile(updates_dir)
 
+    def check_online_updates(self, _icon: pystray.Icon, _item: pystray.MenuItem) -> None:
+        """Tray click: ask the release source right now instead of waiting for
+        the daily check. On a thread because a 40 MB download must not hold
+        the tray menu hostage."""
+        threading.Thread(target=self._check_online, args=(True,), daemon=True).start()
+
+    def _check_online(self, manual: bool) -> None:
+        result = online_updates.check_and_fetch(DATA_ROOT)
+        status = result.get("status")
+        if status == "downloaded":
+            # Worth a toast even on the automatic check -- but it only ever
+            # announces; installing stays a deliberate click in the app.
+            log.info("Online check downloaded %s", result.get("filename"))
+            if self.icon is not None:
+                self.icon.notify(
+                    f"RECON {result.get('version')} downloaded. The app will offer to install it.",
+                    "RECON",
+                )
+            return
+        if not manual or self.icon is None:
+            return
+        if status == "off":
+            self.icon.notify(
+                "Online updates aren't set up on this PC.\n"
+                f"Create {online_updates.config_path(DATA_ROOT)} first.",
+                "RECON",
+            )
+        elif status == "already":
+            self.icon.notify(
+                f"Version {result.get('version')} is already downloaded and waiting to be installed.",
+                "RECON",
+            )
+        elif status == "error":
+            self.icon.notify(f"Couldn't check for updates: {result.get('detail')}", "RECON")
+        else:
+            self.icon.notify("You're on the newest version.", "RECON")
+
+    def _online_update_loop(self) -> None:
+        """Runs for the life of the process on the master: once a day, sees
+        whether a new build has been published and pulls it into the updates
+        folder, where the existing offer-and-install flow takes over.
+
+        The first check waits a couple of minutes so a shop PC switched on at
+        opening time has its network up before anything asks the internet.
+        Unconfigured installs pass through check_and_fetch as a no-op, so the
+        loop costs nothing until update_source.json exists."""
+        time.sleep(120)
+        while True:
+            try:
+                self._check_online(manual=False)
+            except Exception:
+                log.exception("Online update check failed")
+            time.sleep(ONLINE_UPDATE_CHECK_HOURS * 3600)
+
     def _auto_backup_loop(self) -> None:
         """Runs for the life of the process: snapshots the database whenever
         the last one has gone stale, then checks again shortly after. Protects
@@ -516,6 +575,7 @@ class TrayApp:
             if network_mode_enabled():
                 self._start_responder()
             threading.Thread(target=self._auto_backup_loop, daemon=True).start()
+            threading.Thread(target=self._online_update_loop, daemon=True).start()
             log.info("This PC is the master (role fixed at install)")
 
         menu = pystray.Menu(
@@ -551,6 +611,10 @@ class TrayApp:
             # so it's the only one where dropping a build in achieves anything.
             pystray.MenuItem(
                 "Install Update From File...", self.show_updates_folder,
+                visible=lambda _item: self.mode == deployment.MASTER,
+            ),
+            pystray.MenuItem(
+                "Check Online for Updates", self.check_online_updates,
                 visible=lambda _item: self.mode == deployment.MASTER,
             ),
             pystray.MenuItem("Restart Server", self.restart, visible=lambda _item: self.mode == deployment.MASTER),

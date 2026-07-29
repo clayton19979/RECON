@@ -8,6 +8,8 @@ backups/
 # from source it lands next to the repo.
 webview/
 deployment.json
+# Where the shop PC checks online for new releases; may hold a repo token.
+update_source.json
 *.pyc
 # Runtime note of the chosen USB mirror target, written next to the DB.
 backup_destination.json

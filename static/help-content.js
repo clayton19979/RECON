@@ -471,14 +471,16 @@ const HELP_TOPICS = [
 
   {
     id: "invoice-approval",
-    title: "Why an invoice was held for approval",
+    title: "Why an invoice was held for review",
     view: "accounting",
     aliases: ["held", "approval", "over 500", "pending", "why didn't it post", "manager approval", "on hold", "review"],
-    summary: "Invoices over $500 are held for a manual approval step instead of posting straight through.",
+    summary: "Invoices are held only when something about them doesn't add up — the old $500 approval limit is gone.",
     steps: [
-      "The form warns you before you submit when the total crosses the threshold.",
-      "Held invoices appear in the table below with their status, and in the Control Log on the right.",
-      "A manager approves it from that table to finish posting it.",
+      "There is no longer a dollar limit. An invoice of any size posts straight through.",
+      "An invoice is held when the vendor name doesn't match one you've set up, when that invoice number was already posted, when the line items don't add up to the total, or when you'd be receiving more of a part than the ticket ordered.",
+      "Held invoices appear in the table below with their status, and in the Control Log on the right, with the reason spelled out.",
+      "Fix whatever it names — usually the vendor spelling or a typo in the total — and post it again.",
+      "Over $500 you'll see a note suggesting you double-check the invoice. That's a nudge, not a hold; it posts either way.",
     ],
     related: ["post-vendor-invoice", "manage-vendors"],
   },
@@ -654,14 +656,33 @@ const HELP_TOPICS = [
     title: "How backups work",
     view: "backup",
     aliases: ["backup", "back up", "safe", "am i protected", "lost data", "copy", "automatic backup"],
-    summary: "The whole database is backed up automatically every 24 hours, and the last 14 are kept.",
+    summary: "The whole database is backed up automatically every few minutes whenever something has changed, and older backups thin out over time instead of being dropped.",
     steps: [
-      "Open Backup & Restore to see when the last backup ran and how many are on hand.",
+      "Open Backup & Restore to see whether anything is waiting to be backed up and how many backups are on hand.",
       "Click 'Create Backup Now' any time you want one immediately — before something risky, for instance.",
       "Every backup in the list can be downloaded, restored, or deleted.",
+      "Nothing is backed up when nothing has changed, so a quiet night doesn't fill the folder with identical copies.",
+      "Recent backups are kept close together, then hourly, then daily, then monthly — so you can undo the last ten minutes or go back to last month.",
       "Backups only run on the main computer, so that one needs to be on for it to happen.",
     ],
     related: ["restore-a-backup", "backup-to-usb"],
+  },
+
+  {
+    id: "update-recon",
+    title: "Updating RECON",
+    view: "backup",
+    aliases: ["update", "upgrade", "new version", "version", "out of date", "install update", "newer", "latest"],
+    summary: "The main computer hands out updates to every other PC — you update it once, and the rest follow.",
+    steps: [
+      "When a newer version is available, a bar appears across the top of RECON offering it. Nothing installs until you click Update Now, so it can never interrupt a ticket you're in the middle of.",
+      "To put a new version on the main computer: right-click the RECON tray icon, choose 'Install Update From File...', and copy the RECON-Setup file into the folder that opens.",
+      "That's all the main computer needs. Every other PC in the shop will see the update on its own and offer it.",
+      "On the other PCs, click Update Now and follow the installer. Windows will ask for permission — that's normal, RECON installs for the whole machine.",
+      "Your records, backups and settings are untouched by an update; they live outside the program folder on purpose.",
+      "If a PC shows the notice but no Update Now button, you're looking at RECON in a web browser. Open the RECON app on that computer instead.",
+    ],
+    related: ["backup-basics", "backup-to-usb"],
   },
 
   {
@@ -748,6 +769,6 @@ const HELP_GROUPS = [
   },
   {
     title: "Reports, backups and your data",
-    ids: ["run-a-report", "export-and-print-reports", "backup-basics", "backup-to-usb", "restore-a-backup"],
+    ids: ["run-a-report", "export-and-print-reports", "backup-basics", "backup-to-usb", "restore-a-backup", "update-recon"],
   },
 ];

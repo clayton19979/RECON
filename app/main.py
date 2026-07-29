@@ -17,6 +17,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from . import paths
 from .accounting import build_accounting_router
 from .backup_routes import build_backup_router
+from .update_routes import build_update_router
 from .db import RECON_SHOP_CUSTOMER_ID, connect as db_connect, init_db, now
 from .export import build_export_router
 from .jobs import build_jobs_router
@@ -241,6 +242,10 @@ def create_app(db_path: Path = DEFAULT_DB, backups_dir: Path = DEFAULT_BACKUPS_D
     app.include_router(build_tasks_router(connect, now))
     app.include_router(build_jobs_router(connect, now))
     app.include_router(build_backup_router(db_path, backups_dir))
+    # backups_dir is data_root/backups, so its parent is where deployment.json
+    # and the updates folder live -- derived rather than re-resolved, so the
+    # tests' tmp_path data root is honoured the same as the real one.
+    app.include_router(build_update_router(backups_dir.parent))
 
     @app.get("/api/health")
     def health():

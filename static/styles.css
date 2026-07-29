@@ -2043,6 +2043,15 @@ th.sel-col, td.sel-col { width: 32px; padding-right: 0; }
 .stats-backup .stat:has(.stat-value.warn) { border-top-color: var(--warn); }
 .stats-backup .stat:has(.stat-value.crit) { border-top-color: var(--crit); }
 
+/* Update notice. Accent rather than warn: a new version is good news, not a
+   fault, and the shop's warning colour is spent on things that are wrong. */
+.update-bar {
+  display: flex; align-items: center; gap: 10px;
+  background: var(--accent-tint); border-bottom: 1px solid var(--accent);
+  padding: 8px 18px; font-size: 13px; font-weight: 600; color: var(--accent-strong);
+}
+.update-bar-text { flex: 1; }
+
 .backup-warning {
   background: var(--warn-tint); border: 1px solid var(--warn); border-left-width: 3px;
   border-radius: var(--radius); padding: 10px 16px; font-size: 12.5px; font-weight: 600;

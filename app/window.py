@@ -186,6 +186,51 @@ class Api:
             return {"ok": False, "error": f"Could not write that file: {exc}"}
         return {"ok": True, "path": str(chosen), "bytes": len(payload)}
 
+    def install_update(self, path: str, filename: str) -> dict:
+        """Fetch the installer the shop PC is offering and run it.
+
+        Deliberately a separate method from `save_file` even though both
+        download: this one hands the result to the operating system to
+        execute, which is not something the generic "save a file somewhere"
+        helper should ever be able to do. It only accepts a same-origin path
+        (see `_absolute`), and only ever writes to a temp file it names
+        itself, so the page cannot steer it at an arbitrary executable.
+
+        The installer needs elevation, so Windows raises its own UAC prompt.
+        Declining it leaves the running app untouched -- the update simply
+        doesn't happen, which is the right failure.
+        """
+        import subprocess
+        import tempfile
+
+        try:
+            url = self._absolute(path)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+
+        safe_name = Path(filename or "").name
+        if not safe_name.lower().endswith(".exe"):
+            return {"ok": False, "error": "That update doesn't look like an installer"}
+
+        target = Path(tempfile.gettempdir()) / "RECON-updates" / safe_name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with urllib.request.urlopen(url, timeout=DOWNLOAD_TIMEOUT_SECONDS) as response:
+                target.write_bytes(response.read())
+        except Exception as exc:
+            log.exception("Could not download the update from %s", url)
+            return {"ok": False, "error": f"Could not download the update: {exc}"}
+
+        try:
+            # Inno Setup's own /SILENT would skip the prompts, but this shop
+            # updates rarely and a visible installer is the clearer thing to
+            # hand someone -- they see what is happening and can back out.
+            subprocess.Popen([str(target)], close_fds=True)
+        except OSError as exc:
+            log.exception("Could not launch the installer at %s", target)
+            return {"ok": False, "error": f"Could not start the installer: {exc}"}
+        return {"ok": True, "path": str(target)}
+
 
 class AppWindow:
     """Owns the single RECON window.

@@ -127,10 +127,34 @@ def test_every_topic_appears_in_exactly_one_group(topics: list[dict], groups: li
     assert not duplicated, f"topics listed in more than one group: {duplicated}"
 
 
+def _uncommented(html: str) -> str:
+    """index.html with its HTML comments stripped.
+
+    Load-bearing here: Help was removed by commenting its markup and script
+    tags out, so a plain substring search still finds every one of them and
+    would report a screen that cannot possibly render as fully wired.
+    """
+    return re.sub(r"<!--.*?-->", "", html, flags=re.DOTALL)
+
+
+def help_is_in_the_build(html: str) -> bool:
+    """Whether index.html actually loads help.js.
+
+    Help was taken out of the UI on 2026-07-28 -- unfinished, so removed
+    rather than left half-present. The content checks above still run, because
+    the topics are being worked on and drift is exactly what they catch. The
+    wiring checks below only make sense once it's shipping again, so they key
+    off this and light back up on their own the moment the script tag returns.
+    """
+    return '<script src="/assets/help.js"></script>' in _uncommented(html)
+
+
 def test_help_js_only_looks_up_ids_that_exist(html: str) -> None:
     """The same guarantee test_static_assets.py gives app.js. help.js builds
     most of its own markup, but the handful of elements it reaches for in
     index.html have to actually be there."""
+    if not help_is_in_the_build(html):
+        pytest.skip("Help is not loaded by index.html -- see help_is_in_the_build()")
     js = HELP_JS.read_text(encoding="utf-8")
     declared = set(re.findall(r'id="([^"]+)"', html))
     referenced = set(re.findall(r'getElementById\("([^"]+)"\)', js))
@@ -139,6 +163,27 @@ def test_help_js_only_looks_up_ids_that_exist(html: str) -> None:
 
 
 def test_help_screen_is_reachable(html: str, rail_views: set[str]) -> None:
+    if not help_is_in_the_build(html):
+        pytest.skip("Help is not loaded by index.html -- see help_is_in_the_build()")
     assert "help" in rail_views, "the Help rail button is gone -- the screen is unreachable by mouse"
     assert 'id="view-help"' in html, "the Help rail button has no view to switch to"
     assert 'id="help-dialog"' in html, "the F1 help overlay markup is missing"
+
+
+def test_help_is_removed_cleanly_or_wired_fully(html: str, rail_views: set[str]) -> None:
+    """Half-removed is the bad state: a rail button that opens nothing, or an
+    F1 key that reaches for a dialog that isn't there. Whichever way Help is
+    currently set, it has to be set that way consistently."""
+    live = _uncommented(html)
+    pieces = {
+        "help.js script tag": '<script src="/assets/help.js"></script>' in live,
+        "help-content.js script tag": '<script src="/assets/help-content.js"></script>' in live,
+        "rail button": "help" in rail_views,
+        "help view": 'id="view-help"' in live,
+        "F1 dialog": 'id="help-dialog"' in live,
+    }
+    present = {name for name, found in pieces.items() if found}
+    assert present in (set(), set(pieces)), (
+        "Help is half-wired -- present: " + (", ".join(sorted(present)) or "nothing")
+        + " / missing: " + (", ".join(sorted(set(pieces) - present)) or "nothing")
+    )

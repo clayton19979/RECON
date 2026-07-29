@@ -12,7 +12,7 @@ import pystray
 import uvicorn
 from PIL import Image
 
-from app import deployment, discovery, mark, paths, usb_backup
+from app import deployment, discovery, mark, paths, updates, usb_backup
 from app.backup import (
     AUTO_BACKUP_INTERVAL_MINUTES,
     backup_database,
@@ -428,6 +428,18 @@ class TrayApp:
         DEFAULT_BACKUPS_DIR.mkdir(parents=True, exist_ok=True)
         os.startfile(DEFAULT_BACKUPS_DIR)
 
+    def show_updates_folder(self, _icon: pystray.Icon, _item: pystray.MenuItem) -> None:
+        """Opens the folder a new build gets dropped into.
+
+        This is the whole update workflow on the shop PC's side: copy
+        RECON-Setup-x.y.z.exe in here off the USB stick, and every workstation
+        (and this PC) starts offering it. Creating the folder on demand means
+        there's somewhere to drop the file the first time it's ever needed,
+        rather than an error about a path that doesn't exist yet."""
+        updates_dir = updates.updates_dir(DATA_ROOT)
+        updates_dir.mkdir(parents=True, exist_ok=True)
+        os.startfile(updates_dir)
+
     def _auto_backup_loop(self) -> None:
         """Runs for the life of the process: snapshots the database whenever
         the last one has gone stale, then checks again shortly after. Protects
@@ -534,6 +546,12 @@ class TrayApp:
             ),
             pystray.MenuItem(
                 "Show Backups Folder", self.show_backups_folder, visible=lambda _item: self.mode == deployment.MASTER
+            ),
+            # Master only: this PC is what hands updates to the workstations,
+            # so it's the only one where dropping a build in achieves anything.
+            pystray.MenuItem(
+                "Install Update From File...", self.show_updates_folder,
+                visible=lambda _item: self.mode == deployment.MASTER,
             ),
             pystray.MenuItem("Restart Server", self.restart, visible=lambda _item: self.mode == deployment.MASTER),
             pystray.MenuItem("Exit", self.quit_app),

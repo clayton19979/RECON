@@ -58,10 +58,6 @@
       <svg viewBox="0 0 24 24"><path d="M12 4v12m0 0l-4-4m4 4l4-4M4 20h16"/></svg>
       <span>Backup</span>
     </button>
-    <button class="rail-item" data-view="help">
-      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.6 9.4a2.5 2.5 0 114.15 2.2c-.9.7-1.75 1.2-1.75 2.4M12 17.2h.01"/></svg>
-      <span>Help</span>
-    </button>
     <div class="rail-spacer"></div>
     <div class="theme-picker">
       <button class="rail-theme" id="theme-toggle" aria-label="Choose theme" title="Choose theme">
@@ -79,6 +75,13 @@
   </nav>
 
   <div class="main">
+    <!-- Sits above the topbar so it's seen without being modal: an advisor
+         mid-ticket is never interrupted, and nothing installs until asked. -->
+    <div class="update-bar" id="update-bar" hidden>
+      <span class="update-bar-text" id="update-bar-text"></span>
+      <button type="button" class="btn btn-primary btn-sm" id="update-install">Update Now</button>
+      <button type="button" class="btn btn-ghost btn-sm" id="update-dismiss" title="Hide until the next time RECON starts">Later</button>
+    </div>
     <header class="topbar">
       <div class="topbar-shop">
         <div class="shop-name">Discount Auto Repair</div>
@@ -114,9 +117,6 @@
           <div class="notif-list" id="notif-list"></div>
         </div>
       </div>
-      <button class="notif-toggle" id="help-open-btn" type="button" aria-label="Help" title="Help (F1)">
-        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.6 9.4a2.5 2.5 0 114.15 2.2c-.9.7-1.75 1.2-1.75 2.4M12 17.2h.01"/></svg>
-      </button>
       <label class="whoami">
         Working as
         <select id="current-user"><option value="">Unspecified</option></select>
@@ -983,24 +983,16 @@
         </div>
       </section>
 
-      <!-- HELP -->
-      <section class="view" id="view-help">
-        <div class="page-head">
-          <div>
-            <h1>Help</h1>
-            <p class="page-desc">How everything in RECON works, in the order you'd meet it. Press <kbd>F1</kbd> from any screen to search this without leaving what you're doing.</p>
-          </div>
-          <div class="page-head-actions">
-            <button type="button" class="btn btn-ghost" id="help-print" title="Print the whole guide">Print Guide</button>
-          </div>
-        </div>
+      <!-- HELP — taken out of the UI on 2026-07-28, not finished enough to
+           ship. The screen, the F1 overlay, the per-page "?" buttons and the
+           rail item are all unwired together, so nothing half-present is left
+           for someone to stumble into.
 
-        <div class="help-filter-wrap">
-          <input id="help-filter" class="filters-search" type="search" placeholder="Filter — try “core”, “we owe”, “backup”…" aria-label="Filter help topics" autocomplete="off">
-        </div>
-
-        <div id="help-topics"></div>
-      </section>
+           Nothing was deleted: static/help.js and static/help-content.js are
+           untouched on disk and tests/test_help_content.py still checks the
+           content stays honest. To bring it back, restore this section, the
+           rail item, the topbar #help-open-btn, the #help-dialog, and the two
+           script tags at the bottom of this file. -->
 
     </div>
   </div>
@@ -1421,22 +1413,7 @@
      mid-task; clearing the box searches everything. Separate key from "?"
      because they answer different questions -- that one is which key does a
      thing, this one is how a thing works. -->
-<dialog id="help-dialog">
-  <div class="modal help-modal">
-    <div class="help-modal-head">
-      <div style="flex:1">
-        <h2>Help</h2>
-        <input id="help-search" class="filters-search" type="search" placeholder="What are you trying to do?" aria-label="Search help" autocomplete="off">
-        <p class="help-modal-hint" id="help-scope"></p>
-      </div>
-      <button class="icon-btn" type="button" id="help-close" aria-label="Close">×</button>
-    </div>
-    <div class="help-results" id="help-results"></div>
-    <div style="padding:0 20px 16px">
-      <button type="button" class="btn btn-ghost btn-sm" id="help-browse-all">Browse the full guide</button>
-    </div>
-  </div>
-</dialog>
+<!-- The F1 help overlay lived here; unwired with the rest of Help. -->
 
 <!-- Keyboard shortcuts overlay: "?" from any view. The board-hint line under
      the vehicles table documents that one table; this is the whole map. -->
@@ -1495,8 +1472,12 @@
 <div id="toast"></div>
 <div id="print-report" class="print-only"></div>
 <script src="/assets/app.js"></script>
-<!-- After app.js: help.js calls showView() and expects the views to exist. -->
+<!-- Help is not loaded: the screen isn't finished, so it's out of the build
+     rather than half-present. Both files are still on disk. To bring it back,
+     restore these two tags, keeping them after app.js (help.js calls
+     showView() and expects the views to exist), plus the markup noted above.
 <script src="/assets/help-content.js"></script>
 <script src="/assets/help.js"></script>
+-->
 </body>
 </html>

@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import ctypes
 import logging
+import sys
 import threading
 from collections.abc import Callable
 from ctypes import wintypes
@@ -31,23 +32,28 @@ log = logging.getLogger("tray")
 ERROR_ALREADY_EXISTS = 183
 WAIT_OBJECT_0 = 0x00000000
 WAIT_TIMEOUT = 0x00000102
-
-_kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-
-_kernel32.CreateMutexW.argtypes = [wintypes.LPVOID, wintypes.BOOL, wintypes.LPCWSTR]
-_kernel32.CreateMutexW.restype = wintypes.HANDLE
-_kernel32.CreateEventW.argtypes = [wintypes.LPVOID, wintypes.BOOL, wintypes.BOOL, wintypes.LPCWSTR]
-_kernel32.CreateEventW.restype = wintypes.HANDLE
-_kernel32.OpenEventW.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.LPCWSTR]
-_kernel32.OpenEventW.restype = wintypes.HANDLE
-_kernel32.SetEvent.argtypes = [wintypes.HANDLE]
-_kernel32.SetEvent.restype = wintypes.BOOL
-_kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
-_kernel32.WaitForSingleObject.restype = wintypes.DWORD
-_kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
-_kernel32.CloseHandle.restype = wintypes.BOOL
-
 EVENT_MODIFY_STATE = 0x0002
+
+# ctypes.WinDLL only exists on Windows. Importing this module anywhere else
+# (a dev machine, this test suite off Windows) must not blow up just from
+# being imported -- only from actually trying to use it, which callers on
+# other platforms should never do since SingleInstance is a Windows-only
+# concept.
+if sys.platform == "win32":
+    _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+
+    _kernel32.CreateMutexW.argtypes = [wintypes.LPVOID, wintypes.BOOL, wintypes.LPCWSTR]
+    _kernel32.CreateMutexW.restype = wintypes.HANDLE
+    _kernel32.CreateEventW.argtypes = [wintypes.LPVOID, wintypes.BOOL, wintypes.BOOL, wintypes.LPCWSTR]
+    _kernel32.CreateEventW.restype = wintypes.HANDLE
+    _kernel32.OpenEventW.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.LPCWSTR]
+    _kernel32.OpenEventW.restype = wintypes.HANDLE
+    _kernel32.SetEvent.argtypes = [wintypes.HANDLE]
+    _kernel32.SetEvent.restype = wintypes.BOOL
+    _kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    _kernel32.WaitForSingleObject.restype = wintypes.DWORD
+    _kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    _kernel32.CloseHandle.restype = wintypes.BOOL
 
 
 class SingleInstance:

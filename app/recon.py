@@ -662,9 +662,11 @@ def build_recon_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
         # This vehicle's own profit still counts only its own recon spend, so
         # the recon screen keeps meaning what it always did; `lifetime` is
         # where the whole-car picture (we-owe work included) lives.
+        # Same rule as unit_lifetime(): no purchase price on file means no
+        # honest profit, not a profit that's really just the sale price.
         detail["profit"] = (
             round(lifetime["sale_price"] - lifetime["purchase_price"] - rollup["total_cost"], 2)
-            if lifetime["sale_price"] is not None
+            if lifetime["sale_price"] is not None and lifetime["purchase_price"] > 0
             else None
         )
         detail["last_activity"] = last_activity_detail(db, "recon_vehicle_id", recon_id, detail["created_at"])

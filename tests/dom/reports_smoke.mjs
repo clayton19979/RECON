@@ -261,7 +261,9 @@ failNextReport = false;
 // ...and recovering repaints all three.
 click(w, doc.querySelector('[data-report-type="vehicle-spend"]'));
 await settle();
-ok(doc.querySelectorAll("#report-stats .stat").length === 4, "the summary cards didn't come back after a failed report");
+// Three, same as the first vehicle-spend render asserted above -- this line
+// used to expect four, which is the technicians shape's card count.
+ok(doc.querySelectorAll("#report-stats .stat").length === 3, "the summary cards didn't come back after a failed report");
 ok(bars().length === 3, "the chart didn't come back after a failed report");
 ok(!doc.querySelector("#report-output .empty-state.error"), "the error message outlived the failure");
 

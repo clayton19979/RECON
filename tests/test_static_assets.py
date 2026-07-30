@@ -16,8 +16,31 @@ from pathlib import Path
 import pytest
 
 STATIC = Path(__file__).resolve().parent.parent / "static"
-APP_JS = STATIC / "app.js"
+JS_DIR = STATIC / "js"
+MAIN_JS = JS_DIR / "main.js"
 INDEX_HTML = STATIC / "index.html"
+
+
+def js_module_order() -> list[Path]:
+    """The front-end's modules in main.js import order, main.js last."""
+    main = MAIN_JS.read_text(encoding="utf-8")
+    names = re.findall(r'"\./([-\w]+\.js)"', main)
+    assert names, "main.js imports nothing -- has the entry point moved?"
+    return [JS_DIR / name for name in names] + [MAIN_JS]
+
+
+def flat_app_js() -> str:
+    """The modules concatenated back into the flat script they were split
+    from: import lines dropped, `export ` prefixes stripped. Module bodies
+    are declaration-only by convention (tests/dom/harness.mjs evals this
+    same reconstruction), so this is behavior-identical to the old app.js
+    and every regex below keeps meaning what it always meant."""
+    parts = []
+    for path in js_module_order():
+        src = path.read_text(encoding="utf-8")
+        lines = [ln.removeprefix("export ") for ln in src.split("\n") if not ln.startswith("import ")]
+        parts.append("\n".join(lines))
+    return "\n;\n".join(parts)
 
 # IDs that app.js legitimately looks up but index.html never declares, because
 # they're created at runtime. Keep this list short and explain every entry --
@@ -39,7 +62,7 @@ RUNTIME_CREATED_IDS: set[str] = {
 
 @pytest.fixture(scope="module")
 def js() -> str:
-    return APP_JS.read_text(encoding="utf-8")
+    return flat_app_js()
 
 
 @pytest.fixture(scope="module")
@@ -59,6 +82,32 @@ def referenced_ids(js: str) -> dict[str, int]:
         name = match.group(1)[1:]
         found[name] = found.get(name, 0) + 1
     return found
+
+
+def test_module_bodies_are_declaration_only() -> None:
+    """The DOM harness and this file's js fixture rebuild the flat script by
+    concatenating the modules, which is only sound while module bodies declare
+    things rather than do things -- main.js is the one place statements live
+    (the wire calls). A top-level statement in any other module would run in
+    concatenation order in the harness but in import-graph order in the real
+    app, and that divergence is exactly what this split was designed to
+    avoid. Wrap it in a wire function instead."""
+    offenders = []
+    for path in js_module_order():
+        if path.name == "main.js":
+            continue
+        in_template = False
+        for n, line in enumerate(path.read_text(encoding="utf-8").split("\n"), 1):
+            starts_statement = (
+                not in_template
+                and re.match(r"[A-Za-z_$]", line)
+                and not re.match(r"(import|export|function|async|const|let|var|class)\b", line)
+            )
+            if starts_statement:
+                offenders.append(f"{path.name}:{n}: {line[:70]}")
+            if (line.count("`") - line.count("\\`")) % 2:
+                in_template = not in_template
+    assert not offenders, "top-level statements outside main.js:\n" + "\n".join(offenders)
 
 
 def test_every_referenced_element_id_exists(js: str, declared_ids: set[str]) -> None:

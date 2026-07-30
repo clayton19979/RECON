@@ -109,11 +109,17 @@ ok(heldValue && heldValue.textContent === "1", "one review_required audit should
 /* ---------- vendor and PO selects ---------- */
 ok($$("#ap-vendor option").map((o) => o.value).join("|") === "WorldPac|NAPA",
    `vendor select holds ${$$("#ap-vendor option").map((o) => o.value).join("|")}`);
-const poValues = $$("#ap-po option").map((o) => o.value);
-// The PO you give a vendor is the stock number where there is one.
-ok(poValues.includes("R-1042"), `the recon PO isn't offered by stock number: ${JSON.stringify(poValues)}`);
-ok(poValues.includes("RO-2607-0002"), "the we-owe RO (no stock number) isn't offered by RO number");
-ok(!poValues.includes("R-0999"), "a completed RO is still being offered as a PO");
+// The ticket picker posts an order id; the reference it prefills into the PO
+// box is the stock number where there is one, which rides along in data-po.
+// (These assertions used to read option.value, from back when the select held
+// PO strings and the server reverse-matched them to a ticket.)
+const ticketOptions = $$("#ap-order option").filter((o) => o.value);
+const ticketIds = ticketOptions.map((o) => o.value);
+const ticketRefs = ticketOptions.map((o) => o.dataset.po);
+ok(ticketIds.includes("42"), `the open recon ticket isn't offered: ${JSON.stringify(ticketIds)}`);
+ok(ticketRefs.includes("R-1042"), `the recon ticket's reference isn't its stock number: ${JSON.stringify(ticketRefs)}`);
+ok(ticketRefs.includes("RO-2607-0002"), "the we-owe ticket (no stock number) doesn't fall back to its RO number");
+ok(!ticketIds.includes("60"), "a completed RO is still being offered as a ticket");
 
 /* ---------- table rows: clickable, voided, retail ---------- */
 const apRows = $$("#ap-table tr");

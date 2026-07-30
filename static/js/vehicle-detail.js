@@ -1,0 +1,2296 @@
+import { $, $$, api, fmtHours, get, patch, post, put } from "./core.js";
+import { toast } from "./notify.js";
+import { confirmAction } from "./confirm.js";
+import { currentActor, esc, fmtDate, money, relativeTime, withLoading } from "./shortcuts.js";
+import { emptyState } from "./empty-states.js";
+import { AUTH_METHOD_LABEL, ITEM_STATUS_LABEL, KIND_GROUP_LABEL, KIND_GROUP_ORDER, PAY_METHOD_LABEL, STATUS_LABEL, STATUS_OPTIONS, STATUS_PILL_CLASS, fieldLabels, state } from "./state.js";
+import { showView } from "./error-boundary.js";
+import { STALLED_AFTER_DAYS } from "./vehicles-board.js";
+import { openMoveSegmentDialog } from "./move-ticket.js";
+import { openReceiveDialog } from "./dialog-receive-parts.js";
+import { openAddVehicleDialog, openCustomerEditor } from "./customers.js";
+import { loadTasksView } from "./task-bulk.js";
+
+/* ==================================================================
+   VEHICLE DETAIL
+   ================================================================== */
+export async function openVehicleDetail(segment, id) {
+  state.detail = { segment, id, item: null, order: null };
+  await loadVehicleDetail();
+}
+// showView only knows named views wired to the rail; vehicle-detail is entered directly.
+// A retail vehicle's home screen is Customers, not the recon/we-owe board --
+// the rail highlight and the back link both say where Back actually goes.
+function detailHomeView() {
+  return state.detail.segment === "retail" ? "customers" : "vehicles";
+}
+function enterVehicleDetailView() {
+  const home = detailHomeView();
+  $$(".view").forEach((v) => v.classList.toggle("active", v.id === "view-vehicle-detail"));
+  $$(".rail-item").forEach((b) => b.classList.toggle("active", b.dataset.view === home));
+  $("#back-to-vehicles-label").textContent = home === "customers" ? "Back to Customers" : "Back to Vehicles";
+}
+
+export async function loadVehicleDetail() {
+  const { segment, id } = state.detail;
+  let item, orders;
+  try {
+    // Three segments, three entities: recon/we-owe pages are keyed by their
+    // container row's id; a retail page is keyed by the vehicle row itself.
+    item = segment === "recon" ? await get(`/api/recon/vehicles/${id}`)
+      : segment === "retail" ? await get(`/api/retail/vehicles/${id}`)
+      : await get(`/api/we-owe/${id}`);
+    const allOrders = await get(`/api/orders?segment=${segment}`);
+    orders = allOrders.filter((o) => segment === "recon" ? o.recon_vehicle_id === id
+      : segment === "retail" ? o.vehicle_id === id
+      : o.we_owe_id === id)
+      .sort((a, b) => b.id - a.id);
+  } catch (err) {
+    toast(`Could not load vehicle: ${err.message}`, true);
+    return;
+  }
+  state.detail.item = item;
+  state.detail.ordersHistory = orders;
+  // A vehicle can have more than one RO over its life (recon prep now, a
+  // warranty comeback later); the advisor picking an older one from Order
+  // History must survive every other action on this page re-loading the
+  // detail (adding a note, saving assignment, etc.) until they navigate to
+  // a different vehicle, which is what resets selectedOrderId to null.
+  // Excludes a just-voided order, though -- voiding the one currently on
+  // screen must fall back to another open/recent order, not keep showing
+  // the dead ticket with everything still editable except the void button.
+  const preferred = state.detail.selectedOrderId != null ? orders.find((o) => o.id === state.detail.selectedOrderId && !o.voided) : null;
+  // Prefer a still-open order, but fall back to the most recent one (orders
+  // is sorted newest-first) rather than pretending there's no order at all
+  // once it reaches Complete -- otherwise a finished/archived ticket could
+  // never be looked back at, which defeats the point of History.
+  const active = preferred || orders.find((o) => o.status !== "complete") || orders[0] || null;
+  state.detail.selectedOrderId = active ? active.id : null;
+  enterVehicleDetailView();
+  renderDetailHead();
+  renderOrderHistory(orders, active ? active.id : null);
+  // Deleting a vehicle with real order history would silently orphan its
+  // cost data -- only offer it while there's nothing to lose yet. Retail
+  // vehicles are never deletable from here at all: they're the customer's
+  // property record, managed from the Customers screen.
+  $("#vd-delete").style.display = orders.length === 0 && segment !== "retail" ? "" : "none";
+  if (!active) {
+    $("#vd-void-order").style.display = "none";
+    $("#vd-print-ticket").style.display = "none";
+    $("#vd-add-task").style.display = "none";
+    // The order-scoped header chrome is otherwise only reset by the wrapped
+    // renderStatusCard, which never runs on this branch -- navigating from a
+    // ticketed vehicle to one with no RO left the previous car's status
+    // pill, assign picker, concern preview and save-state on screen.
+    ["#vd-status-picker", "#vd-assign-picker", "#vd-status-pill", "#vd-concern-preview"].forEach((sel) => {
+      const el = $(sel);
+      if (el) el.style.display = "none";
+    });
+    $("#vd-concern-preview-text").textContent = "";
+    const saveState = $("#vd-estimate-save-state");
+    if (saveState) { saveState.className = "save-state"; saveState.textContent = ""; }
+    $("#vd-no-order").style.display = "";
+    $("#vd-order-content").style.display = "none";
+    applyArchivedLockUI(!!item.archived_at);
+    return;
+  }
+  $("#vd-no-order").style.display = "none";
+  $("#vd-order-content").style.display = "";
+  let order;
+  try {
+    order = await get(`/api/orders/${active.id}`);
+  } catch (err) {
+    toast(`Could not load repair order: ${err.message}`, true);
+    return;
+  }
+  state.detail.order = order;
+  if (!state.staff.length) state.staff = await get("/api/staff");
+  renderOrderPanel();
+  applyArchivedLockUI(!!item.archived_at);
+}
+
+// Only shown once a vehicle actually has more than one RO -- the common
+// single-ticket case looks exactly as clean as it always did.
+function renderOrderHistory(orders, activeId) {
+  const card = $("#vd-order-history-card");
+  if (orders.length <= 1) {
+    card.style.display = "none";
+    return;
+  }
+  card.style.display = "";
+  $("#vd-order-history").innerHTML = orders.map((o) => `
+    <div class="mini-item clickable ${o.id === activeId ? "active" : ""}" data-id="${o.id}">
+      <div class="mi-title">
+        <span>${esc(o.number)}</span>
+        <span class="pill ${STATUS_PILL_CLASS[o.status] || ""}" style="font-size:9.5px">${o.voided ? "Voided" : (STATUS_LABEL[o.status] || o.status)}</span>
+      </div>
+      <div class="mi-concern">${esc(o.concern)}</div>
+      <div class="mi-meta">${fmtDate(o.created_at)}</div>
+    </div>
+  `).join("");
+  $$(".mini-item.clickable", $("#vd-order-history")).forEach((row) => {
+    row.addEventListener("click", () => selectOrder(Number(row.dataset.id)));
+  });
+}
+
+async function selectOrder(orderId) {
+  if (orderId === state.detail.selectedOrderId) return;
+  state.detail.selectedOrderId = orderId;
+  await loadVehicleDetail();
+}
+
+/* "Last worked on" -- the other end of the board's Idle column.
+
+   The board tells you a car has been sitting nine days; until now, opening it
+   dropped you onto a page whose only timestamp said "Updated 3 minutes ago"
+   (the vehicle record, moved by a VIN correction), with the real answer buried
+   at the bottom of the activity log in the sidebar. Same number the board
+   sorted on, same STALLED_AFTER_DAYS boundary the card counts by, stated
+   where you land.
+
+   The server sends `last_activity` as {at, idle_days, action, actor} and
+   leaves action/actor empty when it can't honestly attribute the timestamp --
+   see last_activity_detail in app/recon.py. That case is common, not an edge:
+   the estimate grid autosaves without logging an event, so a car worked on
+   for an hour this morning may have no event to name. Rendering it as
+   "— by unknown" would be worse than saying nothing, so attribution is a
+   suffix on a line that stands on its own without it. */
+function renderLastWorked() {
+  const el = $("#vd-last-worked");
+  if (!el) return;
+  const la = state.detail.item && state.detail.item.last_activity;
+  if (!la || !la.at) {
+    el.hidden = true;
+    el.textContent = "";
+    return;
+  }
+  el.hidden = false;
+  const days = Math.max(0, la.idle_days || 0);
+  const stalled = days >= STALLED_AFTER_DAYS;
+  const when = days === 0 ? "today" : relativeTime(la.at);
+  const who = la.action ? `${activityLabel(la.action)}${la.actor ? ` by ${la.actor}` : ""}` : "";
+  el.className = `detail-worked${stalled ? " stalled" : ""}`;
+  el.title = `Last activity ${String(la.at).slice(0, 10)}`;
+  // The nudge only appears on a car that's actually stalled, and points at the
+  // + Task button already in the header rather than adding a second way to do
+  // the same thing three inches away from the first.
+  el.innerHTML = `<span class="detail-worked-label">Last worked on</span> ${esc(when)}` +
+    (who ? ` <span class="detail-worked-what">— ${esc(who)}</span>` : "") +
+    (stalled ? ` <button type="button" class="detail-worked-nudge" id="vd-worked-nudge">Stalled ${days} days — make a task</button>` : "");
+  const nudge = $("#vd-worked-nudge");
+  if (nudge) {
+    nudge.addEventListener("click", () => addTaskForThisVehicle({
+      prefill: `Follow up: ${$("#vd-title").textContent} — no work in ${days} days`,
+    }));
+  }
+}
+
+/* Jumps to Tasks with this vehicle's ticket pre-selected in the link
+   dropdown, rather than making the advisor reopen the picker and hunt for the
+   RO they were just looking at.
+
+   Was inline on the + Task button; pulled out because the stalled nudge on
+   the line above wants the same thing, and "notice a car has been sitting for
+   nine days" -> "write down what to do about it" is the whole point of
+   surfacing idle time at all. `prefill` lets a caller seed the title, which
+   the nudge uses -- the advisor can still type over it, but an empty box is
+   one more thing to compose at the exact moment they were about to move on.
+
+   Deliberately does not create the task: nobody wants a queue full of
+   auto-generated "follow up" rows, and the assignee and due date are the
+   parts that make a task worth having. */
+async function addTaskForThisVehicle({ prefill = "" } = {}) {
+  const order = state.detail.order;
+  showView("tasks");
+  await loadTasksView();
+  if (order && $$("#task-order-input option").some((o) => o.value === String(order.id))) {
+    $("#task-order-input").value = String(order.id);
+  }
+  const title = $("#task-title-input");
+  if (prefill && !title.value) title.value = prefill;
+  title.focus();
+  // Caret at the end rather than selecting the prefill, so typing extends the
+  // suggestion instead of silently wiping it.
+  if (title.value) title.setSelectionRange(title.value.length, title.value.length);
+}
+
+function renderDetailHead() {
+  const { segment, item } = state.detail;
+  const updatedEl = $("#vd-updated");
+  if (item.updated_at) {
+    const minutesAgo = (Date.now() - new Date(item.updated_at).getTime()) / 60000;
+    updatedEl.textContent = `Updated ${relativeTime(item.updated_at)}`;
+    updatedEl.classList.toggle("recent", minutesAgo < 10);
+  } else {
+    updatedEl.textContent = "";
+  }
+  // Deliberately relabelled from "Updated" to name what it actually tracks.
+  // Side by side with the line above it, an unqualified "Updated 3 minutes
+  // ago" under "Last worked on 9 days ago" reads as a contradiction; it isn't,
+  // it's the vehicle *record* -- someone correcting a VIN, which is exactly
+  // the edit the idle clock is built to ignore.
+  if (updatedEl.textContent) updatedEl.textContent = `Record updated ${relativeTime(item.updated_at)}`;
+  renderLastWorked();
+  // Vehicle Info (VIN/year/make/model/etc.) is shared by both segments --
+  // a car is sometimes entered quickly with the VIN added later, whether
+  // it's a recon vehicle or a we-owe promise.
+  $("#vd-recon-vin").value = item.vin || "";
+  $("#vd-recon-mileage").value = item.mileage || 0;
+  $("#vd-recon-year").value = item.year;
+  $("#vd-recon-make").value = item.make;
+  $("#vd-recon-model").value = item.model;
+  $("#vd-recon-trim").value = item.trim || "";
+  $("#vd-recon-color").value = item.color || "";
+  $("#vd-recon-purchase-price-row").style.display = segment === "recon" ? "" : "none";
+  if (segment === "recon") {
+    $("#vd-title").textContent = `${item.stock_number} — ${item.year} ${item.make} ${item.model}`;
+    $("#vd-sub").textContent = [item.vin, item.mileage ? `${item.mileage.toLocaleString()} mi` : "", item.trim].filter(Boolean).join(" · ");
+    $("#vd-customer-line").hidden = true;
+    $("#vd-customer-info-card").style.display = "none";
+    $("#vd-other-vehicles-card").style.display = "none";
+    $("#vd-we-owe-status-card").style.display = "none";
+    $("#vd-deposits-card").style.display = "none";
+    $("#vd-recon-purchase-price").value = item.purchase_price || 0;
+  } else {
+    // we_owe and retail share the customer-owned-car layout; only we_owe has
+    // the promise machinery (status/category/target, dealer-paid deposits).
+    $("#vd-title").textContent = `${item.year} ${item.make} ${item.model}`;
+    $("#vd-sub").textContent = [item.vin, item.mileage ? `${item.mileage.toLocaleString()} mi` : "", item.description].filter(Boolean).join(" · ");
+    // Customer name gets its own prominent line in the header rather than
+    // being buried mid-subtitle -- whose car it is is the first thing the
+    // advisor needs.
+    const customerLine = $("#vd-customer-line");
+    customerLine.textContent = item.customer_name ? `Customer: ${item.customer_name}` : "";
+    customerLine.hidden = !item.customer_name;
+    $("#vd-customer-info-card").style.display = "";
+    renderCustomerInfoSummary();
+    // Other Vehicles is retail-only: a we-owe page is about the promise on
+    // *this* car, and its detail payload doesn't carry sibling vehicles.
+    $("#vd-other-vehicles-card").style.display = segment === "retail" ? "" : "none";
+    if (segment === "retail") renderOtherVehicles();
+    if (segment === "we_owe") {
+      $("#vd-we-owe-status-card").style.display = "";
+      $("#vd-we-owe-status").value = item.status;
+      $("#vd-we-owe-description").value = item.description || "";
+      $("#vd-we-owe-category").value = item.category || "";
+      $("#vd-we-owe-target").value = item.target_date || "";
+      $("#vd-deposits-card").style.display = "";
+      renderDepositsSummary();
+    } else {
+      $("#vd-we-owe-status-card").style.display = "none";
+      $("#vd-deposits-card").style.display = "none";
+    }
+  }
+  renderCostSummary();
+  renderVehicleInfoSummary();
+}
+
+// Vehicle-wide (every RO ever opened on this vehicle, not just the active
+// one) -- quoted_cost/total_cost already come from the same cost_rollup
+// the Vehicles-list stats use, just never surfaced here before.
+function renderCostSummary() {
+  const { item } = state.detail;
+  const box = $("#vd-cost-summary");
+  let lines = `<div class="cost-line"><span>Total Quote</span><span class="num">${money(item.quoted_cost)}</span></div>`;
+  lines += `<div class="cost-line total"><span>Actual Cost</span><span class="num">${money(item.total_cost)}</span></div>`;
+  // Hours stand on their own line rather than hiding inside cost. On recon and
+  // we-owe the labor rate is 0, so every hour a tech flags contributes nothing
+  // to the money column -- this is the only place the work itself shows up.
+  if (item.labor_hours) {
+    lines += `<div class="cost-line"><span>Labor logged</span><span class="num">${fmtHours(item.labor_hours)}</span></div>`;
+  }
+  if (state.detail.segment !== "recon" && item.customer_paid) {
+    lines += `<div class="cost-line"><span>Customer paid</span><span class="num">${money(item.customer_paid)}</span></div>`;
+    lines += `<div class="cost-line total"><span>Net to shop</span><span class="num">${money(item.net_cost)}</span></div>`;
+  }
+  box.innerHTML = lines;
+}
+
+// Compact read-only summary replacing the old always-open inline edit form --
+// the full form still exists verbatim, just relocated into #vehicle-edit-dialog.
+function renderVehicleInfoSummary() {
+  const { item } = state.detail;
+  const lifetime = item.lifetime;
+  const rows = [
+    // A VIN gets retyped into parts catalogues and vendor sites all day long,
+    // and it's 17 characters where one wrong digit is silent.
+    ["VIN", item.vin
+      ? `${esc(item.vin)} <button type="button" class="copy-btn" data-copy="${esc(item.vin)}" data-copy-label="VIN" title="Copy VIN" aria-label="Copy VIN">⧉</button>`
+      : "—"],
+    // A mileage of 0 with a broken odometer is a recorded fact, not a blank.
+    ["Mileage", item.odometer_broken
+      ? `<span title="Recorded as unreadable at intake">Odometer broken</span>`
+      : item.mileage ? item.mileage.toLocaleString() : "—"],
+    ["Year/Make/Model", esc([item.year, item.make, item.model].filter(Boolean).join(" "))],
+    ["Trim", esc(item.trim || "—")],
+    ["Color", esc(item.color || "—")],
+  ];
+  // Purchase price belongs to the car, so it shows on both segments now --
+  // a we-owe car was bought too, usually long before RECON ever saw it.
+  if (lifetime) rows.push(["Purchase price", money(lifetime.purchase_price || 0)]);
+  $("#vd-vehicle-info-summary").innerHTML = rows.map(([label, value]) => `<div class="kv-row"><span class="kv-label">${label}</span><span class="kv-value">${value}</span></div>`).join("");
+}
+
+// Customer Info card -- we-owe only (recon vehicles are shop-owned inventory
+// with no real customer). Mirrors the Vehicle Info card: a compact read-only
+// summary with an Edit button that opens the customer dialog.
+function renderCustomerInfoSummary() {
+  const { item } = state.detail;
+  const cityLine = [item.customer_city, [item.customer_state, item.customer_postal_code].filter(Boolean).join(" ")].filter(Boolean).join(", ");
+  const address = [item.customer_address_line1, item.customer_address_line2, cityLine].filter(Boolean).join(", ");
+  const rows = [
+    ["Name", esc(item.customer_name || "—")],
+    ["Phone", item.customer_phone ? `<a href="tel:${esc(phoneDigits(item.customer_phone) || item.customer_phone)}">${esc(fmtPhone(item.customer_phone))}</a>` : "—"],
+    ["Email", item.customer_email ? esc(item.customer_email) : "—"],
+    ["Address", esc(address || "—")],
+  ];
+  $("#vd-customer-info-summary").innerHTML = rows.map(([label, value]) => `<div class="kv-row"><span class="kv-label">${label}</span><span class="kv-value">${value}</span></div>`).join("");
+}
+
+// Customer's Other Vehicles card (retail only). Each row jumps straight to
+// that car's retail page; the pill answers the hop-or-not question ("2 ROs ·
+// 1 open") before the click. The empty state still shows, because the card's
+// other job is the + Add Vehicle button.
+function renderOtherVehicles() {
+  const { item } = state.detail;
+  const box = $("#vd-other-vehicles");
+  const others = item.other_vehicles || [];
+  if (!others.length) {
+    box.innerHTML = '<div class="cust-sub" style="padding:12px 16px">No other vehicles on file.</div>';
+    return;
+  }
+  box.innerHTML = others.map((v) => {
+    const ros = v.order_count
+      ? `${v.order_count} RO${v.order_count === 1 ? "" : "s"}${v.open_orders ? ` · ${v.open_orders} open` : ""}`
+      : "no ROs yet";
+    const meta = [v.plate ? `${v.plate}${v.plate_state ? ` (${v.plate_state})` : ""}` : "", v.vin]
+      .map((s) => String(s || "").trim()).filter(Boolean).join(" · ");
+    return `
+      <div class="mini-item clickable" data-id="${v.id}" title="Open this vehicle's page">
+        <div class="mi-title">
+          <span>${esc([v.year, v.make, v.model].filter(Boolean).join(" "))}</span>
+          <span class="pill ${v.open_orders ? "" : "pill-inactive"}" style="font-size:9.5px">${esc(ros)}</span>
+        </div>
+        ${meta ? `<div class="mi-meta">${esc(meta)}</div>` : ""}
+      </div>`;
+  }).join("");
+  $$(".mini-item.clickable", box).forEach((row) => {
+    row.addEventListener("click", () => openVehicleDetail("retail", Number(row.dataset.id)));
+  });
+}
+
+/* ---------- address field validation (customer editor) ---------- */
+// The 50 states plus DC and the USPS-served territories/military codes.
+// State and ZIP are optional on a customer record, but a filled-in value has
+// to be real -- "Michigan" or "482O3" saved silently before this existed.
+export const US_STATE_CODES = new Set([
+  "AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN","IA",
+  "KS","KY","LA","ME","MD","MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ",
+  "NM","NY","NC","ND","OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VT",
+  "VA","WA","WV","WI","WY","DC","PR","VI","GU","AS","MP","AA","AE","AP",
+]);
+
+export function focusInvalidField(el) {
+  el.focus();
+  if (typeof el.select === "function") el.select();
+}
+
+/* ---------- phone numbers (shared) ---------- */
+// Phones are typed in two places (the customer editor and the we-owe
+// new-customer form) and shown in several more (customer info card, printed
+// ticket, tel: links). One set of helpers so they all agree: inputs mask to
+// (313) 555-0142 as you type, saved values must be a real 10-digit number or
+// empty, display always shows the formatted form, and tel: links get bare
+// digits so the phone app doesn't choke on punctuation.
+
+export function phoneDigits(raw) {
+  let d = String(raw || "").replace(/\D/g, "");
+  if (d.length === 11 && d.startsWith("1")) d = d.slice(1); // +1 country code
+  return d;
+}
+
+// Display formatting: pretty-print a stored value if it's a 10-digit US
+// number, otherwise show whatever was stored (old records predate the mask).
+export function fmtPhone(raw) {
+  const d = phoneDigits(raw);
+  if (d.length !== 10) return String(raw || "").trim();
+  return `(${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6)}`;
+}
+
+// Progressive mask for typing: digits land formatted, everything else never
+// lands, capped at 10 digits. Same normalize-as-you-type treatment the
+// State/ZIP fields get.
+function phoneMask(raw) {
+  const d = phoneDigits(raw).slice(0, 10);
+  if (!d) return "";
+  if (d.length < 4) return `(${d}`;
+  if (d.length < 7) return `(${d.slice(0, 3)}) ${d.slice(3)}`;
+  return `(${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6)}`;
+}
+
+export function wirePhoneInput(el) {
+  el.addEventListener("input", () => { el.value = phoneMask(el.value); });
+}
+
+// Submit-time check for a masked field: empty is fine (phone is optional),
+// anything else has to be all 10 digits. Toasts, focuses, returns false on a
+// partial number so callers can bail before saving. A value identical to
+// what the dialog loaded (el.dataset.loadedValue) also passes: records from
+// before the mask can hold a 7-digit local number, and an advisor opening
+// the editor to fix the *address* shouldn't be held hostage by it.
+export function phoneFieldOk(el) {
+  const value = el.value.trim();
+  if (!value || el.value === (el.dataset.loadedValue || "")) return true;
+  if (phoneDigits(value).length !== 10) {
+    toast("Phone needs all 10 digits, like (313) 555-0142", true);
+    focusInvalidField(el);
+    return false;
+  }
+  return true;
+}
+
+// Email gets the same deal as phone: loose on purpose (name@domain.tld shape,
+// no spaces -- real validation is the mail bouncing; this only catches a
+// street address pasted into the wrong box), and keep-legacy via
+// dataset.loadedValue so a pre-validation record doesn't fail saving on an
+// unrelated edit until someone actually touches the email field.
+export function emailFieldOk(el) {
+  const value = el.value.trim();
+  if (!value || el.value === (el.dataset.loadedValue || "")) return true;
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) {
+    toast("That email doesn't look right — needs a name@domain.com shape", true);
+    focusInvalidField(el);
+    return false;
+  }
+  return true;
+}
+
+/* ---------- address autocomplete (customer editor) ---------- */
+// As-you-type suggestions from /api/address-suggest (a server-side proxy to a
+// keyless geocoder). Picking a suggestion fills Street/City/State/ZIP. Every
+// failure path -- offline, empty result, request outraced by more typing --
+// just hides the dropdown, leaving the fields as plain manual entry.
+let addressSuggestTimer = null;
+let addressAutocompleteReady = false;
+
+export function hideAddressSuggestions() {
+  const box = $("#customer-edit-address-suggestions");
+  if (box) { box.hidden = true; box.innerHTML = ""; }
+}
+
+export function setupAddressAutocomplete() {
+  if (addressAutocompleteReady) return;
+  addressAutocompleteReady = true;
+  const input = $("#customer-edit-address1");
+  const box = $("#customer-edit-address-suggestions");
+  if (!input || !box) return;
+  let results = [];
+
+  const runSearch = async () => {
+    const q = input.value.trim();
+    if (q.length < 3) return hideAddressSuggestions();
+    let found;
+    try {
+      found = await get(`/api/address-suggest?q=${encodeURIComponent(q)}`);
+    } catch {
+      return hideAddressSuggestions();
+    }
+    // The user may have cleared the field or tabbed away while the request
+    // was in flight -- don't pop a stale dropdown back open.
+    if (!Array.isArray(found) || !found.length || document.activeElement !== input) {
+      return hideAddressSuggestions();
+    }
+    results = found;
+    box.innerHTML = results.map((r, i) => `<button type="button" class="addr-suggestion" data-i="${i}">${esc(r.label)}</button>`).join("");
+    box.hidden = false;
+  };
+
+  input.addEventListener("input", () => {
+    clearTimeout(addressSuggestTimer);
+    addressSuggestTimer = setTimeout(runSearch, 250);
+  });
+  input.addEventListener("keydown", (e) => { if (e.key === "Escape") hideAddressSuggestions(); });
+  box.addEventListener("click", (e) => {
+    const btn = e.target.closest(".addr-suggestion");
+    if (!btn) return;
+    const r = results[Number(btn.dataset.i)];
+    if (!r) return;
+    input.value = r.line1 || input.value;
+    if (r.city) $("#customer-edit-city").value = r.city;
+    if (r.state) $("#customer-edit-state").value = r.state;
+    if (r.postal_code) $("#customer-edit-postal").value = r.postal_code;
+    hideAddressSuggestions();
+    $("#customer-edit-address2").focus();
+  });
+  // A click anywhere outside the street field + list dismisses it.
+  document.addEventListener("click", (e) => {
+    if (!e.target.closest(".addr-autocomplete")) hideAddressSuggestions();
+  });
+}
+
+function renderDepositsSummary() {
+  const { item } = state.detail;
+  $("#vd-deposits-summary").innerHTML = `
+    <div class="cost-line"><span>Customer paid</span><span class="num">${money(item.customer_paid || 0)}</span></div>
+    <div class="cost-line total"><span>Net to shop</span><span class="num">${money(item.net_cost ?? item.total_cost)}</span></div>
+  `;
+}
+
+function renderPaymentDialogList() {
+  const { item } = state.detail;
+  const payments = item.payments || [];
+  $("#vd-deposits-list").innerHTML = payments.length ? payments.map((p) => `
+    <div class="mini-item">
+      <div>${money(p.amount)} · ${esc(p.method)} ${p.note ? `— ${esc(p.note)}` : ""}
+        <button type="button" class="rm-btn deposit-rm" data-id="${p.id}" title="Remove">×</button>
+      </div>
+      <div class="mi-meta">${esc(p.actor || "Unspecified")} · ${fmtDate(p.created_at)}</div>
+    </div>
+  `).join("") : emptyState({ icon: "invoice", title: "No deposits recorded", hint: "Money taken from the customer up front is recorded here and counted against what they owe.", compact: true });
+  $$(".deposit-rm", $("#vd-deposits-list")).forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      if (!(await confirmAction({
+        eyebrow: "DEPOSIT",
+        title: "Remove this deposit?",
+        body: "The amount stops counting against what the customer owes.",
+        confirmLabel: "Remove",
+        danger: true,
+      }))) return;
+      try {
+        await api(`/api/we-owe/${item.id}/payments/${btn.dataset.id}`, { method: "DELETE" });
+        toast("Deposit removed");
+        await loadVehicleDetail();
+        renderPaymentDialogList();
+      } catch (err) {
+        toast(err.message, true);
+      }
+    });
+  });
+}
+
+// The backend guard (assert_vehicle_editable) is the real enforcement --
+// this just keeps the UI from offering an action that would 409 anyway
+// once a vehicle is archived to History.
+function applyArchivedLockUI(archived) {
+  // Retail vehicles don't archive: the customer drives the car home and the
+  // RO's own Complete status is the end of the story. No History membership
+  // means neither button; everything below still runs (archived is always
+  // false for retail) so shared controls get re-enabled uniformly.
+  const retail = state.detail.segment === "retail";
+  $("#vd-archived-banner").style.display = archived ? "" : "none";
+  $("#vd-archive-vehicle").style.display = archived || retail ? "none" : "";
+  $("#vd-reopen-vehicle").style.display = archived && !retail ? "" : "none";
+
+  // These are static controls reused across renders (unlike the estimate
+  // rows, which are rebuilt fresh every time) -- reopening must explicitly
+  // re-enable them, not just skip re-disabling, or they'd stay disabled
+  // forever once archived once.
+  const disableIds = [
+    "vd-status-select", "vd-concern", "vd-concern-save",
+    "vd-add-job", "vd-add-part", "vd-add-labor", "vd-order-parts",
+    "vd-add-note", "vd-note-text",
+    "vd-save-assignment", "vd-technician", "vd-advisor",
+    "vd-save-timing", "vd-date-in", "vd-odometer", "vd-promised",
+    "vd-edit-vehicle", "vd-recon-info-save", "vd-decode-vin", "vd-recon-vin", "vd-recon-mileage", "vd-recon-year",
+    "vd-recon-make", "vd-recon-model", "vd-recon-trim", "vd-recon-color", "vd-recon-purchase-price",
+    "vd-edit-customer", "vd-we-owe-save", "vd-we-owe-description", "vd-we-owe-category", "vd-we-owe-target", "vd-we-owe-status",
+    "vd-take-payment", "vd-deposit-add", "vd-deposit-amount", "vd-deposit-method", "vd-deposit-note",
+  ];
+  disableIds.forEach((id) => { const el = $(`#${id}`); if (el) el.disabled = archived; });
+  $$(".job-control", $("#vd-estimate-items")).forEach((el) => { el.disabled = archived; });
+  if (archived) {
+    $("#vd-void-order").style.display = "none";
+    $("#vd-receive-parts").disabled = true;
+  } else {
+    updateReceiveButtonState(); // depends on how many checkboxes are checked, not a flat enable
+  }
+  $$(".part-row:not(.head) input, .part-row:not(.head) select, .part-row:not(.head) .rm-btn", $("#vd-estimate-items")).forEach((el) => {
+    // A returned part's Cost field is deliberately locked at 0 regardless of
+    // archive state (see rowHtml) -- this loop must not re-enable it.
+    if (el.classList.contains("ei-cost") && el.dataset.realCost !== undefined) return;
+    el.disabled = archived;
+  });
+  $$(".part-row:not(.head)", $("#vd-estimate-items")).forEach((row) => row.setAttribute("draggable", String(!archived)));
+}
+
+function renderOrderPanel() {
+  const order = state.detail.order;
+  $("#vd-ro-number").textContent = `Repair Order ${order.number}`;
+  renderStatusCard(order);
+  renderEstimate(order);
+  renderNotes(order);
+  renderActivity(order);
+  renderAssignment(order);
+  $("#vd-print-ticket").style.display = "";
+  $("#vd-add-task").style.display = "";
+  $("#vd-void-order").style.display = order.voided ? "none" : "";
+  // Retail tickets have no lot record behind them, so there's nothing on the
+  // other side for the cost to move onto -- only recon and we-owe can swap.
+  const movable = !order.voided && (order.segment === "recon" || order.segment === "we_owe");
+  $("#vd-move-segment").style.display = movable ? "" : "none";
+}
+
+function renderStatusCardBase(order) {
+  const pill = $("#vd-status-pill");
+  pill.className = `pill ${STATUS_PILL_CLASS[order.status] || ""}`;
+  pill.textContent = order.voided ? "Voided" : (STATUS_LABEL[order.status] || order.status);
+  const select = $("#vd-status-select");
+  select.innerHTML = STATUS_OPTIONS.map((s) => `<option value="${s}" ${s === order.status ? "selected" : ""}>${STATUS_LABEL[s]}</option>`).join("");
+  $("#vd-concern").value = order.concern || "";
+}
+
+function renderEstimate(order) {
+  const items = order.estimate ? order.estimate.items : [];
+  const jobs = order.estimate?.jobs ?? [];
+  const box = $("#vd-estimate-items");
+  box.classList.toggle("has-jobs", jobs.length > 0);
+  // A part sent back to the vendor stops costing the shop anything -- every
+  // cost total on this ticket (job subtotals, Quoted, Actual) excludes it.
+  const notReturned = (i) => !(i.kind === "part" && i.part_returned);
+
+  const jobOptionsHtml = (selectedId) => `<option value="" ${!selectedId ? "selected" : ""}>General</option>` +
+    jobs.map((j) => `<option value="${j.id}" ${selectedId === j.id ? "selected" : ""}>${esc(j.title)}</option>`).join("");
+
+  // Every field sits in its own .pr-cell wrapper carrying a data-label. Wide
+  // enough and the wrappers are just grid tracks under a column header; once
+  // the Parts & Labor container gets narrow (a small window, or the details
+  // drawer open beside it) the same markup reflows into a stacked card and
+  // the data-label becomes the field's visible caption. Before this, the row
+  // was a hardcoded 11-column grid whose header was display:none -- so Qty,
+  // Cost and Core were unlabelled boxes that squeezed to a few pixels wide.
+  // data-label is what the narrow-screen layout prints above each field
+  // (.pr-cell::before). An empty cell must not carry one, or a labor line
+  // shows a "Part #"/"Core" caption with no field under it.
+  const cell = (cls, label, inner) =>
+    `<div class="pr-cell pr-${cls}${inner ? "" : " pr-spacer"}"${label && inner ? ` data-label="${label}"` : ""}>${inner}</div>`;
+
+  const rowHtml = (item, i) => {
+    const remaining = (item.quantity ?? 0) - (item.received_quantity ?? 0);
+    const receivable = item.kind === "part" && item.id && remaining > 0.001;
+    const isPart = item.kind === "part";
+    const L = fieldLabels(item.kind);
+    return `
+    <div class="part-row" draggable="true" data-index="${i}" data-id="${item.id || ""}" data-source="${item.source || "manual"}" data-received-quantity="${item.received_quantity ?? 0}">
+      ${cell("handle", "", `<span class="row-drag-handle" title="Drag to reorder">⋮⋮</span>`)}
+      ${cell("check", "", receivable ? `<input type="checkbox" class="ei-receive-check" data-id="${item.id}" title="Select to receive against a vendor invoice">` : "")}
+      ${cell("kind", "Kind", `<select class="ei-kind">
+        <option value="part" ${item.kind === "part" ? "selected" : ""}>Part</option>
+        <option value="labor" ${item.kind === "labor" ? "selected" : ""}>Labor</option>
+        <option value="fee" ${item.kind === "fee" ? "selected" : ""}>Fee</option>
+        ${/* Vendor invoice ingest writes kind="credit" lines (a returned part,
+             a refunded core). Nobody picks Credit by hand, so it stays out of
+             the dropdown -- but the option has to EXIST, because a <select>
+             holding a value with no matching option reports "" and
+             collectEstimateItems resends every row on every autosave. That
+             empty kind failed validation, so a single credit on a ticket made
+             the whole estimate unsaveable with a 422 naming a field the
+             advisor never touched. */ ""}
+        <option value="credit" hidden ${item.kind === "credit" ? "selected" : ""}>Credit</option>
+      </select>`)}
+      ${cell("desc", "Description", `<input class="ei-desc" value="${esc(item.description || "")}" placeholder="Description">`)}
+      ${cell("part", L.part, `<input class="ei-part" value="${esc(item.part_number || "")}" placeholder="Part #"${isPart ? "" : " hidden"}>`)}
+      ${cell("qty", L.qty, `<input class="ei-qty" type="number" min="0.01" step="0.01" value="${item.quantity ?? 1}"${item.kind === "labor" ? ` title="Hours"` : ""}>`)}
+      ${cell("cost", L.cost, item.part_returned
+        ? `<input class="ei-cost" type="number" value="0" disabled title="Returned to the vendor -- no longer counted" data-real-cost="${item.unit_cost ?? 0}">`
+        : `<input class="ei-cost" type="number" min="0" step="0.01" value="${item.unit_cost ?? 0}"${item.kind === "labor" ? ` title="Hourly rate"` : ""}>`)}
+      ${cell("core", L.core, item.kind === "part"
+        ? `<label class="core-toggle" title="Tick only if this part carries a core deposit the vendor owes back">
+             <input type="checkbox" class="ei-core-on" ${(item.core_charge ?? 0) > 0 ? "checked" : ""} aria-label="This part has a core charge">
+             <span>Core</span>
+           </label>
+           <input class="ei-core" type="number" min="0" step="0.01" placeholder="0.00" title="Core deposit owed back from the vendor" value="${item.core_charge ?? 0}" ${(item.core_charge ?? 0) > 0 ? "" : "hidden"}>`
+        : "")}
+      ${jobs.length ? cell("job", "Job", `<select class="ei-job">${jobOptionsHtml(item.job_id ?? null)}</select>`) : ""}
+      ${cell("status", "Status", item.id
+        ? (item.status === "received"
+            ? `<span class="status-cell">
+                 <span class="status-pill ${item.part_returned ? "sp-returned" : "sp-received"}" ${item.received_invoice_number ? `title="Received via invoice ${esc(item.received_invoice_number)}"` : ""}>${item.part_returned ? "Returned" : (item.received_invoice_number ? `Received (${esc(item.received_invoice_number)})` : "Received")}</span>
+                 ${item.kind === "part" ? `<button type="button" class="btn btn-ghost btn-xs part-return-btn" data-id="${item.id}" data-returned="${item.part_returned ? 1 : 0}" title="${item.part_returned ? "Undo -- this part was not actually sent back" : "Send this part back to the vendor"}">${item.part_returned ? "Undo" : "Mark Returned"}</button>` : ""}
+               </span>`
+            : `<select class="ei-status status-pill sp-${item.status || "quoted"}" data-prev="${item.status || "quoted"}">
+                 <option value="quoted" ${item.status === "quoted" ? "selected" : ""}>Quoted</option>
+                 <option value="ordered" ${item.status === "ordered" ? "selected" : ""}>Ordered</option>
+               </select>`)
+        : `<span class="status-pill sp-quoted">Saving…</span>`)}
+      ${cell("move", "", item.id ? `<button type="button" class="row-move-btn" title="Move to a different ticket" data-id="${item.id}" data-desc="${esc(item.description || "")}">⇄</button>` : "")}
+      ${cell("remove", "", `<button type="button" class="rm-btn" title="Remove line">×</button>`)}
+    </div>
+  `;
+  };
+
+  // The header row doubles as each section's caption: inside a job's Parts
+  // block the first column reads "Parts" instead of "Kind", so one thin row
+  // does the work that a separate section label plus a hidden header row
+  // used to do.
+  // `kind` is set when this header captions a single-kind section (the job
+  // view splits Parts and Labor into their own blocks), so Labor reads
+  // "Hours / Rate" with no Part # or Core column at all. The flat mixed list
+  // passes nothing and keeps the generic captions, since one header there has
+  // to serve every kind at once.
+  const headRow = (leadLabel = "Kind", extraClass = "", kind = null) => {
+    const L = fieldLabels(kind);
+    return `<div class="part-row head ${extraClass}">
+    <span class="pr-cell pr-handle"></span>
+    <span class="pr-cell pr-check"></span>
+    <span class="pr-cell pr-kind">${esc(leadLabel)}</span>
+    <span class="pr-cell pr-desc">Description</span>
+    <span class="pr-cell pr-part">${esc(L.part)}</span>
+    <span class="pr-cell pr-qty">${esc(L.qty)}</span>
+    <span class="pr-cell pr-cost">${esc(L.cost)}</span>
+    <span class="pr-cell pr-core">${esc(L.core)}</span>
+    ${jobs.length ? `<span class="pr-cell pr-job">Job</span>` : ""}
+    <span class="pr-cell pr-status">Status</span>
+    <span class="pr-cell pr-move"></span>
+    <span class="pr-cell pr-remove"></span>
+  </div>`;
+  };
+
+  if (!jobs.length) {
+    // Unchanged flat list -- grouping only appears once a job exists, so the
+    // common/simple ticket looks exactly as clean as it always has.
+    // The .ei-empty wrapper is load-bearing -- adding a line looks for it by
+    // that class and removes it rather than re-rendering the whole list.
+    box.innerHTML = (items.length ? headRow("Kind", "head-flat") : "") + (items.length ? items.map(rowHtml).join("") : `<div class="ei-empty">${emptyState({
+      icon: "invoice",
+      title: "No parts or labor yet",
+      hint: "Add a part or labor line, or start with ＋ Add Job to group this ticket's work by repair.",
+    })}</div>`);
+  } else {
+    const buckets = [...jobs, { id: null, title: "General" }];
+    box.innerHTML = buckets.map((bucket) => {
+      const bucketItems = items.filter((i) => (i.job_id ?? null) === bucket.id);
+      const isGeneral = bucket.id === null;
+      const jobSubtotal = bucketItems.filter(notReturned).reduce((s, i) => s + i.quantity * i.unit_cost, 0);
+      // Parts and labor render as their own mini-sections within the job
+      // (Tekmetric-style) rather than one interleaved list, so it's obvious
+      // at a glance which lines are parts vs labor for this job -- not just
+      // which job a line belongs to.
+      const kindGroups = KIND_GROUP_ORDER
+        .map((kind) => ({ kind, kindItems: bucketItems.filter((i) => i.kind === kind) }))
+        .filter((g) => g.kindItems.length);
+      return `
+        <div class="job-group" data-job-id="${bucket.id ?? ""}">
+          <div class="job-group-head">
+            <span class="job-group-title">${esc(bucket.title)}</span>
+            ${bucketItems.length ? `<span class="job-group-subtotal">${money(jobSubtotal)}</span>` : ""}
+            ${isGeneral ? "" : `
+              <select class="ei-job-tech job-control" data-job-id="${bucket.id}">
+                <option value="">Use ticket default</option>
+                ${state.staff.filter((s) => s.role === "technician").map((t) => `<option value="${t.id}" ${bucket.technician_id === t.id ? "selected" : ""}>${esc(t.name)}</option>`).join("")}
+              </select>
+              <button type="button" class="job-control job-icon-btn job-edit" data-job-id="${bucket.id}" title="Rename job">✎</button>
+              <button type="button" class="job-control job-icon-btn job-delete" data-job-id="${bucket.id}" title="Delete job">×</button>
+            `}
+            <button type="button" class="job-control job-mini-add" data-job-id="${bucket.id ?? ""}" data-kind="part">＋ Part</button>
+            <button type="button" class="job-control job-mini-add" data-job-id="${bucket.id ?? ""}" data-kind="labor">＋ Labor</button>
+          </div>
+          ${kindGroups.length ? kindGroups.map((g) => `
+            <div class="kind-subgroup" data-kind="${g.kind}">
+              ${headRow(KIND_GROUP_LABEL[g.kind], "", g.kind)}
+              ${g.kindItems.map(rowHtml).join("")}
+            </div>
+          `).join("") : `<div class="ei-empty">${emptyState({ icon: "invoice", title: "No lines in this job yet", compact: true })}</div>`}
+        </div>
+      `;
+    }).join("");
+  }
+
+  // No listeners are bound here. #vd-estimate-items carries one delegated set
+  // of handlers, wired once at startup by wireEstimateGrid(), so a re-render
+  // costs exactly one innerHTML swap -- it used to cost twelve
+  // addEventListener calls per row plus three more per job, every time any
+  // single field changed.
+  $$(".part-row:not(.head)", box).forEach(syncRowKindFields);
+  updateReceiveButtonState();
+  renderEstimateTotals(order);
+  lastEstimateShape = estimateShape(order);
+}
+
+function updateReceiveButtonState() {
+  const checked = $$(".ei-receive-check:checked", $("#vd-estimate-items"));
+  const btn = $("#vd-receive-parts");
+  btn.disabled = checked.length === 0;
+  // Say how many -- on a 20-line estimate you should know what you're about
+  // to post before the dialog opens.
+  btn.textContent = checked.length ? `Receive ${checked.length} Line${checked.length === 1 ? "" : "s"}` : "Receive Selected";
+}
+
+// Quoted = every line at its full quantity, whether or not it's landed yet
+// (matches cost_rollup's quoted_cost); actual = only what's really in the
+// car so far -- parts count once received, labor/fees count the moment
+// they're logged. Same "at cost" basis as everywhere else (unit_cost, not
+// unit_price) -- this panel has never shown customer-facing markup.
+// Split out of renderEstimate because an in-place sync has to recompute
+// these without touching the rows.
+function renderEstimateTotals(order) {
+  const items = order.estimate ? order.estimate.items : [];
+  const notReturned = (i) => !(i.kind === "part" && i.part_returned);
+  const quotedTotal = items.filter(notReturned).reduce((s, i) => s + i.quantity * i.unit_cost, 0);
+  const actualParts = items.filter((i) => i.kind === "part" && !i.part_returned).reduce((s, i) => s + i.received_quantity * i.unit_cost, 0);
+  const actualOther = items.filter((i) => i.kind !== "part").reduce((s, i) => s + i.quantity * i.unit_cost, 0);
+  const actual = actualParts + actualOther;
+  $("#vd-quoted-cost").textContent = money(quotedTotal);
+  $("#vd-actual-cost").textContent = money(actual);
+  // The single most decision-relevant number on a recon ticket -- are we
+  // over the quote -- shouldn't have to be computed mentally from two
+  // adjacent figures.
+  const delta = $("#vd-cost-delta");
+  if (delta) {
+    if (!quotedTotal) {
+      delta.hidden = true;
+    } else {
+      const diff = actual - quotedTotal;
+      delta.hidden = false;
+      delta.className = `cost-delta ${diff > 0.005 ? "over" : Math.abs(diff) <= 0.005 ? "zero" : ""}`;
+      delta.textContent = Math.abs(diff) <= 0.005 ? "On quote"
+        : diff > 0 ? `${money(diff)} over quote`
+        : `${money(-diff)} under quote`;
+    }
+  }
+}
+
+// Debounce handle for keystroke-driven autosave (wired in wireEstimateGrid).
+let estimateTypingTimer = null;
+function clearEstimateTypingTimer() {
+  clearTimeout(estimateTypingTimer);
+  estimateTypingTimer = null;
+}
+
+// The live-typing counterpart to renderEstimateTotals: same math, but read
+// straight from the grid's inputs instead of state, so totals track each
+// keystroke without waiting for the save round-trip. A returned part's cost
+// input reads 0 (that's how it renders), which drops it from every figure
+// here exactly like the notReturned filter does server-side.
+function updateEstimateTotalsFromDom() {
+  const box = $("#vd-estimate-items");
+  if (!box) return;
+  const num = (el) => (el ? parseFloat(el.value || "0") || 0 : 0);
+  let quoted = 0;
+  let actual = 0;
+  for (const row of $$(".part-row:not(.head)", box)) {
+    const qty = num(row.querySelector(".ei-qty")) || 0;
+    const cost = num(row.querySelector(".ei-cost"));
+    quoted += qty * cost;
+    actual += row.querySelector(".ei-kind")?.value === "part"
+      ? (parseFloat(row.dataset.receivedQuantity || "0") || 0) * cost
+      : qty * cost;
+  }
+  $("#vd-quoted-cost").textContent = money(quoted);
+  $("#vd-actual-cost").textContent = money(actual);
+  const delta = $("#vd-cost-delta");
+  if (delta) {
+    if (!quoted) {
+      delta.hidden = true;
+    } else {
+      const diff = actual - quoted;
+      delta.hidden = false;
+      delta.className = `cost-delta ${diff > 0.005 ? "over" : Math.abs(diff) <= 0.005 ? "zero" : ""}`;
+      delta.textContent = Math.abs(diff) <= 0.005 ? "On quote"
+        : diff > 0 ? `${money(diff)} over quote`
+        : `${money(-diff)} under quote`;
+    }
+  }
+  // Job subtotals live in each group's header; keep them moving too.
+  for (const group of $$(".job-group", box)) {
+    const label = group.querySelector(".job-group-subtotal");
+    if (!label) continue;
+    let sub = 0;
+    for (const row of $$(".part-row:not(.head)", group)) {
+      sub += (num(row.querySelector(".ei-qty")) || 0) * num(row.querySelector(".ei-cost"));
+    }
+    label.textContent = money(sub);
+  }
+}
+
+/* ---------- estimate grid: applying a save without redrawing ----------
+
+   Every field on the grid autosaves on change, and the save round-trips the
+   whole estimate. Re-rendering the grid from that response is correct but
+   brutal: it blew away the DOM the advisor was standing in, so tabbing
+   Description -> Qty put the caret in Qty, fired the save for Description,
+   and then the response landed a few hundred ms later and yanked focus back
+   out of Qty mid-keystroke. Half-typed numbers went missing that way.
+
+   So: renderEstimate() records a *shape* signature -- everything that decides
+   which elements exist and in what order. When a save comes back with the
+   same shape (the overwhelmingly common case: you edited a value, not the
+   structure), syncEstimateInPlace() writes the server's values into the
+   existing controls, skipping whichever one has focus, and nothing is
+   destroyed. Only a real structural change (a line added or deleted, a status
+   flipped, a job renamed, rows reordered) falls back to a full render -- and
+   even then focus is captured and restored around it.
+
+   Deliberately *not* in the signature: description, part number, quantity,
+   cost, core. Those live inside inputs the user is editing; they're the
+   values a re-render exists to avoid clobbering. */
+let lastEstimateShape = null;
+
+function estimateShape(order) {
+  const jobs = order.estimate?.jobs ?? [];
+  const items = order.estimate?.items ?? [];
+  return JSON.stringify([
+    jobs.map((j) => [j.id, j.title, j.technician_id ?? null]),
+    items.map((i) => [
+      i.id ?? null,
+      i.kind,
+      i.job_id ?? null,
+      i.status ?? "quoted",
+      i.part_returned ? 1 : 0,
+      i.received_invoice_number ?? "",
+      // decides whether the receive checkbox cell has a checkbox in it
+      i.kind === "part" && i.id && ((i.quantity ?? 0) - (i.received_quantity ?? 0)) > 0.001 ? 1 : 0,
+    ]),
+  ]);
+}
+
+// The single entry point for "the server just gave us a new estimate" --
+// cheap path when it can, full render when it must, focus intact either way.
+function applyEstimateResponse(order) {
+  if (syncEstimateInPlace(order)) return;
+  const snap = captureEstimateFocus();
+  renderEstimate(order);
+  restoreEstimateFocus(snap);
+}
+
+function syncEstimateInPlace(order) {
+  const box = $("#vd-estimate-items");
+  if (!box || lastEstimateShape === null) return false;
+  if (estimateShape(order) !== lastEstimateShape) return false;
+
+  const items = order.estimate?.items ?? [];
+  const active = document.activeElement;
+  for (const item of items) {
+    const row = $(`.part-row[data-id="${item.id}"]`, box);
+    if (!row) return false; // DOM drifted from what we think we rendered -- redraw
+    row.dataset.receivedQuantity = item.received_quantity ?? 0;
+    // Never write into the control the user is standing in; that's the whole
+    // point of this path.
+    const set = (sel, value) => {
+      const el = $(sel, row);
+      if (!el || el === active) return;
+      const next = String(value);
+      if (el.value !== next) el.value = next;
+    };
+    set(".ei-kind", item.kind);
+    set(".ei-desc", item.description || "");
+    set(".ei-part", item.part_number || "");
+    set(".ei-qty", item.quantity ?? 1);
+    const costEl = $(".ei-cost", row);
+    if (costEl && costEl.dataset.realCost !== undefined) {
+      // Returned part: the visible 0 is deliberate, the real number is the attribute.
+      costEl.dataset.realCost = String(item.unit_cost ?? 0);
+    } else {
+      set(".ei-cost", item.unit_cost ?? 0);
+    }
+    set(".ei-core", item.core_charge ?? 0);
+    const jobSel = $(".ei-job", row);
+    if (jobSel && jobSel !== active) jobSel.value = item.job_id ?? "";
+    const statusSel = $(".ei-status", row);
+    if (statusSel) {
+      const status = item.status || "quoted";
+      if (statusSel !== active) statusSel.value = status;
+      statusSel.dataset.prev = status;
+      statusSel.className = `ei-status status-pill sp-${status}`;
+    }
+  }
+
+  // Subtotals key off quantity x cost, which the shape signature ignores on
+  // purpose -- so they have to be recomputed here explicitly.
+  const notReturned = (i) => !(i.kind === "part" && i.part_returned);
+  $$(".job-group", box).forEach((groupEl) => {
+    const sub = $(".job-group-subtotal", groupEl);
+    if (!sub) return;
+    const jobId = groupEl.dataset.jobId === "" ? null : Number(groupEl.dataset.jobId);
+    sub.textContent = money(
+      items.filter((i) => (i.job_id ?? null) === jobId).filter(notReturned).reduce((s, i) => s + i.quantity * i.unit_cost, 0),
+    );
+  });
+  renderEstimateTotals(order);
+  updateReceiveButtonState();
+  return true;
+}
+
+// Identify the focused control well enough to find it again after the grid is
+// rebuilt: by row id when the row survives the round-trip, by position when it
+// doesn't (a brand-new row has no id until the server assigns one).
+function captureEstimateFocus() {
+  const box = $("#vd-estimate-items");
+  const el = document.activeElement;
+  if (!box || !el || !box.contains(el)) return null;
+  const row = el.closest(".part-row");
+  const field = [...el.classList].find((c) => c.startsWith("ei-"));
+  if (!row || !field) return null;
+  const snap = { id: row.dataset.id || "", index: $$(".part-row:not(.head)", box).indexOf(row), field };
+  // Number inputs report null here; only text fields carry a caret worth keeping.
+  if (typeof el.selectionStart === "number") {
+    snap.start = el.selectionStart;
+    snap.end = el.selectionEnd;
+  }
+  return snap;
+}
+
+function restoreEstimateFocus(snap) {
+  if (!snap) return;
+  const box = $("#vd-estimate-items");
+  if (!box) return;
+  const row = (snap.id && $(`.part-row[data-id="${snap.id}"]`, box)) || $$(".part-row:not(.head)", box)[snap.index];
+  const el = row && $(`.${snap.field}`, row);
+  if (!el || el.disabled) return;
+  el.focus();
+  if (typeof snap.start === "number" && typeof el.setSelectionRange === "function") {
+    try {
+      el.setSelectionRange(snap.start, snap.end);
+    } catch {
+      /* input types that don't support a selection range -- focus is enough */
+    }
+  }
+}
+
+/* ---------- estimate grid: one delegated listener set ----------
+   Wired once at startup against #vd-estimate-items, which never gets
+   replaced -- only its contents do. Everything the grid renders (rows, job
+   headers, the transient row addEstimateRow paints before its save lands) is
+   live the instant it exists, and re-rendering binds nothing. */
+/* A part number and a core charge only mean something on a part line. The
+   estimate stores all three kinds in one table with one shared part_number
+   column, so before this the Part # box sat there on a labor line inviting
+   someone to fill it in, and the core box sat on every part line at 0.00 with
+   nothing marking it as optional -- close enough to the cost box that typing
+   the part's cost into it created a deposit the shop would later chase a
+   vendor for. Both now appear only where they apply. */
+function syncRowKindFields(row) {
+  if (!row) return;
+  const kind = row.querySelector(".ei-kind")?.value || "part";
+  const isPart = kind === "part";
+  const L = fieldLabels(kind);
+
+  // The captions come off data-label (.pr-cell::before draws them once the
+  // grid reflows to stacked cards), so they have to be retargeted here as
+  // well as at render time -- otherwise switching a line to Labor leaves it
+  // captioned "Part #" and "Qty" until the save round-trips.
+  const relabel = (cls, label) => {
+    const box = row.querySelector(`.pr-${cls}`);
+    if (!box) return;
+    if (label) box.setAttribute("data-label", label);
+    else box.removeAttribute("data-label");
+    box.classList.toggle("pr-spacer", !label);
+  };
+  relabel("part", L.part);
+  relabel("qty", L.qty);
+  relabel("cost", L.cost);
+  relabel("core", L.core);
+
+  const partInput = row.querySelector(".ei-part");
+  if (partInput) {
+    partInput.hidden = !isPart;
+    if (!isPart) partInput.value = "";
+  }
+  const coreToggle = row.querySelector(".core-toggle");
+  const coreAmount = row.querySelector(".ei-core");
+  if (coreToggle) coreToggle.hidden = !isPart;
+  if (coreAmount) {
+    const on = isPart && row.querySelector(".ei-core-on")?.checked;
+    coreAmount.hidden = !on;
+    if (!on) coreAmount.value = "0";
+  }
+}
+
+export function wireEstimateGrid() {
+  const box = $("#vd-estimate-items");
+  if (!box) return;
+
+  box.addEventListener("change", (e) => {
+    const t = e.target;
+    if (!(t instanceof Element)) return;
+    // Ticking Core reveals the amount; unticking clears it, so the box can't
+    // keep a figure the line no longer claims.
+    if (t.matches(".ei-core-on")) {
+      const row = t.closest(".part-row");
+      const amount = row?.querySelector(".ei-core");
+      if (amount) {
+        amount.hidden = !t.checked;
+        if (!t.checked) amount.value = "0";
+        else amount.focus();
+      }
+      updateEstimateTotalsFromDom();
+      clearEstimateTypingTimer();
+      return void persistEstimate();
+    }
+    // Switching a line to Labor takes away the fields that only mean
+    // something on a part, rather than leaving them there to be filled in.
+    if (t.matches(".ei-kind")) syncRowKindFields(t.closest(".part-row"));
+    // Every field autosaves on change -- there is no "forgot to click Save and
+    // it silently vanished" window, because nothing is ever left DOM-only.
+    // A change (blur/Enter) supersedes any debounced keystroke save still
+    // waiting -- clear it so one edit doesn't post twice.
+    if (t.matches(".ei-kind, .ei-desc, .ei-part, .ei-qty, .ei-cost, .ei-core, .ei-job")) {
+      clearEstimateTypingTimer();
+      return void persistEstimate();
+    }
+    if (t.matches(".ei-receive-check")) return void updateReceiveButtonState();
+    if (t.matches(".ei-status")) return void onEstimateStatusChange(t);
+    if (t.matches(".ei-job-tech")) return void onJobTechnicianChange(t);
+  });
+
+  // Keystroke-level feedback. The change handler above only fires on blur, so
+  // while a number was being typed every total on the page -- Quoted, Actual,
+  // the over/under delta, job subtotals -- sat stale until the advisor clicked
+  // somewhere else. Now money and qty edits recompute those figures locally on
+  // every keystroke, and the save itself follows after a short pause in typing
+  // (the blur save still exists as the backstop; the token in persistEstimate
+  // already keeps overlapping responses ordered).
+  box.addEventListener("input", (e) => {
+    const t = e.target;
+    if (!(t instanceof Element) || !t.matches(".ei-qty, .ei-cost, .ei-core, .ei-desc, .ei-part")) return;
+    if (t.matches(".ei-qty, .ei-cost, .ei-core")) updateEstimateTotalsFromDom();
+    clearEstimateTypingTimer();
+    // A row whose description is empty gets dropped by collectEstimateItems --
+    // saving mid-retype would delete the line out from under the advisor. Hold
+    // the autosave until the row would survive it.
+    const desc = t.closest(".part-row")?.querySelector(".ei-desc");
+    if (desc && !desc.value.trim()) return;
+    estimateTypingTimer = setTimeout(() => { estimateTypingTimer = null; persistEstimate(); }, 800);
+  });
+
+  /* ----- keyboard entry: Tab / Enter / Shift+Enter, one handler -----
+     Spreadsheet-style row entry. The three keys share one definition of the
+     grid's geometry so their guards can't drift apart:
+
+     - EST_ENTRY_ORDER is the through-path along a line (Description -> Qty ->
+       Cost -> Core). Part # rides along at Description's slot: forwards it
+       advances the same way Description does (it's optional, and the fast
+       path is the point), backwards it steps to Description itself.
+     - Enter walks the chain forwards on the grid's last line only -- a
+       correction three lines up must not grow the estimate, so Enter keeps
+       its default commit meaning everywhere else. From the row's last money
+       field it starts the next line, same contract as Tab.
+     - Shift+Enter walks backwards from anywhere, crossing up into the
+       previous row's last enabled field (across job groups, the same order
+       the forward keys walk downwards). It never adds a line.
+     - Tab out of the last money field on the last described line adds the
+       next line of the same kind, instead of dumping focus onto the status
+       pill. */
+  const EST_ENTRY_ORDER = ["ei-desc", "ei-qty", "ei-cost", "ei-core"];
+  const estRows = () => $$(".part-row:not(.head)", box);
+  const rowField = (row, cls) => row.querySelector(`.${cls}`);
+  const focusField = (el) => {
+    el.focus();
+    if (typeof el.select === "function") el.select();
+  };
+  // Index of the target on the through-path, or -1 for non-entry fields.
+  // Part # sits between Description (0) and Qty (1): forward chains use
+  // floor -> 0 (next stop Qty), backward chains use ceil -> 1 (previous
+  // stop Description).
+  const entryIndex = (t, { back = false } = {}) => {
+    if (t.classList.contains("ei-part")) return back ? 1 : 0;
+    return EST_ENTRY_ORDER.findIndex((c) => t.classList.contains(c));
+  };
+  const firstEnabled = (row, classes) =>
+    classes.map((c) => rowField(row, c)).find((el) => el && !el.disabled);
+  // The add-a-line contract shared by Tab and Enter: only from the grid's
+  // final row, only out of that row's true last money field (Core when the
+  // row has one (parts), Cost otherwise), and never chaining on from a line
+  // that hasn't been described yet -- there's nothing to chain onward from.
+  const mayAddLineFrom = (row, t, rows) => {
+    if (row !== rows[rows.length - 1]) return false;
+    const lastField = rowField(row, "ei-core") || rowField(row, "ei-cost");
+    if (t !== lastField || (lastField && lastField.disabled)) return false;
+    return Boolean(rowField(row, "ei-desc")?.value.trim());
+  };
+  const addLineAfter = (row) => {
+    clearEstimateTypingTimer();
+    const jobIdRaw = row.closest(".job-group")?.dataset.jobId ?? row.dataset.jobId ?? "";
+    addEstimateRow(rowField(row, "ei-kind")?.value || "part", {}, jobIdRaw ? Number(jobIdRaw) : null);
+  };
+
+  box.addEventListener("keydown", (e) => {
+    if (e.altKey || e.ctrlKey || e.metaKey) return;
+    const t = e.target;
+    if (!(t instanceof Element)) return;
+    const row = t.closest(".part-row:not(.head)");
+    if (!row) return;
+
+    if (e.key === "Tab" && !e.shiftKey) {
+      if (!mayAddLineFrom(row, t, estRows())) return;
+      e.preventDefault();
+      return void addLineAfter(row);
+    }
+
+    if (e.key !== "Enter") return;
+
+    if (!e.shiftKey) {
+      // Enter: forwards along the last line, then the add-a-line contract.
+      const idx = entryIndex(t);
+      if (idx === -1) return;
+      const rows = estRows();
+      if (row !== rows[rows.length - 1]) return;
+      const next = firstEnabled(row, EST_ENTRY_ORDER.slice(idx + 1));
+      if (next) {
+        e.preventDefault();
+        return void focusField(next);
+      }
+      if (!mayAddLineFrom(row, t, rows)) return;
+      e.preventDefault();
+      return void addLineAfter(row);
+    }
+
+    // Shift+Enter: backwards along the line, then up into the previous row.
+    const idx = entryIndex(t, { back: true });
+    if (idx === -1) return;
+    const prev = firstEnabled(row, EST_ENTRY_ORDER.slice(0, idx).reverse());
+    if (prev) {
+      e.preventDefault();
+      return void focusField(prev);
+    }
+    const rows = estRows();
+    const prevRow = rows[rows.indexOf(row) - 1];
+    if (!prevRow) return; // first field of the first line: nowhere further back
+    const target = firstEnabled(prevRow, [...EST_ENTRY_ORDER].reverse());
+    if (!target) return;
+    e.preventDefault();
+    focusField(target);
+  });
+
+  box.addEventListener("click", (e) => {
+    const btn = e.target instanceof Element ? e.target.closest("button") : null;
+    if (!btn || !box.contains(btn)) return;
+    if (btn.classList.contains("rm-btn")) return void onEstimateRowRemove(btn);
+    if (btn.classList.contains("row-move-btn")) return void onEstimateRowMove(btn);
+    if (btn.classList.contains("part-return-btn")) return void onEstimatePartReturn(btn);
+    if (btn.classList.contains("job-edit")) return void onJobEdit(btn);
+    if (btn.classList.contains("job-delete")) return void onJobDelete(btn);
+    if (btn.classList.contains("job-mini-add")) {
+      addEstimateRow(btn.dataset.kind, {}, btn.dataset.jobId ? Number(btn.dataset.jobId) : null);
+    }
+  });
+
+  wireEstimateRowDragging(box);
+}
+
+function currentEstimateJob(jobId) {
+  return (state.detail.order?.estimate?.jobs ?? []).find((j) => String(j.id) === String(jobId)) || null;
+}
+
+async function onEstimateRowRemove(btn) {
+  const row = btn.closest(".part-row");
+  if (!row) return;
+  const desc = row.querySelector(".ei-desc").value.trim();
+  if (desc && !(await confirmAction({
+    eyebrow: "REMOVE LINE",
+    title: `Remove "${desc}"?`,
+    body: "It comes off this repair order and stops counting toward its cost.",
+    confirmLabel: "Remove Line",
+    danger: true,
+  }))) return;
+  row.remove();
+  persistEstimate();
+}
+
+function onEstimateRowMove(btn) {
+  const order = state.detail.order;
+  if (!order) return;
+  openMoveItemDialog(order.id, Number(btn.dataset.id), btn.dataset.desc);
+}
+
+async function onEstimateStatusChange(sel) {
+  const order = state.detail.order;
+  const itemId = sel.closest(".part-row")?.dataset.id;
+  if (!order || !itemId) return;
+  try {
+    await patch(`/api/orders/${order.id}/estimate/items/${itemId}/status`, { status: sel.value });
+    sel.dataset.prev = sel.value;
+    toast("Status updated");
+    await loadVehicleDetail();
+  } catch (err) {
+    sel.value = sel.dataset.prev || "quoted";
+    toast(err.message, true);
+  }
+}
+
+async function onEstimatePartReturn(btn) {
+  const order = state.detail.order;
+  if (!order) return;
+  const returned = btn.dataset.returned !== "1";
+  const desc = btn.closest(".part-row").querySelector(".ei-desc").value.trim();
+  // Sending the new part back reverses the line's core charge too: there's
+  // no old unit owed to anyone, so its pending core drops off the cores
+  // board. Say so, because that board is where someone would otherwise go
+  // looking for it.
+  const line = (order.estimate?.items || []).find((i) => String(i.id) === String(btn.dataset.id));
+  const coreNote = returned && line && (line.core_charge || 0) > 0 && !line.core_returned
+    ? ` Its ${money(line.core_charge)} core charge reverses with it, so the core drops off the cores board — there's no old unit to send back.`
+    : "";
+  // No paperwork at this step: the part goes back to the vendor first, and
+  // the credit invoice arrives later -- it's recorded on the Cores & Returns
+  // page once it shows up.
+  if (returned && !(await confirmAction({
+    eyebrow: "VENDOR RETURN",
+    title: `Mark "${desc}" as returned?`,
+    body: `Its cost stops counting toward this ticket and it lands on the returns board as Pending — mark it picked up there once the vendor collects it, then record their credit when the paperwork arrives.${coreNote}`,
+    confirmLabel: "Mark Returned",
+  }))) return;
+  try {
+    await patch(`/api/orders/${order.id}/estimate/items/${btn.dataset.id}/part-return`, { returned, actor: currentActor() });
+    toast(returned ? "Marked returned — it's waiting for pickup in Cores & Returns" : "Return undone");
+    await loadVehicleDetail();
+  } catch (err) {
+    toast(err.message, true);
+  }
+}
+
+async function onJobTechnicianChange(sel) {
+  const order = state.detail.order;
+  const job = currentEstimateJob(sel.dataset.jobId);
+  if (!order || !job) return;
+  try {
+    await put(`/api/orders/${order.id}/jobs/${job.id}`, {
+      title: job.title,
+      technician_id: sel.value ? Number(sel.value) : null,
+      actor: currentActor(),
+    });
+    toast("Job technician updated");
+    await loadVehicleDetail();
+  } catch (err) {
+    toast(err.message, true);
+  }
+}
+
+function onJobEdit(btn) {
+  const job = currentEstimateJob(btn.dataset.jobId);
+  if (job) openJobDialog(job);
+}
+
+async function onJobDelete(btn) {
+  const order = state.detail.order;
+  if (!order) return;
+  const job = currentEstimateJob(btn.dataset.jobId);
+  if (!(await confirmAction({
+    eyebrow: "DELETE JOB",
+    title: `Delete "${job ? job.title : "this job"}"?`,
+    body: "Its parts and labor move back to General. No lines are deleted.",
+    confirmLabel: "Delete Job",
+    danger: true,
+  }))) return;
+  try {
+    await api(`/api/orders/${order.id}/jobs/${btn.dataset.jobId}`, { method: "DELETE" });
+    toast("Job deleted");
+    await loadVehicleDetail();
+  } catch (err) {
+    toast(err.message, true);
+  }
+}
+
+// Native HTML5 drag-and-drop: grabbing the row (the visible affordance is the
+// ⋮⋮ handle) reorders it among its siblings live as you drag; persistEstimate()
+// on drop saves whatever order the DOM ends up in, same as every other estimate
+// edit. Delegated from the grid container rather than bound per row, with the
+// same-parent check doing what per-group wiring used to do: a row can only be
+// dropped among its own group's siblings, because dragging a part into the
+// Labor section wouldn't change its kind and would just look wrong. Moving a
+// line to a different job or kind is the Job/Kind selects' job.
+function wireEstimateRowDragging(box) {
+  let dragRow = null;
+  box.addEventListener("dragstart", (e) => {
+    const row = e.target instanceof Element ? e.target.closest(".part-row:not(.head)") : null;
+    if (!row || row.getAttribute("draggable") === "false") return;
+    dragRow = row;
+    row.classList.add("dragging");
+  });
+  box.addEventListener("dragend", () => {
+    if (!dragRow) return;
+    dragRow.classList.remove("dragging");
+    dragRow = null;
+    persistEstimate();
+  });
+  box.addEventListener("dragover", (e) => {
+    if (!dragRow) return;
+    e.preventDefault();
+    const row = e.target instanceof Element ? e.target.closest(".part-row:not(.head)") : null;
+    if (!row || row === dragRow || row.parentNode !== dragRow.parentNode) return;
+    const rect = row.getBoundingClientRect();
+    const before = rect.height > 0 && (e.clientY - rect.top) / rect.height < 0.5;
+    row.parentNode.insertBefore(dragRow, before ? row : row.nextSibling);
+  });
+}
+
+function collectEstimateItems() {
+  return $$(".part-row:not(.head)", $("#vd-estimate-items")).map((row) => {
+    // A returned part's Cost field is shown as 0 on screen so it reads as
+    // "no longer counted" -- but the real received cost lives in
+    // data-real-cost and must round-trip through every save (persistEstimate
+    // resends every row, this one included) or it'd be lost for good, taking
+    // the vendor credit amount with it.
+    const costInput = row.querySelector(".ei-cost");
+    const cost = costInput.dataset.realCost !== undefined
+      ? parseFloat(costInput.dataset.realCost)
+      : parseFloat(costInput.value || "0");
+    const coreInput = row.querySelector(".ei-core");
+    // The core amount only counts when the line is explicitly marked as
+    // carrying a core. An unticked row reports 0 no matter what is sitting in
+    // the box, so a stray figure can't quietly become a deposit the shop then
+    // chases a vendor for.
+    const coreOn = row.querySelector(".ei-core-on")?.checked;
+    const kind = row.querySelector(".ei-kind").value;
+    const jobSelect = row.querySelector(".ei-job");
+    return {
+      id: row.dataset.id ? Number(row.dataset.id) : null,
+      kind,
+      description: row.querySelector(".ei-desc").value.trim(),
+      // Labor has no part number -- the column is shared across line kinds,
+      // so anything typed there before the kind was switched is dropped
+      // rather than saved against a labor line.
+      part_number: kind === "part" ? row.querySelector(".ei-part").value.trim() : "",
+      quantity: parseFloat(row.querySelector(".ei-qty").value || "1"),
+      unit_cost: cost,
+      unit_price: cost,
+      core_charge: coreOn && coreInput ? parseFloat(coreInput.value || "0") : 0,
+      source: row.dataset.source || "manual",
+      // A freshly-added row (addEstimateRow) has no .ei-job select yet --
+      // just the data-job-id it was created with -- so fall back to that.
+      job_id: jobSelect ? (jobSelect.value ? Number(jobSelect.value) : null) : (row.dataset.jobId ? Number(row.dataset.jobId) : null),
+    };
+  }).filter((i) => i.description);
+}
+
+// Saves the estimate exactly as it currently sits in the DOM, then re-renders
+// from the server's response so ids/status controls attach to new rows.
+// Called after every add/edit/remove -- an estimate line is never sitting
+// unsaved in the browser waiting to be wiped out by an unrelated action
+// elsewhere on the page (that was the bug: adding a part, then clicking any
+// other Save/Advance/Order-Parts button, reloaded the page and discarded it).
+//
+// Fast successive edits (tabbing through several fields) fire several of
+// these calls in flight at once; an earlier, slower response landing after
+// a newer one would overwrite fresher data with stale data. estimateSaveToken
+// tags each call so only the most recently *started* one is allowed to render.
+let estimateSaveToken = 0;
+async function persistEstimate() {
+  const order = state.detail.order;
+  if (!order) return;
+  const items = collectEstimateItems();
+  const token = ++estimateSaveToken;
+  const expectedVersion = order.estimate ? order.estimate.edit_version : null;
+  setEstimateSaveState("saving");
+  try {
+    const estimate = await post(`/api/orders/${order.id}/estimate`, { labor_rate: 0, tax_rate: 0, actor: currentActor(), items, expected_version: expectedVersion });
+    if (token !== estimateSaveToken) return; // a newer edit has already been sent; drop this stale response
+    order.estimate = estimate;
+    applyEstimateResponse(order);
+    setEstimateSaveState("saved");
+  } catch (err) {
+    if (token === estimateSaveToken) setEstimateSaveState("failed");
+    if (String(err.message).includes("Someone else changed")) {
+      toast(err.message, true);
+      await loadVehicleDetail(); // pull the latest version instead of leaving stale data on screen
+      return;
+    }
+    toast(err.message, true);
+  }
+}
+
+/* Autosave is invisible by design -- which also means there was no way to tell
+   whether the number you just typed actually reached the database, or whether
+   the app was simply ignoring you. This is the one bit of feedback: it says
+   Saving while a request is in flight, settles to "All changes saved" and
+   fades out, and stays put (in red) if the save failed. */
+let estimateSaveStateTimer = null;
+function setEstimateSaveState(kind) {
+  const el = $("#vd-estimate-save-state");
+  if (!el) return;
+  clearTimeout(estimateSaveStateTimer);
+  el.textContent = { saving: "Saving…", saved: "All changes saved", failed: "Not saved" }[kind] || "";
+  el.className = `save-state show ${kind}`;
+  if (kind === "saved") {
+    estimateSaveStateTimer = setTimeout(() => { el.className = "save-state saved"; }, 2200);
+  }
+}
+
+function addEstimateRow(kind, defaults = {}, jobId = null) {
+  const box = $("#vd-estimate-items");
+  const targetContainer = box.classList.contains("has-jobs")
+    ? ($(`.job-group[data-job-id="${jobId ?? ""}"]`, box) || box)
+    : box;
+  const empty = $(".ei-empty", targetContainer);
+  if (empty) empty.remove();
+  const row = document.createElement("div");
+  const source = defaults.source || "manual";
+  row.className = "part-row";
+  row.dataset.id = "";
+  row.dataset.source = source;
+  row.dataset.jobId = jobId ?? "";
+  const label = kind === "labor" ? "Labor" : kind === "fee" ? "Fee" : "Part";
+  // Same .pr-cell scaffolding renderEstimate() emits, including the empty
+  // spacers -- otherwise this row sits misaligned against the ones around it
+  // for the half-second before the save round-trips and re-renders.
+  row.innerHTML = `
+    <div class="pr-cell pr-handle pr-spacer"></div>
+    <div class="pr-cell pr-check pr-spacer"></div>
+    <div class="pr-cell pr-kind" data-label="Kind"><select class="ei-kind">
+      <option value="part" ${kind === "part" ? "selected" : ""}>Part</option>
+      <option value="labor" ${kind === "labor" ? "selected" : ""}>Labor</option>
+      <option value="fee" ${kind === "fee" ? "selected" : ""}>Fee</option>
+      ${/* Same hidden Credit option as the rendered grid above -- a new row is
+           never a credit, but this row is also what a duplicated row is built
+           from, and dropping the kind here would resend it as "". */ ""}
+      <option value="credit" hidden ${kind === "credit" ? "selected" : ""}>Credit</option>
+    </select></div>
+    <div class="pr-cell pr-desc" data-label="Description"><input class="ei-desc" placeholder="Description" value="${esc(defaults.description || `New ${label.toLowerCase()}`)}"></div>
+    <div class="pr-cell pr-part"${fieldLabels(kind).part ? ` data-label="${fieldLabels(kind).part}"` : ""}><input class="ei-part" placeholder="Part #" value="${esc(defaults.part_number || "")}"></div>
+    <div class="pr-cell pr-qty" data-label="${fieldLabels(kind).qty}"><input class="ei-qty" type="number" min="0.01" step="0.01" value="${defaults.quantity ?? 1}"></div>
+    <div class="pr-cell pr-cost" data-label="${fieldLabels(kind).cost}"><input class="ei-cost" type="number" min="0" step="0.01" value="${defaults.unit_cost ?? 0}"></div>
+    <div class="pr-cell pr-core pr-spacer"></div>
+    ${box.classList.contains("has-jobs") ? `<div class="pr-cell pr-job pr-spacer"></div>` : ""}
+    <div class="pr-cell pr-status" data-label="Status"><span class="status-pill sp-quoted">Saving…</span></div>
+    <div class="pr-cell pr-move pr-spacer"></div>
+    <div class="pr-cell pr-remove"><button type="button" class="rm-btn" title="Remove line">×</button></div>
+  `;
+  // No listener wiring: the delegated handler on #vd-estimate-items already
+  // covers this row's × button the moment it lands in the DOM.
+  targetContainer.appendChild(row);
+  // A brand-new Labor line shouldn't flash a Part # box for the half-second
+  // before the save round-trips and re-renders it.
+  syncRowKindFields(row);
+  // Persist immediately -- this is a real line on the RO from the moment it
+  // appears, matching a one-click "add at cost" flow rather than a draft
+  // that silently disappears if the advisor clicks anything else first.
+  // New items are always returned last (inserted with the highest id), so
+  // the last row after the re-render is the one just added.
+  persistEstimate().then(() => {
+    const rows = $$(".part-row:not(.head) .ei-desc", box);
+    rows[rows.length - 1]?.focus();
+    rows[rows.length - 1]?.select();
+  });
+}
+
+function openJobDialog(job = null) {
+  state.detail.editingJobId = job ? job.id : null;
+  $("#job-dialog-title").textContent = job ? "Rename Job" : "Add Job";
+  $("#job-title-input").value = job ? job.title : "";
+  const techs = state.staff.filter((s) => s.role === "technician");
+  $("#job-technician-input").innerHTML = `<option value="">Use ticket default</option>` +
+    techs.map((t) => `<option value="${t.id}" ${job && job.technician_id === t.id ? "selected" : ""}>${esc(t.name)}</option>`).join("");
+  $("#job-dialog").showModal();
+}
+
+export function wireJobDialog() {
+  $("#job-cancel").addEventListener("click", () => $("#job-dialog").close());
+  $("#job-cancel-2").addEventListener("click", () => $("#job-dialog").close());
+  $("#job-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const title = $("#job-title-input").value.trim();
+    if (!title) return;
+    const technicianId = $("#job-technician-input").value ? Number($("#job-technician-input").value) : null;
+    const editingId = state.detail.editingJobId;
+    try {
+      const body = { title, technician_id: technicianId, actor: currentActor() };
+      if (editingId) {
+        await put(`/api/orders/${state.detail.order.id}/jobs/${editingId}`, body);
+      } else {
+        await post(`/api/orders/${state.detail.order.id}/jobs`, body);
+      }
+      $("#job-dialog").close();
+      toast(editingId ? "Job updated" : "Job added");
+      await loadVehicleDetail();
+    } catch (err) {
+      toast(err.message, true);
+    }
+  });
+}
+
+/* ---------- move a mis-logged line to a different ticket ---------- */
+async function openMoveItemDialog(orderId, itemId, desc) {
+  state.detail.movingItemId = itemId;
+  state.detail.movingFromOrderId = orderId;
+  state.detail.movingInvoiceId = null;
+  $("#move-item-desc").textContent = `Moving "${desc}" off this ticket.`;
+  const select = $("#move-item-target");
+  select.innerHTML = `<option value="">Loading…</option>`;
+  $("#move-item-invoice-box").style.display = "none";
+  $("#move-item-no-invoice-note").style.display = "";
+  $("#move-item-reassign-invoice").checked = false;
+  $("#move-item-dialog").showModal();
+  try {
+    const [orders, invoice] = await Promise.all([
+      get("/api/orders"),
+      get(`/api/orders/${orderId}/estimate/items/${itemId}/received-invoice`),
+    ]);
+    const options = orders.filter((o) => o.id !== orderId && !o.voided).map((o) => {
+      const vehicleLabel = o.stock_number ? `${o.stock_number} · ${o.year} ${o.make} ${o.model}` : `${o.year} ${o.make} ${o.model} · ${o.customer_name}`;
+      return `<option value="${o.id}">${esc(o.number)} — ${esc(vehicleLabel)}</option>`;
+    }).join("");
+    select.innerHTML = options || `<option value="">No other repair orders</option>`;
+
+    if (invoice) {
+      state.detail.movingInvoiceId = invoice.invoice_id;
+      $("#move-item-invoice-label").textContent = `Also reassign vendor invoice ${invoice.invoice_number} (${invoice.vendor_name}, posted ${fmtDate(invoice.posted_at)}) to this ticket`;
+      $("#move-item-invoice-box").style.display = "";
+      $("#move-item-no-invoice-note").style.display = "none";
+      const warning = $("#move-item-invoice-warning");
+      if (invoice.other_item_count > 0) {
+        warning.textContent = `⚠ This invoice also covers ${invoice.other_item_count} other part${invoice.other_item_count === 1 ? "" : "s"} still on this ticket — checking this moves ALL of them, not just this one.`;
+        warning.style.display = "";
+      } else {
+        warning.style.display = "none";
+      }
+    }
+  } catch (err) {
+    select.innerHTML = `<option value="">Could not load repair orders</option>`;
+    toast(err.message, true);
+  }
+}
+
+export function wireMoveItemDialog() {
+  $("#move-item-cancel").addEventListener("click", () => $("#move-item-dialog").close());
+  $("#move-item-cancel-2").addEventListener("click", () => $("#move-item-dialog").close());
+  $("#move-item-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const targetOrderId = Number($("#move-item-target").value);
+    if (!targetOrderId) return;
+    const { movingItemId, movingFromOrderId } = state.detail;
+    const reassignInvoice = $("#move-item-reassign-invoice").checked;
+    try {
+      await patch(`/api/orders/${movingFromOrderId}/estimate/items/${movingItemId}/move`, { target_order_id: targetOrderId, reassign_invoice: reassignInvoice, actor: currentActor() });
+      $("#move-item-dialog").close();
+      toast("Line moved to the other ticket");
+      await loadVehicleDetail();
+    } catch (err) {
+      toast(err.message, true);
+    }
+  });
+}
+
+/* ---------- notes / activity ---------- */
+function renderNotes(order) {
+  const box = $("#vd-note-list");
+  box.innerHTML = order.notes.length ? order.notes.map((n) => `
+    <div class="mini-item"><div>${esc(n.text)} <span class="pill" style="background:var(--line-soft);color:var(--ink-faint);text-transform:none;font-weight:600">${n.visibility}</span></div><div class="mi-meta">${esc(n.actor)} · ${fmtDate(n.created_at)}</div></div>
+  `).join("") : emptyState({ icon: "idea", title: "No notes yet", hint: "Anything worth remembering about this vehicle -- what the customer said, what you found.", compact: true });
+}
+/* The activity log's actions are database verbs, and the log used to print
+   them with the underscores swapped for spaces: "technician findings
+   recorded", "ap invoice voided", "estimate item moved out". Readable enough
+   to debug with, but the log is on a screen advisors use, and now the same
+   strings caption the "last worked on" line at the top of the page, where a
+   half-translated identifier looks broken.
+
+   Anything missing from this map falls back to the old de-underscoring, so a
+   new server-side action is ugly rather than blank -- these are written in a
+   dozen places across five modules and this list will drift. */
+const ACTIVITY_LABEL = {
+  order_created: "Ticket opened",
+  status_changed: "Status changed",
+  segment_changed: "Moved to another vehicle",
+  concern_updated: "Concern updated",
+  assignment_updated: "Assignment changed",
+  note_added: "Note added",
+  inspection_saved: "Inspection saved",
+  technician_findings_recorded: "Findings recorded",
+  job_created: "Job added",
+  job_updated: "Job updated",
+  job_deleted: "Job removed",
+  estimate_approved: "Estimate approved",
+  estimate_declined: "Estimate declined",
+  estimate_item_moved_in: "Line moved onto this ticket",
+  estimate_item_moved_out: "Line moved to another ticket",
+  parts_received: "Parts received",
+  part_returned: "Part returned",
+  part_return_undone: "Part return undone",
+  part_return_credited: "Return credited",
+  core_returned: "Core picked up",
+  core_return_undone: "Core return undone",
+  core_credit_recorded: "Core credit recorded",
+  part_picked_up: "Return picked up",
+  part_pickup_undone: "Return pickup undone",
+  invoice_created: "Invoice created",
+  payment_recorded: "Payment recorded",
+  ap_invoice_voided: "Vendor invoice voided",
+  order_voided: "Ticket voided",
+};
+
+function activityLabel(action) {
+  return ACTIVITY_LABEL[action] || String(action || "").replace(/_/g, " ");
+}
+
+function renderActivity(order) {
+  const box = $("#vd-activity-list");
+  box.innerHTML = order.activity.length ? order.activity.slice().reverse().map((a) => `
+    <div class="mini-item"><div>${esc(activityLabel(a.action))}</div><div class="mi-meta">${esc(a.actor)} · ${fmtDate(a.created_at)}</div></div>
+  `).join("") : emptyState({ icon: "check", title: "No activity yet", hint: "Status changes, assignments, and receipts on this ticket get logged here.", compact: true });
+}
+
+/* ---------- assignment ---------- */
+function renderAssignment(order) {
+  const techs = state.staff.filter((s) => s.role === "technician");
+  const advisors = state.staff.filter((s) => s.role === "advisor" || s.role === "manager");
+  const a = order.assignment;
+  /* The ticket already knows who you are -- "Working as" is set in the top
+     right and stamps your name on everything you do here. Asking again which
+     advisor owns the ticket was the same fact requested twice, so an
+     unassigned ticket now defaults to whoever is working it, provided they're
+     an advisor or manager. It's a pre-selection, not a lock: the dropdown
+     still opens and anyone in it can be picked. */
+  const selfAdvisor = advisors.find((s) => s.name === state.currentUser);
+  const advisorId = (a && a.advisor_id) || (selfAdvisor ? selfAdvisor.id : null);
+  $("#vd-technician").innerHTML = `<option value="">Unassigned</option>` + techs.map((t) => `<option value="${t.id}" ${a && a.technician_id === t.id ? "selected" : ""}>${esc(t.name)}</option>`).join("");
+  $("#vd-advisor").innerHTML = `<option value="">Unassigned</option>` + advisors.map((t) => `<option value="${t.id}" ${advisorId === t.id ? "selected" : ""}>${esc(t.name)}</option>`).join("");
+  $("#vd-date-in").value = (a && a.date_in) || "";
+  $("#vd-odometer").value = (a && a.odometer_in) || "";
+  const promised = $("#vd-promised");
+  promised.value = (a && a.promised_at) || "";
+  // A promised date in the past is the single most actionable field in the
+  // drawer -- it turns red instead of sitting there looking routine.
+  promised.classList.toggle("overdue",
+    !!(a && a.promised_at) && new Date(a.promised_at) < new Date() && order.status !== "complete");
+
+  // The toggle used to always read "Assign" even once both roles were
+  // filled in, so reading who's on the ticket meant opening the popover --
+  // same first-name-only convention as the Tasks assignee summary.
+  const firstName = (name) => (name || "").split(" ")[0];
+  const label = $("#vd-assign-picker-label");
+  if (a && (a.technician_name || a.advisor_name)) {
+    label.textContent = `${firstName(a.technician_name) || "—"} / ${firstName(a.advisor_name) || "—"}`;
+    label.closest("button").title = `Technician: ${a.technician_name || "Unassigned"} · Advisor: ${a.advisor_name || "Unassigned"}`;
+  } else {
+    label.textContent = "Assign";
+    label.closest("button").title = "";
+  }
+}
+
+/* ---------- print a single ticket ---------- */
+// Reuses the same print-only surface and letterhead/table styling the
+// Reports view already prints with -- printing a report and printing a
+// ticket are mutually exclusive user actions, so sharing the one
+// `#print-report` container is simpler than maintaining a second.
+//
+// Sharing it requires knowing who wrote it last. The Reports screen rebuilds
+// its markup on beforeprint (so Ctrl+P always prints current rows), and that
+// event fires for EVERY print -- including a ticket's. Without the ownership
+// check, one visit to Reports left state.report set for the rest of the
+// session, and every Print Ticket after that came out of the printer as the
+// summary report: the rebuild overwrote the ticket between renderPrintTicket()
+// and the dialog capturing the page. Looked like a haunted server, was one
+// stale flag -- and "restart the server" only helped because it forced the
+// page reload that cleared it.
+
+function renderPrintTicket() {
+  state.printSurfaceOwner = "ticket";
+  const { segment, item, order } = state.detail;
+  const generated = new Date().toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" });
+  const isWeOwe = segment !== "recon";
+  const vehicleLabel = segment === "recon"
+    ? `${item.stock_number} — ${item.year} ${item.make} ${item.model}`
+    : `${item.year} ${item.make} ${item.model}`;
+  const customerLabel = isWeOwe ? (item.customer_name || "") : "";
+  const items = order.estimate ? order.estimate.items : [];
+  const jobs = order.estimate?.jobs ?? [];
+  const quotedTotal = items.filter((i) => !(i.kind === "part" && i.part_returned)).reduce((s, i) => s + i.quantity * i.unit_cost, 0);
+  const actualParts = items.filter((i) => i.kind === "part" && !i.part_returned).reduce((s, i) => s + i.received_quantity * i.unit_cost, 0);
+  const actualOther = items.filter((i) => i.kind !== "part").reduce((s, i) => s + i.quantity * i.unit_cost, 0);
+  const actualTotal = actualParts + actualOther;
+  const a = order.assignment;
+  const techName = (a && a.technician_name) || "Unassigned";
+  const advisorName = (a && a.advisor_name) || "Unassigned";
+  // A we-owe ticket can end up in the customer's hands -- internal notes
+  // stay off that paper. A recon ticket is a shop document; everything
+  // prints, and either way the visibility tag itself stays on screen.
+  const printNotes = isWeOwe ? (order.notes || []).filter((n) => n.visibility === "customer") : (order.notes || []);
+  const auth = order.authorization;
+  const payments = isWeOwe ? (item.payments || []) : [];
+  const paid = isWeOwe ? (item.customer_paid || 0) : 0;
+  // Key/value line that drops itself when there's nothing to say, so the
+  // info blocks self-compact instead of printing rows of dashes.
+  const kv = (k, v) => (v ? `<div class="pi-row"><span class="k">${k}</span><span class="v">${v}</span></div>` : "");
+
+  // 6 columns: Description | Part # | Qty | Unit | Total | Status. The line
+  // total is what lets anyone verify the math on paper; status is a
+  // parts-only concept (labor/fees have no order lifecycle), mirroring the
+  // on-screen grid.
+  const itemRow = (i) => {
+    const returned = i.kind === "part" && i.part_returned;
+    let status = "";
+    if (i.kind === "part") {
+      if (returned) status = "Returned";
+      else if ((i.received_quantity ?? 0) > 0 && i.received_quantity < i.quantity) status = `Received ${i.received_quantity}/${i.quantity}`;
+      else status = ITEM_STATUS_LABEL[i.status] || "Quoted";
+    }
+    const coreSub = i.kind === "part" && (i.core_charge || 0) > 0
+      ? `<div class="pt-desc-sub">Core charge ${money(i.core_charge)}</div>` : "";
+    return `<tr><td>${esc(i.description)}${coreSub}</td><td>${i.part_number ? esc(i.part_number) : ""}</td>
+      <td class="num-col">${i.quantity}</td><td class="num-col">${money(returned ? 0 : i.unit_cost)}</td>
+      <td class="num-col">${money(returned ? 0 : i.quantity * i.unit_cost)}</td><td>${status}</td></tr>`;
+  };
+
+  // Parts/Labor/Fees sub-headers replace the old Kind column -- the same
+  // grouping whether or not the ticket has jobs, so the column count never
+  // changes shape between tickets. Exhaustive over every kind actually
+  // present, not just the three named groups: vendor-credit ingest writes
+  // kind="credit" lines, and a printed row list that drops them stops
+  // summing to its own printed totals.
+  const kindGroupRows = (bucketItems) => {
+    const extraKinds = [...new Set(bucketItems.map((x) => x.kind).filter((k) => !KIND_GROUP_ORDER.includes(k)))];
+    return [...KIND_GROUP_ORDER, ...extraKinds]
+      .map((kind) => ({ kind, kindItems: bucketItems.filter((x) => x.kind === kind) }))
+      .filter((g) => g.kindItems.length)
+      .map((g) => `<tr class="print-kind-head"><td colspan="6">${KIND_GROUP_LABEL[g.kind] || (g.kind === "credit" ? "Credits" : esc(g.kind))}</td></tr>` + g.kindItems.map(itemRow).join(""))
+      .join("");
+  };
+
+  // Same job/General buckets as the on-screen ticket (renderEstimate) --
+  // a printed ticket that's grouped differently than what the advisor was
+  // just looking at on screen would be confusing to hand to a technician.
+  // One tbody per job so a page break can't strand a job title alone.
+  let bodyRows;
+  if (!jobs.length) {
+    bodyRows = `<tbody>${items.length ? kindGroupRows(items) : `<tr><td colspan="6">No parts or labor lines.</td></tr>`}</tbody>`;
+  } else {
+    const buckets = [...jobs, { id: null, title: "General" }];
+    bodyRows = buckets.map((bucket) => {
+      const bucketItems = items.filter((i) => (i.job_id ?? null) === bucket.id);
+      if (!bucketItems.length) return "";
+      const jobTech = bucket.id === null ? "" : (bucket.technician_name || "Use ticket default");
+      const jobSubtotal = bucketItems.filter((i) => !(i.kind === "part" && i.part_returned)).reduce((s, i) => s + i.quantity * i.unit_cost, 0);
+      return `<tbody class="print-job"><tr class="print-job-head"><td colspan="4">${esc(bucket.title)}${jobTech ? ` — ${esc(jobTech)}` : ""}</td><td class="num-col">${money(jobSubtotal)}</td><td></td></tr>${kindGroupRows(bucketItems)}</tbody>`;
+    }).join("") || `<tbody><tr><td colspan="6">No parts or labor lines.</td></tr></tbody>`;
+  }
+
+  // Invoice-style totals. With deposits (we-owe), the balance is the grand
+  // row; without them Actual Cost is the bottom line itself.
+  const totalsRows = [`<div class="tl-row"><span>Total Quote</span><span class="num">${money(quotedTotal)}</span></div>`];
+  if (paid > 0) {
+    totalsRows.push(`<div class="tl-row"><span>Actual Cost</span><span class="num">${money(actualTotal)}</span></div>`);
+    // The API returns payments newest-first; paper reads oldest-first.
+    payments.slice().reverse().forEach((p) => totalsRows.push(
+      `<div class="tl-row muted"><span>Deposit · ${PAY_METHOD_LABEL[p.method] || esc(p.method)} · ${esc(fmtDate(p.created_at))}</span><span class="num">−${money(p.amount)}</span></div>`));
+    totalsRows.push(`<div class="tl-row grand"><span>Balance</span><span class="num">${money(item.net_cost)}</span></div>`);
+  } else {
+    totalsRows.push(`<div class="tl-row grand"><span>Actual Cost</span><span class="num">${money(actualTotal)}</span></div>`);
+  }
+  // net_cost/customer_paid roll up the whole vehicle, not just this RO --
+  // say so whenever more than one RO shares them.
+  const totalsNote = paid > 0 && (item.orders || []).length > 1
+    ? `<div class="tl-note">Deposits and balance include all repair orders on this vehicle.</div>` : "";
+
+  $("#print-report").innerHTML = `
+    <header class="print-letterhead">
+      <div>
+        <div class="print-shop-name">RECON</div>
+        <div class="print-shop-sub">Discount Auto Repair · Merrillville, IN</div>
+      </div>
+      <div class="print-meta">
+        <div class="print-report-title">Repair Order ${esc(order.number)}</div>
+        <div>${esc(vehicleLabel)}${customerLabel ? " — " + esc(customerLabel) : ""}</div>
+        <div class="print-meta-line">${esc(STATUS_LABEL[order.status] || order.status)} · ${segment === "recon" ? "Recon Inventory" : segment === "retail" ? "Customer Vehicle (Retail)" : "Customer Vehicle (We-Owe)"}</div>
+        <div class="print-generated">Generated ${esc(generated)}</div>
+      </div>
+    </header>
+    ${order.concern ? `<div class="print-concern"><div class="label">Concern</div><div class="text">${esc(order.concern)}</div></div>` : ""}
+    <div class="print-info-grid">
+      <div class="print-info-block">
+        <div class="pi-label">Vehicle</div>
+        ${kv("Year/Make/Model", esc([item.year, item.make, item.model].filter(Boolean).join(" ")))}
+        ${kv("VIN", esc(item.vin || ""))}
+        ${kv("Mileage", item.mileage ? `${item.mileage.toLocaleString()} mi` : "")}
+        ${kv("Trim", esc(item.trim || ""))}
+        ${kv("Engine", esc(item.engine || ""))}
+        ${kv("Color", esc(item.color || ""))}
+      </div>
+      ${isWeOwe ? `
+      <div class="print-info-block">
+        <div class="pi-label">Customer</div>
+        ${kv("Name", esc(item.customer_name || ""))}
+        ${kv("Phone", esc(fmtPhone(item.customer_phone || "")))}
+        ${kv("Email", esc(item.customer_email || ""))}
+        ${kv("We-Owe", esc(item.description || ""))}
+      </div>` : `
+      <div class="print-info-block">
+        <div class="pi-label">Stock</div>
+        ${kv("Stock #", esc(item.stock_number || ""))}
+        ${kv("Source", esc(item.acquisition_source || ""))}
+        ${kv("Acquired", item.acquisition_date ? esc(fmtDate(item.acquisition_date)) : "")}
+      </div>`}
+      <div class="print-info-block">
+        <div class="pi-label">Service</div>
+        ${kv("Technician", esc(techName))}
+        ${kv("Advisor", esc(advisorName))}
+        ${kv("Date in", a?.date_in ? esc(fmtDate(a.date_in)) : "")}
+        ${kv("Odometer in", a?.odometer_in ? `${esc(String(a.odometer_in))} mi` : "")}
+        ${kv("Promised", a?.promised_at ? esc(fmtDate(a.promised_at)) : "")}
+        ${isWeOwe && item.target_date ? kv("Target date", esc(fmtDate(item.target_date))) : ""}
+      </div>
+    </div>
+    <div class="print-subhead">Parts &amp; Labor</div>
+    <table class="print-table ticket">
+      <thead><tr><th>Description</th><th>Part #</th><th class="num-col">Qty</th><th class="num-col">Unit</th><th class="num-col">Total</th><th>Status</th></tr></thead>
+      ${bodyRows}
+      <tfoot><tr class="tfoot-space" aria-hidden="true"><td colspan="6"></td></tr></tfoot>
+    </table>
+    <div class="print-totals">${totalsRows.join("")}${totalsNote}</div>
+    ${printNotes.length ? `<div class="print-subhead">Notes</div><div class="print-notes">${printNotes.map((n) => `<div>${esc(n.text)}</div>`).join("")}</div>` : ""}
+    ${auth && auth.status === "approved" ? `<p class="print-note">Estimate approved by ${esc(auth.approved_by)}${AUTH_METHOD_LABEL[auth.method] ? ` ${AUTH_METHOD_LABEL[auth.method]}` : ""} · ${esc(fmtDate(auth.created_at))}</p>` : ""}
+    <div class="print-sign">
+      <div class="sign-cell"><div class="sign-rule"></div><div class="sign-label">${isWeOwe ? "Customer Authorization" : "Technician Sign-Off"}</div></div>
+      <div class="sign-cell"><div class="sign-rule"></div><div class="sign-label">Date</div></div>
+    </div>
+    <footer class="print-foot">
+      <span>RECON · Discount Auto Repair</span>
+      <span>Repair Order ${esc(order.number)} · ${esc(vehicleLabel)} · Generated ${esc(generated)}</span>
+    </footer>
+  `;
+}
+
+/* ---------- vehicle-detail event wiring (wired once) ---------- */
+export function wireVehicleDetail() {
+  $("#back-to-vehicles").addEventListener("click", () => showView(detailHomeView()));
+
+  $("#vd-start-ro").addEventListener("click", async () => {
+    const concern = $("#vd-new-ro-concern").value.trim();
+    if (!concern) return toast("Describe what's being done first", true);
+    const { segment, id, item } = state.detail;
+    const payload = { concern, segment, customer_id: null, vehicle_id: null };
+    if (segment === "recon") payload.recon_vehicle_id = id;
+    else if (segment === "retail") { payload.customer_id = item.customer_id; payload.vehicle_id = id; }
+    else payload.we_owe_id = id;
+    try {
+      await post("/api/orders", payload);
+      $("#vd-new-ro-concern").value = "";
+      toast("Repair order started");
+      await loadVehicleDetail();
+    } catch (err) {
+      toast(err.message, true);
+    }
+  });
+
+  $("#vd-status-select").addEventListener("change", async (e) => {
+    const select = e.target;
+    const status = select.value;
+    select.disabled = true;
+    try {
+      await patch(`/api/orders/${state.detail.order.id}/status`, { status, actor: currentActor() });
+      toast(`Status set to ${STATUS_LABEL[status]}`);
+      await loadVehicleDetail();
+    } catch (err) {
+      toast(err.message, true);
+      select.disabled = false;
+    }
+  });
+
+  $("#vd-concern-save").addEventListener("click", async (e) => {
+    const concern = $("#vd-concern").value.trim();
+    if (!concern) return toast("Concern can't be empty", true);
+    await withLoading(e.target, "Saving…", async () => {
+      try {
+        await patch(`/api/orders/${state.detail.order.id}/concern`, { concern, actor: currentActor() });
+        toast("Concern updated");
+        await loadVehicleDetail();
+      } catch (err) {
+        toast(err.message, true);
+      }
+    });
+  });
+  // Everything else on this page autosaves; the concern shouldn't silently
+  // lose an edit because the Save button never got clicked before navigating
+  // away. Blur commits quietly when the text actually changed.
+  $("#vd-concern").addEventListener("blur", async () => {
+    const order = state.detail.order;
+    if (!order) return;
+    const concern = $("#vd-concern").value.trim();
+    if (!concern || concern === (order.concern || "").trim()) return;
+    try {
+      await patch(`/api/orders/${order.id}/concern`, { concern, actor: currentActor() });
+      order.concern = concern;
+      toast("Concern updated");
+    } catch (err) {
+      toast(err.message, true);
+    }
+  });
+
+  $("#vd-print-ticket").addEventListener("click", () => {
+    renderPrintTicket();
+    window.print();
+  });
+
+  $("#vd-add-task").addEventListener("click", () => addTaskForThisVehicle());
+
+  $("#vd-archive-vehicle").addEventListener("click", async () => {
+    const { segment, id, item } = state.detail;
+    if (!(await confirmAction({
+      eyebrow: "ARCHIVE",
+      title: "Send this vehicle to History?",
+      body: "It becomes read-only until reopened. Nothing is deleted.",
+      confirmLabel: "Send to History",
+    }))) return;
+    try {
+      await post(segment === "recon" ? `/api/recon/vehicles/${id}/archive` : `/api/we-owe/${id}/archive`, { expected_version: item.edit_version });
+      toast("Sent to History");
+      await loadVehicleDetail();
+    } catch (err) {
+      toast(err.message, true);
+      if (String(err.message).includes("Someone else changed")) await loadVehicleDetail();
+    }
+  });
+
+  $("#vd-reopen-vehicle").addEventListener("click", async () => {
+    const { segment, id, item } = state.detail;
+    try {
+      await post(segment === "recon" ? `/api/recon/vehicles/${id}/reopen` : `/api/we-owe/${id}/reopen`, { expected_version: item.edit_version });
+      toast("Reopened -- fully editable again");
+      await loadVehicleDetail();
+    } catch (err) {
+      toast(err.message, true);
+      if (String(err.message).includes("Someone else changed")) await loadVehicleDetail();
+    }
+  });
+
+  $("#vd-move-segment").addEventListener("click", openMoveSegmentDialog);
+
+  $("#vd-void-order").addEventListener("click", async () => {
+    if (!(await confirmAction({
+      eyebrow: "VOID TICKET",
+      title: "Void this repair order?",
+      body: "Its cost stops counting toward the vehicle's total. This can't be undone.",
+      confirmLabel: "Void Ticket",
+      danger: true,
+    }))) return;
+    try {
+      await post(`/api/orders/${state.detail.order.id}/void`, { actor: currentActor() });
+      toast("Ticket voided");
+      await loadVehicleDetail();
+    } catch (err) {
+      toast(err.message, true);
+    }
+  });
+
+  $("#vd-add-part").addEventListener("click", () => addEstimateRow("part"));
+  $("#vd-add-labor").addEventListener("click", () => addEstimateRow("labor"));
+
+  $("#vd-order-parts").addEventListener("click", async () => {
+    // One click flips every quoted part on the ticket -- worth a question,
+    // and the "doesn't place a real purchase order" caveat that used to hide
+    // in a hover-only title belongs in it.
+    const quoted = (state.detail.order?.estimate?.items || [])
+      .filter((i) => i.kind === "part" && i.id && (i.status || "quoted") === "quoted").length;
+    if (!quoted) return toast("No quoted parts to order");
+    if (!(await confirmAction({
+      eyebrow: "ORDER PARTS",
+      title: `Mark ${quoted} quoted part line${quoted === 1 ? "" : "s"} as ordered?`,
+      body: "This only changes their status on this ticket — it does not place a purchase order with any vendor.",
+      confirmLabel: "Mark Ordered",
+    }))) return;
+    try {
+      const res = await patch(`/api/orders/${state.detail.order.id}/estimate/order-parts`);
+      toast(res.updated ? `${res.updated} part line(s) marked ordered` : "No quoted parts to order");
+      await loadVehicleDetail();
+    } catch (err) {
+      toast(err.message, true);
+    }
+  });
+
+  $("#vd-receive-parts").addEventListener("click", () => openReceiveDialog());
+
+  const addNote = async () => {
+    const text = $("#vd-note-text").value.trim();
+    if (!text) return;
+    try {
+      await post(`/api/orders/${state.detail.order.id}/notes`, { text, visibility: $("#vd-note-visibility").value, actor: currentActor() });
+      $("#vd-note-text").value = "";
+      toast("Note added");
+      await loadVehicleDetail();
+    } catch (err) {
+      toast(err.message, true);
+    }
+  };
+  $("#vd-add-note").addEventListener("click", addNote);
+  $("#vd-note-text").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); addNote(); }
+  });
+
+  const saveAssignment = async (e) => {
+    await withLoading(e.target, "Saving…", async () => {
+      try {
+        await put(`/api/orders/${state.detail.order.id}/assignment`, {
+          advisor_id: $("#vd-advisor").value ? Number($("#vd-advisor").value) : null,
+          technician_id: $("#vd-technician").value ? Number($("#vd-technician").value) : null,
+          date_in: $("#vd-date-in").value,
+          odometer_in: Number($("#vd-odometer").value || 0),
+          promised_at: $("#vd-promised").value,
+          actor: currentActor(),
+        });
+        toast("Saved");
+        // Close the popover so the save visibly took -- it used to stay
+        // open looking like nothing happened.
+        $("#vd-assign-picker-menu")?.classList.remove("open");
+        await loadVehicleDetail();
+      } catch (err) {
+        toast(err.message, true);
+      }
+    });
+  };
+  $("#vd-save-assignment").addEventListener("click", saveAssignment);
+  $("#vd-save-timing").addEventListener("click", saveAssignment);
+
+  $("#vd-we-owe-save").addEventListener("click", async (e) => {
+    const { id, item } = state.detail;
+    await withLoading(e.target, "Saving…", async () => {
+      try {
+        await patch(`/api/we-owe/${id}`, {
+          status: $("#vd-we-owe-status").value,
+          description: $("#vd-we-owe-description").value.trim(),
+          category: $("#vd-we-owe-category").value.trim(),
+          target_date: $("#vd-we-owe-target").value,
+          expected_version: item.edit_version,
+        });
+        toast("We-owe item updated");
+        await loadVehicleDetail();
+      } catch (err) {
+        if (String(err.message).includes("Someone else changed")) await loadVehicleDetail();
+        toast(err.message, true);
+      }
+    });
+  });
+
+  $("#vd-deposit-add").addEventListener("click", async (e) => {
+    const { id } = state.detail;
+    const amount = Number($("#vd-deposit-amount").value || 0);
+    if (!amount || amount <= 0) return toast("Enter a deposit amount first", true);
+    await withLoading(e.target, "Saving…", async () => {
+      try {
+        await post(`/api/we-owe/${id}/payments`, {
+          amount,
+          method: $("#vd-deposit-method").value,
+          note: $("#vd-deposit-note").value.trim(),
+          actor: currentActor(),
+        });
+        $("#vd-deposit-amount").value = "";
+        $("#vd-deposit-note").value = "";
+        toast("Deposit recorded");
+        await loadVehicleDetail();
+        renderPaymentDialogList();
+      } catch (err) {
+        toast(err.message, true);
+      }
+    });
+  });
+
+  $("#vd-take-payment").addEventListener("click", () => {
+    renderPaymentDialogList();
+    $("#payment-dialog").showModal();
+  });
+  $("#payment-cancel").addEventListener("click", () => $("#payment-dialog").close());
+  $("#payment-cancel-2").addEventListener("click", () => $("#payment-dialog").close());
+  // Enter in the Amount field used to fall through the form with no submit
+  // handler -- record the deposit instead of doing nothing.
+  $("#payment-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    $("#vd-deposit-add").click();
+  });
+
+  $("#vd-edit-vehicle").addEventListener("click", () => $("#vehicle-edit-dialog").showModal());
+  $("#vehicle-edit-cancel").addEventListener("click", () => $("#vehicle-edit-dialog").close());
+  $("#vehicle-edit-cancel-2").addEventListener("click", () => $("#vehicle-edit-dialog").close());
+
+  $("#vd-edit-customer").addEventListener("click", () => {
+    // The detail payload carries the customer flattened under customer_*
+    // prefixes; the shared editor (see wireCustomerEditor) speaks plain
+    // customer rows, because it also serves the Customers screen, which
+    // has the real rows.
+    const { item } = state.detail;
+    openCustomerEditor({
+      id: item.customer_id,
+      name: item.customer_name, phone: item.customer_phone, email: item.customer_email,
+      address_line1: item.customer_address_line1, address_line2: item.customer_address_line2,
+      city: item.customer_city, state: item.customer_state, postal_code: item.customer_postal_code,
+    }, () => loadVehicleDetail());
+  });
+
+  // Other Vehicles card (retail only): put the customer's second car on file
+  // and land on its page, where the natural next click is "Start Repair
+  // Order" -- the same landing the Customers screen's Write RO flow uses.
+  $("#vd-add-other-vehicle").addEventListener("click", () => {
+    const { item } = state.detail;
+    openAddVehicleDialog(item.customer_id, item.customer_name, (created) => {
+      delete state.customerDetails[item.customer_id]; // Customers expansion is stale now
+      openVehicleDetail("retail", created.id);
+    });
+  });
+
+  $("#vehicle-edit-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const { segment, id, item } = state.detail;
+    await withLoading(e.submitter, "Saving…", async () => {
+      try {
+        const payload = {
+          vin: $("#vd-recon-vin").value.trim(),
+          mileage: Number($("#vd-recon-mileage").value || 0),
+          year: Number($("#vd-recon-year").value),
+          make: $("#vd-recon-make").value.trim(),
+          model: $("#vd-recon-model").value.trim(),
+          trim: $("#vd-recon-trim").value.trim(),
+          color: $("#vd-recon-color").value.trim(),
+          expected_version: item.edit_version,
+        };
+        if (segment === "recon") {
+          payload.purchase_price = Number($("#vd-recon-purchase-price").value || 0);
+          await patch(`/api/recon/vehicles/${id}`, payload);
+        } else if (segment === "retail") {
+          await patch(`/api/retail/vehicles/${id}`, payload);
+        } else {
+          await patch(`/api/we-owe/${id}`, payload);
+        }
+        toast("Vehicle info updated");
+        $("#vehicle-edit-dialog").close();
+        await loadVehicleDetail();
+      } catch (err) {
+        if (String(err.message).includes("Someone else changed")) await loadVehicleDetail();
+        toast(err.message, true);
+      }
+    });
+  });
+
+  $("#vd-add-job").addEventListener("click", () => openJobDialog());
+
+  $("#vd-decode-vin").addEventListener("click", async () => {
+    const vin = $("#vd-recon-vin").value.trim();
+    if (vin.length < 5) return toast("Enter a VIN first", true);
+    try {
+      const data = await post("/api/vehicles/decode-vin", { vin });
+      $("#vd-recon-year").value = data.year;
+      $("#vd-recon-make").value = data.make;
+      $("#vd-recon-model").value = data.model;
+      $("#vd-recon-trim").value = data.trim;
+      toast("VIN decoded — click Save to keep it");
+    } catch (err) {
+      toast(err.message, true);
+    }
+  });
+
+  $("#vd-delete").addEventListener("click", async () => {
+    const { segment, id, item } = state.detail;
+    const label = segment === "recon" ? item.stock_number : `${item.year} ${item.make} ${item.model}`;
+    if (!(await confirmAction({
+      eyebrow: "DELETE",
+      title: `Delete ${label}?`,
+      body: "The vehicle, its repair order, and everything on it are removed permanently. This can't be undone -- send it to History instead if you only want it off the board.",
+      confirmLabel: "Delete Permanently",
+      danger: true,
+    }))) return;
+    try {
+      await api(segment === "recon" ? `/api/recon/vehicles/${id}` : `/api/we-owe/${id}`, { method: "DELETE" });
+      toast("Deleted");
+      showView("vehicles");
+    } catch (err) {
+      toast(err.message, true);
+    }
+  });
+}
+
+
+// The drawer module (REDESIGN ADDITIONS) decorates the status-card render
+// without this module knowing how. It used to reassign the function binding,
+// which ES modules forbid -- so the decoration goes through this hook.
+let renderStatusCardImpl = renderStatusCardBase;
+function renderStatusCard(order) {
+  return renderStatusCardImpl(order);
+}
+export function overrideRenderStatusCard(wrap) {
+  renderStatusCardImpl = wrap(renderStatusCardImpl);
+}

@@ -1471,11 +1471,11 @@
 
 <div id="toast"></div>
 <div id="print-report" class="print-only"></div>
-<script src="/assets/app.js"></script>
+<script type="module" src="/assets/js/main.js"></script>
 <!-- Help is not loaded: the screen isn't finished, so it's out of the build
      rather than half-present. Both files are still on disk. To bring it back,
-     restore these two tags, keeping them after app.js (help.js calls
-     showView() and expects the views to exist), plus the markup noted above.
+     help.js needs porting to the module layout in /assets/js/ (it called
+     showView() from the old global scope), plus the markup noted above.
 <script src="/assets/help-content.js"></script>
 <script src="/assets/help.js"></script>
 -->

@@ -1,9 +1,9 @@
 // Shared jsdom harness for the front-end smoke tests.
 //
-// Booting the real index.html + app.js is fiddly in ways that are easy to get
-// subtly wrong (see the DOMContentLoaded note below), and there's now more
-// than one screen worth driving, so the boot lives here and each *_smoke.mjs
-// file is just its screen's assertions.
+// Booting the real index.html + the app's modules is fiddly in ways that are
+// easy to get subtly wrong (see the DOMContentLoaded note below), and there's
+// now more than one screen worth driving, so the boot lives here and each
+// *_smoke.mjs file is just its screen's assertions.
 //
 // Requires jsdom, which is not a dependency of the app itself:
 //     cd tests/dom && npm install jsdom
@@ -26,18 +26,40 @@ export const STATIC_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.ur
  * @param {object} opts
  * @param {(url: string, opts: object) => any} opts.fetch  responds to the app's
  *        requests; return the parsed body, or a { status, body } pair.
- * @param {string[]} opts.expose  names from app.js's module scope to copy onto
- *        `window`. app.js is strict-mode, so an eval'd declaration does *not*
- *        become a global -- anything a test wants to call has to be listed.
+ * @param {string[]} opts.expose  names from the app's scope to copy onto
+ *        `window`. The script is strict-mode, so an eval'd declaration does
+ *        *not* become a global -- anything a test calls has to be listed.
  * @param {(w: Window) => void} opts.beforeBoot  runs after the window exists
- *        but before app.js does. The only way to stage localStorage the app
+ *        but before the app does. The only way to stage localStorage the app
  *        reads during init -- by the time boot() returns, init has already
  *        run against whatever was (or wasn't) there.
  * @returns {Promise<object>} { dom, w, doc, fetchLog, settle, ok, fails, rejections, finish }
  */
+/**
+ * Rebuild the front-end as one flat script.
+ *
+ * The app ships as ES modules under static/js/, but jsdom's eval() cannot
+ * import. Module bodies are declaration-only by convention (main.js is the
+ * only file with statements -- the wire calls), so stripping the import
+ * lines and `export ` prefixes and concatenating in main.js's import order
+ * reconstructs exactly the flat script the modules were split out of.
+ */
+export function flatAppJs() {
+  const main = fs.readFileSync(`${STATIC_DIR}/js/main.js`, "utf8");
+  const order = [...main.matchAll(/"\.\/([-\w]+\.js)"/g)].map((m) => m[1]);
+  const strip = (src) =>
+    src
+      .split("\n")
+      .filter((l) => !/^import\b/.test(l))
+      .map((l) => l.replace(/^export /, ""))
+      .join("\n");
+  const modules = order.map((f) => strip(fs.readFileSync(`${STATIC_DIR}/js/${f}`, "utf8")));
+  return '"use strict";\n' + modules.join("\n;\n") + "\n" + strip(main);
+}
+
 export async function boot({ fetch: handler, expose = [], beforeBoot } = {}) {
   const html = fs.readFileSync(`${STATIC_DIR}/index.html`, "utf8");
-  const js = fs.readFileSync(`${STATIC_DIR}/app.js`, "utf8");
+  const js = flatAppJs();
   const dom = new JSDOM(html, { runScripts: "outside-only", url: "http://localhost/", pretendToBeVisual: true });
   const w = dom.window;
 
@@ -100,6 +122,10 @@ export async function boot({ fetch: handler, expose = [], beforeBoot } = {}) {
   const finish = (label) => {
     if (report(label)) process.exit(1);
     console.log(`PASS -- ${label}`);
+    // Exit explicitly: the app legitimately leaves timers running (the
+    // update-check interval, toast timeouts), and a passing test would
+    // otherwise sit on jsdom's live event loop until the runner's timeout.
+    process.exit(0);
   };
 
   // Failures are only collected until finish() prints them, so a test that

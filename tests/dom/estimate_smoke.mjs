@@ -374,3 +374,6 @@ if (fails.length) {
   process.exit(1);
 }
 console.log("PASS -- estimate grid, autosave/focus, live totals + debounce + tab-to-add, message log, confirm dialog and error boundary");
+// Exit explicitly -- the app leaves its update-check interval running, and a
+// passing test would otherwise sit on jsdom's event loop until the timeout.
+process.exit(0);

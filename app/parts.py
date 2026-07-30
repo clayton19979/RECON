@@ -7,7 +7,7 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from .accounting import InvoiceItemIn, create_ap_invoice_record
+from .accounting import InvoiceItemIn, create_ap_invoice_record, receive_onto_invoice
 from .recon import assert_vehicle_editable
 from .workflow import assert_estimate_editable, get_or_create_estimate, record_activity
 
@@ -623,10 +623,7 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
                     )
                 )
 
-            subtotal = round(sum(i.quantity * i.unit_cost for i in invoice_items), 2)
-            total = round(subtotal + item.tax, 2)
-
-            result = create_ap_invoice_record(
+            result = receive_onto_invoice(
                 db,
                 now_fn,
                 vendor_id=item.vendor_id,
@@ -634,10 +631,10 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
                 invoice_number=item.invoice_number,
                 po_number=current_order["number"],
                 items=invoice_items,
-                subtotal=subtotal,
+                # Same order the invoice lines were built in just above, so
+                # each billed line points back at the part it paid for.
+                estimate_item_ids=[row["id"] for row in rows],
                 tax=item.tax,
-                total=total,
-                source="ticket_receive",
             )
             if result["status"] == "duplicate":
                 raise HTTPException(409, "This vendor invoice number is already posted for this vendor")
@@ -645,8 +642,9 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
             for row in rows:
                 remaining, unit_cost = remaining_by_id[row["id"]]
                 db.execute(
-                    "UPDATE estimate_items SET received_quantity=received_quantity+?,unit_cost=?,status='received',received_invoice_number=? WHERE id=?",
-                    (remaining, unit_cost, item.invoice_number.strip(), row["id"]),
+                    "UPDATE estimate_items SET received_quantity=received_quantity+?,unit_cost=?,status='received',"
+                    "received_invoice_number=?,received_vendor_id=? WHERE id=?",
+                    (remaining, unit_cost, item.invoice_number.strip(), item.vendor_id, row["id"]),
                 )
 
             recompute_estimate_totals(db, estimate["id"])

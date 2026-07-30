@@ -4,12 +4,13 @@ import json
 import os
 import re
 import sqlite3
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from .db import inserted_id
 from .workflow import estimate_line_total, record_activity
 
 
@@ -87,6 +88,9 @@ def create_ap_invoice_record(
     tax: float,
     total: float,
     source: str,
+    # Parallel to `items`: which estimate line each billed line paid for, when
+    # the invoice came from receiving on a ticket rather than being typed in.
+    estimate_item_ids: Sequence[int | None] | None = None,
 ) -> dict:
     """Writes one ap_invoices row + its ap_invoice_items -- the one piece of
     invoice posting that's genuinely identical whether the invoice came from
@@ -118,22 +122,108 @@ def create_ap_invoice_record(
     except sqlite3.IntegrityError:
         db.rollback()
         return {"status": "duplicate"}
-    ap_id = cur.lastrowid
+    ap_id = inserted_id(cur)
+    _insert_invoice_items(db, ap_id, items, estimate_item_ids)
+    return {"status": "posted", "ap_invoice_id": ap_id}
+
+
+def _insert_invoice_items(
+    db: sqlite3.Connection,
+    ap_invoice_id: int,
+    items: list[InvoiceItemIn],
+    estimate_item_ids: Sequence[int | None] | None = None,
+) -> None:
+    links = list(estimate_item_ids or [None] * len(items))
+    assert len(links) == len(items), "every billed line needs a link slot, even an empty one"
     db.executemany(
-        "INSERT INTO ap_invoice_items(ap_invoice_id,part_number,description,quantity,unit_cost,line_total) VALUES(?,?,?,?,?,?)",
+        "INSERT INTO ap_invoice_items(ap_invoice_id,part_number,description,quantity,unit_cost,line_total,estimate_item_id)"
+        " VALUES(?,?,?,?,?,?,?)",
         [
             (
-                ap_id,
+                ap_invoice_id,
                 item.part_number.strip().upper(),
                 item.description.strip(),
                 item.quantity,
                 item.unit_cost,
                 round(item.quantity * item.unit_cost, 2),
             )
-            for item in items
+            + (link,)
+            for item, link in zip(items, links, strict=True)
         ],
     )
-    return {"status": "posted", "ap_invoice_id": ap_id}
+
+
+def receive_onto_invoice(
+    db: sqlite3.Connection,
+    now_fn: Callable[[], str],
+    *,
+    vendor_id: int,
+    order_id: int,
+    invoice_number: str,
+    po_number: str,
+    items: list[InvoiceItemIn],
+    estimate_item_ids: Sequence[int | None],
+    tax: float,
+) -> dict:
+    """Put parts received on a ticket onto the vendor's invoice, opening it on
+    the first delivery and adding to it on every one after.
+
+    One vendor invoice routinely covers parts for several cars, and those
+    parts rarely arrive together -- two axles for one car today, a mirror for
+    another tomorrow, all on the same invoice. Posting used to create the
+    invoice outright and refuse the second delivery as a duplicate, so the
+    only way through was to invent invoice numbers ("WP-5512-A", "WP-5512-B").
+    That put numbers in the system the vendor had never issued, which is both
+    the thing that made the real invoice impossible to reconcile and the thing
+    that broke the only link back to who supplied a part.
+
+    So the invoice accumulates. Each delivery adds its lines and its share of
+    tax, and the running total is what the vendor will actually bill.
+
+    An invoice that ends up covering more than one ticket stops claiming to
+    belong to any single one -- `order_id` goes null and the per-line links
+    carry the truth. Cars are costed from their own received part lines, never
+    from an invoice total, so spanning tickets cannot disturb what any car has
+    in it.
+    """
+    subtotal = round(sum(i.quantity * i.unit_cost for i in items), 2)
+    existing = db.execute(
+        "SELECT * FROM ap_invoices WHERE vendor_id=? AND normalized_invoice_number=? AND status!='voided'",
+        (vendor_id, normalize(invoice_number)),
+    ).fetchone()
+
+    if existing is None:
+        result = create_ap_invoice_record(
+            db,
+            now_fn,
+            vendor_id=vendor_id,
+            order_id=order_id,
+            invoice_number=invoice_number,
+            po_number=po_number,
+            items=items,
+            subtotal=subtotal,
+            tax=tax,
+            total=round(subtotal + tax, 2),
+            source="ticket_receive",
+            estimate_item_ids=estimate_item_ids,
+        )
+        return result
+
+    _insert_invoice_items(db, existing["id"], items, estimate_item_ids)
+    new_subtotal = round(existing["subtotal"] + subtotal, 2)
+    new_tax = round(existing["tax"] + tax, 2)
+    spans_tickets = existing["order_id"] is not None and existing["order_id"] != order_id
+    db.execute(
+        "UPDATE ap_invoices SET subtotal=?,tax=?,total=?,order_id=? WHERE id=?",
+        (
+            new_subtotal,
+            new_tax,
+            round(new_subtotal + new_tax, 2),
+            None if spans_tickets else existing["order_id"],
+            existing["id"],
+        ),
+    )
+    return {"status": "extended", "ap_invoice_id": existing["id"]}
 
 
 def build_accounting_router(connect: Callable[[], sqlite3.Connection], now: Callable[[], str]) -> APIRouter:

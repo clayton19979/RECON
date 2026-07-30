@@ -638,6 +638,29 @@ function renderStatusCardBase(order) {
   $("#vd-concern").value = order.concern || "";
 }
 
+/* "Where did this part come from?" -- the question the parts grid could not
+   answer. A supplier name is what an advisor actually needs (who do I call
+   about the wrong caliper); the invoice number is the paperwork behind it and
+   goes second. Older lines received before the supplier was recorded still
+   have their invoice number, so they show that rather than nothing. */
+function receivedSourceHtml(item) {
+  const vendor = item.received_vendor_name;
+  const invoice = item.received_invoice_number;
+  if (!vendor && !invoice) return "";
+  return `<span class="received-from">${vendor ? `<span class="rf-vendor">${esc(vendor)}</span>` : ""}${
+    invoice ? `<span class="rf-invoice">${esc(invoice)}</span>` : ""
+  }</span>`;
+}
+
+function receivedFromTitle(item) {
+  const vendor = item.received_vendor_name;
+  const invoice = item.received_invoice_number;
+  if (vendor && invoice) return `Received from ${vendor} on invoice ${invoice}`;
+  if (vendor) return `Received from ${vendor}`;
+  if (invoice) return `Received on invoice ${invoice}`;
+  return "Received";
+}
+
 function renderEstimate(order) {
   const items = order.estimate ? order.estimate.items : [];
   const jobs = order.estimate?.jobs ?? [];
@@ -700,10 +723,16 @@ function renderEstimate(order) {
            <input class="ei-core" type="number" min="0" step="0.01" placeholder="0.00" title="Core deposit owed back from the vendor" value="${item.core_charge ?? 0}" ${(item.core_charge ?? 0) > 0 ? "" : "hidden"}>`
         : "")}
       ${jobs.length ? cell("job", "Job", `<select class="ei-job">${jobOptionsHtml(item.job_id ?? null)}</select>`) : ""}
+      ${/* Where the part came from, on the ticket itself. It used to show the
+            invoice number alone -- "Received (WP-55123)" -- which is the one
+            thing an advisor holding the part in his hand already can't use.
+            The supplier's name is the answer to "who do I call about this",
+            and the invoice number rides along underneath it. */""}
       ${cell("status", "Status", item.id
         ? (item.status === "received"
             ? `<span class="status-cell">
-                 <span class="status-pill ${item.part_returned ? "sp-returned" : "sp-received"}" ${item.received_invoice_number ? `title="Received via invoice ${esc(item.received_invoice_number)}"` : ""}>${item.part_returned ? "Returned" : (item.received_invoice_number ? `Received (${esc(item.received_invoice_number)})` : "Received")}</span>
+                 <span class="status-pill ${item.part_returned ? "sp-returned" : "sp-received"}" title="${esc(receivedFromTitle(item))}">${item.part_returned ? "Returned" : "Received"}</span>
+                 ${receivedSourceHtml(item)}
                  ${item.kind === "part" ? `<button type="button" class="btn btn-ghost btn-xs part-return-btn" data-id="${item.id}" data-returned="${item.part_returned ? 1 : 0}" title="${item.part_returned ? "Undo -- this part was not actually sent back" : "Send this part back to the vendor"}">${item.part_returned ? "Undo" : "Mark Returned"}</button>` : ""}
                </span>`
             : `<select class="ei-status status-pill sp-${item.status || "quoted"}" data-prev="${item.status || "quoted"}">

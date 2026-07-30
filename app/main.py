@@ -249,6 +249,26 @@ def rowdict(row: sqlite3.Row | None) -> dict[str, Any] | None:
     return dict(row) if row else None
 
 
+def estimate_items_list(db: sqlite3.Connection, estimate_id: int) -> list[dict]:
+    """The ticket's parts and labour, each received line carrying the name of
+    the vendor it came from.
+
+    The name rather than just the id, for the same reason estimate_jobs_list
+    carries the technician's: the grid needs to *say* where a part came from,
+    and an advisor holding a part in one hand should not have to cross-check
+    an invoice number against the Accounting screen to find out.
+    """
+    return [
+        dict(row)
+        for row in db.execute(
+            """SELECT ei.*, v.name received_vendor_name FROM estimate_items ei
+           LEFT JOIN vendors v ON v.id=ei.received_vendor_id
+           WHERE ei.estimate_id=? ORDER BY ei.sort_order, ei.id""",
+            (estimate_id,),
+        )
+    ]
+
+
 def estimate_jobs_list(db: sqlite3.Connection, estimate_id: int) -> list[dict]:
     return [
         dict(row)
@@ -731,12 +751,7 @@ def create_app(db_path: Path = DEFAULT_DB, backups_dir: Path = DEFAULT_BACKUPS_D
             detail["estimate"] = None
             if estimate:
                 detail["estimate"] = dict(estimate)
-                detail["estimate"]["items"] = [
-                    dict(row)
-                    for row in db.execute(
-                        "SELECT * FROM estimate_items WHERE estimate_id=? ORDER BY sort_order, id", (estimate["id"],)
-                    )
-                ]
+                detail["estimate"]["items"] = estimate_items_list(db, estimate["id"])
                 detail["estimate"]["jobs"] = estimate_jobs_list(db, estimate["id"])
             detail.update(workflow_detail(db, order_id))
             recon_vehicle = (
@@ -959,12 +974,7 @@ def create_app(db_path: Path = DEFAULT_DB, backups_dir: Path = DEFAULT_BACKUPS_D
             # car idle for a week while a tech was pricing it out all morning.
             touch_order(db, order_id, now)
             result = dict(db.execute("SELECT * FROM estimates WHERE id=?", (estimate_id,)).fetchone())
-            result["items"] = [
-                dict(row)
-                for row in db.execute(
-                    "SELECT * FROM estimate_items WHERE estimate_id=? ORDER BY sort_order, id", (estimate_id,)
-                )
-            ]
+            result["items"] = estimate_items_list(db, estimate_id)
             result["jobs"] = estimate_jobs_list(db, estimate_id)
             return result
 

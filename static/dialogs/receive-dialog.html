@@ -6,7 +6,12 @@
       <button class="icon-btn" formnovalidate type="button" id="receive-cancel">×</button>
     </div>
     <div class="modal-body">
-      <div id="receive-lines" class="kv-list" style="padding:0 0 12px"></div>
+      <!-- Each price starts at what the line was quoted at and is editable,
+           because the invoice in your hand is the number that's true. This is
+           the one moment the app writes the car's cost and the vendor's bill
+           from the same figure; correcting it afterwards fixes only one of
+           them. -->
+      <div class="receive-lines" id="receive-lines"></div>
       <label>Vendor<select id="receive-vendor"><option value="__new__">＋ New vendor…</option></select></label>
       <div id="receive-new-vendor" style="display:none">
         <label>New vendor name<input id="receive-new-vendor-name" placeholder="WorldPac"></label>

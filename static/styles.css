@@ -2078,6 +2078,16 @@ th.sel-col, td.sel-col { width: 32px; padding-right: 0; }
 }
 .dropzone-file .dz-size { color: var(--ink-faint); }
 
+/* Where a received part came from, under its status pill. The supplier reads
+   first because that is the actionable half; the invoice number is reference
+   and sits quieter beneath it. */
+.received-from { display: flex; flex-direction: column; line-height: 1.25; margin-top: 2px; }
+.rf-vendor { font-size: 11px; font-weight: 600; color: var(--ink-soft); }
+.rf-invoice {
+  font-family: "IBM Plex Mono", "Cascadia Mono", Consolas, monospace;
+  font-size: 10px; color: var(--ink-faint);
+}
+
 /* ---------- reports ---------- */
 #report-scope { min-height: 16px; }
 /* Lot report group bands. Walt reads this grouped, so the headings have to

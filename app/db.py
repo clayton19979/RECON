@@ -172,6 +172,9 @@ CREATE TABLE IF NOT EXISTS estimate_items (
   line_total REAL NOT NULL,
   status TEXT NOT NULL DEFAULT 'quoted',
   received_invoice_number TEXT NOT NULL DEFAULT '',
+  -- Who the part actually came from. See the migration in _migrate for why
+  -- the invoice number above is not enough on its own.
+  received_vendor_id INTEGER REFERENCES vendors(id),
   source TEXT NOT NULL DEFAULT 'manual',
   review_required INTEGER NOT NULL DEFAULT 0,
   reviewed_by TEXT NOT NULL DEFAULT '',
@@ -341,7 +344,10 @@ CREATE TABLE IF NOT EXISTS ap_invoice_items (
   description TEXT NOT NULL,
   quantity REAL NOT NULL,
   unit_cost REAL NOT NULL,
-  line_total REAL NOT NULL
+  line_total REAL NOT NULL,
+  -- The part line this billed line paid for, when it came from receiving on
+  -- a ticket. Null for invoices typed in whole on the Accounting screen.
+  estimate_item_id INTEGER REFERENCES estimate_items(id)
 );
 
 CREATE TABLE IF NOT EXISTS invoice_audits (
@@ -409,6 +415,37 @@ def _migrate(db: sqlite3.Connection) -> None:
     columns = {row[1] for row in db.execute("PRAGMA table_info(estimate_items)")}
     if "received_invoice_number" not in columns:
         db.execute("ALTER TABLE estimate_items ADD COLUMN received_invoice_number TEXT NOT NULL DEFAULT ''")
+
+    # Where the part came from, as a real reference rather than a guess.
+    #
+    # A received line used to record only the invoice *number* it was posted
+    # under, as loose text. Answering "who supplied this?" meant taking that
+    # string and hunting for an invoice on the same ticket that happened to
+    # carry the same number -- so the ticket could only ever show a number,
+    # and the answer disappeared entirely the moment an invoice was moved or
+    # its number was typed differently.
+    if "received_vendor_id" not in columns:
+        db.execute("ALTER TABLE estimate_items ADD COLUMN received_vendor_id INTEGER REFERENCES vendors(id)")
+        # Backfill by the same string match the app used to do at read time,
+        # so history keeps whatever answer it already had.
+        db.execute(
+            """UPDATE estimate_items SET received_vendor_id = (
+                   SELECT a.vendor_id FROM ap_invoices a
+                     JOIN estimates e ON e.id = estimate_items.estimate_id
+                    WHERE a.order_id = e.order_id
+                      AND a.invoice_number = estimate_items.received_invoice_number
+                      AND a.status != 'voided'
+                    ORDER BY a.id DESC LIMIT 1)
+                 WHERE received_invoice_number != '' AND received_vendor_id IS NULL"""
+        )
+
+    # Which part line a billed line paid for. Without it the two halves of a
+    # part's life -- what we quoted and what the vendor charged -- are joined
+    # by nothing, so one invoice covering three cars cannot say which line
+    # belongs to which car.
+    ap_item_columns = {row[1] for row in db.execute("PRAGMA table_info(ap_invoice_items)")}
+    if "estimate_item_id" not in ap_item_columns:
+        db.execute("ALTER TABLE ap_invoice_items ADD COLUMN estimate_item_id INTEGER REFERENCES estimate_items(id)")
 
     # The Gmail email-report and PartsTech integrations were removed --
     # neither ever had a working real integration behind it (PartsTech was

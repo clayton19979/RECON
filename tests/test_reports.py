@@ -1,12 +1,21 @@
 from __future__ import annotations
 
-from tests.helpers import make_recon_order, make_recon_vehicle, make_we_owe, save_estimate
+from tests.helpers import (
+    make_recon_order,
+    make_recon_vehicle,
+    make_we_owe,
+    save_estimate,
+)
 
 
 def test_vehicle_spend_report(client):
     vehicle = make_recon_vehicle(client, stock_number="R-1101")
     order = make_recon_order(client, vehicle["id"])
-    save_estimate(client, order["id"], [{"kind": "labor", "description": "Diag", "quantity": 1, "unit_price": 80, "unit_cost": 80}])
+    save_estimate(
+        client,
+        order["id"],
+        [{"kind": "labor", "description": "Diag", "quantity": 1, "unit_price": 80, "unit_cost": 80}],
+    )
     make_we_owe(client)
 
     rows = client.get("/api/reports/vehicle-spend").json()
@@ -28,7 +37,11 @@ def test_technician_productivity(client):
     technician = client.post("/api/staff", json={"name": "Jordan", "role": "technician"}).json()
     vehicle = make_recon_vehicle(client, stock_number="R-1103")
     order = make_recon_order(client, vehicle["id"])
-    save_estimate(client, order["id"], [{"kind": "labor", "description": "Diag", "quantity": 2, "unit_price": 40, "unit_cost": 40}])
+    save_estimate(
+        client,
+        order["id"],
+        [{"kind": "labor", "description": "Diag", "quantity": 2, "unit_price": 40, "unit_cost": 40}],
+    )
     client.put(f"/api/orders/{order['id']}/assignment", json={"technician_id": technician["id"]})
 
     rows = client.get("/api/reports/technicians").json()
@@ -47,11 +60,24 @@ def test_technician_productivity_uses_job_technician_over_ticket_default(client)
     vehicle = make_recon_vehicle(client, stock_number="R-1104")
     order = make_recon_order(client, vehicle["id"])
     client.put(f"/api/orders/{order['id']}/assignment", json={"technician_id": default_tech["id"]})
-    job = client.post(f"/api/orders/{order['id']}/jobs", json={"title": "Brakes", "technician_id": job_tech["id"]}).json()
-    save_estimate(client, order["id"], [
-        {"kind": "labor", "description": "Diag", "quantity": 1, "unit_price": 40, "unit_cost": 40},
-        {"kind": "labor", "description": "Brake job", "quantity": 3, "unit_price": 40, "unit_cost": 40, "job_id": job["id"]},
-    ])
+    job = client.post(
+        f"/api/orders/{order['id']}/jobs", json={"title": "Brakes", "technician_id": job_tech["id"]}
+    ).json()
+    save_estimate(
+        client,
+        order["id"],
+        [
+            {"kind": "labor", "description": "Diag", "quantity": 1, "unit_price": 40, "unit_cost": 40},
+            {
+                "kind": "labor",
+                "description": "Brake job",
+                "quantity": 3,
+                "unit_price": 40,
+                "unit_cost": 40,
+                "job_id": job["id"],
+            },
+        ],
+    )
 
     rows = client.get("/api/reports/technicians").json()
     default_row = next(r for r in rows if r["technician"] == "Default Dana")

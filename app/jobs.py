@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
-from typing import Callable
+from collections.abc import Callable
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
@@ -65,7 +65,9 @@ def build_jobs_router(connect: Callable[[], sqlite3.Connection], now_fn: Callabl
                 "INSERT INTO estimate_jobs(estimate_id,title,technician_id,sort_order,created_at) VALUES(?,?,?,?,?)",
                 (estimate["id"], item.title.strip(), item.technician_id, next_sort, now_fn()),
             )
-            record_activity(db, order_id, "job_created", item.actor, {"job_id": cur.lastrowid, "title": item.title.strip()}, now_fn)
+            record_activity(
+                db, order_id, "job_created", item.actor, {"job_id": cur.lastrowid, "title": item.title.strip()}, now_fn
+            )
             return job_dict(db, cur.lastrowid)
 
     @router.put("/orders/{order_id}/jobs/{job_id}")
@@ -80,7 +82,9 @@ def build_jobs_router(connect: Callable[[], sqlite3.Connection], now_fn: Callabl
                 "UPDATE estimate_jobs SET title=?,technician_id=? WHERE id=?",
                 (item.title.strip(), item.technician_id, job_id),
             )
-            record_activity(db, order_id, "job_updated", item.actor, {"job_id": job_id, "title": item.title.strip()}, now_fn)
+            record_activity(
+                db, order_id, "job_updated", item.actor, {"job_id": job_id, "title": item.title.strip()}, now_fn
+            )
             return job_dict(db, job_id)
 
     @router.delete("/orders/{order_id}/jobs/{job_id}", status_code=204)
@@ -95,6 +99,5 @@ def build_jobs_router(connect: Callable[[], sqlite3.Connection], now_fn: Callabl
             db.execute("UPDATE estimate_items SET job_id=NULL WHERE job_id=?", (job_id,))
             db.execute("DELETE FROM estimate_jobs WHERE id=?", (job_id,))
             record_activity(db, order_id, "job_deleted", actor, {"job_id": job_id, "title": job["title"]}, now_fn)
-        return None
 
     return router

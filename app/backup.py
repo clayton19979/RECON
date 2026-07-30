@@ -4,7 +4,7 @@ import argparse
 import shutil
 import sqlite3
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 
@@ -12,7 +12,7 @@ def backup_database(source: Path, destination_dir: Path) -> Path:
     if not source.is_file():
         raise FileNotFoundError(f"Database not found: {source}")
     destination_dir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     destination = destination_dir / f"discount-auto-ops-{stamp}.db"
     temporary = destination.with_suffix(".db.tmp")
     source_db = sqlite3.connect(source)
@@ -84,7 +84,7 @@ def restore_database(backup_path: Path, destination: Path) -> Path:
         # Snapshotted through SQLite's own backup API (like backup_database
         # does), not a plain file copy -- a raw copy of a WAL-mode database
         # can miss committed rows still sitting in the -wal file.
-        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
         pre_restore = destination.with_name(f"{destination.stem}-pre-restore-{stamp}{destination.suffix}")
         live_db = sqlite3.connect(destination)
         snapshot_db = sqlite3.connect(pre_restore)
@@ -145,9 +145,9 @@ def backup_timestamp(path: Path) -> datetime | None:
     restoring a folder rewrites mtimes, and retention decisions have to
     survive that. The name is the record.
     """
-    stem = path.name[len("discount-auto-ops-"):-len(".db")] if path.name.endswith(".db") else ""
+    stem = path.name[len("discount-auto-ops-") : -len(".db")] if path.name.endswith(".db") else ""
     try:
-        return datetime.strptime(stem, _STAMP_FORMAT).replace(tzinfo=timezone.utc)
+        return datetime.strptime(stem, _STAMP_FORMAT).replace(tzinfo=UTC)
     except ValueError:
         return None
 
@@ -166,7 +166,7 @@ def prune_backups_tiered(destination_dir: Path, now: datetime | None = None) -> 
     """
     if not destination_dir.is_dir():
         return []
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
 
     dated: list[tuple[datetime, Path]] = []
     for path in destination_dir.glob("discount-auto-ops-*.db"):
@@ -244,7 +244,7 @@ def most_recent_backup_age_hours(destination_dir: Path) -> float | None:
     if not backups:
         return None
     newest = max(backups, key=lambda p: p.stat().st_mtime)
-    age_seconds = datetime.now(timezone.utc).timestamp() - newest.stat().st_mtime
+    age_seconds = datetime.now(UTC).timestamp() - newest.stat().st_mtime
     return age_seconds / 3600
 
 

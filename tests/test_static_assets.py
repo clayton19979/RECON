@@ -65,7 +65,9 @@ def test_every_referenced_element_id_exists(js: str, declared_ids: set[str]) -> 
     """A `$("#thing")` that resolves to null is a feature that silently does
     nothing -- there's no error until something dereferences it."""
     missing = sorted(set(referenced_ids(js)) - declared_ids - RUNTIME_CREATED_IDS)
-    assert not missing, "app.js looks up element ids that index.html doesn't define: " + ", ".join(f"#{m}" for m in missing)
+    assert not missing, "app.js looks up element ids that index.html doesn't define: " + ", ".join(
+        f"#{m}" for m in missing
+    )
 
 
 def test_rail_navigation_targets_real_views(html: str) -> None:
@@ -98,6 +100,8 @@ def test_empty_states_go_through_the_shared_component(js: str) -> None:
     going through emptyState()/emptyRow() rather than reintroducing that."""
     strays = re.findall(r'color:var\(--ink-faint\);font-size:[^"]*"[^>]*>\s*No ', js)
     assert not strays, f"{len(strays)} inline-styled empty state(s) found -- use emptyState() or emptyRow() instead"
+
+
 # ---------------------------------------------------------------------------
 # Parts & Labor grid
 #
@@ -129,7 +133,7 @@ def estimate_row_cells(js: str) -> list[str]:
 
 def estimate_head_cells(js: str) -> list[str]:
     head = _render_estimate_source(js)
-    head = head[head.index("const headRow"):]
+    head = head[head.index("const headRow") :]
     head = head[: head.index("</div>`;")]
     return re.findall(r'class="pr-cell pr-([a-z]+)"', head)
 
@@ -148,7 +152,7 @@ def test_estimate_grid_tracks_match_the_number_of_cells(js: str, css: str) -> No
     too few and the extra cell wraps onto a phantom second row."""
     cells = estimate_row_cells(js)
     flat, with_jobs = len(cells) - 1, len(cells)  # the Job cell only renders once a ticket has jobs
-    declared = dict(re.findall(r'#vd-estimate-items(\.has-jobs)?\s*\{\s*--pr-cols:\s*([^;]+);', css))
+    declared = dict(re.findall(r"#vd-estimate-items(\.has-jobs)?\s*\{\s*--pr-cols:\s*([^;]+);", css))
     assert declared, "no --pr-cols declaration found in styles.css"
     assert len(declared[""].split()) == flat, f"--pr-cols declares {len(declared[''].split())} tracks for {flat} cells"
     assert len(declared[".has-jobs"].split()) == with_jobs, (
@@ -173,7 +177,7 @@ def test_estimate_grid_delegation_is_wired_at_startup(js: str) -> None:
     """The delegated handlers are useless if nothing calls wireEstimateGrid();
     the symptom would be a grid where no field saves at all."""
     assert "function wireEstimateGrid(" in js, "wireEstimateGrid() is gone -- who owns the grid's events now?"
-    init = js[js.index("document.addEventListener(\"DOMContentLoaded\""):]
+    init = js[js.index('document.addEventListener("DOMContentLoaded"') :]
     assert "wireEstimateGrid();" in init, "wireEstimateGrid() is never called from init"
 
 
@@ -194,9 +198,10 @@ def test_every_estimate_cell_is_reachable_from_css(js: str, css: str) -> None:
 # state short of the table's width.
 # ---------------------------------------------------------------------------
 
+
 def _vehicles_thead(html: str) -> str:
-    section = html[html.index('id="view-vehicles"'):]
-    return section[section.index("<thead"):section.index("</thead>")]
+    section = html[html.index('id="view-vehicles"') :]
+    return section[section.index("<thead") : section.index("</thead>")]
 
 
 def _function_source(js: str, name: str) -> str:
@@ -214,7 +219,7 @@ def test_board_row_cells_match_the_header(js: str, html: str) -> None:
 
 
 def _board_columns(js: str) -> int:
-    declared = re.search(r"^const BOARD_COLUMNS = (\d+);", js, re.M)
+    declared = re.search(r"^const BOARD_COLUMNS = (\d+);", js, re.MULTILINE)
     assert declared, "BOARD_COLUMNS is gone -- the skeleton and empty state have no shared width"
     return int(declared.group(1))
 
@@ -248,8 +253,8 @@ def test_every_sortable_header_has_a_comparator(js: str, html: str) -> None:
     """A `data-sort-key` with no VEHICLE_SORTS entry is a header that looks
     clickable, highlights when clicked, and sorts nothing."""
     declared = set(re.findall(r'data-sort-key="([^"]+)"', _vehicles_thead(html)))
-    block = js[js.index("const VEHICLE_SORTS"):js.index("function sortVehicleRows")]
-    comparators = set(re.findall(r"^\s{2}(\w+): \{ label:", block, re.M))
+    block = js[js.index("const VEHICLE_SORTS") : js.index("function sortVehicleRows")]
+    comparators = set(re.findall(r"^\s{2}(\w+): \{ label:", block, re.MULTILINE))
     assert declared, "no sortable headers found on the vehicles board"
     assert declared == comparators, (
         f"sortable headers without a comparator: {sorted(declared - comparators)}; "
@@ -272,10 +277,11 @@ def test_board_rows_are_not_wired_one_by_one(js: str) -> None:
 # Destructive actions and the error boundary
 # ---------------------------------------------------------------------------
 
+
 def test_destructive_actions_use_the_in_app_confirm(js: str) -> None:
     """window.confirm() renders OS chrome with no room for context and no way
     to mark an action as destructive -- confirmAction() is the replacement."""
-    strays = re.findall(r'(?<![.\w])confirm\(', js)
+    strays = re.findall(r"(?<![.\w])confirm\(", js)
     # confirmAction(...) / settleConfirm(...) / wireConfirmDialog() don't match
     # the pattern above; anything left is a bare window.confirm call.
     assert not strays, f"{len(strays)} raw window.confirm() call(s) left -- use confirmAction() instead"
@@ -285,10 +291,24 @@ def test_every_view_loader_can_report_its_own_failure(js: str) -> None:
     """renderViewFailure() paints into VIEW_PLACEHOLDERS, so a loader with no
     placeholder entry can only fall back to a toast that leaves the skeleton
     rows on screen forever."""
-    loaders = set(re.findall(r'^\s{2}(\w+): \(\) => load', js[js.index("const VIEW_LOADERS"):js.index("/* ---------- render error boundary")], re.M))
-    placeholders = set(re.findall(r'^\s{2}(\w+):\s*\[', js[js.index("const VIEW_PLACEHOLDERS"):js.index("function showPlaceholders")], re.M))
+    loaders = set(
+        re.findall(
+            r"^\s{2}(\w+): \(\) => load",
+            js[js.index("const VIEW_LOADERS") : js.index("/* ---------- render error boundary")],
+            re.MULTILINE,
+        )
+    )
+    placeholders = set(
+        re.findall(
+            r"^\s{2}(\w+):\s*\[",
+            js[js.index("const VIEW_PLACEHOLDERS") : js.index("function showPlaceholders")],
+            re.MULTILINE,
+        )
+    )
     assert loaders, "no VIEW_LOADERS entries found"
-    assert loaders <= placeholders, f"views with a loader but no placeholder/error target: {sorted(loaders - placeholders)}"
+    assert loaders <= placeholders, (
+        f"views with a loader but no placeholder/error target: {sorted(loaders - placeholders)}"
+    )
 
 
 def test_rail_views_all_have_a_loader_or_are_static(html: str, js: str) -> None:
@@ -296,23 +316,32 @@ def test_rail_views_all_have_a_loader_or_are_static(html: str, js: str) -> None:
     VIEW_LOADERS is either static on purpose or a screen that silently never
     fetches anything."""
     nav_targets = set(re.findall(r'class="rail-item[^"]*"\s+data-view="([^"]+)"', html))
-    loaders = set(re.findall(r'^\s{2}(\w+): \(\) => load', js[js.index("const VIEW_LOADERS"):js.index("/* ---------- render error boundary")], re.M))
+    loaders = set(
+        re.findall(
+            r"^\s{2}(\w+): \(\) => load",
+            js[js.index("const VIEW_LOADERS") : js.index("/* ---------- render error boundary")],
+            re.MULTILINE,
+        )
+    )
     # Help is genuinely static: its content is HELP_TOPICS, shipped in the
     # page, so help.js builds the whole screen once at load and there is
     # nothing to fetch or to fail. Every other rail view hits the server.
     STATIC_VIEWS: set[str] = {"help"}
-    assert nav_targets - loaders <= STATIC_VIEWS, f"rail views with no loader: {sorted(nav_targets - loaders - STATIC_VIEWS)}"
+    assert nav_targets - loaders <= STATIC_VIEWS, (
+        f"rail views with no loader: {sorted(nav_targets - loaders - STATIC_VIEWS)}"
+    )
 
 
 # ---------------------------------------------------------------------------
 # Reports
 # ---------------------------------------------------------------------------
 
+
 def test_every_report_sort_key_in_the_markup_has_a_spec(js: str) -> None:
     """A th whose data-report-sort doesn't match a REPORT_SORTS entry looks
     sortable, clicks, and then sorts by nothing at all."""
-    block = js[js.index("const REPORT_SORTS"):js.index("function sortReportRows")]
-    specced = set(re.findall(r"^\s{4}(\w+):\s*\{", block, re.M))
+    block = js[js.index("const REPORT_SORTS") : js.index("function sortReportRows")]
+    specced = set(re.findall(r"^\s{4}(\w+):\s*\{", block, re.MULTILINE))
     used = set(re.findall(r'reportSortHeader\("[\w-]+",\s*"(\w+)"', js))
     assert used, "no reportSortHeader calls found"
     assert used <= specced, f"report columns sorted by an undefined key: {sorted(used - specced)}"
@@ -322,13 +351,13 @@ def test_report_sort_specs_are_partitioned_by_shape(js: str) -> None:
     """The two report shapes have different columns, so a key from one is
     meaningless in the other -- generateReport() resets the sort on a shape
     change and needs both tables keyed independently."""
-    block = js[js.index("const REPORT_SORTS"):js.index("function sortReportRows")]
-    shapes = re.split(r'^  (?:"vehicle-spend"|technicians): \{$', block, flags=re.M)[1:]
+    block = js[js.index("const REPORT_SORTS") : js.index("function sortReportRows")]
+    shapes = re.split(r'^  (?:"vehicle-spend"|technicians): \{$', block, flags=re.MULTILINE)[1:]
     assert len(shapes) == 2, f"expected 2 report shapes in REPORT_SORTS, found {len(shapes)}"
     # Both must offer "cost" -- that's what generateReport falls back to when
     # the saved sort key belongs to the other shape.
     for body in shapes:
-        assert re.search(r"^\s{4}cost:", body, re.M), "a report shape has no cost sort to fall back to"
+        assert re.search(r"^\s{4}cost:", body, re.MULTILINE), "a report shape has no cost sort to fall back to"
 
 
 def test_report_controls_refetch_rather_than_waiting_for_a_button(html: str, js: str) -> None:
@@ -343,13 +372,21 @@ def test_report_controls_refetch_rather_than_waiting_for_a_button(html: str, js:
     # every range setReportRange understands needs a chip -- one dropped
     # attribute and an option is simply unreachable.
     types = set(re.findall(r'data-report-type="([\w-]+)"', html))
-    titled = set(re.findall(r'^  (?:"([\w-]+)"|(\w+)):\s*"', js[js.index("const REPORT_TITLES"):js.index("const REPORT_SEGMENT")], re.M))
+    titled = set(
+        re.findall(
+            r'^  (?:"([\w-]+)"|(\w+)):\s*"',
+            js[js.index("const REPORT_TITLES") : js.index("const REPORT_SEGMENT")],
+            re.MULTILINE,
+        )
+    )
     assert types == {a or b for a, b in titled}, f"report toolbar and REPORT_TITLES disagree: {types}"
 
     ranges = re.findall(r'data-report-range="(\w+)"', html)
     assert len(ranges) == len(set(ranges)) == 5, f"expected 5 distinct range chips, found {ranges}"
-    known = set(re.findall(r'"(\w+)"', re.search(r'const match = \[([^\]]+)\]', js).group(1)))
-    assert set(ranges) == known, f"range chips {sorted(ranges)} don't match the ranges the app can detect {sorted(known)}"
+    known = set(re.findall(r'"(\w+)"', re.search(r"const match = \[([^\]]+)\]", js).group(1)))
+    assert set(ranges) == known, (
+        f"range chips {sorted(ranges)} don't match the ranges the app can detect {sorted(known)}"
+    )
 
 
 def test_board_cards_are_scoped_to_the_visible_rows(js: str) -> None:
@@ -387,7 +424,7 @@ def test_over_quote_rule_has_exactly_one_definition(js: str) -> None:
     assert len(re.findall(r"quoted_cost \* 1\.1", js)) == 1, (
         "the over-quote threshold appears more than once -- isOverQuote should be the only definition"
     )
-    assert "isOverQuote(v) ? \"over-quote\"" in js, "costCellClass no longer defers to isOverQuote"
+    assert 'isOverQuote(v) ? "over-quote"' in js, "costCellClass no longer defers to isOverQuote"
 
 
 def test_parts_filter_toggle_is_not_a_segment_chip(js: str, html: str) -> None:
@@ -397,13 +434,11 @@ def test_parts_filter_toggle_is_not_a_segment_chip(js: str, html: str) -> None:
     so an unscoped selector either clears the toggle on every segment click
     or lights it up on every page load. Both must ask for [data-filter]."""
     assert 'id="vehicles-parts-filter"' in html, "the parts toggle is gone from the board toolbar"
-    assert 'data-filter' not in re.search(
-        r'<button[^>]*id="vehicles-parts-filter"[^>]*>', html
-    ).group(0), "the parts toggle grew a data-filter and will be treated as a fifth segment"
-    unscoped = re.findall(r'\$\$\("#view-vehicles \.filters \.chip"\)', js)
-    assert not unscoped, (
-        "a segment-chip selector isn't scoped to [data-filter] and will sweep up the parts toggle"
+    assert "data-filter" not in re.search(r'<button[^>]*id="vehicles-parts-filter"[^>]*>', html).group(0), (
+        "the parts toggle grew a data-filter and will be treated as a fifth segment"
     )
+    unscoped = re.findall(r'\$\$\("#view-vehicles \.filters \.chip"\)', js)
+    assert not unscoped, "a segment-chip selector isn't scoped to [data-filter] and will sweep up the parts toggle"
     assert len(re.findall(r'\$\$\("#view-vehicles \.filters \.chip\[data-filter\]"\)', js)) >= 3, (
         "the segment chips are no longer selected by [data-filter] in all three places"
     )
@@ -429,7 +464,7 @@ def test_idle_column_is_wired_end_to_end(js: str, html: str) -> None:
     header = re.search(r'<th[^>]*data-sort-key="idle"[^>]*>', html)
     assert header, "the board has no Idle column header"
     assert "sortable" in header.group(0), "the Idle column isn't sortable"
-    assert re.search(r'idle:\s*\{[^}]*value:\s*\(v\)\s*=>\s*v\.idle_days', js), (
+    assert re.search(r"idle:\s*\{[^}]*value:\s*\(v\)\s*=>\s*v\.idle_days", js), (
         "the Idle sort comparator doesn't read idle_days"
     )
     assert "idleCellHtml(v)" in _function_source(js, "vehicleRowHtml"), "the Idle cell isn't rendered"
@@ -449,7 +484,7 @@ def test_idle_severity_and_buckets_share_one_set_of_thresholds(js: str) -> None:
     assert not re.search(r"days\s*>=\s*\d+", idle_class), (
         "idleClass compares day counts directly -- that's a second copy of the bucket boundaries"
     )
-    buckets = re.search(r"const IDLE_BUCKETS = \[(.*?)\];", js, re.S)
+    buckets = re.search(r"const IDLE_BUCKETS = \[(.*?)\];", js, re.DOTALL)
     assert buckets, "IDLE_BUCKETS is gone"
     keys = re.findall(r'key:\s*"([a-z]+)"', buckets.group(1))
     assert keys == ["today", "recent", "stale", "cold", "frozen"], f"the idle buckets changed shape: {keys}"
@@ -468,9 +503,7 @@ def test_board_chart_bars_are_filters(js: str, html: str) -> None:
     assert "visibleVehicles({ ignoreIdle: true })" in chart, (
         "the chart counts over the idle-filtered rows, so picking a bucket collapses it to one bar"
     )
-    assert "ignoreIdle" in _function_source(js, "visibleVehicles"), (
-        "visibleVehicles no longer honours ignoreIdle"
-    )
+    assert "ignoreIdle" in _function_source(js, "visibleVehicles"), "visibleVehicles no longer honours ignoreIdle"
 
 
 def test_hiding_the_board_chart_clears_its_filter(js: str) -> None:
@@ -481,11 +514,12 @@ def test_hiding_the_board_chart_clears_its_filter(js: str) -> None:
     "stalled" is the one selection that survives, because the Stalled summary
     card sets it and stays on screen showing it -- see the wiring's comment."""
     wiring = _function_source(js, "wireVehiclesView")
-    assert re.search(r"state\.vehicleChartOpen = !state\.vehicleChartOpen;\s*(?://[^\n]*\n\s*)*"
-                     r"if \(!state\.vehicleChartOpen && state\.vehicleIdleBucket !== \"stalled\"\)"
-                     r" state\.vehicleIdleBucket = \"\";", wiring), (
-        "hiding the activity chart doesn't clear the idle filter it owns"
-    )
+    assert re.search(
+        r"state\.vehicleChartOpen = !state\.vehicleChartOpen;\s*(?://[^\n]*\n\s*)*"
+        r"if \(!state\.vehicleChartOpen && state\.vehicleIdleBucket !== \"stalled\"\)"
+        r" state\.vehicleIdleBucket = \"\";",
+        wiring,
+    ), "hiding the activity chart doesn't clear the idle filter it owns"
 
 
 def test_idle_bucket_filter_round_trips_with_the_other_preferences(js: str) -> None:
@@ -498,7 +532,7 @@ def test_idle_bucket_filter_round_trips_with_the_other_preferences(js: str) -> N
     assert "chartOpen" not in re.search(r"const dirty = [^;]+;", save).group(0), (
         "showing or hiding the chart counts as a dirty view -- it hides no rows"
     )
-    assert "state.vehicleIdleBucket = \"\";" in _function_source(js, "resetVehicleView"), (
+    assert 'state.vehicleIdleBucket = "";' in _function_source(js, "resetVehicleView"), (
         "Reset view leaves the idle bucket filter applied"
     )
 
@@ -531,7 +565,7 @@ def test_stalled_threshold_agrees_across_the_stack(js: str) -> None:
 
 
 def test_stalled_span_is_matched_by_range_not_bucket_identity(js: str) -> None:
-    """"Stalled" covers two buckets, so filtering by comparing bucket keys
+    """ "Stalled" covers two buckets, so filtering by comparing bucket keys
     would silently match nothing. One range test serves both kinds of
     selection, which is also what keeps a span from disagreeing with the
     bars it spans."""
@@ -572,9 +606,7 @@ def test_the_stalled_card_counts_with_the_idle_filter_lifted(js: str) -> None:
     assert "visibleVehicles({ ignoreIdle: true })" in stats, (
         "the Stalled card counts over the idle-filtered rows, so picking a bucket relabels it"
     )
-    assert "ignoreIdle" in _function_source(js, "visibleVehicles"), (
-        "visibleVehicles no longer honours ignoreIdle"
-    )
+    assert "ignoreIdle" in _function_source(js, "visibleVehicles"), "visibleVehicles no longer honours ignoreIdle"
 
 
 def test_board_card_filters_round_trip_with_the_other_preferences(js: str) -> None:
@@ -600,14 +632,16 @@ def test_activity_labels_cover_every_action_the_server_logs(js: str) -> None:
         source = path.read_text(encoding="utf-8")
         logged |= set(re.findall(r'record_activity\(\s*(?:\n\s*)?db,\s*[^,]+,\s*"([a-z_]+)"', source))
         logged |= set(re.findall(r'record_activity\(\s*(?:\n\s*)?db,\s*[^,]+,\s*"([a-z_]+)" if ', source))
-        logged |= set(re.findall(r'record_activity\(\s*(?:\n\s*)?db,\s*[^,]+,\s*"[a-z_]+" if [^"]+ else "([a-z_]+)"', source))
+        logged |= set(
+            re.findall(r'record_activity\(\s*(?:\n\s*)?db,\s*[^,]+,\s*"[a-z_]+" if [^"]+ else "([a-z_]+)"', source)
+        )
     assert logged, "found no record_activity calls to check against -- the scan is broken"
 
-    labelled = set(re.findall(r"^  ([a-z_]+): \"", _label_map(js), re.M))
+    labelled = set(re.findall(r"^  ([a-z_]+): \"", _label_map(js), re.MULTILINE))
     missing = sorted(logged - labelled)
     assert not missing, "ACTIVITY_LABEL has no wording for: " + ", ".join(missing)
 
 
 def _label_map(js: str) -> str:
     start = js.index("const ACTIVITY_LABEL = {")
-    return js[start:js.index("};", start)]
+    return js[start : js.index("};", start)]

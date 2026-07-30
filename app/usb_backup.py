@@ -22,7 +22,7 @@ import os
 import shutil
 import sqlite3
 import string
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 _MAX_LABEL_LEN = 261
@@ -174,7 +174,7 @@ LAST_MIRROR: dict | None = None
 def record_mirror(destination: Path | None, label: str | None, error: str | None = None) -> None:
     global LAST_MIRROR
     LAST_MIRROR = {
-        "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "at": datetime.now(UTC).isoformat(timespec="seconds"),
         "label": label,
         "path": str(destination) if destination else None,
         "error": error,

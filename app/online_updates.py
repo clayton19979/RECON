@@ -21,6 +21,7 @@ repository is private; drop the key if it ever goes public. No config file at
 all means online checking is off -- which is the state of every install that
 predates this feature, so old installs keep working untouched.
 """
+
 from __future__ import annotations
 
 import json
@@ -65,7 +66,7 @@ def load_source(data_root: Path) -> dict | None:
         return None
     repo = str(raw.get("repo") or "").strip()
     if not repo or repo.count("/") != 1:
-        log.warning("%s has no usable \"repo\" (owner/name) -- online update checking is off", path)
+        log.warning('%s has no usable "repo" (owner/name) -- online update checking is off', path)
         return None
     token = str(raw.get("token") or "").strip() or None
     return {"repo": repo, "token": token}
@@ -157,13 +158,10 @@ def _download(client: httpx.Client, asset: dict, version: str, updates_dir: Path
     partial = final.with_name(final.name + PARTIAL_SUFFIX)
     expected = int(asset.get("size") or 0)
 
-    with client.stream(
-        "GET", str(asset["url"]), headers={"Accept": "application/octet-stream"}
-    ) as response:
+    with client.stream("GET", str(asset["url"]), headers={"Accept": "application/octet-stream"}) as response:
         response.raise_for_status()
         with open(partial, "wb") as handle:
-            for chunk in response.iter_bytes():
-                handle.write(chunk)
+            handle.writelines(response.iter_bytes())
 
     written = partial.stat().st_size
     if expected and written != expected:

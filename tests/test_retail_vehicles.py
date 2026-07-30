@@ -1,6 +1,7 @@
 """The retail vehicle detail endpoints -- a customer's own car as a
 first-class page, keyed by vehicles.id rather than a recon/we-owe
 container row."""
+
 from __future__ import annotations
 
 from tests.helpers import make_recon_vehicle, make_retail_order, save_estimate
@@ -10,7 +11,13 @@ def _retail_setup(client, name="Dana Retail"):
     customer = client.post("/api/customers", json={"name": name}).json()
     vehicle = client.post(
         "/api/vehicles",
-        json={"customer_id": customer["id"], "year": 2017, "make": "Toyota", "model": "Camry", "vin": "4t1bf1fk5hu300001"},
+        json={
+            "customer_id": customer["id"],
+            "year": 2017,
+            "make": "Toyota",
+            "model": "Camry",
+            "vin": "4t1bf1fk5hu300001",
+        },
     ).json()
     return customer, vehicle
 
@@ -27,9 +34,13 @@ def _retail_order(client, customer, vehicle, concern="Brakes grinding"):
 def test_retail_detail_carries_customer_and_rollup(client):
     customer, vehicle = _retail_setup(client)
     order = _retail_order(client, customer, vehicle)
-    save_estimate(client, order["id"], [
-        {"kind": "labor", "description": "Brake job", "quantity": 2, "unit_price": 120, "unit_cost": 80},
-    ])
+    save_estimate(
+        client,
+        order["id"],
+        [
+            {"kind": "labor", "description": "Brake job", "quantity": 2, "unit_price": 120, "unit_cost": 80},
+        ],
+    )
 
     detail = client.get(f"/api/retail/vehicles/{vehicle['id']}").json()
     assert detail["customer_name"] == "Dana Retail"
@@ -64,18 +75,30 @@ def test_retail_rollup_excludes_other_segments_and_voided(client):
     wo_order = client.post(
         "/api/orders", json={"concern": "Owed mirror", "segment": "we_owe", "we_owe_id": we_owe["id"]}
     ).json()
-    save_estimate(client, wo_order["id"], [
-        {"kind": "labor", "description": "Mirror swap", "quantity": 1, "unit_price": 90, "unit_cost": 60},
-    ])
+    save_estimate(
+        client,
+        wo_order["id"],
+        [
+            {"kind": "labor", "description": "Mirror swap", "quantity": 1, "unit_price": 90, "unit_cost": 60},
+        ],
+    )
 
     keep = _retail_order(client, customer, vehicle, concern="Brake job")
-    save_estimate(client, keep["id"], [
-        {"kind": "labor", "description": "Brakes", "quantity": 1, "unit_price": 200, "unit_cost": 150},
-    ])
+    save_estimate(
+        client,
+        keep["id"],
+        [
+            {"kind": "labor", "description": "Brakes", "quantity": 1, "unit_price": 200, "unit_cost": 150},
+        ],
+    )
     voided = _retail_order(client, customer, vehicle, concern="Started by mistake")
-    save_estimate(client, voided["id"], [
-        {"kind": "labor", "description": "Oops", "quantity": 1, "unit_price": 500, "unit_cost": 400},
-    ])
+    save_estimate(
+        client,
+        voided["id"],
+        [
+            {"kind": "labor", "description": "Oops", "quantity": 1, "unit_price": 500, "unit_cost": 400},
+        ],
+    )
     client.post(f"/api/orders/{voided['id']}/void", json={"actor": "tester"})
 
     detail = client.get(f"/api/retail/vehicles/{vehicle['id']}").json()
@@ -90,7 +113,13 @@ def test_retail_patch_updates_vehicle_info(client):
     _retail_order(client, customer, vehicle)
     res = client.patch(
         f"/api/retail/vehicles/{vehicle['id']}",
-        json={"vin": "4t1bf1fk5hu300002", "mileage": 88123, "color": " Silver ", "plate": "abc1234", "expected_version": 0},
+        json={
+            "vin": "4t1bf1fk5hu300002",
+            "mileage": 88123,
+            "color": " Silver ",
+            "plate": "abc1234",
+            "expected_version": 0,
+        },
     )
     assert res.status_code == 200, res.text
     detail = res.json()
@@ -107,12 +136,19 @@ def test_retail_detail_lists_customers_other_vehicles(client):
     customer, camry = _retail_setup(client)
     truck = client.post(
         "/api/vehicles",
-        json={"customer_id": customer["id"], "year": 2020, "make": "Ford", "model": "F-150", "plate": "TRK 42", "plate_state": "mi"},
+        json={
+            "customer_id": customer["id"],
+            "year": 2020,
+            "make": "Ford",
+            "model": "F-150",
+            "plate": "TRK 42",
+            "plate_state": "mi",
+        },
     ).json()
     # Someone else's car must never show up in this customer's list.
-    other_customer, other_vehicle = _retail_setup(client, name="Sam Stranger")
+    _other_customer, other_vehicle = _retail_setup(client, name="Sam Stranger")
 
-    open_ro = _retail_order(client, customer, truck, concern="Rattle over bumps")
+    _retail_order(client, customer, truck, concern="Rattle over bumps")  # stays open
     done_ro = _retail_order(client, customer, truck, concern="Oil change")
     client.patch(f"/api/orders/{done_ro['id']}/status", json={"status": "complete", "actor": "tester"})
     voided = _retail_order(client, customer, truck, concern="Started by mistake")
@@ -142,7 +178,13 @@ def test_add_second_vehicle_then_it_appears_as_other(client):
     customer, camry = _retail_setup(client)
     res = client.post(
         "/api/vehicles",
-        json={"customer_id": customer["id"], "year": 2015, "make": "Honda", "model": "Odyssey", "vin": "5fnrl5h60fb000001"},
+        json={
+            "customer_id": customer["id"],
+            "year": 2015,
+            "make": "Honda",
+            "model": "Odyssey",
+            "vin": "5fnrl5h60fb000001",
+        },
     )
     assert res.status_code == 201, res.text
     van = res.json()

@@ -38,14 +38,14 @@ def _field(block: str, name: str) -> str | None:
 
 
 def _array(block: str, name: str) -> list[str]:
-    match = re.search(rf"(?:^|\n)\s*{name}:\s*\[(.*?)\]", block, re.S)
+    match = re.search(rf"(?:^|\n)\s*{name}:\s*\[(.*?)\]", block, re.DOTALL)
     return re.findall(r'"((?:[^"\\]|\\.)*)"', match.group(1)) if match else []
 
 
 @pytest.fixture(scope="module")
 def topics(source: str) -> list[dict]:
-    body = source[source.index("const HELP_TOPICS"): source.index("const HELP_GROUPS")]
-    blocks = re.findall(r"\n  \{\n(.*?)\n  \},", body, re.S)
+    body = source[source.index("const HELP_TOPICS") : source.index("const HELP_GROUPS")]
+    blocks = re.findall(r"\n  \{\n(.*?)\n  \},", body, re.DOTALL)
     parsed = [
         {
             "id": _field(b, "id"),
@@ -64,8 +64,8 @@ def topics(source: str) -> list[dict]:
 
 @pytest.fixture(scope="module")
 def groups(source: str) -> list[dict]:
-    body = source[source.index("const HELP_GROUPS"):]
-    blocks = re.findall(r"\n  \{\n(.*?)\n  \},", body, re.S)
+    body = source[source.index("const HELP_GROUPS") :]
+    blocks = re.findall(r"\n  \{\n(.*?)\n  \},", body, re.DOTALL)
     return [{"title": _field(b, "title"), "ids": _array(b, "ids")} for b in blocks]
 
 
@@ -101,7 +101,7 @@ def test_topics_point_at_real_screens(topics: list[dict], rail_views: set[str]) 
 
 def test_related_links_resolve(topics: list[dict]) -> None:
     ids = {t["id"] for t in topics}
-    broken = sorted({f'{t["id"]} -> {r}' for t in topics for r in t["related"] if r not in ids})
+    broken = sorted({f"{t['id']} -> {r}" for t in topics for r in t["related"] if r not in ids})
     assert not broken, f"'See also' links pointing at topics that don't exist: {broken}"
 
 
@@ -184,6 +184,8 @@ def test_help_is_removed_cleanly_or_wired_fully(html: str, rail_views: set[str])
     }
     present = {name for name, found in pieces.items() if found}
     assert present in (set(), set(pieces)), (
-        "Help is half-wired -- present: " + (", ".join(sorted(present)) or "nothing")
-        + " / missing: " + (", ".join(sorted(set(pieces) - present)) or "nothing")
+        "Help is half-wired -- present: "
+        + (", ".join(sorted(present)) or "nothing")
+        + " / missing: "
+        + (", ".join(sorted(set(pieces) - present)) or "nothing")
     )

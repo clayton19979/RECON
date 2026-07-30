@@ -7,6 +7,7 @@ there was nothing joining them, and "what did we actually make on that car"
 had no answer -- the purchase price sat on one row and the post-sale repair
 bill on the other.
 """
+
 from __future__ import annotations
 
 from tests.helpers import make_recon_order, make_recon_vehicle, save_estimate
@@ -30,9 +31,13 @@ def _we_owe_on_vin(client, vin, customer_name="Jordan Whitfield", **overrides):
 
 
 def _spend(client, order_id, amount):
-    save_estimate(client, order_id, [
-        {"kind": "labor", "description": "Work", "quantity": 1, "unit_price": amount, "unit_cost": amount},
-    ])
+    save_estimate(
+        client,
+        order_id,
+        [
+            {"kind": "labor", "description": "Work", "quantity": 1, "unit_price": amount, "unit_cost": amount},
+        ],
+    )
 
 
 def test_recon_and_we_owe_on_one_vin_share_a_unit(client):
@@ -60,9 +65,14 @@ def test_we_owe_cost_eats_into_the_cars_profit(client):
 
     # Weeks later it comes back on a we-owe that costs the shop 600.
     we_owe = _we_owe_on_vin(client, VIN)
-    order = client.post("/api/orders", json={
-        "concern": "A/C", "segment": "we_owe", "we_owe_id": we_owe["id"],
-    }).json()
+    order = client.post(
+        "/api/orders",
+        json={
+            "concern": "A/C",
+            "segment": "we_owe",
+            "we_owe_id": we_owe["id"],
+        },
+    ).json()
     _spend(client, order["id"], 600)
 
     lifetime = client.get(f"/api/recon/vehicles/{recon['id']}").json()["lifetime"]
@@ -75,9 +85,14 @@ def test_customer_payment_offsets_the_we_owe_cost(client):
     recon = make_recon_vehicle(client, vin=VIN, purchase_price=5000)
     client.patch(f"/api/recon/vehicles/{recon['id']}", json={"sale_price": 8000})
     we_owe = _we_owe_on_vin(client, VIN)
-    order = client.post("/api/orders", json={
-        "concern": "A/C", "segment": "we_owe", "we_owe_id": we_owe["id"],
-    }).json()
+    order = client.post(
+        "/api/orders",
+        json={
+            "concern": "A/C",
+            "segment": "we_owe",
+            "we_owe_id": we_owe["id"],
+        },
+    ).json()
     _spend(client, order["id"], 600)
     client.post(f"/api/we-owe/{we_owe['id']}/payments", json={"amount": 250, "method": "cash"})
 
@@ -174,9 +189,14 @@ def test_profit_report_csv_breaks_out_every_cost(client):
     _spend(client, make_recon_order(client, recon["id"])["id"], 800)
     client.patch(f"/api/recon/vehicles/{recon['id']}", json={"sale_price": 8000})
     we_owe = _we_owe_on_vin(client, VIN)
-    order = client.post("/api/orders", json={
-        "concern": "A/C", "segment": "we_owe", "we_owe_id": we_owe["id"],
-    }).json()
+    order = client.post(
+        "/api/orders",
+        json={
+            "concern": "A/C",
+            "segment": "we_owe",
+            "we_owe_id": we_owe["id"],
+        },
+    ).json()
     _spend(client, order["id"], 600)
 
     res = client.get("/api/export/report/vehicle-profit.csv")
@@ -190,15 +210,28 @@ def test_profit_report_csv_breaks_out_every_cost(client):
 
 def test_odometer_broken_is_recorded_not_just_a_zero(client):
     customer = client.post("/api/customers", json={"name": "Pat Nguyen"}).json()
-    vehicle = client.post("/api/vehicles", json={
-        "customer_id": customer["id"], "year": 2016, "make": "Ford", "model": "Fusion",
-        "vin": "3FA6P0H73GR000222", "mileage": 0, "odometer_broken": True,
-    }).json()
+    vehicle = client.post(
+        "/api/vehicles",
+        json={
+            "customer_id": customer["id"],
+            "year": 2016,
+            "make": "Ford",
+            "model": "Fusion",
+            "vin": "3FA6P0H73GR000222",
+            "mileage": 0,
+            "odometer_broken": True,
+        },
+    ).json()
     assert vehicle["odometer_broken"] == 1
 
-    we_owe = client.post("/api/we-owe", json={
-        "customer_id": customer["id"], "vehicle_id": vehicle["id"], "description": "Promised tires",
-    }).json()
+    we_owe = client.post(
+        "/api/we-owe",
+        json={
+            "customer_id": customer["id"],
+            "vehicle_id": vehicle["id"],
+            "description": "Promised tires",
+        },
+    ).json()
     assert we_owe["odometer_broken"] == 1, "a broken odometer has to survive to the ticket"
 
 
@@ -207,11 +240,15 @@ def test_labor_hours_are_tracked_even_at_a_zero_rate(client):
     permanently 0 and the hours the techs flagged were invisible. Hours have
     to be counted in their own right, not inferred from money."""
     recon = make_recon_vehicle(client, vin=VIN, purchase_price=5000)
-    save_estimate(client, make_recon_order(client, recon["id"])["id"], [
-        {"kind": "labor", "description": "Brakes", "quantity": 3.5, "unit_price": 0, "unit_cost": 0},
-        {"kind": "labor", "description": "Detail", "quantity": 2, "unit_price": 0, "unit_cost": 0},
-        {"kind": "part", "description": "Pads", "quantity": 1, "unit_price": 60, "unit_cost": 60},
-    ])
+    save_estimate(
+        client,
+        make_recon_order(client, recon["id"])["id"],
+        [
+            {"kind": "labor", "description": "Brakes", "quantity": 3.5, "unit_price": 0, "unit_cost": 0},
+            {"kind": "labor", "description": "Detail", "quantity": 2, "unit_price": 0, "unit_cost": 0},
+            {"kind": "part", "description": "Pads", "quantity": 1, "unit_price": 60, "unit_cost": 60},
+        ],
+    )
 
     detail = client.get(f"/api/recon/vehicles/{recon['id']}").json()
     assert detail["total_cost"] == 0, "nothing received yet, and labor is free"
@@ -223,16 +260,29 @@ def test_labor_hours_are_tracked_even_at_a_zero_rate(client):
 
 def test_lifetime_hours_span_recon_and_we_owe(client):
     recon = make_recon_vehicle(client, vin=VIN, purchase_price=5000)
-    save_estimate(client, make_recon_order(client, recon["id"])["id"], [
-        {"kind": "labor", "description": "Recon labor", "quantity": 4, "unit_price": 0, "unit_cost": 0},
-    ])
+    save_estimate(
+        client,
+        make_recon_order(client, recon["id"])["id"],
+        [
+            {"kind": "labor", "description": "Recon labor", "quantity": 4, "unit_price": 0, "unit_cost": 0},
+        ],
+    )
     we_owe = _we_owe_on_vin(client, VIN)
-    order = client.post("/api/orders", json={
-        "concern": "A/C", "segment": "we_owe", "we_owe_id": we_owe["id"],
-    }).json()
-    save_estimate(client, order["id"], [
-        {"kind": "labor", "description": "Comeback labor", "quantity": 2.5, "unit_price": 0, "unit_cost": 0},
-    ])
+    order = client.post(
+        "/api/orders",
+        json={
+            "concern": "A/C",
+            "segment": "we_owe",
+            "we_owe_id": we_owe["id"],
+        },
+    ).json()
+    save_estimate(
+        client,
+        order["id"],
+        [
+            {"kind": "labor", "description": "Comeback labor", "quantity": 2.5, "unit_price": 0, "unit_cost": 0},
+        ],
+    )
 
     assert client.get(f"/api/reports/vehicle-profit?vin={VIN}").json()[0]["labor_hours"] == 6.5
 

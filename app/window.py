@@ -11,12 +11,13 @@ This uses WebView2 through pywebview instead -- the same rendering engine, but
 in a window RECON owns. WebView2 ships with Windows 11 and arrives on Windows
 10 with Edge; the installer bootstraps it on anything older.
 """
+
 from __future__ import annotations
 
 import logging
 import urllib.request
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 from urllib.parse import urlsplit, urlunsplit
 
 from app import paths
@@ -250,16 +251,16 @@ class AppWindow:
     def _create(self, url: str | None):
         import webview
 
-        kwargs = dict(
-            title="RECON",
-            width=DEFAULT_WIDTH,
-            height=DEFAULT_HEIGHT,
-            min_size=(MIN_WIDTH, MIN_HEIGHT),
-            background_color="#0c1118",
+        kwargs = {
+            "title": "RECON",
+            "width": DEFAULT_WIDTH,
+            "height": DEFAULT_HEIGHT,
+            "min_size": (MIN_WIDTH, MIN_HEIGHT),
+            "background_color": "#0c1118",
             # Both windows get the api: the offline screen needs `retry`, and
             # the app itself needs `save_file` for every download link.
-            js_api=self._api,
-        )
+            "js_api": self._api,
+        }
         self._url = url
         if url:
             window = webview.create_window(url=url, **kwargs)

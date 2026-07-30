@@ -4,7 +4,12 @@ from unittest.mock import MagicMock, patch
 
 import httpx
 
-from tests.helpers import make_recon_order, make_recon_vehicle, make_retail_order, save_estimate
+from tests.helpers import (
+    make_recon_order,
+    make_recon_vehicle,
+    make_retail_order,
+    save_estimate,
+)
 
 
 def test_customers_and_vehicles_crud(client):
@@ -15,7 +20,8 @@ def test_customers_and_vehicles_crud(client):
     assert res.status_code == 404
 
     vehicle = client.post(
-        "/api/vehicles", json={"customer_id": customer["id"], "year": 2020, "make": "Kia", "model": "Soul", "vin": "abc123"}
+        "/api/vehicles",
+        json={"customer_id": customer["id"], "year": 2020, "make": "Kia", "model": "Soul", "vin": "abc123"},
     ).json()
     assert vehicle["vin"] == "ABC123"  # normalized uppercase
 
@@ -57,15 +63,18 @@ def test_customer_phone_normalized_on_create_and_patch(client):
 
 
 def test_customer_address_create_and_patch_round_trip(client):
-    customer = client.post("/api/customers", json={
-        "name": "Address Tester",
-        "phone": "219-555-0111",
-        "address_line1": "123 Broadway",
-        "address_line2": "Apt 4",
-        "city": "Merrillville",
-        "state": "IN",
-        "postal_code": "46410",
-    }).json()
+    customer = client.post(
+        "/api/customers",
+        json={
+            "name": "Address Tester",
+            "phone": "219-555-0111",
+            "address_line1": "123 Broadway",
+            "address_line2": "Apt 4",
+            "city": "Merrillville",
+            "state": "IN",
+            "postal_code": "46410",
+        },
+    ).json()
     assert customer["address_line1"] == "123 Broadway"
     assert customer["address_line2"] == "Apt 4"
     assert customer["city"] == "Merrillville"
@@ -73,7 +82,9 @@ def test_customer_address_create_and_patch_round_trip(client):
     assert customer["postal_code"] == "46410"
 
     # Partial patch touches only the sent fields, leaving the rest intact.
-    res = client.patch(f"/api/customers/{customer['id']}", json={"address_line1": "500 Main St", "postal_code": "46411"})
+    res = client.patch(
+        f"/api/customers/{customer['id']}", json={"address_line1": "500 Main St", "postal_code": "46411"}
+    )
     assert res.status_code == 200
     body = res.json()
     assert body["address_line1"] == "500 Main St"
@@ -86,9 +97,15 @@ def test_we_owe_detail_exposes_customer_address(client):
     from tests.helpers import make_we_owe
 
     we_owe = make_we_owe(client)
-    client.patch(f"/api/customers/{we_owe['customer_id']}", json={
-        "address_line1": "77 Sunset Blvd", "city": "Gary", "state": "IN", "postal_code": "46402",
-    })
+    client.patch(
+        f"/api/customers/{we_owe['customer_id']}",
+        json={
+            "address_line1": "77 Sunset Blvd",
+            "city": "Gary",
+            "state": "IN",
+            "postal_code": "46402",
+        },
+    )
     detail = client.get(f"/api/we-owe/{we_owe['id']}").json()
     assert detail["customer_address_line1"] == "77 Sunset Blvd"
     assert detail["customer_city"] == "Gary"
@@ -99,13 +116,23 @@ def test_we_owe_detail_exposes_customer_address(client):
 def test_address_suggest_parses_provider_results(client):
     fake_response = MagicMock()
     fake_response.raise_for_status.return_value = None
-    fake_response.json.return_value = {"features": [
-        {"properties": {"housenumber": "1600", "street": "Amphitheatre Parkway",
-                        "city": "Mountain View", "state": "California",
-                        "postcode": "94043", "countrycode": "US"}},
-        {"properties": {"housenumber": "10", "street": "Downing Street",
-                        "city": "London", "countrycode": "GB"}},  # non-US, filtered out
-    ]}
+    fake_response.json.return_value = {
+        "features": [
+            {
+                "properties": {
+                    "housenumber": "1600",
+                    "street": "Amphitheatre Parkway",
+                    "city": "Mountain View",
+                    "state": "California",
+                    "postcode": "94043",
+                    "countrycode": "US",
+                }
+            },
+            {
+                "properties": {"housenumber": "10", "street": "Downing Street", "city": "London", "countrycode": "GB"}
+            },  # non-US, filtered out
+        ]
+    }
     with patch("app.main.httpx.get", return_value=fake_response):
         res = client.get("/api/address-suggest", params={"q": "1600 Amphitheatre"})
     assert res.status_code == 200
@@ -122,14 +149,6 @@ def test_address_suggest_degrades_to_empty_when_provider_unreachable(client):
 
     with patch("app.main.httpx.get", side_effect=_httpx.ConnectError("offline")):
         res = client.get("/api/address-suggest", params={"q": "123 Main St"})
-    assert res.status_code == 200
-    assert res.json() == []
-
-
-def test_address_suggest_ignores_short_queries(client):
-    # No provider call at all for <3 chars -- if httpx.get were hit it would blow up.
-    with patch("app.main.httpx.get", side_effect=AssertionError("should not call provider")):
-        res = client.get("/api/address-suggest", params={"q": "12"})
     assert res.status_code == 200
     assert res.json() == []
 
@@ -160,7 +179,14 @@ def test_order_lifecycle_and_estimate_editing(client):
         client,
         order["id"],
         [
-            {"kind": "part", "description": "Filter", "part_number": "F-1", "quantity": 1, "unit_price": 20, "unit_cost": 20},
+            {
+                "kind": "part",
+                "description": "Filter",
+                "part_number": "F-1",
+                "quantity": 1,
+                "unit_price": 20,
+                "unit_cost": 20,
+            },
             {"kind": "labor", "description": "Install", "quantity": 1, "unit_price": 30, "unit_cost": 30},
         ],
     )
@@ -173,7 +199,15 @@ def test_order_lifecycle_and_estimate_editing(client):
         client,
         order["id"],
         [
-            {"id": keep_id, "kind": "part", "description": "Filter", "part_number": "F-1", "quantity": 2, "unit_price": 20, "unit_cost": 20},
+            {
+                "id": keep_id,
+                "kind": "part",
+                "description": "Filter",
+                "part_number": "F-1",
+                "quantity": 2,
+                "unit_price": 20,
+                "unit_cost": 20,
+            },
             {"kind": "fee", "description": "Shop supplies", "quantity": 1, "unit_price": 5, "unit_cost": 5},
         ],
     )
@@ -188,7 +222,10 @@ def test_save_estimate_rejects_oversized_item_list(client):
     unbounded list could otherwise raise an uncaught OperationalError."""
     vehicle = make_recon_vehicle(client, stock_number="R-3502")
     order = make_recon_order(client, vehicle["id"])
-    items = [{"kind": "part", "description": "x", "part_number": f"P-{i}", "quantity": 1, "unit_price": 1, "unit_cost": 1} for i in range(301)]
+    items = [
+        {"kind": "part", "description": "x", "part_number": f"P-{i}", "quantity": 1, "unit_price": 1, "unit_cost": 1}
+        for i in range(301)
+    ]
     res = client.post(f"/api/orders/{order['id']}/estimate", json={"actor": "t", "items": items})
     assert res.status_code == 422
 
@@ -202,9 +239,17 @@ def test_save_estimate_never_deletes_a_received_line(client):
     vehicle = make_recon_vehicle(client, stock_number="R-3501")
     order = make_recon_order(client, vehicle["id"])
     estimate = save_estimate(
-        client, order["id"],
+        client,
+        order["id"],
         [
-            {"kind": "part", "description": "Brake pads", "part_number": "BP-1", "quantity": 1, "unit_price": 10, "unit_cost": 10},
+            {
+                "kind": "part",
+                "description": "Brake pads",
+                "part_number": "BP-1",
+                "quantity": 1,
+                "unit_price": 10,
+                "unit_cost": 10,
+            },
             {"kind": "labor", "description": "Install", "quantity": 1, "unit_price": 30, "unit_cost": 30},
         ],
     )
@@ -216,7 +261,11 @@ def test_save_estimate_never_deletes_a_received_line(client):
     )
 
     # Resave with a payload that omits the now-received part entirely.
-    estimate2 = save_estimate(client, order["id"], [{"id": labor_id, "kind": "labor", "description": "Install", "quantity": 1, "unit_price": 30, "unit_cost": 30}])
+    estimate2 = save_estimate(
+        client,
+        order["id"],
+        [{"id": labor_id, "kind": "labor", "description": "Install", "quantity": 1, "unit_price": 30, "unit_cost": 30}],
+    )
     ids = {i["id"] for i in estimate2["items"]}
     assert received_id in ids  # survived despite being left out of the payload
     assert next(i for i in estimate2["items"] if i["id"] == received_id)["status"] == "received"
@@ -233,8 +282,23 @@ def test_estimate_item_source_is_recorded(client):
         client,
         order["id"],
         [
-            {"kind": "part", "description": "OEM sensor", "part_number": "PT-1", "quantity": 1, "unit_price": 80, "unit_cost": 80, "source": "technician_finding"},
-            {"kind": "part", "description": "Filter", "part_number": "F-1", "quantity": 1, "unit_price": 10, "unit_cost": 10},
+            {
+                "kind": "part",
+                "description": "OEM sensor",
+                "part_number": "PT-1",
+                "quantity": 1,
+                "unit_price": 80,
+                "unit_cost": 80,
+                "source": "technician_finding",
+            },
+            {
+                "kind": "part",
+                "description": "Filter",
+                "part_number": "F-1",
+                "quantity": 1,
+                "unit_price": 10,
+                "unit_cost": 10,
+            },
         ],
     )
     by_desc = {i["description"]: i for i in estimate["items"]}
@@ -247,8 +311,24 @@ def test_estimate_item_source_is_recorded(client):
         client,
         order["id"],
         [
-            {"id": finding_id, "kind": "part", "description": "OEM sensor", "part_number": "PT-1", "quantity": 2, "unit_price": 80, "unit_cost": 80},
-            {"kind": "part", "description": "Filter", "part_number": "F-1", "quantity": 1, "unit_price": 10, "unit_cost": 10, "id": by_desc["Filter"]["id"]},
+            {
+                "id": finding_id,
+                "kind": "part",
+                "description": "OEM sensor",
+                "part_number": "PT-1",
+                "quantity": 2,
+                "unit_price": 80,
+                "unit_cost": 80,
+            },
+            {
+                "kind": "part",
+                "description": "Filter",
+                "part_number": "F-1",
+                "quantity": 1,
+                "unit_price": 10,
+                "unit_cost": 10,
+                "id": by_desc["Filter"]["id"],
+            },
         ],
     )
     updated = next(i for i in estimate2["items"] if i["id"] == finding_id)
@@ -262,12 +342,20 @@ def test_estimate_save_conflict_when_stale_version(client):
     clobber each other. A stale expected_version must be rejected."""
     vehicle = make_recon_vehicle(client, stock_number="R-3301")
     order = make_recon_order(client, vehicle["id"])
-    estimate = save_estimate(client, order["id"], [{"kind": "labor", "description": "Diag", "quantity": 1, "unit_price": 50, "unit_cost": 50}])
+    estimate = save_estimate(
+        client,
+        order["id"],
+        [{"kind": "labor", "description": "Diag", "quantity": 1, "unit_price": 50, "unit_cost": 50}],
+    )
     assert estimate["edit_version"] == 1
 
     res = client.post(
         f"/api/orders/{order['id']}/estimate",
-        json={"actor": "tester", "items": [{"kind": "labor", "description": "Diag", "quantity": 1, "unit_price": 50, "unit_cost": 50}], "expected_version": 1},
+        json={
+            "actor": "tester",
+            "items": [{"kind": "labor", "description": "Diag", "quantity": 1, "unit_price": 50, "unit_cost": 50}],
+            "expected_version": 1,
+        },
     )
     assert res.status_code == 200
     assert res.json()["edit_version"] == 2
@@ -275,7 +363,11 @@ def test_estimate_save_conflict_when_stale_version(client):
     # A second client still holding version=1 tries to save over it
     res = client.post(
         f"/api/orders/{order['id']}/estimate",
-        json={"actor": "tester", "items": [{"kind": "labor", "description": "Different", "quantity": 1, "unit_price": 99, "unit_cost": 99}], "expected_version": 1},
+        json={
+            "actor": "tester",
+            "items": [{"kind": "labor", "description": "Different", "quantity": 1, "unit_price": 99, "unit_cost": 99}],
+            "expected_version": 1,
+        },
     )
     assert res.status_code == 409
 
@@ -302,7 +394,11 @@ def test_retail_order_requires_customer_and_vehicle_match(client):
 def test_dashboard_aggregates_open_work(client):
     vehicle = make_recon_vehicle(client, stock_number="R-2201", purchase_price=5000)
     order = make_recon_order(client, vehicle["id"])
-    save_estimate(client, order["id"], [{"kind": "labor", "description": "Diag", "quantity": 1, "unit_price": 60, "unit_cost": 60}])
+    save_estimate(
+        client,
+        order["id"],
+        [{"kind": "labor", "description": "Diag", "quantity": 1, "unit_price": 60, "unit_cost": 60}],
+    )
 
     dashboard = client.get("/api/dashboard").json()
     assert dashboard["recon_open"] == 1
@@ -313,7 +409,16 @@ def test_decode_vin_success(client):
     fake_response = MagicMock()
     fake_response.raise_for_status.return_value = None
     fake_response.json.return_value = {
-        "Results": [{"ModelYear": "2019", "Make": "Honda", "Model": "Civic", "Trim": "EX", "DisplacementL": "2.0", "EngineCylinders": "4"}]
+        "Results": [
+            {
+                "ModelYear": "2019",
+                "Make": "Honda",
+                "Model": "Civic",
+                "Trim": "EX",
+                "DisplacementL": "2.0",
+                "EngineCylinders": "4",
+            }
+        ]
     }
     with patch("app.main.httpx.get", return_value=fake_response):
         res = client.post("/api/vehicles/decode-vin", json={"vin": "1HGCM82633A004352"})
@@ -372,16 +477,30 @@ def test_decode_plate_without_api_key(client, monkeypatch):
 
 def test_address_suggest_ignores_short_queries(client):
     """Two characters match half the country; the request isn't worth making."""
-    assert client.get("/api/address-suggest?q=16").json() == []
+    # If the provider were consulted at all, this patch would blow the test up.
+    with patch("app.main.httpx.get", side_effect=AssertionError("should not call provider")):
+        res = client.get("/api/address-suggest", params={"q": "12"})
+    assert res.status_code == 200
+    assert res.json() == []
 
 
 def test_address_suggest_maps_a_result_into_the_form_fields(client):
     fake_response = MagicMock()
     fake_response.raise_for_status.return_value = None
-    fake_response.json.return_value = {"features": [{"properties": {
-        "countrycode": "US", "housenumber": "1600", "street": "Pennsylvania Ave NW",
-        "city": "Washington", "state": "District of Columbia", "postcode": "20500",
-    }}]}
+    fake_response.json.return_value = {
+        "features": [
+            {
+                "properties": {
+                    "countrycode": "US",
+                    "housenumber": "1600",
+                    "street": "Pennsylvania Ave NW",
+                    "city": "Washington",
+                    "state": "District of Columbia",
+                    "postcode": "20500",
+                }
+            }
+        ]
+    }
     with patch("app.main.httpx.get", return_value=fake_response):
         body = client.get("/api/address-suggest?q=1600 Pennsylvania").json()
     assert len(body) == 1
@@ -389,18 +508,22 @@ def test_address_suggest_maps_a_result_into_the_form_fields(client):
     # name, so an unmapped state would land in the box as unusable text.
     assert body[0] == {
         "label": "1600 Pennsylvania Ave NW, Washington, DC 20500",
-        "line1": "1600 Pennsylvania Ave NW", "city": "Washington",
-        "state": "DC", "postal_code": "20500",
+        "line1": "1600 Pennsylvania Ave NW",
+        "city": "Washington",
+        "state": "DC",
+        "postal_code": "20500",
     }
 
 
 def test_address_suggest_skips_non_us_results(client):
     fake_response = MagicMock()
     fake_response.raise_for_status.return_value = None
-    fake_response.json.return_value = {"features": [
-        {"properties": {"countrycode": "CA", "street": "Yonge St", "city": "Toronto"}},
-        {"properties": {"countrycode": "US", "street": "Broadway", "city": "Gary", "state": "Indiana"}},
-    ]}
+    fake_response.json.return_value = {
+        "features": [
+            {"properties": {"countrycode": "CA", "street": "Yonge St", "city": "Toronto"}},
+            {"properties": {"countrycode": "US", "street": "Broadway", "city": "Gary", "state": "Indiana"}},
+        ]
+    }
     with patch("app.main.httpx.get", return_value=fake_response):
         body = client.get("/api/address-suggest?q=street").json()
     assert [s["city"] for s in body] == ["Gary"]
@@ -454,7 +577,9 @@ def test_customers_list_carries_visit_aggregates(client):
 def test_customer_detail_groups_orders_under_vehicles(client):
     order = make_retail_order(client)
     customer_id, vehicle_id = order["customer_id"], order["vehicle_id"]
-    second = client.post("/api/vehicles", json={"customer_id": customer_id, "year": 2015, "make": "Jeep", "model": "Patriot"}).json()
+    second = client.post(
+        "/api/vehicles", json={"customer_id": customer_id, "year": 2015, "make": "Jeep", "model": "Patriot"}
+    ).json()
 
     detail = client.get(f"/api/customers/{customer_id}").json()
     assert detail["name"] == "Retail Customer"

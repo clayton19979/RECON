@@ -1,12 +1,21 @@
 from __future__ import annotations
 
-from tests.helpers import make_recon_order, make_recon_vehicle, make_we_owe, save_estimate
+from tests.helpers import (
+    make_recon_order,
+    make_recon_vehicle,
+    make_we_owe,
+    save_estimate,
+)
 
 
 def test_archive_and_reopen_recon_vehicle(client):
     vehicle = make_recon_vehicle(client, stock_number="R-8801")
     order = make_recon_order(client, vehicle["id"])
-    save_estimate(client, order["id"], [{"kind": "labor", "description": "Diag", "quantity": 1, "unit_price": 50, "unit_cost": 50}])
+    save_estimate(
+        client,
+        order["id"],
+        [{"kind": "labor", "description": "Diag", "quantity": 1, "unit_price": 50, "unit_cost": 50}],
+    )
     client.patch(f"/api/orders/{order['id']}/status", json={"status": "complete"})
 
     board = client.get("/api/vehicles-board", params={"segment": "recon"}).json()
@@ -31,10 +40,15 @@ def test_archive_and_reopen_recon_vehicle(client):
     assert res.status_code == 409
     res = client.post(
         f"/api/orders/{order['id']}/estimate",
-        json={"actor": "tester", "items": [{"kind": "labor", "description": "Diag", "quantity": 1, "unit_price": 50, "unit_cost": 50}]},
+        json={
+            "actor": "tester",
+            "items": [{"kind": "labor", "description": "Diag", "quantity": 1, "unit_price": 50, "unit_cost": 50}],
+        },
     )
     assert res.status_code == 409
-    res = client.post("/api/orders", json={"concern": "New work", "segment": "recon", "recon_vehicle_id": vehicle["id"]})
+    res = client.post(
+        "/api/orders", json={"concern": "New work", "segment": "recon", "recon_vehicle_id": vehicle["id"]}
+    )
     assert res.status_code == 409
     res = client.patch(f"/api/orders/{order['id']}/concern", json={"concern": "Different work"})
     assert res.status_code == 409
@@ -101,13 +115,23 @@ def test_retail_orders_unaffected_by_archiving_guard(client):
     """Retail orders have no recon_vehicle_id/we_owe_id -- the archiving
     guard must be a no-op for them, never blocking normal retail work."""
     customer = client.post("/api/customers", json={"name": "Retail Customer"}).json()
-    vehicle = client.post("/api/vehicles", json={"customer_id": customer["id"], "year": 2020, "make": "Ford", "model": "Focus"}).json()
+    vehicle = client.post(
+        "/api/vehicles", json={"customer_id": customer["id"], "year": 2020, "make": "Ford", "model": "Focus"}
+    ).json()
     order = client.post(
         "/api/orders",
-        json={"concern": "Check engine light", "segment": "retail", "customer_id": customer["id"], "vehicle_id": vehicle["id"]},
+        json={
+            "concern": "Check engine light",
+            "segment": "retail",
+            "customer_id": customer["id"],
+            "vehicle_id": vehicle["id"],
+        },
     ).json()
-    res = save_estimate_res = client.post(
+    res = client.post(
         f"/api/orders/{order['id']}/estimate",
-        json={"actor": "tester", "items": [{"kind": "labor", "description": "Diag", "quantity": 1, "unit_price": 50, "unit_cost": 50}]},
+        json={
+            "actor": "tester",
+            "items": [{"kind": "labor", "description": "Diag", "quantity": 1, "unit_price": 50, "unit_cost": 50}],
+        },
     )
     assert res.status_code == 200

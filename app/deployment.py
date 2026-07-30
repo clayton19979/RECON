@@ -9,6 +9,7 @@ So the role is now written once, at install time, and read here. UDP discovery
 still exists, but its job shrank to the useful half: a workstation asking
 "where is the shop PC?", not "is there one?".
 """
+
 from __future__ import annotations
 
 import json

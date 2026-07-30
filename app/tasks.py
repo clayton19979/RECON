@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from typing import Callable
+from collections.abc import Callable
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
@@ -134,9 +134,13 @@ def build_tasks_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
     @router.get("/tasks")
     def list_tasks():
         with connect() as db:
-            return [task_dict(row) for row in db.execute(
-                task_query + " ORDER BY t.done, t.urgent DESC, coalesce(nullif(t.due_date,''), '9999-99-99'), t.id DESC"
-            )]
+            return [
+                task_dict(row)
+                for row in db.execute(
+                    task_query
+                    + " ORDER BY t.done, t.urgent DESC, coalesce(nullif(t.due_date,''), '9999-99-99'), t.id DESC"
+                )
+            ]
 
     @router.post("/tasks", status_code=201)
     def create_task(item: TaskIn):
@@ -145,7 +149,17 @@ def build_tasks_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
             ts = now_fn()
             cur = db.execute(
                 "INSERT INTO tasks(title,notes,assigned_to,due_date,urgent,order_id,created_by,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
-                (item.title.strip(), item.notes.strip(), json.dumps(_clean_names(item.assigned_to)), item.due_date.strip(), int(item.urgent), item.order_id, item.actor.strip(), ts, ts),
+                (
+                    item.title.strip(),
+                    item.notes.strip(),
+                    json.dumps(_clean_names(item.assigned_to)),
+                    item.due_date.strip(),
+                    int(item.urgent),
+                    item.order_id,
+                    item.actor.strip(),
+                    ts,
+                    ts,
+                ),
             )
             return task_dict(db.execute(task_query + " WHERE t.id=?", (cur.lastrowid,)).fetchone())
 
@@ -184,24 +198,32 @@ def build_tasks_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
             fields: list[str] = []
             params: list[object] = []
             if item.title is not None:
-                fields.append("title=?"); params.append(item.title.strip())
+                fields.append("title=?")
+                params.append(item.title.strip())
             if item.notes is not None:
-                fields.append("notes=?"); params.append(item.notes.strip())
+                fields.append("notes=?")
+                params.append(item.notes.strip())
             if item.assigned_to is not None:
-                fields.append("assigned_to=?"); params.append(json.dumps(_clean_names(item.assigned_to)))
+                fields.append("assigned_to=?")
+                params.append(json.dumps(_clean_names(item.assigned_to)))
             if item.due_date is not None:
-                fields.append("due_date=?"); params.append(item.due_date.strip())
+                fields.append("due_date=?")
+                params.append(item.due_date.strip())
             if item.urgent is not None:
-                fields.append("urgent=?"); params.append(int(item.urgent))
+                fields.append("urgent=?")
+                params.append(int(item.urgent))
             if item.done is not None:
-                fields.append("done=?"); params.append(int(item.done))
-                fields.append("completed_at=?"); params.append(now_fn() if item.done else "")
+                fields.append("done=?")
+                params.append(int(item.done))
+                fields.append("completed_at=?")
+                params.append(now_fn() if item.done else "")
             if item.order_id is not None:
                 # -1 is the "unlink" sentinel -- None already means "field
                 # not sent" for a PATCH, so a real NULL needs its own value.
                 new_order_id = None if item.order_id == -1 else item.order_id
                 assert_valid_order(db, new_order_id)
-                fields.append("order_id=?"); params.append(new_order_id)
+                fields.append("order_id=?")
+                params.append(new_order_id)
             if fields:
                 fields.append("updated_at=?")
                 params.append(now_fn())
@@ -282,7 +304,6 @@ def build_tasks_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
             if not db.execute("SELECT 1 FROM tasks WHERE id=?", (task_id,)).fetchone():
                 raise HTTPException(404, "Task not found")
             db.execute("DELETE FROM tasks WHERE id=?", (task_id,))
-        return None
 
     # --- Suggestions ---
 
@@ -309,9 +330,11 @@ def build_tasks_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
             fields: list[str] = []
             params: list[object] = []
             if item.text is not None:
-                fields.append("text=?"); params.append(item.text.strip())
+                fields.append("text=?")
+                params.append(item.text.strip())
             if item.resolved is not None:
-                fields.append("resolved=?"); params.append(int(item.resolved))
+                fields.append("resolved=?")
+                params.append(int(item.resolved))
             if fields:
                 fields.append("updated_at=?")
                 params.append(now_fn())
@@ -325,6 +348,5 @@ def build_tasks_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
             if not db.execute("SELECT 1 FROM suggestions WHERE id=?", (suggestion_id,)).fetchone():
                 raise HTTPException(404, "Suggestion not found")
             db.execute("DELETE FROM suggestions WHERE id=?", (suggestion_id,))
-        return None
 
     return router

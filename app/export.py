@@ -3,8 +3,9 @@ from __future__ import annotations
 import csv
 import io
 import sqlite3
+from collections.abc import Callable
 from datetime import date
-from typing import Callable, Literal
+from typing import Literal
 
 from fastapi import APIRouter, Response
 
@@ -56,23 +57,34 @@ def build_export_router(connect: Callable[[], sqlite3.Connection], now_fn: Calla
 
             buffer = io.StringIO()
             writer = csv.writer(buffer)
-            writer.writerow([
-                "Stock #/Customer", "Vehicle", "VIN", "Segment", "Status", "Age (days)",
-                "What's In It", "Linked Vendor Invoices", "Updated At",
-            ])
+            writer.writerow(
+                [
+                    "Stock #/Customer",
+                    "Vehicle",
+                    "VIN",
+                    "Segment",
+                    "Status",
+                    "Age (days)",
+                    "What's In It",
+                    "Linked Vendor Invoices",
+                    "Updated At",
+                ]
+            )
             for row, order_ids in zip(rows, order_ids_by_row):
                 label = row["stock_number"] or row.get("customer_name", "")
-                writer.writerow([
-                    label,
-                    row["vehicle"],
-                    row.get("vin", ""),
-                    "Recon" if row["segment"] == "recon" else "We-Owe",
-                    STATUS_LABEL.get(row["status"], row["status"]),
-                    row["age_days"],
-                    f"{row['actual_cost']:.2f}",
-                    _linked_invoices(db, order_ids),
-                    row["updated_at"],
-                ])
+                writer.writerow(
+                    [
+                        label,
+                        row["vehicle"],
+                        row.get("vin", ""),
+                        "Recon" if row["segment"] == "recon" else "We-Owe",
+                        STATUS_LABEL.get(row["status"], row["status"]),
+                        row["age_days"],
+                        f"{row['actual_cost']:.2f}",
+                        _linked_invoices(db, order_ids),
+                        row["updated_at"],
+                    ]
+                )
 
         filename = f"discount-auto-ops-export-{date.today():%Y-%m-%d}.csv"
         return Response(
@@ -95,8 +107,19 @@ def build_export_router(connect: Callable[[], sqlite3.Connection], now_fn: Calla
         with connect() as db:
             rows = vehicle_board_rows(db, start, end, segment)
         return _csv_response(
-            ["Stock #", "Vehicle", "VIN", "Type", "Status", "Technicians",
-             "Quoted", "Cost", "Customer Paid", "Net to Shop", "Age (days)"],
+            [
+                "Stock #",
+                "Vehicle",
+                "VIN",
+                "Type",
+                "Status",
+                "Technicians",
+                "Quoted",
+                "Cost",
+                "Customer Paid",
+                "Net to Shop",
+                "Age (days)",
+            ],
             [
                 [
                     row["stock_number"] or row.get("customer_name", ""),
@@ -125,8 +148,20 @@ def build_export_router(connect: Callable[[], sqlite3.Connection], now_fn: Calla
         with connect() as db:
             rows = vehicle_profit_rows(db, start, end, normalize_vin(vin))
         return _csv_response(
-            ["Stock #", "Vehicle", "VIN", "Labor Hours", "Purchase Price", "Recon Cost", "We-Owe Cost",
-             "Customer Paid", "Total Invested", "Sale Price", "Profit", "Margin %"],
+            [
+                "Stock #",
+                "Vehicle",
+                "VIN",
+                "Labor Hours",
+                "Purchase Price",
+                "Recon Cost",
+                "We-Owe Cost",
+                "Customer Paid",
+                "Total Invested",
+                "Sale Price",
+                "Profit",
+                "Margin %",
+            ],
             [
                 [
                     row["stock_number"],
@@ -154,8 +189,13 @@ def build_export_router(connect: Callable[[], sqlite3.Connection], now_fn: Calla
         return _csv_response(
             ["Technician", "Repair Orders", "Completed", "Labor Hours", "Labor Cost"],
             [
-                [row["technician"], row["ro_count"], row["completed_count"],
-                 f"{row['labor_hours']:.2f}", f"{row['labor_cost']:.2f}"]
+                [
+                    row["technician"],
+                    row["ro_count"],
+                    row["completed_count"],
+                    f"{row['labor_hours']:.2f}",
+                    f"{row['labor_cost']:.2f}",
+                ]
                 for row in rows
             ],
             "technicians",

@@ -10,6 +10,7 @@ cosmetic and starts meaning "never updates" or "updates forever".
 
 `tests/test_version.py` asserts all three still agree.
 """
+
 from __future__ import annotations
 
 VERSION = "1.1.0"

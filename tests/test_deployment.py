@@ -1,5 +1,6 @@
 """The role config is what stops two PCs from each starting their own
 database, so its failure modes matter more than its happy path."""
+
 from __future__ import annotations
 
 import json

@@ -14,6 +14,7 @@ Deliberately no auto-install: an advisor is always mid-ticket somewhere, and
 an app that restarts itself under them is how you lose a repair order. The
 app says a version is available and waits to be asked.
 """
+
 from __future__ import annotations
 
 import re

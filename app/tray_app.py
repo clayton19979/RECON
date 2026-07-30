@@ -24,7 +24,13 @@ from app.backup import (
     restore_database,
     set_auto_backup_running,
 )
-from app.main import DATA_ROOT, DEFAULT_BACKUPS_DIR, DEFAULT_DB, NETWORK_FLAG, create_app
+from app.main import (
+    DATA_ROOT,
+    DEFAULT_BACKUPS_DIR,
+    DEFAULT_DB,
+    NETWORK_FLAG,
+    create_app,
+)
 from app.single_instance import SingleInstance
 from app.window import AppWindow
 
@@ -84,6 +90,7 @@ def pick_backup_destination(initial_dir: Path) -> Path | None:
         root.destroy()
     return Path(chosen) if chosen else None
 
+
 PORT = 8787
 # Daily is the tempo updates actually happen at -- a build published from
 # home tonight is on the shop PC before tomorrow's first ticket. The tray
@@ -93,6 +100,7 @@ ONLINE_UPDATE_CHECK_HOURS = 24
 # have to be re-navigated every time, and so the automatic backups know
 # where to mirror a copy once it's plugged in.
 DESTINATION_FILE = DATA_ROOT / "backup_destination.json"
+
 
 def network_mode_enabled() -> bool:
     return NETWORK_FLAG.is_file()
@@ -220,7 +228,9 @@ class TrayApp:
             host = current_host()
             # log_config=None: uvicorn's default formatter calls sys.stdout.isatty(),
             # which crashes under a --windowed PyInstaller build where stdout is None.
-            config = uvicorn.Config(create_app(), host=host, port=PORT, log_level="warning", log_config=None, access_log=False)
+            config = uvicorn.Config(
+                create_app(), host=host, port=PORT, log_level="warning", log_config=None, access_log=False
+            )
             self.server = uvicorn.Server(config)
             self.thread = threading.Thread(target=self.server.run, daemon=True)
             self.thread.start()
@@ -468,8 +478,7 @@ class TrayApp:
             return
         if status == "off":
             self.icon.notify(
-                "Online updates aren't set up on this PC.\n"
-                f"Create {online_updates.config_path(DATA_ROOT)} first.",
+                f"Online updates aren't set up on this PC.\nCreate {online_updates.config_path(DATA_ROOT)} first.",
                 "RECON",
             )
         elif status == "already":
@@ -591,15 +600,21 @@ class TrayApp:
                 self.promote_to_master,
                 visible=lambda _item: self.mode == deployment.CLIENT,
             ),
-            pystray.MenuItem("Show Server Address", self.show_server_address, visible=lambda _item: self.mode == deployment.MASTER),
+            pystray.MenuItem(
+                "Show Server Address", self.show_server_address, visible=lambda _item: self.mode == deployment.MASTER
+            ),
             pystray.MenuItem(
                 "Backup Now (entire database)", self.backup_now, visible=lambda _item: self.mode == deployment.MASTER
             ),
             pystray.MenuItem(
-                "Backup To USB or Folder...", self.backup_to_location, visible=lambda _item: self.mode == deployment.MASTER
+                "Backup To USB or Folder...",
+                self.backup_to_location,
+                visible=lambda _item: self.mode == deployment.MASTER,
             ),
             pystray.MenuItem(
-                "Restore Latest Backup", self.restore_latest_backup, visible=lambda _item: self.mode == deployment.MASTER
+                "Restore Latest Backup",
+                self.restore_latest_backup,
+                visible=lambda _item: self.mode == deployment.MASTER,
             ),
             pystray.MenuItem(
                 "Restore From File...", self.restore_from_file, visible=lambda _item: self.mode == deployment.MASTER
@@ -610,11 +625,13 @@ class TrayApp:
             # Master only: this PC is what hands updates to the workstations,
             # so it's the only one where dropping a build in achieves anything.
             pystray.MenuItem(
-                "Install Update From File...", self.show_updates_folder,
+                "Install Update From File...",
+                self.show_updates_folder,
                 visible=lambda _item: self.mode == deployment.MASTER,
             ),
             pystray.MenuItem(
-                "Check Online for Updates", self.check_online_updates,
+                "Check Online for Updates",
+                self.check_online_updates,
                 visible=lambda _item: self.mode == deployment.MASTER,
             ),
             pystray.MenuItem("Restart Server", self.restart, visible=lambda _item: self.mode == deployment.MASTER),

@@ -3,6 +3,7 @@
 Split out of main so tray_app and deployment can ask these questions without
 importing the whole FastAPI app.
 """
+
 from __future__ import annotations
 
 import os

@@ -5,6 +5,7 @@ was cosmetic while updating was manual; once a workstation decides whether it
 is out of date by comparing them, a stale one means "never updates" or
 "updates forever", so the agreement is now asserted.
 """
+
 from __future__ import annotations
 
 import re
@@ -25,6 +26,7 @@ def _installer(directory: Path, version: str, size: int = 1024) -> Path:
 
 # --- the three places a version is written must agree ---
 
+
 def test_version_info_matches_version_module():
     text = (REPO / "version_info.txt").read_text(encoding="utf-8")
     match = re.search(r"StringStruct\('FileVersion',\s*'([\d.]+)'\)", text)
@@ -40,6 +42,7 @@ def test_installer_script_matches_version_module():
 
 
 # --- comparison ---
+
 
 def test_padding_makes_short_and_long_forms_compare_equal():
     assert parse("1.1") == parse("1.1.0") == parse("1.1.0.0")
@@ -62,6 +65,7 @@ def test_unparseable_versions_are_never_newer():
 
 
 # --- what the shop PC offers ---
+
 
 def test_offers_the_newest_installer_it_has(tmp_path):
     _installer(tmp_path, "1.0.1")
@@ -102,6 +106,7 @@ def test_unrecognised_files_are_never_offered(tmp_path):
 
 
 # --- the API a workstation asks ---
+
 
 def test_version_endpoint_reports_this_install(client):
     body = client.get("/api/version").json()

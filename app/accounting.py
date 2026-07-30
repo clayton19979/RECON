@@ -99,7 +99,19 @@ def create_ap_invoice_record(
     try:
         cur = db.execute(
             "INSERT INTO ap_invoices(vendor_id,order_id,invoice_number,normalized_invoice_number,po_number,subtotal,tax,total,status,source,posted_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-            (vendor_id, order_id, invoice_number.strip(), normalized, po_number.strip(), subtotal, tax, total, "posted", source, now_fn()),
+            (
+                vendor_id,
+                order_id,
+                invoice_number.strip(),
+                normalized,
+                po_number.strip(),
+                subtotal,
+                tax,
+                total,
+                "posted",
+                source,
+                now_fn(),
+            ),
         )
     except sqlite3.IntegrityError:
         db.rollback()
@@ -107,7 +119,17 @@ def create_ap_invoice_record(
     ap_id = cur.lastrowid
     db.executemany(
         "INSERT INTO ap_invoice_items(ap_invoice_id,part_number,description,quantity,unit_cost,line_total) VALUES(?,?,?,?,?,?)",
-        [(ap_id, item.part_number.strip().upper(), item.description.strip(), item.quantity, item.unit_cost, round(item.quantity * item.unit_cost, 2)) for item in items],
+        [
+            (
+                ap_id,
+                item.part_number.strip().upper(),
+                item.description.strip(),
+                item.quantity,
+                item.unit_cost,
+                round(item.quantity * item.unit_cost, 2),
+            )
+            for item in items
+        ],
     )
     return {"status": "posted", "ap_invoice_id": ap_id}
 
@@ -118,7 +140,10 @@ def build_accounting_router(connect: Callable[[], sqlite3.Connection], now: Call
     @router.get("/vendors")
     def list_vendors():
         with connect() as db:
-            return [dict(row) | {"aliases": json.loads(row["aliases"])} for row in db.execute("SELECT * FROM vendors ORDER BY name")]
+            return [
+                dict(row) | {"aliases": json.loads(row["aliases"])}
+                for row in db.execute("SELECT * FROM vendors ORDER BY name")
+            ]
 
     @router.post("/vendors", status_code=201)
     def create_vendor(vendor: VendorIn):
@@ -143,12 +168,16 @@ def build_accounting_router(connect: Callable[[], sqlite3.Connection], now: Call
             fields: list[str] = []
             params: list[object] = []
             if item.name is not None:
-                fields.append("name=?"); params.append(item.name.strip())
-                fields.append("normalized_name=?"); params.append(normalize(item.name))
+                fields.append("name=?")
+                params.append(item.name.strip())
+                fields.append("normalized_name=?")
+                params.append(normalize(item.name))
             if item.aliases is not None:
-                fields.append("aliases=?"); params.append(json.dumps(item.aliases))
+                fields.append("aliases=?")
+                params.append(json.dumps(item.aliases))
             if item.account_number is not None:
-                fields.append("account_number=?"); params.append(item.account_number.strip())
+                fields.append("account_number=?")
+                params.append(item.account_number.strip())
             if fields:
                 params.append(vendor_id)
                 try:
@@ -219,18 +248,31 @@ def build_accounting_router(connect: Callable[[], sqlite3.Connection], now: Call
             # would block ever re-posting a corrected invoice under the
             # same real invoice number.
             freed_number = f"{invoice['normalized_invoice_number']}-voided-{invoice_id}"
-            db.execute("UPDATE ap_invoices SET status='voided', normalized_invoice_number=? WHERE id=?", (freed_number, invoice_id))
+            db.execute(
+                "UPDATE ap_invoices SET status='voided', normalized_invoice_number=? WHERE id=?",
+                (freed_number, invoice_id),
+            )
             # The activity log is per-ticket, so an invoice that belongs to no
             # ticket has nowhere to log to. The void is still recorded on the
             # invoice row itself, which is where anyone would look for it.
             if invoice["order_id"] is not None:
-                record_activity(db, invoice["order_id"], "ap_invoice_voided", item.actor, {"invoice_id": invoice_id, "invoice_number": invoice["invoice_number"]}, now)
+                record_activity(
+                    db,
+                    invoice["order_id"],
+                    "ap_invoice_voided",
+                    item.actor,
+                    {"invoice_id": invoice_id, "invoice_number": invoice["invoice_number"]},
+                    now,
+                )
             return dict(db.execute("SELECT * FROM ap_invoices WHERE id=?", (invoice_id,)).fetchone())
 
     @router.get("/accounting/audits")
     def list_audits():
         with connect() as db:
-            return [dict(row) | {"issues": json.loads(row["issues"])} for row in db.execute("SELECT * FROM invoice_audits ORDER BY id DESC LIMIT 100")]
+            return [
+                dict(row) | {"issues": json.loads(row["issues"])}
+                for row in db.execute("SELECT * FROM invoice_audits ORDER BY id DESC LIMIT 100")
+            ]
 
     def find_vendor(db: sqlite3.Connection, supplied: str):
         target = normalize(supplied)
@@ -263,10 +305,27 @@ def build_accounting_router(connect: Callable[[], sqlite3.Connection], now: Call
                     return orders[0]
         return None
 
-    def audit(db: sqlite3.Connection, invoice: InvoiceIn, status: str, issues: list[str], order_id: int | None, vendor_id: int | None):
+    def audit(
+        db: sqlite3.Connection,
+        invoice: InvoiceIn,
+        status: str,
+        issues: list[str],
+        order_id: int | None,
+        vendor_id: int | None,
+    ):
         db.execute(
             "INSERT INTO invoice_audits(invoice_number,vendor_text,po_number,status,issues,source,order_id,vendor_id,created_at) VALUES(?,?,?,?,?,?,?,?,?)",
-            (invoice.invoice_number.strip(), invoice.vendor_name.strip(), invoice.po_number.strip(), status, json.dumps(issues), invoice.source, order_id, vendor_id, now()),
+            (
+                invoice.invoice_number.strip(),
+                invoice.vendor_name.strip(),
+                invoice.po_number.strip(),
+                status,
+                json.dumps(issues),
+                invoice.source,
+                order_id,
+                vendor_id,
+                now(),
+            ),
         )
 
     RECEIVABLE_ORDER_STATUSES = {"estimate", "pending_approval", "in_progress"}
@@ -297,8 +356,16 @@ def build_accounting_router(connect: Callable[[], sqlite3.Connection], now: Call
             if not vendor:
                 issues.append(f"Vendor '{invoice.vendor_name}' did not exactly match a configured vendor or alias")
             if order and order["status"] not in RECEIVABLE_ORDER_STATUSES:
-                issues.append(f"Repair order '{order['number']}' has status '{order['status']}' and cannot receive parts")
-            if vendor and db.execute("SELECT id FROM ap_invoices WHERE vendor_id=? AND normalized_invoice_number=?", (vendor_id, normalize(invoice.invoice_number))).fetchone():
+                issues.append(
+                    f"Repair order '{order['number']}' has status '{order['status']}' and cannot receive parts"
+                )
+            if (
+                vendor
+                and db.execute(
+                    "SELECT id FROM ap_invoices WHERE vendor_id=? AND normalized_invoice_number=?",
+                    (vendor_id, normalize(invoice.invoice_number)),
+                ).fetchone()
+            ):
                 duplicate_issues = ["Vendor invoice number was already posted"]
                 audit(db, invoice, "duplicate", duplicate_issues, order_id, vendor_id)
                 return {"status": "duplicate", "issues": duplicate_issues, "vendor_id": vendor_id, "order_id": order_id}
@@ -331,7 +398,9 @@ def build_accounting_router(connect: Callable[[], sqlite3.Connection], now: Call
                 key = (item.kind, normalize(item.part_number))
                 prior = merged_items.get(key)
                 if prior:
-                    merged_items[key] = prior.model_copy(update={"quantity": prior.quantity + item.quantity, "unit_cost": item.unit_cost})
+                    merged_items[key] = prior.model_copy(
+                        update={"quantity": prior.quantity + item.quantity, "unit_cost": item.unit_cost}
+                    )
                 else:
                     merged_items[key] = item
 
@@ -340,7 +409,10 @@ def build_accounting_router(connect: Callable[[], sqlite3.Connection], now: Call
             if estimate:
                 existing_by_part = {
                     normalize(row["part_number"]): row
-                    for row in db.execute("SELECT * FROM estimate_items WHERE estimate_id=? AND kind='part' AND part_number!=''", (estimate["id"],))
+                    for row in db.execute(
+                        "SELECT * FROM estimate_items WHERE estimate_id=? AND kind='part' AND part_number!=''",
+                        (estimate["id"],),
+                    )
                 }
                 # Only a "part" line's quantity is ever tracked against the
                 # repair order's received_quantity -- labor/credit lines have
@@ -350,8 +422,13 @@ def build_accounting_router(connect: Callable[[], sqlite3.Connection], now: Call
                     if kind != "part":
                         continue
                     existing = existing_by_part.get(part_key)
-                    if existing and float(existing["received_quantity"]) + item.quantity > float(existing["quantity"]) + 0.001:
-                        issues.append(f"Receipt quantity for {item.part_number} exceeds the quantity on the repair order")
+                    if (
+                        existing
+                        and float(existing["received_quantity"]) + item.quantity > float(existing["quantity"]) + 0.001
+                    ):
+                        issues.append(
+                            f"Receipt quantity for {item.part_number} exceeds the quantity on the repair order"
+                        )
 
             if issues:
                 audit(db, invoice, "review_required", issues, order_id, vendor_id)
@@ -368,10 +445,16 @@ def build_accounting_router(connect: Callable[[], sqlite3.Connection], now: Call
             # for shop supplies is.
             if order is None:
                 result = create_ap_invoice_record(
-                    db, now,
-                    vendor_id=vendor_id, order_id=None,
-                    invoice_number=invoice.invoice_number, po_number=invoice.po_number,
-                    items=invoice.items, subtotal=invoice.subtotal, tax=invoice.tax, total=invoice.total,
+                    db,
+                    now,
+                    vendor_id=vendor_id,
+                    order_id=None,
+                    invoice_number=invoice.invoice_number,
+                    po_number=invoice.po_number,
+                    items=invoice.items,
+                    subtotal=invoice.subtotal,
+                    tax=invoice.tax,
+                    total=invoice.total,
                     source=invoice.source,
                 )
                 if result["status"] == "duplicate":
@@ -384,7 +467,9 @@ def build_accounting_router(connect: Callable[[], sqlite3.Connection], now: Call
                     "ap_invoice_id": result["ap_invoice_id"],
                     "vendor_id": vendor_id,
                     "order_id": None,
-                    "received_parts": [], "added_parts": [], "added_labor": [],
+                    "received_parts": [],
+                    "added_parts": [],
+                    "added_labor": [],
                     "issues": [],
                 }
 
@@ -402,17 +487,48 @@ def build_accounting_router(connect: Callable[[], sqlite3.Connection], now: Call
                     hours = item.quantity  # quantity = hours for labor items
                     db.execute(
                         "INSERT INTO estimate_items(estimate_id,kind,description,part_number,quantity,unit_price,unit_cost,received_quantity,line_total,status) VALUES(?,?,?,?,?,?,?,?,?,?)",
-                        (estimate_id, "labor", item.description.strip(), item.part_number.strip().upper(), hours, item.unit_cost, item.unit_cost, 0, round(hours * item.unit_cost, 2), "received"),
+                        (
+                            estimate_id,
+                            "labor",
+                            item.description.strip(),
+                            item.part_number.strip().upper(),
+                            hours,
+                            item.unit_cost,
+                            item.unit_cost,
+                            0,
+                            round(hours * item.unit_cost, 2),
+                            "received",
+                        ),
                     )
-                    added_labor.append({"description": item.description.strip(), "hours": hours, "cost": item.unit_cost})
+                    added_labor.append(
+                        {"description": item.description.strip(), "hours": hours, "cost": item.unit_cost}
+                    )
                     continue
 
                 if item.kind == "credit":
                     db.execute(
                         "INSERT INTO estimate_items(estimate_id,kind,description,part_number,quantity,unit_price,unit_cost,received_quantity,line_total,status) VALUES(?,?,?,?,?,?,?,?,?,?)",
-                        (estimate_id, "credit", item.description.strip(), item.part_number.strip().upper(), item.quantity, item.unit_cost, item.unit_cost, 0, round(item.quantity * item.unit_cost, 2), "received"),
+                        (
+                            estimate_id,
+                            "credit",
+                            item.description.strip(),
+                            item.part_number.strip().upper(),
+                            item.quantity,
+                            item.unit_cost,
+                            item.unit_cost,
+                            0,
+                            round(item.quantity * item.unit_cost, 2),
+                            "received",
+                        ),
                     )
-                    received_parts.append({"part_number": item.part_number.strip().upper(), "quantity": -item.quantity, "unit_cost": item.unit_cost, "type": "credit"})
+                    received_parts.append(
+                        {
+                            "part_number": item.part_number.strip().upper(),
+                            "quantity": -item.quantity,
+                            "unit_cost": item.unit_cost,
+                            "type": "credit",
+                        }
+                    )
                     continue
 
                 existing = existing_by_part.get(part_key)
@@ -424,10 +540,28 @@ def build_accounting_router(connect: Callable[[], sqlite3.Connection], now: Call
                 else:
                     db.execute(
                         "INSERT INTO estimate_items(estimate_id,kind,description,part_number,quantity,unit_price,unit_cost,received_quantity,line_total,status,received_invoice_number) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-                        (estimate_id, "part", item.description.strip(), item.part_number.strip().upper(), item.quantity, item.unit_cost, item.unit_cost, item.quantity, round(item.quantity * item.unit_cost, 2), "received", invoice.invoice_number.strip()),
+                        (
+                            estimate_id,
+                            "part",
+                            item.description.strip(),
+                            item.part_number.strip().upper(),
+                            item.quantity,
+                            item.unit_cost,
+                            item.unit_cost,
+                            item.quantity,
+                            round(item.quantity * item.unit_cost, 2),
+                            "received",
+                            invoice.invoice_number.strip(),
+                        ),
                     )
                     added_parts.append({"part_number": item.part_number.strip().upper(), "cost": item.unit_cost})
-                received_parts.append({"part_number": item.part_number.strip().upper(), "quantity": item.quantity, "unit_cost": item.unit_cost})
+                received_parts.append(
+                    {
+                        "part_number": item.part_number.strip().upper(),
+                        "quantity": item.quantity,
+                        "unit_cost": item.unit_cost,
+                    }
+                )
 
             totals = db.execute(
                 "SELECT coalesce(sum(line_total),0),coalesce(sum(CASE WHEN kind='part' THEN line_total ELSE 0 END),0) FROM estimate_items WHERE estimate_id=?",
@@ -435,12 +569,21 @@ def build_accounting_router(connect: Callable[[], sqlite3.Connection], now: Call
             ).fetchone()
             estimate_subtotal = round(totals[0], 2)
             estimate_tax = round(totals[1] * float(estimate["tax_rate"]), 2)
-            db.execute("UPDATE estimates SET subtotal=?,tax=?,total=? WHERE id=?", (estimate_subtotal, estimate_tax, round(estimate_subtotal + estimate_tax, 2), estimate_id))
+            db.execute(
+                "UPDATE estimates SET subtotal=?,tax=?,total=? WHERE id=?",
+                (estimate_subtotal, estimate_tax, round(estimate_subtotal + estimate_tax, 2), estimate_id),
+            )
             result = create_ap_invoice_record(
-                db, now,
-                vendor_id=vendor_id, order_id=order_id,
-                invoice_number=invoice.invoice_number, po_number=invoice.po_number,
-                items=invoice.items, subtotal=invoice.subtotal, tax=invoice.tax, total=invoice.total,
+                db,
+                now,
+                vendor_id=vendor_id,
+                order_id=order_id,
+                invoice_number=invoice.invoice_number,
+                po_number=invoice.po_number,
+                items=invoice.items,
+                subtotal=invoice.subtotal,
+                tax=invoice.tax,
+                total=invoice.total,
                 source=invoice.source,
             )
             if result["status"] == "duplicate":

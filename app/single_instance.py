@@ -17,13 +17,14 @@ SeCreateGlobalPrivilege that `Global\\` objects need (standard users on a
 shop PC will not have it). Machine-wide server collisions are a separate
 concern, handled by the port bind in tray_app.
 """
+
 from __future__ import annotations
 
 import ctypes
 import logging
 import threading
+from collections.abc import Callable
 from ctypes import wintypes
-from typing import Callable
 
 log = logging.getLogger("tray")
 
@@ -100,7 +101,7 @@ class SingleInstance:
     def stop(self) -> None:
         self._stop.set()
         if self._event:
-            _kernel32.SetEvent(self._event)          # break the wait immediately
+            _kernel32.SetEvent(self._event)  # break the wait immediately
         if self._thread is not None:
             self._thread.join(timeout=2)
             self._thread = None

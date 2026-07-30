@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-from tests.helpers import make_recon_order, make_recon_vehicle, make_retail_order, save_estimate
+from tests.helpers import (
+    make_recon_order,
+    make_recon_vehicle,
+    make_retail_order,
+    save_estimate,
+)
 
 
 def test_order_parts_flips_quoted_to_ordered(client):
@@ -10,8 +15,22 @@ def test_order_parts_flips_quoted_to_ordered(client):
         client,
         order["id"],
         [
-            {"kind": "part", "description": "Brake pads", "part_number": "BP-1", "quantity": 1, "unit_price": 10, "unit_cost": 10},
-            {"kind": "part", "description": "Rotors", "part_number": "RT-1", "quantity": 1, "unit_price": 30, "unit_cost": 30},
+            {
+                "kind": "part",
+                "description": "Brake pads",
+                "part_number": "BP-1",
+                "quantity": 1,
+                "unit_price": 10,
+                "unit_cost": 10,
+            },
+            {
+                "kind": "part",
+                "description": "Rotors",
+                "part_number": "RT-1",
+                "quantity": 1,
+                "unit_price": 30,
+                "unit_cost": 30,
+            },
             {"kind": "labor", "description": "Install", "quantity": 1, "unit_price": 50, "unit_cost": 50},
         ],
     )
@@ -40,7 +59,16 @@ def test_set_item_status_no_longer_accepts_received(client):
     estimate = save_estimate(
         client,
         order["id"],
-        [{"kind": "part", "description": "Brake pads", "part_number": "BP-1", "quantity": 1, "unit_price": 10, "unit_cost": 10}],
+        [
+            {
+                "kind": "part",
+                "description": "Brake pads",
+                "part_number": "BP-1",
+                "quantity": 1,
+                "unit_price": 10,
+                "unit_cost": 10,
+            }
+        ],
     )
     item_id = estimate["items"][0]["id"]
     res = client.patch(f"/api/orders/{order['id']}/estimate/items/{item_id}/status", json={"status": "received"})
@@ -63,8 +91,22 @@ def test_receive_parts_posts_single_ap_invoice_for_multiple_lines(client):
         client,
         order["id"],
         [
-            {"kind": "part", "description": "Brake pads", "part_number": "BP-1", "quantity": 2, "unit_price": 10, "unit_cost": 10},
-            {"kind": "part", "description": "Rotors", "part_number": "RT-1", "quantity": 1, "unit_price": 30, "unit_cost": 30},
+            {
+                "kind": "part",
+                "description": "Brake pads",
+                "part_number": "BP-1",
+                "quantity": 2,
+                "unit_price": 10,
+                "unit_cost": 10,
+            },
+            {
+                "kind": "part",
+                "description": "Rotors",
+                "part_number": "RT-1",
+                "quantity": 1,
+                "unit_price": 30,
+                "unit_cost": 30,
+            },
         ],
     )
     item_ids = [i["id"] for i in estimate["items"]]
@@ -94,14 +136,29 @@ def test_receive_parts_rejects_negative_cost_override(client):
     vehicle = make_recon_vehicle(client)
     order = make_recon_order(client, vehicle["id"])
     estimate = save_estimate(
-        client, order["id"],
-        [{"kind": "part", "description": "Brake pads", "part_number": "BP-1", "quantity": 1, "unit_price": 10, "unit_cost": 10}],
+        client,
+        order["id"],
+        [
+            {
+                "kind": "part",
+                "description": "Brake pads",
+                "part_number": "BP-1",
+                "quantity": 1,
+                "unit_price": 10,
+                "unit_cost": 10,
+            }
+        ],
     )
     item_id = estimate["items"][0]["id"]
 
     res = client.post(
         f"/api/orders/{order['id']}/estimate/receive-parts",
-        json={"item_ids": [item_id], "vendor_id": vendor["id"], "invoice_number": "INV-1", "cost_overrides": {str(item_id): -5}},
+        json={
+            "item_ids": [item_id],
+            "vendor_id": vendor["id"],
+            "invoice_number": "INV-1",
+            "cost_overrides": {str(item_id): -5},
+        },
     )
     assert res.status_code == 422
 
@@ -113,9 +170,25 @@ def test_parts_endpoints_respect_invoiced_estimate_lock(client):
     fixed invoice total silently drifts from what the shop keeps spending."""
     vendor = client.post("/api/vendors", json={"name": "WorldPac"}).json()
     order = make_retail_order(client)
-    estimate = save_estimate(client, order["id"], [{"kind": "part", "description": "Brake pads", "part_number": "BP-1", "quantity": 1, "unit_price": 50, "unit_cost": 40}])
+    estimate = save_estimate(
+        client,
+        order["id"],
+        [
+            {
+                "kind": "part",
+                "description": "Brake pads",
+                "part_number": "BP-1",
+                "quantity": 1,
+                "unit_price": 50,
+                "unit_cost": 40,
+            }
+        ],
+    )
     item_id = estimate["items"][0]["id"]
-    client.post(f"/api/orders/{order['id']}/authorization", json={"status": "approved", "approved_by": "Jamie", "method": "in_person"})
+    client.post(
+        f"/api/orders/{order['id']}/authorization",
+        json={"status": "approved", "approved_by": "Jamie", "method": "in_person"},
+    )
     res = client.post(f"/api/orders/{order['id']}/invoice", json={"actor": "t"})
     assert res.status_code == 201, res.text
 
@@ -125,7 +198,10 @@ def test_parts_endpoints_respect_invoiced_estimate_lock(client):
     res = client.patch(f"/api/orders/{order['id']}/estimate/items/{item_id}/status", json={"status": "ordered"})
     assert res.status_code == 409
 
-    res = client.post(f"/api/orders/{order['id']}/estimate/receive-parts", json={"item_ids": [item_id], "vendor_id": vendor["id"], "invoice_number": "INV-1"})
+    res = client.post(
+        f"/api/orders/{order['id']}/estimate/receive-parts",
+        json={"item_ids": [item_id], "vendor_id": vendor["id"], "invoice_number": "INV-1"},
+    )
     assert res.status_code == 409
 
 
@@ -135,7 +211,16 @@ def test_receive_parts_requires_known_vendor(client):
     estimate = save_estimate(
         client,
         order["id"],
-        [{"kind": "part", "description": "Brake pads", "part_number": "BP-1", "quantity": 1, "unit_price": 10, "unit_cost": 10}],
+        [
+            {
+                "kind": "part",
+                "description": "Brake pads",
+                "part_number": "BP-1",
+                "quantity": 1,
+                "unit_price": 10,
+                "unit_cost": 10,
+            }
+        ],
     )
     item_id = estimate["items"][0]["id"]
     res = client.post(
@@ -152,7 +237,16 @@ def test_receive_parts_requires_invoice_number(client):
     estimate = save_estimate(
         client,
         order["id"],
-        [{"kind": "part", "description": "Brake pads", "part_number": "BP-1", "quantity": 1, "unit_price": 10, "unit_cost": 10}],
+        [
+            {
+                "kind": "part",
+                "description": "Brake pads",
+                "part_number": "BP-1",
+                "quantity": 1,
+                "unit_price": 10,
+                "unit_cost": 10,
+            }
+        ],
     )
     item_id = estimate["items"][0]["id"]
     res = client.post(
@@ -166,8 +260,19 @@ def test_core_charge_is_saved_and_listed_in_cores(client):
     vehicle = make_recon_vehicle(client)
     order = make_recon_order(client, vehicle["id"])
     estimate = save_estimate(
-        client, order["id"],
-        [{"kind": "part", "description": "Caliper", "part_number": "CAL-1", "quantity": 1, "unit_price": 80, "unit_cost": 80, "core_charge": 25}],
+        client,
+        order["id"],
+        [
+            {
+                "kind": "part",
+                "description": "Caliper",
+                "part_number": "CAL-1",
+                "quantity": 1,
+                "unit_price": 80,
+                "unit_cost": 80,
+                "core_charge": 25,
+            }
+        ],
     )
     item = estimate["items"][0]
     assert item["core_charge"] == 25
@@ -228,8 +333,18 @@ def test_core_return_rejects_line_with_no_core_charge(client):
     vehicle = make_recon_vehicle(client)
     order = make_recon_order(client, vehicle["id"])
     estimate = save_estimate(
-        client, order["id"],
-        [{"kind": "part", "description": "Brake pads", "part_number": "BP-1", "quantity": 1, "unit_price": 10, "unit_cost": 10}],
+        client,
+        order["id"],
+        [
+            {
+                "kind": "part",
+                "description": "Brake pads",
+                "part_number": "BP-1",
+                "quantity": 1,
+                "unit_price": 10,
+                "unit_cost": 10,
+            }
+        ],
     )
     item_id = estimate["items"][0]["id"]
     res = client.patch(f"/api/orders/{order['id']}/estimate/items/{item_id}/core-return", json={})
@@ -241,8 +356,18 @@ def test_part_return_toggles_flag_and_drops_from_actual_cost(client):
     vehicle = make_recon_vehicle(client)
     order = make_recon_order(client, vehicle["id"])
     estimate = save_estimate(
-        client, order["id"],
-        [{"kind": "part", "description": "Brake pads", "part_number": "BP-1", "quantity": 1, "unit_price": 10, "unit_cost": 10}],
+        client,
+        order["id"],
+        [
+            {
+                "kind": "part",
+                "description": "Brake pads",
+                "part_number": "BP-1",
+                "quantity": 1,
+                "unit_price": 10,
+                "unit_cost": 10,
+            }
+        ],
     )
     item_id = estimate["items"][0]["id"]
     client.post(
@@ -289,9 +414,19 @@ def test_returning_the_new_part_drops_its_pending_core(client):
     vehicle = make_recon_vehicle(client)
     order = make_recon_order(client, vehicle["id"])
     estimate = save_estimate(
-        client, order["id"],
-        [{"kind": "part", "description": "Alternator", "part_number": "ALT-1", "quantity": 1,
-          "unit_price": 150, "unit_cost": 150, "core_charge": 45}],
+        client,
+        order["id"],
+        [
+            {
+                "kind": "part",
+                "description": "Alternator",
+                "part_number": "ALT-1",
+                "quantity": 1,
+                "unit_price": 150,
+                "unit_cost": 150,
+                "core_charge": 45,
+            }
+        ],
     )
     item_id = estimate["items"][0]["id"]
     client.post(
@@ -320,9 +455,19 @@ def test_a_core_already_sent_back_survives_a_later_part_return(client):
     vendor = client.post("/api/vendors", json={"name": "WorldPac"}).json()
     order = make_retail_order(client)
     estimate = save_estimate(
-        client, order["id"],
-        [{"kind": "part", "description": "Caliper", "part_number": "CAL-9", "quantity": 1,
-          "unit_price": 80, "unit_cost": 80, "core_charge": 25}],
+        client,
+        order["id"],
+        [
+            {
+                "kind": "part",
+                "description": "Caliper",
+                "part_number": "CAL-9",
+                "quantity": 1,
+                "unit_price": 80,
+                "unit_cost": 80,
+                "core_charge": 25,
+            }
+        ],
     )
     item_id = estimate["items"][0]["id"]
     client.post(
@@ -344,8 +489,18 @@ def test_part_pickup_tracks_whether_the_vendor_has_collected_it(client):
     vehicle = make_recon_vehicle(client)
     order = make_recon_order(client, vehicle["id"])
     estimate = save_estimate(
-        client, order["id"],
-        [{"kind": "part", "description": "Alternator", "part_number": "ALT-1", "quantity": 1, "unit_price": 150, "unit_cost": 150}],
+        client,
+        order["id"],
+        [
+            {
+                "kind": "part",
+                "description": "Alternator",
+                "part_number": "ALT-1",
+                "quantity": 1,
+                "unit_price": 150,
+                "unit_cost": 150,
+            }
+        ],
     )
     item_id = estimate["items"][0]["id"]
     client.post(
@@ -386,8 +541,18 @@ def test_posting_a_credit_stamps_pickup_on_a_part_still_marked_pending(client):
     vendor = client.post("/api/vendors", json={"name": "WorldPac"}).json()
     order = make_retail_order(client)
     estimate = save_estimate(
-        client, order["id"],
-        [{"kind": "part", "description": "Starter", "part_number": "ST-1", "quantity": 1, "unit_price": 90, "unit_cost": 90}],
+        client,
+        order["id"],
+        [
+            {
+                "kind": "part",
+                "description": "Starter",
+                "part_number": "ST-1",
+                "quantity": 1,
+                "unit_price": 90,
+                "unit_cost": 90,
+            }
+        ],
     )
     item_id = estimate["items"][0]["id"]
     client.post(
@@ -411,8 +576,18 @@ def test_part_return_rejects_line_that_was_never_received(client):
     vehicle = make_recon_vehicle(client)
     order = make_recon_order(client, vehicle["id"])
     estimate = save_estimate(
-        client, order["id"],
-        [{"kind": "part", "description": "Brake pads", "part_number": "BP-1", "quantity": 1, "unit_price": 10, "unit_cost": 10}],
+        client,
+        order["id"],
+        [
+            {
+                "kind": "part",
+                "description": "Brake pads",
+                "part_number": "BP-1",
+                "quantity": 1,
+                "unit_price": 10,
+                "unit_cost": 10,
+            }
+        ],
     )
     item_id = estimate["items"][0]["id"]
     res = client.patch(f"/api/orders/{order['id']}/estimate/items/{item_id}/part-return", json={})
@@ -425,13 +600,29 @@ def test_part_return_allowed_after_estimate_is_invoiced(client):
     assert_estimate_editable the way order-parts/receive-parts are."""
     vendor = client.post("/api/vendors", json={"name": "WorldPac"}).json()
     order = make_retail_order(client)
-    estimate = save_estimate(client, order["id"], [{"kind": "part", "description": "Brake pads", "part_number": "BP-1", "quantity": 1, "unit_price": 50, "unit_cost": 40}])
+    estimate = save_estimate(
+        client,
+        order["id"],
+        [
+            {
+                "kind": "part",
+                "description": "Brake pads",
+                "part_number": "BP-1",
+                "quantity": 1,
+                "unit_price": 50,
+                "unit_cost": 40,
+            }
+        ],
+    )
     item_id = estimate["items"][0]["id"]
     client.post(
         f"/api/orders/{order['id']}/estimate/receive-parts",
         json={"item_ids": [item_id], "vendor_id": vendor["id"], "invoice_number": "INV-1"},
     )
-    client.post(f"/api/orders/{order['id']}/authorization", json={"status": "approved", "approved_by": "Jamie", "method": "in_person"})
+    client.post(
+        f"/api/orders/{order['id']}/authorization",
+        json={"status": "approved", "approved_by": "Jamie", "method": "in_person"},
+    )
     res = client.post(f"/api/orders/{order['id']}/invoice", json={"actor": "t"})
     assert res.status_code == 201, res.text
 
@@ -445,8 +636,18 @@ def test_post_return_credit_posts_negative_ap_invoice_and_lists_in_returns(clien
     vehicle = make_recon_vehicle(client)
     order = make_recon_order(client, vehicle["id"])
     estimate = save_estimate(
-        client, order["id"],
-        [{"kind": "part", "description": "Alternator", "part_number": "ALT-1", "quantity": 1, "unit_price": 150, "unit_cost": 150}],
+        client,
+        order["id"],
+        [
+            {
+                "kind": "part",
+                "description": "Alternator",
+                "part_number": "ALT-1",
+                "quantity": 1,
+                "unit_price": 150,
+                "unit_cost": 150,
+            }
+        ],
     )
     item_id = estimate["items"][0]["id"]
     client.post(
@@ -497,8 +698,18 @@ def test_post_return_credit_rejects_part_not_marked_returned(client):
     vehicle = make_recon_vehicle(client)
     order = make_recon_order(client, vehicle["id"])
     estimate = save_estimate(
-        client, order["id"],
-        [{"kind": "part", "description": "Brake pads", "part_number": "BP-1", "quantity": 1, "unit_price": 10, "unit_cost": 10}],
+        client,
+        order["id"],
+        [
+            {
+                "kind": "part",
+                "description": "Brake pads",
+                "part_number": "BP-1",
+                "quantity": 1,
+                "unit_price": 10,
+                "unit_cost": 10,
+            }
+        ],
     )
     item_id = estimate["items"][0]["id"]
     client.post(
@@ -519,8 +730,19 @@ def test_move_item_to_a_different_ticket_recomputes_both_totals(client):
     order_b = make_recon_order(client, vehicle_b["id"])
 
     estimate_a = save_estimate(
-        client, order_a["id"],
-        [{"kind": "part", "description": "Alternator", "part_number": "ALT-1", "quantity": 1, "unit_price": 150, "unit_cost": 150, "core_charge": 40}],
+        client,
+        order_a["id"],
+        [
+            {
+                "kind": "part",
+                "description": "Alternator",
+                "part_number": "ALT-1",
+                "quantity": 1,
+                "unit_price": 150,
+                "unit_cost": 150,
+                "core_charge": 40,
+            }
+        ],
     )
     item_id = estimate_a["items"][0]["id"]
 
@@ -551,24 +773,54 @@ def test_move_item_rejects_same_order(client):
     vehicle = make_recon_vehicle(client)
     order = make_recon_order(client, vehicle["id"])
     estimate = save_estimate(
-        client, order["id"],
-        [{"kind": "part", "description": "Brake pads", "part_number": "BP-1", "quantity": 1, "unit_price": 10, "unit_cost": 10}],
+        client,
+        order["id"],
+        [
+            {
+                "kind": "part",
+                "description": "Brake pads",
+                "part_number": "BP-1",
+                "quantity": 1,
+                "unit_price": 10,
+                "unit_cost": 10,
+            }
+        ],
     )
     item_id = estimate["items"][0]["id"]
-    res = client.patch(f"/api/orders/{order['id']}/estimate/items/{item_id}/move", json={"target_order_id": order["id"]})
+    res = client.patch(
+        f"/api/orders/{order['id']}/estimate/items/{item_id}/move", json={"target_order_id": order["id"]}
+    )
     assert res.status_code == 400
 
 
 def test_move_item_blocked_once_either_side_is_invoiced(client):
     order_a = make_retail_order(client)
-    estimate = save_estimate(client, order_a["id"], [{"kind": "part", "description": "Brake pads", "part_number": "BP-1", "quantity": 1, "unit_price": 50, "unit_cost": 40}])
+    estimate = save_estimate(
+        client,
+        order_a["id"],
+        [
+            {
+                "kind": "part",
+                "description": "Brake pads",
+                "part_number": "BP-1",
+                "quantity": 1,
+                "unit_price": 50,
+                "unit_cost": 40,
+            }
+        ],
+    )
     item_id = estimate["items"][0]["id"]
-    client.post(f"/api/orders/{order_a['id']}/authorization", json={"status": "approved", "approved_by": "Jamie", "method": "in_person"})
+    client.post(
+        f"/api/orders/{order_a['id']}/authorization",
+        json={"status": "approved", "approved_by": "Jamie", "method": "in_person"},
+    )
     res = client.post(f"/api/orders/{order_a['id']}/invoice", json={"actor": "t"})
     assert res.status_code == 201, res.text
 
     order_b = make_retail_order(client, concern="Different job")
-    res = client.patch(f"/api/orders/{order_a['id']}/estimate/items/{item_id}/move", json={"target_order_id": order_b["id"]})
+    res = client.patch(
+        f"/api/orders/{order_a['id']}/estimate/items/{item_id}/move", json={"target_order_id": order_b["id"]}
+    )
     assert res.status_code == 409
 
 
@@ -583,8 +835,18 @@ def test_move_item_can_reassign_its_vendor_invoice(client):
     order_b = make_recon_order(client, vehicle_b["id"])
 
     estimate = save_estimate(
-        client, order_a["id"],
-        [{"kind": "part", "description": "Alternator", "part_number": "ALT-1", "quantity": 1, "unit_price": 150, "unit_cost": 150}],
+        client,
+        order_a["id"],
+        [
+            {
+                "kind": "part",
+                "description": "Alternator",
+                "part_number": "ALT-1",
+                "quantity": 1,
+                "unit_price": 150,
+                "unit_cost": 150,
+            }
+        ],
     )
     item_id = estimate["items"][0]["id"]
     res = client.post(
@@ -620,8 +882,18 @@ def test_move_item_without_reassign_leaves_invoice_on_original_order(client):
     order_b = make_recon_order(client, vehicle_b["id"])
 
     estimate = save_estimate(
-        client, order_a["id"],
-        [{"kind": "part", "description": "Alternator", "part_number": "ALT-1", "quantity": 1, "unit_price": 150, "unit_cost": 150}],
+        client,
+        order_a["id"],
+        [
+            {
+                "kind": "part",
+                "description": "Alternator",
+                "part_number": "ALT-1",
+                "quantity": 1,
+                "unit_price": 150,
+                "unit_cost": 150,
+            }
+        ],
     )
     item_id = estimate["items"][0]["id"]
     client.post(
@@ -645,10 +917,25 @@ def test_related_invoice_warns_when_it_covers_other_items_still_on_the_ticket(cl
     vehicle = make_recon_vehicle(client)
     order = make_recon_order(client, vehicle["id"])
     estimate = save_estimate(
-        client, order["id"],
+        client,
+        order["id"],
         [
-            {"kind": "part", "description": "Alternator", "part_number": "ALT-1", "quantity": 1, "unit_price": 150, "unit_cost": 150},
-            {"kind": "part", "description": "Belt", "part_number": "BLT-1", "quantity": 1, "unit_price": 20, "unit_cost": 20},
+            {
+                "kind": "part",
+                "description": "Alternator",
+                "part_number": "ALT-1",
+                "quantity": 1,
+                "unit_price": 150,
+                "unit_cost": 150,
+            },
+            {
+                "kind": "part",
+                "description": "Belt",
+                "part_number": "BLT-1",
+                "quantity": 1,
+                "unit_price": 20,
+                "unit_cost": 20,
+            },
         ],
     )
     item_ids = [i["id"] for i in estimate["items"]]
@@ -669,7 +956,16 @@ def test_receive_parts_wrong_order_404(client):
     estimate = save_estimate(
         client,
         order["id"],
-        [{"kind": "part", "description": "Brake pads", "part_number": "BP-1", "quantity": 1, "unit_price": 10, "unit_cost": 10}],
+        [
+            {
+                "kind": "part",
+                "description": "Brake pads",
+                "part_number": "BP-1",
+                "quantity": 1,
+                "unit_price": 10,
+                "unit_cost": 10,
+            }
+        ],
     )
     item_id = estimate["items"][0]["id"]
     res = client.post(
@@ -690,7 +986,16 @@ def test_receive_parts_duplicate_invoice_number_shared_with_agent_path(client):
     estimate = save_estimate(
         client,
         order["id"],
-        [{"kind": "part", "description": "Brake pads", "part_number": "BP-1", "quantity": 1, "unit_price": 10, "unit_cost": 10}],
+        [
+            {
+                "kind": "part",
+                "description": "Brake pads",
+                "part_number": "BP-1",
+                "quantity": 1,
+                "unit_price": 10,
+                "unit_cost": 10,
+            }
+        ],
     )
     item_id = estimate["items"][0]["id"]
 
@@ -707,8 +1012,12 @@ def test_receive_parts_duplicate_invoice_number_shared_with_agent_path(client):
             "vendor_name": "WorldPac",
             "invoice_number": "INV-DUP",
             "po_number": order["number"],
-            "subtotal": 10, "tax": 0, "total": 10,
-            "items": [{"part_number": "BP-1", "description": "Brake pads", "quantity": 1, "unit_cost": 10, "kind": "part"}],
+            "subtotal": 10,
+            "tax": 0,
+            "total": 10,
+            "items": [
+                {"part_number": "BP-1", "description": "Brake pads", "quantity": 1, "unit_cost": 10, "kind": "part"}
+            ],
         },
     )
     assert res.json()["status"] == "duplicate"
@@ -721,7 +1030,16 @@ def test_set_item_status_wrong_order_404(client):
     estimate = save_estimate(
         client,
         order["id"],
-        [{"kind": "part", "description": "Brake pads", "part_number": "BP-1", "quantity": 1, "unit_price": 10, "unit_cost": 10}],
+        [
+            {
+                "kind": "part",
+                "description": "Brake pads",
+                "part_number": "BP-1",
+                "quantity": 1,
+                "unit_price": 10,
+                "unit_cost": 10,
+            }
+        ],
     )
     item_id = estimate["items"][0]["id"]
     res = client.patch(f"/api/orders/{other_order['id']}/estimate/items/{item_id}/status", json={"status": "ordered"})

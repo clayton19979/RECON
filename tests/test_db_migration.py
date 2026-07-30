@@ -19,7 +19,16 @@ def test_status_migration_maps_old_values_and_is_idempotent(tmp_path):
             (customer_id, 2020, "Kia", "Soul", "2026-01-01T00:00:00"),
         ).lastrowid
 
-        old_statuses = ["draft", "inspection", "awaiting_approval", "approved", "in_progress", "completed", "closed", "cancelled"]
+        old_statuses = [
+            "draft",
+            "inspection",
+            "awaiting_approval",
+            "approved",
+            "in_progress",
+            "completed",
+            "closed",
+            "cancelled",
+        ]
         order_ids: dict[str, int] = {}
         for i, status in enumerate(old_statuses):
             order_id = db.execute(
@@ -156,7 +165,7 @@ def test_last_activity_backfills_from_the_activity_log_and_is_idempotent(tmp_pat
             return order_id
 
         worked = legacy_order("RO-ACT-0001", "2026-01-05T08:00:00")
-        untouched = legacy_order("RO-ACT-0002", "2026-02-09T08:00:00")
+        legacy_order("RO-ACT-0002", "2026-02-09T08:00:00")  # gets no activity rows
         for when in ("2026-01-06T10:00:00", "2026-03-11T16:30:00", "2026-02-02T09:00:00"):
             db.execute(
                 "INSERT INTO activity_events(order_id,action,actor,created_at) VALUES(?,?,?,?)",

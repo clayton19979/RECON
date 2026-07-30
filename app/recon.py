@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime, timezone
-from typing import Callable, Literal
+from collections.abc import Callable
+from datetime import UTC, datetime
+from typing import Literal
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
@@ -22,8 +23,8 @@ def age_days(created_at: str) -> int:
     except (TypeError, ValueError):
         return 0
     if created.tzinfo is None:
-        created = created.replace(tzinfo=timezone.utc)
-    return (datetime.now(timezone.utc) - created).days
+        created = created.replace(tzinfo=UTC)
+    return (datetime.now(UTC) - created).days
 
 
 def last_activity(db: sqlite3.Connection, column: str, ref_id: int, fallback: str, segment: str | None = None) -> str:
@@ -65,7 +66,9 @@ def idle_days(last_activity_at: str) -> int:
 STALLED_AFTER_DAYS = 7
 
 
-def last_activity_detail(db: sqlite3.Connection, column: str, ref_id: int, fallback: str, segment: str | None = None) -> dict:
+def last_activity_detail(
+    db: sqlite3.Connection, column: str, ref_id: int, fallback: str, segment: str | None = None
+) -> dict:
     """When work last happened on this vehicle, and -- where we can honestly
     say -- what it was and who did it.
 
@@ -95,6 +98,7 @@ def last_activity_detail(db: sqlite3.Connection, column: str, ref_id: int, fallb
         detail["action"] = row["action"] or ""
         detail["actor"] = row["actor"] or ""
     return detail
+
 
 RECON_STATUSES = {"acquired", "in_repair", "ready", "sold", "retained"}
 WE_OWE_STATUSES = {"open", "fulfilled", "waived"}
@@ -184,6 +188,7 @@ class WeOwePaymentIn(BaseModel):
     """Customers are sometimes talked into putting money down toward a
     we-owe repair -- tracked separately from shop cost so the net amount
     the shop is actually out of pocket is visible, not just gross spend."""
+
     amount: float = Field(gt=0)
     method: Literal["cash", "card", "check", "bank", "other"] = "cash"
     note: str = ""
@@ -333,12 +338,18 @@ def unit_lifetime(db: sqlite3.Connection, unit_id: int) -> dict:
     if unit is None:
         raise HTTPException(404, "Vehicle unit not found")
 
-    recon_ids = [r["id"] for r in db.execute(
-        "SELECT rv.id FROM recon_vehicles rv JOIN vehicles v ON v.id=rv.vehicle_id WHERE v.unit_id=?", (unit_id,)
-    )]
-    we_owe_ids = [r["id"] for r in db.execute(
-        "SELECT w.id FROM we_owe_items w JOIN vehicles v ON v.id=w.vehicle_id WHERE v.unit_id=?", (unit_id,)
-    )]
+    recon_ids = [
+        r["id"]
+        for r in db.execute(
+            "SELECT rv.id FROM recon_vehicles rv JOIN vehicles v ON v.id=rv.vehicle_id WHERE v.unit_id=?", (unit_id,)
+        )
+    ]
+    we_owe_ids = [
+        r["id"]
+        for r in db.execute(
+            "SELECT w.id FROM we_owe_items w JOIN vehicles v ON v.id=w.vehicle_id WHERE v.unit_id=?", (unit_id,)
+        )
+    ]
 
     recon_rollups = [cost_rollup(db, "recon_vehicle_id", rid) for rid in recon_ids]
     we_owe_rollups = [cost_rollup(db, "we_owe_id", wid) for wid in we_owe_ids]
@@ -403,7 +414,9 @@ def assert_vehicle_editable(db: sqlite3.Connection, order_row: sqlite3.Row) -> N
     if order_row["voided"]:
         raise HTTPException(409, "This repair order has been voided and can no longer be edited")
     if order_row["recon_vehicle_id"]:
-        row = db.execute("SELECT archived_at FROM recon_vehicles WHERE id=?", (order_row["recon_vehicle_id"],)).fetchone()
+        row = db.execute(
+            "SELECT archived_at FROM recon_vehicles WHERE id=?", (order_row["recon_vehicle_id"],)
+        ).fetchone()
         if row:
             _assert_not_archived(row)
     if order_row["we_owe_id"]:
@@ -424,7 +437,13 @@ def technician_names(db: sqlite3.Connection, order_ids: list[int]) -> list[str]:
     return [row["name"] for row in rows]
 
 
-def vehicle_board_rows(db: sqlite3.Connection, start: str | None = None, end: str | None = None, segment: str | None = None, archived: bool = False) -> list[dict]:
+def vehicle_board_rows(
+    db: sqlite3.Connection,
+    start: str | None = None,
+    end: str | None = None,
+    segment: str | None = None,
+    archived: bool = False,
+) -> list[dict]:
     """The unified Vehicles list: recon + we-owe merged, one row per vehicle,
     with rolled-up cost and assigned technicians. This is the primary view
     of the app and also backs the date-range vehicle-spend report.
@@ -456,38 +475,40 @@ def vehicle_board_rows(db: sqlite3.Connection, start: str | None = None, end: st
             has_closed_order = any(o["status"] == "complete" for o in rollup["orders"])
             display_status = (active_order or latest_order)["status"] if (active_order or latest_order) else "acquired"
             activity_at = last_activity(db, "recon_vehicle_id", row["id"], row["created_at"])
-            result.append({
-                "segment": "recon",
-                "recon_id": row["id"],
-                "we_owe_id": None,
-                "stock_number": row["stock_number"],
-                "vehicle": f"{row['year']} {row['make']} {row['model']}",
-                "vin": row["vin"],
-                "status": display_status,
-                "status_bucket": "finished" if (active_order is None and has_closed_order) else "in_progress",
-                # From the unit, not recon_vehicles' legacy column of the same
-                # name -- one car, one purchase price, whichever half of its
-                # life you happen to be looking at.
-                "purchase_price": row["unit_purchase_price"] or 0,
-                "sale_price": row["unit_sale_price"],
-                "unit_id": row["unit_id"],
-                "actual_cost": rollup["total_cost"],
-                "quoted_cost": rollup["quoted_cost"],
-                "labor_hours": rollup["labor_hours"],
-                "parts_pending": rollup["parts_pending"],
-                "parts_pending_value": rollup["parts_pending_value"],
-                "technicians": technician_names(db, order_ids),
-                # The ticket a board-level action should attach itself to:
-                # the open one if there is one, else the most recent, else
-                # nothing (a car with no ticket yet). Tasks created off the
-                # board link through this, so "follow up on that stalled car"
-                # lands on the RO rather than floating unattached.
-                "order_id": (active_order or latest_order)["id"] if (active_order or latest_order) else None,
-                "updated_at": row["updated_at"],
-                "age_days": age_days(row["created_at"]),
-                "last_activity_at": activity_at,
-                "idle_days": idle_days(activity_at),
-            })
+            result.append(
+                {
+                    "segment": "recon",
+                    "recon_id": row["id"],
+                    "we_owe_id": None,
+                    "stock_number": row["stock_number"],
+                    "vehicle": f"{row['year']} {row['make']} {row['model']}",
+                    "vin": row["vin"],
+                    "status": display_status,
+                    "status_bucket": "finished" if (active_order is None and has_closed_order) else "in_progress",
+                    # From the unit, not recon_vehicles' legacy column of the same
+                    # name -- one car, one purchase price, whichever half of its
+                    # life you happen to be looking at.
+                    "purchase_price": row["unit_purchase_price"] or 0,
+                    "sale_price": row["unit_sale_price"],
+                    "unit_id": row["unit_id"],
+                    "actual_cost": rollup["total_cost"],
+                    "quoted_cost": rollup["quoted_cost"],
+                    "labor_hours": rollup["labor_hours"],
+                    "parts_pending": rollup["parts_pending"],
+                    "parts_pending_value": rollup["parts_pending_value"],
+                    "technicians": technician_names(db, order_ids),
+                    # The ticket a board-level action should attach itself to:
+                    # the open one if there is one, else the most recent, else
+                    # nothing (a car with no ticket yet). Tasks created off the
+                    # board link through this, so "follow up on that stalled car"
+                    # lands on the RO rather than floating unattached.
+                    "order_id": (active_order or latest_order)["id"] if (active_order or latest_order) else None,
+                    "updated_at": row["updated_at"],
+                    "age_days": age_days(row["created_at"]),
+                    "last_activity_at": activity_at,
+                    "idle_days": idle_days(activity_at),
+                }
+            )
     if segment in (None, "we_owe"):
         rows = db.execute(
             """SELECT w.*, c.name customer_name, v.year, v.make, v.model, v.vin, v.unit_id,
@@ -510,49 +531,56 @@ def vehicle_board_rows(db: sqlite3.Connection, start: str | None = None, end: st
             # ticket) -- but while it's still open, what's actually changing
             # day to day is the linked ticket's own workflow status, so that's
             # what the board shows, same as recon already does.
-            display_status = row["status"] if row["status"] != "open" else (
-                (active_order or latest_order)["status"] if (active_order or latest_order) else "open"
+            display_status = (
+                row["status"]
+                if row["status"] != "open"
+                else ((active_order or latest_order)["status"] if (active_order or latest_order) else "open")
             )
-            customer_paid = round(db.execute(
-                "SELECT coalesce(sum(amount),0) FROM we_owe_payments WHERE we_owe_id=?", (row["id"],)
-            ).fetchone()[0], 2)
+            customer_paid = round(
+                db.execute(
+                    "SELECT coalesce(sum(amount),0) FROM we_owe_payments WHERE we_owe_id=?", (row["id"],)
+                ).fetchone()[0],
+                2,
+            )
             activity_at = last_activity(db, "we_owe_id", row["id"], row["created_at"])
-            result.append({
-                "segment": "we_owe",
-                "recon_id": None,
-                "we_owe_id": row["id"],
-                "stock_number": row["lot_stock_number"] or None,
-                "vehicle": f"{row['year']} {row['make']} {row['model']}",
-                "vin": row["vin"],
-                "customer_name": row["customer_name"],
-                "description": row["description"],
-                "status": display_status,
-                "status_bucket": "finished" if row["status"] in ("fulfilled", "waived") else "in_progress",
-                # A we-owe car has a purchase price too -- it's just usually
-                # entered here, because the shop bought and recon'd it long
-                # before RECON ever saw it.
-                "purchase_price": row["unit_purchase_price"] or 0,
-                "sale_price": row["unit_sale_price"],
-                "unit_id": row["unit_id"],
-                "actual_cost": rollup["total_cost"],
-                "quoted_cost": rollup["quoted_cost"],
-                "labor_hours": rollup["labor_hours"],
-                "parts_pending": rollup["parts_pending"],
-                "parts_pending_value": rollup["parts_pending_value"],
-                "customer_paid": customer_paid,
-                "net_cost": round(rollup["total_cost"] - customer_paid, 2),
-                "technicians": technician_names(db, order_ids),
-                # The ticket a board-level action should attach itself to:
-                # the open one if there is one, else the most recent, else
-                # nothing (a car with no ticket yet). Tasks created off the
-                # board link through this, so "follow up on that stalled car"
-                # lands on the RO rather than floating unattached.
-                "order_id": (active_order or latest_order)["id"] if (active_order or latest_order) else None,
-                "updated_at": row["updated_at"],
-                "age_days": age_days(row["created_at"]),
-                "last_activity_at": activity_at,
-                "idle_days": idle_days(activity_at),
-            })
+            result.append(
+                {
+                    "segment": "we_owe",
+                    "recon_id": None,
+                    "we_owe_id": row["id"],
+                    "stock_number": row["lot_stock_number"] or None,
+                    "vehicle": f"{row['year']} {row['make']} {row['model']}",
+                    "vin": row["vin"],
+                    "customer_name": row["customer_name"],
+                    "description": row["description"],
+                    "status": display_status,
+                    "status_bucket": "finished" if row["status"] in ("fulfilled", "waived") else "in_progress",
+                    # A we-owe car has a purchase price too -- it's just usually
+                    # entered here, because the shop bought and recon'd it long
+                    # before RECON ever saw it.
+                    "purchase_price": row["unit_purchase_price"] or 0,
+                    "sale_price": row["unit_sale_price"],
+                    "unit_id": row["unit_id"],
+                    "actual_cost": rollup["total_cost"],
+                    "quoted_cost": rollup["quoted_cost"],
+                    "labor_hours": rollup["labor_hours"],
+                    "parts_pending": rollup["parts_pending"],
+                    "parts_pending_value": rollup["parts_pending_value"],
+                    "customer_paid": customer_paid,
+                    "net_cost": round(rollup["total_cost"] - customer_paid, 2),
+                    "technicians": technician_names(db, order_ids),
+                    # The ticket a board-level action should attach itself to:
+                    # the open one if there is one, else the most recent, else
+                    # nothing (a car with no ticket yet). Tasks created off the
+                    # board link through this, so "follow up on that stalled car"
+                    # lands on the RO rather than floating unattached.
+                    "order_id": (active_order or latest_order)["id"] if (active_order or latest_order) else None,
+                    "updated_at": row["updated_at"],
+                    "age_days": age_days(row["created_at"]),
+                    "last_activity_at": activity_at,
+                    "idle_days": idle_days(activity_at),
+                }
+            )
     return result
 
 
@@ -625,9 +653,10 @@ def build_recon_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
         detail["total_cost"] = rollup["total_cost"]
         detail["quoted_cost"] = rollup["quoted_cost"]
         detail["labor_hours"] = rollup["labor_hours"]
-        payments = [dict(p) for p in db.execute(
-            "SELECT * FROM we_owe_payments WHERE we_owe_id=? ORDER BY id DESC", (we_owe_id,)
-        )]
+        payments = [
+            dict(p)
+            for p in db.execute("SELECT * FROM we_owe_payments WHERE we_owe_id=? ORDER BY id DESC", (we_owe_id,))
+        ]
         detail["payments"] = payments
         detail["customer_paid"] = round(sum(p["amount"] for p in payments), 2)
         detail["net_cost"] = round(detail["total_cost"] - detail["customer_paid"], 2)
@@ -654,11 +683,34 @@ def build_recon_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
             ts = now_fn()
             vehicle_cur = db.execute(
                 "INSERT INTO vehicles(customer_id,year,make,model,vin,mileage,odometer_broken,plate,plate_state,trim,engine,color,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (RECON_SHOP_CUSTOMER_ID, item.year, item.make.strip(), item.model.strip(), item.vin.strip().upper(), item.mileage, int(item.odometer_broken), "", "", item.trim.strip(), item.engine.strip(), item.color.strip(), ts),
+                (
+                    RECON_SHOP_CUSTOMER_ID,
+                    item.year,
+                    item.make.strip(),
+                    item.model.strip(),
+                    item.vin.strip().upper(),
+                    item.mileage,
+                    int(item.odometer_broken),
+                    "",
+                    "",
+                    item.trim.strip(),
+                    item.engine.strip(),
+                    item.color.strip(),
+                    ts,
+                ),
             )
             recon_cur = db.execute(
                 "INSERT INTO recon_vehicles(vehicle_id,stock_number,acquisition_source,acquisition_date,purchase_price,notes,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",
-                (vehicle_cur.lastrowid, stock_number, item.acquisition_source.strip(), item.acquisition_date.strip(), item.purchase_price, item.notes.strip(), ts, ts),
+                (
+                    vehicle_cur.lastrowid,
+                    stock_number,
+                    item.acquisition_source.strip(),
+                    item.acquisition_date.strip(),
+                    item.purchase_price,
+                    item.notes.strip(),
+                    ts,
+                    ts,
+                ),
             )
             # What the car cost belongs to the car, not to this recon episode:
             # the same VIN coming back on a we-owe months later has to find
@@ -680,7 +732,9 @@ def build_recon_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
         with connect() as db:
             row = recon_row(db, recon_id)
             assert_current_version(row, item.expected_version)
-            db.execute("UPDATE recon_vehicles SET archived_at=?,edit_version=edit_version+1 WHERE id=?", (now_fn(), recon_id))
+            db.execute(
+                "UPDATE recon_vehicles SET archived_at=?,edit_version=edit_version+1 WHERE id=?", (now_fn(), recon_id)
+            )
             return recon_detail(db, recon_id)
 
     @router.post("/recon/vehicles/{recon_id}/reopen")
@@ -697,7 +751,9 @@ def build_recon_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
             row = recon_row(db, recon_id)
             _assert_not_archived(row)
             if item.expected_version is not None and item.expected_version != row["edit_version"]:
-                raise HTTPException(409, "Someone else changed this vehicle since you loaded it -- reload to see their update")
+                raise HTTPException(
+                    409, "Someone else changed this vehicle since you loaded it -- reload to see their update"
+                )
             fields: list[str] = []
             params: list[object] = []
             if item.status is not None:
@@ -778,23 +834,37 @@ def build_recon_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
         with connect() as db:
             row = recon_row(db, recon_id)
             if db.execute("SELECT 1 FROM orders WHERE recon_vehicle_id=?", (recon_id,)).fetchone():
-                raise HTTPException(409, "Can't delete a vehicle with repair order history -- cancel or close its orders instead")
+                raise HTTPException(
+                    409, "Can't delete a vehicle with repair order history -- cancel or close its orders instead"
+                )
             db.execute("DELETE FROM recon_vehicles WHERE id=?", (recon_id,))
             db.execute("DELETE FROM vehicles WHERE id=?", (row["vehicle_id"],))
-        return None
 
     # --- We-owe items ---
 
     @router.post("/we-owe", status_code=201)
     def create_we_owe_item(item: WeOweIn):
         with connect() as db:
-            vehicle = db.execute("SELECT 1 FROM vehicles WHERE id=? AND customer_id=?", (item.vehicle_id, item.customer_id)).fetchone()
+            vehicle = db.execute(
+                "SELECT 1 FROM vehicles WHERE id=? AND customer_id=?", (item.vehicle_id, item.customer_id)
+            ).fetchone()
             if not vehicle:
                 raise HTTPException(400, "Vehicle does not belong to customer")
             ts = now_fn()
             cur = db.execute(
                 "INSERT INTO we_owe_items(customer_id,vehicle_id,description,category,promised_at,target_date,sale_reference,lot_stock_number,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
-                (item.customer_id, item.vehicle_id, item.description.strip(), item.category.strip() or "other", ts, item.target_date.strip(), item.sale_reference.strip(), item.lot_stock_number.strip().upper(), ts, ts),
+                (
+                    item.customer_id,
+                    item.vehicle_id,
+                    item.description.strip(),
+                    item.category.strip() or "other",
+                    ts,
+                    item.target_date.strip(),
+                    item.sale_reference.strip(),
+                    item.lot_stock_number.strip().upper(),
+                    ts,
+                    ts,
+                ),
             )
             # A we-owe is very often the first time a car is written down at
             # all -- bought and recon'd before RECON ever saw it. Recording
@@ -824,7 +894,9 @@ def build_recon_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
         with connect() as db:
             row = we_owe_row(db, we_owe_id)
             assert_current_version(row, item.expected_version)
-            db.execute("UPDATE we_owe_items SET archived_at=?,edit_version=edit_version+1 WHERE id=?", (now_fn(), we_owe_id))
+            db.execute(
+                "UPDATE we_owe_items SET archived_at=?,edit_version=edit_version+1 WHERE id=?", (now_fn(), we_owe_id)
+            )
             return we_owe_detail(db, we_owe_id)
 
     @router.post("/we-owe/{we_owe_id}/reopen")
@@ -841,7 +913,9 @@ def build_recon_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
             row = we_owe_row(db, we_owe_id)
             _assert_not_archived(row)
             if item.expected_version is not None and item.expected_version != row["edit_version"]:
-                raise HTTPException(409, "Someone else changed this item since you loaded it -- reload to see their update")
+                raise HTTPException(
+                    409, "Someone else changed this item since you loaded it -- reload to see their update"
+                )
             fields: list[str] = []
             params: list[object] = []
             if item.status is not None:
@@ -915,9 +989,10 @@ def build_recon_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
         with connect() as db:
             we_owe_row(db, we_owe_id)
             if db.execute("SELECT 1 FROM orders WHERE we_owe_id=?", (we_owe_id,)).fetchone():
-                raise HTTPException(409, "Can't delete a we-owe item with repair order history -- cancel or close its orders instead")
+                raise HTTPException(
+                    409, "Can't delete a we-owe item with repair order history -- cancel or close its orders instead"
+                )
             db.execute("DELETE FROM we_owe_items WHERE id=?", (we_owe_id,))
-        return None
 
     @router.post("/we-owe/{we_owe_id}/payments", status_code=201)
     def add_we_owe_payment(we_owe_id: int, item: WeOwePaymentIn):
@@ -933,9 +1008,10 @@ def build_recon_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
     def delete_we_owe_payment(we_owe_id: int, payment_id: int):
         with connect() as db:
             _assert_not_archived(we_owe_row(db, we_owe_id))
-            if not db.execute("SELECT 1 FROM we_owe_payments WHERE id=? AND we_owe_id=?", (payment_id, we_owe_id)).fetchone():
+            if not db.execute(
+                "SELECT 1 FROM we_owe_payments WHERE id=? AND we_owe_id=?", (payment_id, we_owe_id)
+            ).fetchone():
                 raise HTTPException(404, "Payment not found")
             db.execute("DELETE FROM we_owe_payments WHERE id=?", (payment_id,))
-        return None
 
     return router

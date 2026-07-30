@@ -17,14 +17,22 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from . import paths
 from .accounting import build_accounting_router
 from .backup_routes import build_backup_router
-from .update_routes import build_update_router
-from .db import RECON_SHOP_CUSTOMER_ID, connect as db_connect, init_db, now
+from .db import RECON_SHOP_CUSTOMER_ID, init_db, now
+from .db import connect as db_connect
 from .export import build_export_router
 from .jobs import build_jobs_router
 from .parts import build_parts_router
-from .recon import assert_vehicle_editable, build_recon_router, cost_rollup, last_activity_detail, resolve_unit, vehicle_board_rows
+from .recon import (
+    assert_vehicle_editable,
+    build_recon_router,
+    cost_rollup,
+    last_activity_detail,
+    resolve_unit,
+    vehicle_board_rows,
+)
 from .reports import build_reports_router
 from .tasks import build_tasks_router
+from .update_routes import build_update_router
 from .workflow import (
     assert_estimate_editable,
     build_workflow_router,
@@ -34,7 +42,6 @@ from .workflow import (
     workflow_detail,
 )
 
-
 ROOT = paths.bundle_root()
 DATA_ROOT = paths.data_root()
 DEFAULT_DB = Path(os.getenv("DISCOUNT_AUTO_OPS_DB", DATA_ROOT / "data" / "shop.db"))
@@ -42,17 +49,57 @@ DEFAULT_BACKUPS_DIR = Path(os.getenv("DISCOUNT_AUTO_OPS_BACKUPS_DIR", DATA_ROOT 
 
 
 _US_STATE_ABBREV = {
-    "alabama": "AL", "alaska": "AK", "arizona": "AZ", "arkansas": "AR", "california": "CA",
-    "colorado": "CO", "connecticut": "CT", "delaware": "DE", "district of columbia": "DC",
-    "florida": "FL", "georgia": "GA", "hawaii": "HI", "idaho": "ID", "illinois": "IL",
-    "indiana": "IN", "iowa": "IA", "kansas": "KS", "kentucky": "KY", "louisiana": "LA",
-    "maine": "ME", "maryland": "MD", "massachusetts": "MA", "michigan": "MI", "minnesota": "MN",
-    "mississippi": "MS", "missouri": "MO", "montana": "MT", "nebraska": "NE", "nevada": "NV",
-    "new hampshire": "NH", "new jersey": "NJ", "new mexico": "NM", "new york": "NY",
-    "north carolina": "NC", "north dakota": "ND", "ohio": "OH", "oklahoma": "OK", "oregon": "OR",
-    "pennsylvania": "PA", "rhode island": "RI", "south carolina": "SC", "south dakota": "SD",
-    "tennessee": "TN", "texas": "TX", "utah": "UT", "vermont": "VT", "virginia": "VA",
-    "washington": "WA", "west virginia": "WV", "wisconsin": "WI", "wyoming": "WY",
+    "alabama": "AL",
+    "alaska": "AK",
+    "arizona": "AZ",
+    "arkansas": "AR",
+    "california": "CA",
+    "colorado": "CO",
+    "connecticut": "CT",
+    "delaware": "DE",
+    "district of columbia": "DC",
+    "florida": "FL",
+    "georgia": "GA",
+    "hawaii": "HI",
+    "idaho": "ID",
+    "illinois": "IL",
+    "indiana": "IN",
+    "iowa": "IA",
+    "kansas": "KS",
+    "kentucky": "KY",
+    "louisiana": "LA",
+    "maine": "ME",
+    "maryland": "MD",
+    "massachusetts": "MA",
+    "michigan": "MI",
+    "minnesota": "MN",
+    "mississippi": "MS",
+    "missouri": "MO",
+    "montana": "MT",
+    "nebraska": "NE",
+    "nevada": "NV",
+    "new hampshire": "NH",
+    "new jersey": "NJ",
+    "new mexico": "NM",
+    "new york": "NY",
+    "north carolina": "NC",
+    "north dakota": "ND",
+    "ohio": "OH",
+    "oklahoma": "OK",
+    "oregon": "OR",
+    "pennsylvania": "PA",
+    "rhode island": "RI",
+    "south carolina": "SC",
+    "south dakota": "SD",
+    "tennessee": "TN",
+    "texas": "TX",
+    "utah": "UT",
+    "vermont": "VT",
+    "virginia": "VA",
+    "washington": "WA",
+    "west virginia": "WV",
+    "wisconsin": "WI",
+    "wyoming": "WY",
 }
 
 
@@ -196,12 +243,15 @@ def rowdict(row: sqlite3.Row | None) -> dict[str, Any] | None:
 
 
 def estimate_jobs_list(db: sqlite3.Connection, estimate_id: int) -> list[dict]:
-    return [dict(row) for row in db.execute(
-        """SELECT ej.*, s.name technician_name FROM estimate_jobs ej
+    return [
+        dict(row)
+        for row in db.execute(
+            """SELECT ej.*, s.name technician_name FROM estimate_jobs ej
            LEFT JOIN staff s ON s.id=ej.technician_id
            WHERE ej.estimate_id=? ORDER BY ej.sort_order, ej.id""",
-        (estimate_id,),
-    )]
+            (estimate_id,),
+        )
+    ]
 
 
 NETWORK_FLAG = DATA_ROOT / "network_mode.flag"
@@ -217,7 +267,9 @@ def create_app(db_path: Path = DEFAULT_DB, backups_dir: Path = DEFAULT_BACKUPS_D
     # on. This machine is still only reachable from inside the LAN unless
     # the router is explicitly configured to forward the port.
     default_hosts = "*" if NETWORK_FLAG.is_file() else "127.0.0.1,localhost,testserver"
-    allowed_hosts = [h.strip() for h in os.getenv("DISCOUNT_AUTO_OPS_ALLOWED_HOSTS", default_hosts).split(",") if h.strip()]
+    allowed_hosts = [
+        h.strip() for h in os.getenv("DISCOUNT_AUTO_OPS_ALLOWED_HOSTS", default_hosts).split(",") if h.strip()
+    ]
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=allowed_hosts)
 
     @app.middleware("http")
@@ -226,7 +278,9 @@ def create_app(db_path: Path = DEFAULT_DB, backups_dir: Path = DEFAULT_BACKUPS_D
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "same-origin"
-        response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'"
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'"
+        )
         response.headers["Cache-Control"] = "no-store"
         return response
 
@@ -255,7 +309,9 @@ def create_app(db_path: Path = DEFAULT_DB, backups_dir: Path = DEFAULT_BACKUPS_D
     def dashboard():
         with connect() as db:
             customers_count = db.execute("SELECT count(*) FROM customers WHERE is_shop_owned=0").fetchone()[0]
-            vehicles_count = db.execute("SELECT count(*) FROM vehicles v JOIN customers c ON c.id=v.customer_id WHERE c.is_shop_owned=0").fetchone()[0]
+            vehicles_count = db.execute(
+                "SELECT count(*) FROM vehicles v JOIN customers c ON c.id=v.customer_id WHERE c.is_shop_owned=0"
+            ).fetchone()[0]
             open_orders = db.execute("SELECT count(*) FROM orders WHERE status != 'complete'").fetchone()[0]
             board = vehicle_board_rows(db)
             recon_open = [r for r in board if r["segment"] == "recon" and r["status_bucket"] == "in_progress"]
@@ -301,7 +357,10 @@ def create_app(db_path: Path = DEFAULT_DB, backups_dir: Path = DEFAULT_BACKUPS_D
             if not row:
                 raise HTTPException(404, "Customer not found")
             detail = dict(row)
-            vehicles = [dict(v) for v in db.execute("SELECT * FROM vehicles WHERE customer_id=? ORDER BY id DESC", (customer_id,))]
+            vehicles = [
+                dict(v)
+                for v in db.execute("SELECT * FROM vehicles WHERE customer_id=? ORDER BY id DESC", (customer_id,))
+            ]
             orders = db.execute(
                 """SELECT id, number, vehicle_id, segment, status, voided, created_at,
                           recon_vehicle_id, we_owe_id, concern
@@ -321,9 +380,17 @@ def create_app(db_path: Path = DEFAULT_DB, backups_dir: Path = DEFAULT_BACKUPS_D
         with connect() as db:
             cur = db.execute(
                 "INSERT INTO customers(name,phone,email,address_line1,address_line2,city,state,postal_code,created_at) VALUES(?,?,?,?,?,?,?,?,?)",
-                (item.name.strip(), _normalize_phone(item.phone), item.email.strip(),
-                 item.address_line1.strip(), item.address_line2.strip(), item.city.strip(),
-                 item.state.strip(), item.postal_code.strip(), now()),
+                (
+                    item.name.strip(),
+                    _normalize_phone(item.phone),
+                    item.email.strip(),
+                    item.address_line1.strip(),
+                    item.address_line2.strip(),
+                    item.city.strip(),
+                    item.state.strip(),
+                    item.postal_code.strip(),
+                    now(),
+                ),
             )
             return rowdict(db.execute("SELECT * FROM customers WHERE id=?", (cur.lastrowid,)).fetchone())
 
@@ -386,7 +453,7 @@ def create_app(db_path: Path = DEFAULT_DB, backups_dir: Path = DEFAULT_BACKUPS_D
             )
             resp.raise_for_status()
             features = resp.json().get("features", [])
-        except Exception:
+        except Exception:  # noqa: BLE001
             # Deliberately bare. This endpoint's entire contract is "a nice-to-
             # have that never gets in the way", and the narrower
             # (httpx.HTTPError, ValueError) still let a 500 through: on a
@@ -413,19 +480,23 @@ def create_app(db_path: Path = DEFAULT_DB, backups_dir: Path = DEFAULT_BACKUPS_D
             # full name pushes the ZIP out of a narrow dropdown besides.
             abbrev = _state_abbrev(state)
             label = ", ".join(part for part in (line1, city, " ".join(x for x in (abbrev, postal) if x)) if part)
-            suggestions.append({
-                "label": label,
-                "line1": line1,
-                "city": city,
-                "state": abbrev,
-                "postal_code": postal,
-            })
+            suggestions.append(
+                {
+                    "label": label,
+                    "line1": line1,
+                    "city": city,
+                    "state": abbrev,
+                    "postal_code": postal,
+                }
+            )
         return suggestions
 
     @app.get("/api/vehicles")
     def list_vehicles():
         with connect() as db:
-            rows = db.execute("SELECT v.*, c.name customer_name FROM vehicles v JOIN customers c ON c.id=v.customer_id WHERE c.is_shop_owned=0 ORDER BY v.id DESC")
+            rows = db.execute(
+                "SELECT v.*, c.name customer_name FROM vehicles v JOIN customers c ON c.id=v.customer_id WHERE c.is_shop_owned=0 ORDER BY v.id DESC"
+            )
             return [dict(row) for row in rows]
 
     @app.post("/api/vehicles", status_code=201)
@@ -436,7 +507,21 @@ def create_app(db_path: Path = DEFAULT_DB, backups_dir: Path = DEFAULT_BACKUPS_D
             ts = now()
             cur = db.execute(
                 "INSERT INTO vehicles(customer_id,year,make,model,vin,mileage,odometer_broken,plate,plate_state,trim,engine,color,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (item.customer_id, item.year, item.make.strip(), item.model.strip(), item.vin.strip().upper(), item.mileage, int(item.odometer_broken), item.plate.replace(" ", "").upper(), item.plate_state.strip().upper(), item.trim.strip(), item.engine.strip(), item.color.strip(), ts),
+                (
+                    item.customer_id,
+                    item.year,
+                    item.make.strip(),
+                    item.model.strip(),
+                    item.vin.strip().upper(),
+                    item.mileage,
+                    int(item.odometer_broken),
+                    item.plate.replace(" ", "").upper(),
+                    item.plate_state.strip().upper(),
+                    item.trim.strip(),
+                    item.engine.strip(),
+                    item.color.strip(),
+                    ts,
+                ),
             )
             # Attach it to the physical car straight away, so a VIN that's
             # already been through the shop finds its own history immediately
@@ -467,9 +552,15 @@ def create_app(db_path: Path = DEFAULT_DB, backups_dir: Path = DEFAULT_BACKUPS_D
             raise HTTPException(404, "No vehicle matched that plate and state")
         color = vehicle.get("color", "")
         return {
-            "plate": plate, "state": state, "vin": str(vehicle["vin"]).upper(), "year": int(vehicle["year"]),
-            "make": vehicle.get("make", ""), "model": vehicle.get("model", ""), "trim": vehicle.get("trim", ""),
-            "engine": vehicle.get("engine", ""), "color": color.get("name", "") if isinstance(color, dict) else color,
+            "plate": plate,
+            "state": state,
+            "vin": str(vehicle["vin"]).upper(),
+            "year": int(vehicle["year"]),
+            "make": vehicle.get("make", ""),
+            "model": vehicle.get("model", ""),
+            "trim": vehicle.get("trim", ""),
+            "engine": vehicle.get("engine", ""),
+            "color": color.get("name", "") if isinstance(color, dict) else color,
         }
 
     @app.post("/api/vehicles/decode-vin")
@@ -478,7 +569,8 @@ def create_app(db_path: Path = DEFAULT_DB, backups_dir: Path = DEFAULT_BACKUPS_D
         try:
             response = httpx.get(
                 f"https://vpic.nhtsa.dot.gov/api/vehicles/decodevinvalues/{vin}",
-                params={"format": "json"}, timeout=20,
+                params={"format": "json"},
+                timeout=20,
             )
             response.raise_for_status()
         except httpx.HTTPError as exc:
@@ -504,10 +596,17 @@ def create_app(db_path: Path = DEFAULT_DB, backups_dir: Path = DEFAULT_BACKUPS_D
         except ValueError:
             pass
         cylinders = (results.get("EngineCylinders") or "").strip()
-        engine = " ".join(filter(None, [f"{displacement}L" if displacement else "", f"{cylinders}-cyl" if cylinders else ""]))
+        engine = " ".join(
+            filter(None, [f"{displacement}L" if displacement else "", f"{cylinders}-cyl" if cylinders else ""])
+        )
         return {
-            "vin": vin, "year": int(year), "make": make, "model": model,
-            "trim": (results.get("Trim") or "").strip(), "engine": engine, "color": "",
+            "vin": vin,
+            "year": int(year),
+            "make": make,
+            "model": model,
+            "trim": (results.get("Trim") or "").strip(),
+            "engine": engine,
+            "color": "",
         }
 
     # --- Retail vehicles ---
@@ -541,7 +640,9 @@ def create_app(db_path: Path = DEFAULT_DB, backups_dir: Path = DEFAULT_BACKUPS_D
         detail["orders"] = rollup["orders"]
         detail["total_cost"] = rollup["total_cost"]
         detail["quoted_cost"] = rollup["quoted_cost"]
-        detail["last_activity"] = last_activity_detail(db, "vehicle_id", vehicle_id, detail["created_at"], segment="retail")
+        detail["last_activity"] = last_activity_detail(
+            db, "vehicle_id", vehicle_id, detail["created_at"], segment="retail"
+        )
         # Retail vehicles never archive -- the RO's own status is the whole
         # lifecycle -- and the vehicles table has no optimistic-lock counter.
         # Both keys exist so the detail page can treat all three segments
@@ -554,7 +655,8 @@ def create_app(db_path: Path = DEFAULT_DB, backups_dir: Path = DEFAULT_BACKUPS_D
         # history / is something open on it" -- because that's the hop-or-not
         # question; the money rollup above stays retail-only.
         detail["other_vehicles"] = [
-            dict(v) for v in db.execute(
+            dict(v)
+            for v in db.execute(
                 """SELECT v.id, v.year, v.make, v.model, v.vin, v.plate, v.plate_state,
                           (SELECT count(*) FROM orders o WHERE o.vehicle_id=v.id AND o.voided=0) order_count,
                           (SELECT count(*) FROM orders o WHERE o.vehicle_id=v.id AND o.voided=0 AND o.status!='complete') open_orders
@@ -622,12 +724,25 @@ def create_app(db_path: Path = DEFAULT_DB, backups_dir: Path = DEFAULT_BACKUPS_D
             detail["estimate"] = None
             if estimate:
                 detail["estimate"] = dict(estimate)
-                detail["estimate"]["items"] = [dict(row) for row in db.execute("SELECT * FROM estimate_items WHERE estimate_id=? ORDER BY sort_order, id", (estimate["id"],))]
+                detail["estimate"]["items"] = [
+                    dict(row)
+                    for row in db.execute(
+                        "SELECT * FROM estimate_items WHERE estimate_id=? ORDER BY sort_order, id", (estimate["id"],)
+                    )
+                ]
                 detail["estimate"]["jobs"] = estimate_jobs_list(db, estimate["id"])
             detail.update(workflow_detail(db, order_id))
-            recon_vehicle = db.execute("SELECT * FROM recon_vehicles WHERE id=?", (order["recon_vehicle_id"],)).fetchone() if order["recon_vehicle_id"] else None
+            recon_vehicle = (
+                db.execute("SELECT * FROM recon_vehicles WHERE id=?", (order["recon_vehicle_id"],)).fetchone()
+                if order["recon_vehicle_id"]
+                else None
+            )
             detail["recon_vehicle"] = dict(recon_vehicle) if recon_vehicle else None
-            we_owe_item = db.execute("SELECT * FROM we_owe_items WHERE id=?", (order["we_owe_id"],)).fetchone() if order["we_owe_id"] else None
+            we_owe_item = (
+                db.execute("SELECT * FROM we_owe_items WHERE id=?", (order["we_owe_id"],)).fetchone()
+                if order["we_owe_id"]
+                else None
+            )
             detail["we_owe_item"] = dict(we_owe_item) if we_owe_item else None
             return detail
 
@@ -635,23 +750,41 @@ def create_app(db_path: Path = DEFAULT_DB, backups_dir: Path = DEFAULT_BACKUPS_D
     def create_order(item: OrderIn):
         with connect() as db:
             if item.segment == "recon":
-                recon_vehicle = db.execute("SELECT vehicle_id, archived_at FROM recon_vehicles WHERE id=?", (item.recon_vehicle_id,)).fetchone() if item.recon_vehicle_id else None
+                recon_vehicle = (
+                    db.execute(
+                        "SELECT vehicle_id, archived_at FROM recon_vehicles WHERE id=?", (item.recon_vehicle_id,)
+                    ).fetchone()
+                    if item.recon_vehicle_id
+                    else None
+                )
                 if not recon_vehicle:
                     raise HTTPException(404, "Recon vehicle not found")
                 if recon_vehicle["archived_at"]:
-                    raise HTTPException(409, "This vehicle is archived to History -- reopen it to start a new repair order")
+                    raise HTTPException(
+                        409, "This vehicle is archived to History -- reopen it to start a new repair order"
+                    )
                 customer_id, vehicle_id = RECON_SHOP_CUSTOMER_ID, recon_vehicle["vehicle_id"]
             elif item.segment == "we_owe":
-                we_owe_item = db.execute("SELECT customer_id, vehicle_id, archived_at FROM we_owe_items WHERE id=?", (item.we_owe_id,)).fetchone() if item.we_owe_id else None
+                we_owe_item = (
+                    db.execute(
+                        "SELECT customer_id, vehicle_id, archived_at FROM we_owe_items WHERE id=?", (item.we_owe_id,)
+                    ).fetchone()
+                    if item.we_owe_id
+                    else None
+                )
                 if not we_owe_item:
                     raise HTTPException(404, "We-owe item not found")
                 if we_owe_item["archived_at"]:
-                    raise HTTPException(409, "This vehicle is archived to History -- reopen it to start a new repair order")
+                    raise HTTPException(
+                        409, "This vehicle is archived to History -- reopen it to start a new repair order"
+                    )
                 customer_id, vehicle_id = we_owe_item["customer_id"], we_owe_item["vehicle_id"]
             else:
                 if item.customer_id is None or item.vehicle_id is None:
                     raise HTTPException(422, "customer_id and vehicle_id are required for retail orders")
-                vehicle = db.execute("SELECT * FROM vehicles WHERE id=? AND customer_id=?", (item.vehicle_id, item.customer_id)).fetchone()
+                vehicle = db.execute(
+                    "SELECT * FROM vehicles WHERE id=? AND customer_id=?", (item.vehicle_id, item.customer_id)
+                ).fetchone()
                 if not vehicle:
                     raise HTTPException(400, "Vehicle does not belong to customer")
                 customer_id, vehicle_id = item.customer_id, item.vehicle_id
@@ -659,7 +792,18 @@ def create_app(db_path: Path = DEFAULT_DB, backups_dir: Path = DEFAULT_BACKUPS_D
             number = f"RO-{datetime.now():%y%m}-{sequence:04d}"
             cur = db.execute(
                 "INSERT INTO orders(number,customer_id,vehicle_id,concern,segment,recon_vehicle_id,we_owe_id,status,voided,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
-                (number, customer_id, vehicle_id, item.concern.strip(), item.segment, item.recon_vehicle_id if item.segment == "recon" else None, item.we_owe_id if item.segment == "we_owe" else None, "estimate", 0, now()),
+                (
+                    number,
+                    customer_id,
+                    vehicle_id,
+                    item.concern.strip(),
+                    item.segment,
+                    item.recon_vehicle_id if item.segment == "recon" else None,
+                    item.we_owe_id if item.segment == "we_owe" else None,
+                    "estimate",
+                    0,
+                    now(),
+                ),
             )
             order_id = cur.lastrowid
             assert order_id is not None
@@ -676,7 +820,9 @@ def create_app(db_path: Path = DEFAULT_DB, backups_dir: Path = DEFAULT_BACKUPS_D
             assert_estimate_editable(db, order_id)
             old = db.execute("SELECT id, edit_version FROM estimates WHERE order_id=?", (order_id,)).fetchone()
             if old and estimate.expected_version is not None and old["edit_version"] != estimate.expected_version:
-                raise HTTPException(409, "Someone else changed this estimate since you loaded it -- reload to see their update")
+                raise HTTPException(
+                    409, "Someone else changed this estimate since you loaded it -- reload to see their update"
+                )
             estimate_id = get_or_create_estimate(db, order_id, now)["id"]
             if old:
                 db.execute(
@@ -691,22 +837,60 @@ def create_app(db_path: Path = DEFAULT_DB, backups_dir: Path = DEFAULT_BACKUPS_D
                     "UPDATE estimates SET labor_rate=?,tax_rate=? WHERE id=?",
                     (estimate.labor_rate, estimate.tax_rate, estimate_id),
                 )
-            valid_job_ids = {row[0] for row in db.execute("SELECT id FROM estimate_jobs WHERE estimate_id=?", (estimate_id,))}
+            valid_job_ids = {
+                row[0] for row in db.execute("SELECT id FROM estimate_jobs WHERE estimate_id=?", (estimate_id,))
+            }
             retained_ids: set[int] = set()
             for position, item in enumerate(estimate.items):
                 if item.job_id is not None and item.job_id not in valid_job_ids:
                     raise HTTPException(422, "Job does not belong to this repair order's estimate")
-                existing = db.execute("SELECT id FROM estimate_items WHERE id=? AND estimate_id=?", (item.id, estimate_id)).fetchone() if item.id else None
+                existing = (
+                    db.execute(
+                        "SELECT id FROM estimate_items WHERE id=? AND estimate_id=?", (item.id, estimate_id)
+                    ).fetchone()
+                    if item.id
+                    else None
+                )
                 if existing:
                     retained_ids.add(int(existing["id"]))
                     db.execute(
                         "UPDATE estimate_items SET kind=?,description=?,part_number=?,quantity=?,unit_price=?,unit_cost=?,line_total=?,review_required=0,reviewed_by=?,reviewed_at=?,sort_order=?,job_id=?,core_charge=? WHERE id=?",
-                        (item.kind, item.description.strip(), item.part_number.strip().upper(), item.quantity, item.unit_price, item.unit_cost, round(item.quantity * item.unit_price, 2), estimate.actor, now(), position, item.job_id, item.core_charge, item.id),
+                        (
+                            item.kind,
+                            item.description.strip(),
+                            item.part_number.strip().upper(),
+                            item.quantity,
+                            item.unit_price,
+                            item.unit_cost,
+                            round(item.quantity * item.unit_price, 2),
+                            estimate.actor,
+                            now(),
+                            position,
+                            item.job_id,
+                            item.core_charge,
+                            item.id,
+                        ),
                     )
                 else:
                     cur = db.execute(
                         "INSERT INTO estimate_items(estimate_id,kind,description,part_number,quantity,unit_price,unit_cost,line_total,source,review_required,reviewed_by,reviewed_at,sort_order,job_id,core_charge) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                        (estimate_id, item.kind, item.description.strip(), item.part_number.strip().upper(), item.quantity, item.unit_price, item.unit_cost, round(item.quantity * item.unit_price, 2), item.source, 0, estimate.actor, now(), position, item.job_id, item.core_charge),
+                        (
+                            estimate_id,
+                            item.kind,
+                            item.description.strip(),
+                            item.part_number.strip().upper(),
+                            item.quantity,
+                            item.unit_price,
+                            item.unit_cost,
+                            round(item.quantity * item.unit_price, 2),
+                            item.source,
+                            0,
+                            estimate.actor,
+                            now(),
+                            position,
+                            item.job_id,
+                            item.core_charge,
+                        ),
                     )
                     if cur.lastrowid is not None:
                         retained_ids.add(int(cur.lastrowid))
@@ -719,14 +903,19 @@ def create_app(db_path: Path = DEFAULT_DB, backups_dir: Path = DEFAULT_BACKUPS_D
                 # never-received lines are ever deleted this way.
                 if retained_ids:
                     placeholders = ",".join("?" for _ in retained_ids)
-                    db.execute(f"DELETE FROM estimate_items WHERE estimate_id=? AND id NOT IN ({placeholders}) AND status!='received'", (estimate_id, *retained_ids))
+                    db.execute(
+                        f"DELETE FROM estimate_items WHERE estimate_id=? AND id NOT IN ({placeholders}) AND status!='received'",
+                        (estimate_id, *retained_ids),
+                    )
                 else:
                     db.execute("DELETE FROM estimate_items WHERE estimate_id=? AND status!='received'", (estimate_id,))
             # Computed from the rows that actually survived, not from the
             # request payload -- a received line kept alive above despite
             # being left out of the payload would otherwise never be counted
             # into subtotal/tax/total, understating the estimate's real total.
-            final_rows = db.execute("SELECT quantity, unit_price, kind FROM estimate_items WHERE estimate_id=?", (estimate_id,)).fetchall()
+            final_rows = db.execute(
+                "SELECT quantity, unit_price, kind FROM estimate_items WHERE estimate_id=?", (estimate_id,)
+            ).fetchall()
             subtotal = round(sum(r["quantity"] * r["unit_price"] for r in final_rows), 2)
             taxable = sum(r["quantity"] * r["unit_price"] for r in final_rows if r["kind"] == "part")
             tax = round(taxable * estimate.tax_rate, 2)
@@ -739,7 +928,12 @@ def create_app(db_path: Path = DEFAULT_DB, backups_dir: Path = DEFAULT_BACKUPS_D
             # car idle for a week while a tech was pricing it out all morning.
             touch_order(db, order_id, now)
             result = dict(db.execute("SELECT * FROM estimates WHERE id=?", (estimate_id,)).fetchone())
-            result["items"] = [dict(row) for row in db.execute("SELECT * FROM estimate_items WHERE estimate_id=? ORDER BY sort_order, id", (estimate_id,))]
+            result["items"] = [
+                dict(row)
+                for row in db.execute(
+                    "SELECT * FROM estimate_items WHERE estimate_id=? ORDER BY sort_order, id", (estimate_id,)
+                )
+            ]
             result["jobs"] = estimate_jobs_list(db, estimate_id)
             return result
 

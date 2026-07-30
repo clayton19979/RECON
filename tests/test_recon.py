@@ -2,7 +2,12 @@ from __future__ import annotations
 
 from app.db import connect
 from app.recon import age_days
-from tests.helpers import make_recon_order, make_recon_vehicle, make_we_owe, save_estimate
+from tests.helpers import (
+    make_recon_order,
+    make_recon_vehicle,
+    make_we_owe,
+    save_estimate,
+)
 
 
 def test_create_recon_vehicle(client):
@@ -41,7 +46,14 @@ def test_recon_patch_edits_core_vehicle_info(client):
     vehicle = make_recon_vehicle(client, stock_number="R-2101", purchase_price=4000, vin="OLDVIN")
     res = client.patch(
         f"/api/recon/vehicles/{vehicle['id']}",
-        json={"purchase_price": 4500, "vin": "1hgcm82633a004352", "make": "Honda", "model": "Accord", "year": 2021, "mileage": 12345},
+        json={
+            "purchase_price": 4500,
+            "vin": "1hgcm82633a004352",
+            "make": "Honda",
+            "model": "Accord",
+            "year": 2021,
+            "mileage": 12345,
+        },
     )
     assert res.status_code == 200
     body = res.json()
@@ -99,7 +111,14 @@ def test_we_owe_patch_edits_vehicle_info(client):
     assert item["vin"] == ""
     res = client.patch(
         f"/api/we-owe/{item['id']}",
-        json={"vin": "1hgcm82633a004352", "year": 2021, "make": "Honda", "model": "Accord", "trim": "EX", "mileage": 42000},
+        json={
+            "vin": "1hgcm82633a004352",
+            "year": 2021,
+            "make": "Honda",
+            "model": "Accord",
+            "trim": "EX",
+            "mileage": 42000,
+        },
     )
     assert res.status_code == 200
     body = res.json()
@@ -155,10 +174,18 @@ def test_we_owe_customer_deposit_reduces_net_cost(client):
     we-owe repair -- that must show up separately from shop spend, netting
     against it, not just get lost."""
     item = make_we_owe(client, description="Fix AC")
-    order = client.post("/api/orders", json={"concern": "AC repair", "segment": "we_owe", "we_owe_id": item["id"]}).json()
-    save_estimate(client, order["id"], [{"kind": "labor", "description": "Diag", "quantity": 1, "unit_price": 200, "unit_cost": 200}])
+    order = client.post(
+        "/api/orders", json={"concern": "AC repair", "segment": "we_owe", "we_owe_id": item["id"]}
+    ).json()
+    save_estimate(
+        client,
+        order["id"],
+        [{"kind": "labor", "description": "Diag", "quantity": 1, "unit_price": 200, "unit_cost": 200}],
+    )
 
-    res = client.post(f"/api/we-owe/{item['id']}/payments", json={"amount": 75, "method": "cash", "note": "Down payment"})
+    res = client.post(
+        f"/api/we-owe/{item['id']}/payments", json={"amount": 75, "method": "cash", "note": "Down payment"}
+    )
     assert res.status_code == 201
     body = res.json()
     assert body["customer_paid"] == 75
@@ -184,7 +211,9 @@ def test_we_owe_board_status_tracks_ticket_while_open(client):
     is still 'open', the same way recon rows already track their ticket --
     otherwise progressing the ticket never shows up on the board at all."""
     item = make_we_owe(client, description="Fix AC")
-    order = client.post("/api/orders", json={"concern": "AC repair", "segment": "we_owe", "we_owe_id": item["id"]}).json()
+    order = client.post(
+        "/api/orders", json={"concern": "AC repair", "segment": "we_owe", "we_owe_id": item["id"]}
+    ).json()
 
     board = client.get("/api/vehicles-board", params={"segment": "we_owe"}).json()
     row = next(r for r in board if r["we_owe_id"] == item["id"])
@@ -256,7 +285,9 @@ def test_recon_patch_conflict_when_stale_version(client):
 def test_we_owe_patch_conflict_when_stale_version(client):
     item = make_we_owe(client)
     client.patch(f"/api/we-owe/{item['id']}", json={"category": "mirror", "expected_version": item["edit_version"]})
-    res = client.patch(f"/api/we-owe/{item['id']}", json={"category": "seatbelt", "expected_version": item["edit_version"]})
+    res = client.patch(
+        f"/api/we-owe/{item['id']}", json={"category": "seatbelt", "expected_version": item["edit_version"]}
+    )
     assert res.status_code == 409
 
 
@@ -266,10 +297,27 @@ def test_voided_order_does_not_count_toward_vehicle_cost(client):
     vehicle's actual/quoted totals -- that work was never actually done."""
     vehicle = make_recon_vehicle(client, stock_number="R-4501")
     live_order = make_recon_order(client, vehicle["id"], concern="Real work")
-    save_estimate(client, live_order["id"], [{"kind": "labor", "description": "Diag", "quantity": 1, "unit_price": 100, "unit_cost": 100}])
+    save_estimate(
+        client,
+        live_order["id"],
+        [{"kind": "labor", "description": "Diag", "quantity": 1, "unit_price": 100, "unit_cost": 100}],
+    )
 
     mistake_order = make_recon_order(client, vehicle["id"], concern="Started by mistake")
-    save_estimate(client, mistake_order["id"], [{"kind": "part", "description": "Wrong part", "part_number": "X-1", "quantity": 1, "unit_price": 300, "unit_cost": 300}])
+    save_estimate(
+        client,
+        mistake_order["id"],
+        [
+            {
+                "kind": "part",
+                "description": "Wrong part",
+                "part_number": "X-1",
+                "quantity": 1,
+                "unit_price": 300,
+                "unit_cost": 300,
+            }
+        ],
+    )
     client.post(f"/api/orders/{mistake_order['id']}/void", json={"actor": "Clay"})
 
     detail = client.get(f"/api/recon/vehicles/{vehicle['id']}").json()
@@ -299,7 +347,14 @@ def test_cost_rollup_actual_vs_quoted(client):
         client,
         order["id"],
         [
-            {"kind": "part", "description": "Brake pads", "part_number": "BP-1", "quantity": 2, "unit_price": 10, "unit_cost": 10},
+            {
+                "kind": "part",
+                "description": "Brake pads",
+                "part_number": "BP-1",
+                "quantity": 2,
+                "unit_price": 10,
+                "unit_cost": 10,
+            },
             {"kind": "labor", "description": "Install", "quantity": 1, "unit_price": 50, "unit_cost": 50},
         ],
     )
@@ -319,7 +374,9 @@ def test_cost_rollup_actual_vs_quoted(client):
             "subtotal": 20,
             "tax": 0,
             "total": 20,
-            "items": [{"part_number": "BP-1", "description": "Brake pads", "quantity": 2, "unit_cost": 10, "kind": "part"}],
+            "items": [
+                {"part_number": "BP-1", "description": "Brake pads", "quantity": 2, "unit_cost": 10, "kind": "part"}
+            ],
         },
     )
     assert res.json()["status"] == "posted", res.text
@@ -343,8 +400,22 @@ def test_board_reports_parts_ordered_but_not_received(client):
         client,
         order["id"],
         [
-            {"kind": "part", "description": "Brake pads", "part_number": "BP-1", "quantity": 2, "unit_price": 10, "unit_cost": 15},
-            {"kind": "part", "description": "Rotors", "part_number": "RT-1", "quantity": 1, "unit_price": 30, "unit_cost": 40},
+            {
+                "kind": "part",
+                "description": "Brake pads",
+                "part_number": "BP-1",
+                "quantity": 2,
+                "unit_price": 10,
+                "unit_cost": 15,
+            },
+            {
+                "kind": "part",
+                "description": "Rotors",
+                "part_number": "RT-1",
+                "quantity": 1,
+                "unit_price": 30,
+                "unit_cost": 40,
+            },
             {"kind": "labor", "description": "Install", "quantity": 3, "unit_price": 50, "unit_cost": 50},
         ],
     )
@@ -369,9 +440,12 @@ def test_board_reports_parts_ordered_but_not_received(client):
     # It's still not something a vendor owes the shop: without the kind='part'
     # filter this would read 3 pending worth $220.
     labor = next(i for i in estimate["items"] if i["kind"] == "labor")
-    assert client.patch(
-        f"/api/orders/{order['id']}/estimate/items/{labor['id']}/status", json={"status": "ordered"}
-    ).status_code == 200
+    assert (
+        client.patch(
+            f"/api/orders/{order['id']}/estimate/items/{labor['id']}/status", json={"status": "ordered"}
+        ).status_code
+        == 200
+    )
     assert row()["parts_pending"] == 2, "a labor line marked 'ordered' counted as a part on order"
     assert row()["parts_pending_value"] == 70
 
@@ -393,15 +467,37 @@ def test_board_parts_pending_ignores_returned_and_voided(client):
     same reason."""
     vehicle = make_recon_vehicle(client, stock_number="R-7200")
     kept = make_recon_order(client, vehicle["id"])
-    save_estimate(client, kept["id"], [
-        {"kind": "part", "description": "Filter", "part_number": "F-1", "quantity": 1, "unit_price": 9, "unit_cost": 9},
-    ])
+    save_estimate(
+        client,
+        kept["id"],
+        [
+            {
+                "kind": "part",
+                "description": "Filter",
+                "part_number": "F-1",
+                "quantity": 1,
+                "unit_price": 9,
+                "unit_cost": 9,
+            },
+        ],
+    )
     client.patch(f"/api/orders/{kept['id']}/estimate/order-parts")
 
     voided = make_recon_order(client, vehicle["id"], concern="Started by mistake")
-    estimate = save_estimate(client, voided["id"], [
-        {"kind": "part", "description": "Alternator", "part_number": "ALT-1", "quantity": 1, "unit_price": 300, "unit_cost": 300},
-    ])
+    save_estimate(
+        client,
+        voided["id"],
+        [
+            {
+                "kind": "part",
+                "description": "Alternator",
+                "part_number": "ALT-1",
+                "quantity": 1,
+                "unit_price": 300,
+                "unit_cost": 300,
+            },
+        ],
+    )
     client.patch(f"/api/orders/{voided['id']}/estimate/order-parts")
 
     def row():
@@ -422,18 +518,27 @@ def test_board_parts_pending_ignores_returned_and_voided(client):
     # board would say the shop is waiting on a part it decided not to keep.
     vendor = client.post("/api/vendors", json={"name": "WorldPac"}).json()
     item_id = client.get(f"/api/orders/{kept['id']}").json()["estimate"]["items"][0]["id"]
-    assert client.post(
-        f"/api/orders/{kept['id']}/estimate/receive-parts",
-        json={"item_ids": [item_id], "vendor_id": vendor["id"], "invoice_number": "INV-9"},
-    ).status_code == 200
+    assert (
+        client.post(
+            f"/api/orders/{kept['id']}/estimate/receive-parts",
+            json={"item_ids": [item_id], "vendor_id": vendor["id"], "invoice_number": "INV-9"},
+        ).status_code
+        == 200
+    )
     assert row()["parts_pending"] == 0, "a received part is not still pending"
-    assert client.patch(
-        f"/api/orders/{kept['id']}/estimate/items/{item_id}/part-return",
-        json={"returned": True, "actor": "tester"},
-    ).status_code == 200
-    assert client.patch(
-        f"/api/orders/{kept['id']}/estimate/items/{item_id}/status", json={"status": "ordered"}
-    ).status_code == 200
+    assert (
+        client.patch(
+            f"/api/orders/{kept['id']}/estimate/items/{item_id}/part-return",
+            json={"returned": True, "actor": "tester"},
+        ).status_code
+        == 200
+    )
+    assert (
+        client.patch(
+            f"/api/orders/{kept['id']}/estimate/items/{item_id}/status", json={"status": "ordered"}
+        ).status_code
+        == 200
+    )
     assert row()["parts_pending"] == 0, "a returned part put back to 'ordered' counts as pending"
 
 
@@ -441,12 +546,21 @@ def test_we_owe_board_row_carries_parts_pending(client):
     """Both halves of the board are one list on screen, so a field that only
     exists on recon rows shows a blank column for every we-owe car."""
     item = make_we_owe(client, description="Replace mirror")
-    order = client.post(
-        "/api/orders", json={"concern": "Mirror", "segment": "we_owe", "we_owe_id": item["id"]}
-    ).json()
-    save_estimate(client, order["id"], [
-        {"kind": "part", "description": "Mirror", "part_number": "M-1", "quantity": 1, "unit_price": 120, "unit_cost": 85},
-    ])
+    order = client.post("/api/orders", json={"concern": "Mirror", "segment": "we_owe", "we_owe_id": item["id"]}).json()
+    save_estimate(
+        client,
+        order["id"],
+        [
+            {
+                "kind": "part",
+                "description": "Mirror",
+                "part_number": "M-1",
+                "quantity": 1,
+                "unit_price": 120,
+                "unit_cost": 85,
+            },
+        ],
+    )
     client.patch(f"/api/orders/{order['id']}/estimate/order-parts")
 
     board = client.get("/api/vehicles-board", params={"segment": "we_owe"}).json()
@@ -494,13 +608,16 @@ def test_board_row_reports_idle_time_from_ticket_activity(client, db_path):
     backdate_activity(db_path, order["id"], "2026-01-01T09:00:00")
     stale = board_row(client, vehicle["id"])
     assert stale["last_activity_at"] == "2026-01-01T09:00:00"
-    assert stale["idle_days"] > 100, f"a ticket last touched in January should read as long idle, got {stale['idle_days']}"
+    assert stale["idle_days"] > 100, (
+        f"a ticket last touched in January should read as long idle, got {stale['idle_days']}"
+    )
 
     # ...and any real work on the ticket resets it. A status change is the
     # cheapest mutation that goes through record_activity.
-    assert client.patch(
-        f"/api/orders/{order['id']}/status", json={"status": "in_progress", "actor": "tester"}
-    ).status_code == 200
+    assert (
+        client.patch(f"/api/orders/{order['id']}/status", json={"status": "in_progress", "actor": "tester"}).status_code
+        == 200
+    )
     assert board_row(client, vehicle["id"])["idle_days"] == 0, "working the ticket didn't reset the idle clock"
 
 
@@ -555,9 +672,13 @@ def test_saving_the_estimate_counts_as_activity(client, db_path):
     backdate_activity(db_path, order["id"], "2026-03-01T09:00:00")
     assert board_row(client, vehicle["id"])["idle_days"] > 30
 
-    save_estimate(client, order["id"], [
-        {"kind": "labor", "description": "Diagnose", "quantity": 1, "unit_price": 120, "unit_cost": 60},
-    ])
+    save_estimate(
+        client,
+        order["id"],
+        [
+            {"kind": "labor", "description": "Diagnose", "quantity": 1, "unit_price": 120, "unit_cost": 60},
+        ],
+    )
     row = board_row(client, vehicle["id"])
     assert row["idle_days"] == 0, "saving the estimate grid didn't count as activity"
     assert row["last_activity_at"] > "2026-03-01T09:00:00"
@@ -586,9 +707,7 @@ def test_we_owe_rows_carry_idle_time_too(client, db_path):
     """Both halves of the board are one list on screen, so a field only recon
     rows had would leave a blank column down every we-owe car."""
     item = make_we_owe(client, description="Replace mirror")
-    order = client.post(
-        "/api/orders", json={"concern": "Mirror", "segment": "we_owe", "we_owe_id": item["id"]}
-    ).json()
+    order = client.post("/api/orders", json={"concern": "Mirror", "segment": "we_owe", "we_owe_id": item["id"]}).json()
     backdate_activity(db_path, order["id"], "2026-05-01T09:00:00")
 
     row = next(r for r in client.get("/api/vehicles-board").json() if r["we_owe_id"] == item["id"])
@@ -620,9 +739,12 @@ def test_detail_names_who_last_worked_on_the_car(client):
     last thing that happened to it actually was, not just when."""
     vehicle = make_recon_vehicle(client, stock_number="R-LW-1")
     order = make_recon_order(client, vehicle["id"])
-    assert client.patch(
-        f"/api/orders/{order['id']}/status", json={"status": "in_progress", "actor": "Dana Ruiz"}
-    ).status_code == 200
+    assert (
+        client.patch(
+            f"/api/orders/{order['id']}/status", json={"status": "in_progress", "actor": "Dana Ruiz"}
+        ).status_code
+        == 200
+    )
 
     la = client.get(f"/api/recon/vehicles/{vehicle['id']}").json()["last_activity"]
     assert la["action"] == "status_changed"
@@ -639,16 +761,23 @@ def test_detail_declines_to_attribute_an_unlogged_write(client, db_path):
     touched the car. Better to say when and stop."""
     vehicle = make_recon_vehicle(client, stock_number="R-LW-2")
     order = make_recon_order(client, vehicle["id"])
-    assert client.patch(
-        f"/api/orders/{order['id']}/status", json={"status": "in_progress", "actor": "Dana Ruiz"}
-    ).status_code == 200
+    assert (
+        client.patch(
+            f"/api/orders/{order['id']}/status", json={"status": "in_progress", "actor": "Dana Ruiz"}
+        ).status_code
+        == 200
+    )
     # Push every logged event into the past, then do an unlogged write.
     with connect(db_path) as db:
         db.execute("UPDATE activity_events SET created_at=? WHERE order_id=?", ("2026-01-01T09:00:00", order["id"]))
         db.commit()
-    save_estimate(client, order["id"], [
-        {"kind": "labor", "description": "Diagnose", "quantity": 1, "unit_price": 120, "unit_cost": 60},
-    ])
+    save_estimate(
+        client,
+        order["id"],
+        [
+            {"kind": "labor", "description": "Diagnose", "quantity": 1, "unit_price": 120, "unit_cost": 60},
+        ],
+    )
 
     la = client.get(f"/api/recon/vehicles/{vehicle['id']}").json()["last_activity"]
     assert la["idle_days"] == 0, "the estimate save should still have moved the clock"
@@ -692,12 +821,11 @@ def test_we_owe_detail_carries_last_activity_too(client):
     """Both segments open the same detail page, so a field only recon had
     would leave the header line blank down every we-owe promise."""
     item = make_we_owe(client, description="Replace mirror")
-    order = client.post(
-        "/api/orders", json={"concern": "Mirror", "segment": "we_owe", "we_owe_id": item["id"]}
-    ).json()
-    assert client.patch(
-        f"/api/orders/{order['id']}/status", json={"status": "in_progress", "actor": "Chris"}
-    ).status_code == 200
+    order = client.post("/api/orders", json={"concern": "Mirror", "segment": "we_owe", "we_owe_id": item["id"]}).json()
+    assert (
+        client.patch(f"/api/orders/{order['id']}/status", json={"status": "in_progress", "actor": "Chris"}).status_code
+        == 200
+    )
 
     la = client.get(f"/api/we-owe/{item['id']}").json()["last_activity"]
     assert la["actor"] == "Chris" and la["action"] == "status_changed"
@@ -708,14 +836,13 @@ def test_board_rows_carry_the_ticket_an_action_should_attach_to(client):
     through this. The open ticket wins over a finished one, so a follow-up
     lands on the work in progress rather than on last month's closed RO."""
     vehicle = make_recon_vehicle(client, stock_number="R-OID-1")
-    assert board_row(client, vehicle["id"])["order_id"] is None, (
-        "a car with no ticket should offer nothing to link to"
-    )
+    assert board_row(client, vehicle["id"])["order_id"] is None, "a car with no ticket should offer nothing to link to"
 
     done = make_recon_order(client, vehicle["id"], concern="Finished job")
-    assert client.patch(
-        f"/api/orders/{done['id']}/status", json={"status": "complete", "actor": "tester"}
-    ).status_code == 200
+    assert (
+        client.patch(f"/api/orders/{done['id']}/status", json={"status": "complete", "actor": "tester"}).status_code
+        == 200
+    )
     assert board_row(client, vehicle["id"])["order_id"] == done["id"], (
         "with only a closed ticket, that's still the one to link to"
     )
@@ -726,9 +853,12 @@ def test_board_rows_carry_the_ticket_an_action_should_attach_to(client):
     # been closed out.
     live = make_recon_order(client, vehicle["id"], concern="Open job")
     newer_done = make_recon_order(client, vehicle["id"], concern="Later, already finished")
-    assert client.patch(
-        f"/api/orders/{newer_done['id']}/status", json={"status": "complete", "actor": "tester"}
-    ).status_code == 200
+    assert (
+        client.patch(
+            f"/api/orders/{newer_done['id']}/status", json={"status": "complete", "actor": "tester"}
+        ).status_code
+        == 200
+    )
     assert board_row(client, vehicle["id"])["order_id"] == live["id"], (
         "an open ticket should win over a completed one, even a newer completed one"
     )
@@ -739,8 +869,6 @@ def test_we_owe_board_rows_carry_an_order_id(client):
     row = next(r for r in client.get("/api/vehicles-board").json() if r["we_owe_id"] == item["id"])
     assert row["order_id"] is None
 
-    order = client.post(
-        "/api/orders", json={"concern": "Mirror", "segment": "we_owe", "we_owe_id": item["id"]}
-    ).json()
+    order = client.post("/api/orders", json={"concern": "Mirror", "segment": "we_owe", "we_owe_id": item["id"]}).json()
     row = next(r for r in client.get("/api/vehicles-board").json() if r["we_owe_id"] == item["id"])
     assert row["order_id"] == order["id"]

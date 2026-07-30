@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-from tests.helpers import make_recon_order, make_recon_vehicle, make_retail_order, save_estimate
+from tests.helpers import (
+    make_recon_order,
+    make_recon_vehicle,
+    make_retail_order,
+    save_estimate,
+)
 
 
 def test_staff_crud(client):
@@ -53,7 +58,9 @@ def test_staff_rename_follows_through_to_task_assignments(client):
     ray = client.post("/api/staff", json={"name": "Ray Ortiz", "role": "technician"}).json()
     client.post("/api/staff", json={"name": "Dana Wu", "role": "advisor"})
 
-    shared = client.post("/api/tasks", json={"title": "Shared detail", "assigned_to": ["Ray Ortiz", "Dana Wu"], "actor": "Ray Ortiz"}).json()
+    shared = client.post(
+        "/api/tasks", json={"title": "Shared detail", "assigned_to": ["Ray Ortiz", "Dana Wu"], "actor": "Ray Ortiz"}
+    ).json()
     done = client.post("/api/tasks", json={"title": "Old sublet", "assigned_to": ["Ray Ortiz"]}).json()
     client.patch(f"/api/tasks/{done['id']}", json={"done": True})
     danas = client.post("/api/tasks", json={"title": "Call customer", "assigned_to": ["Dana Wu"]}).json()
@@ -196,10 +203,27 @@ def test_status_transitions(client):
 def test_void_order(client):
     vehicle = make_recon_vehicle(client, stock_number="R-4501")
     live_order = make_recon_order(client, vehicle["id"], concern="Real work")
-    save_estimate(client, live_order["id"], [{"kind": "labor", "description": "Diag", "quantity": 1, "unit_price": 100, "unit_cost": 100}])
+    save_estimate(
+        client,
+        live_order["id"],
+        [{"kind": "labor", "description": "Diag", "quantity": 1, "unit_price": 100, "unit_cost": 100}],
+    )
 
     mistake_order = make_recon_order(client, vehicle["id"], concern="Started by mistake")
-    save_estimate(client, mistake_order["id"], [{"kind": "part", "description": "Wrong part", "part_number": "X-1", "quantity": 1, "unit_price": 300, "unit_cost": 300}])
+    save_estimate(
+        client,
+        mistake_order["id"],
+        [
+            {
+                "kind": "part",
+                "description": "Wrong part",
+                "part_number": "X-1",
+                "quantity": 1,
+                "unit_price": 300,
+                "unit_cost": 300,
+            }
+        ],
+    )
     res = client.post(f"/api/orders/{mistake_order['id']}/void", json={"actor": "Clay"})
     assert res.status_code == 200
     assert res.json() == {"id": mistake_order["id"], "status": "complete", "voided": True}
@@ -222,7 +246,20 @@ def test_voided_order_is_frozen_from_further_edits(client):
     vendor = client.post("/api/vendors", json={"name": "WorldPac"}).json()
     vehicle = make_recon_vehicle(client, stock_number="R-4502")
     order = make_recon_order(client, vehicle["id"])
-    estimate = save_estimate(client, order["id"], [{"kind": "part", "description": "Brake pads", "part_number": "BP-1", "quantity": 1, "unit_price": 40, "unit_cost": 40}])
+    estimate = save_estimate(
+        client,
+        order["id"],
+        [
+            {
+                "kind": "part",
+                "description": "Brake pads",
+                "part_number": "BP-1",
+                "quantity": 1,
+                "unit_price": 40,
+                "unit_cost": 40,
+            }
+        ],
+    )
     item_id = estimate["items"][0]["id"]
     client.post(f"/api/orders/{order['id']}/void", json={"actor": "Clay"})
 
@@ -232,13 +269,32 @@ def test_voided_order_is_frozen_from_further_edits(client):
     res = client.patch(f"/api/orders/{order['id']}/concern", json={"concern": "Different work"})
     assert res.status_code == 409
 
-    res = client.post(f"/api/orders/{order['id']}/estimate", json={"actor": "t", "items": [{"id": item_id, "kind": "part", "description": "Brake pads", "part_number": "BP-1", "quantity": 5, "unit_price": 40, "unit_cost": 40}]})
+    res = client.post(
+        f"/api/orders/{order['id']}/estimate",
+        json={
+            "actor": "t",
+            "items": [
+                {
+                    "id": item_id,
+                    "kind": "part",
+                    "description": "Brake pads",
+                    "part_number": "BP-1",
+                    "quantity": 5,
+                    "unit_price": 40,
+                    "unit_cost": 40,
+                }
+            ],
+        },
+    )
     assert res.status_code == 409
 
     res = client.patch(f"/api/orders/{order['id']}/estimate/order-parts")
     assert res.status_code == 409
 
-    res = client.post(f"/api/orders/{order['id']}/estimate/receive-parts", json={"item_ids": [item_id], "vendor_id": vendor["id"], "invoice_number": "INV-1"})
+    res = client.post(
+        f"/api/orders/{order['id']}/estimate/receive-parts",
+        json={"item_ids": [item_id], "vendor_id": vendor["id"], "invoice_number": "INV-1"},
+    )
     assert res.status_code == 409
 
 
@@ -247,8 +303,15 @@ def test_void_order_blocked_once_customer_invoiced(client):
     vehicle's rollup while the customer invoice/payment records still say
     it was billed -- the two would permanently disagree."""
     order = make_retail_order(client)
-    save_estimate(client, order["id"], [{"kind": "labor", "description": "Diag", "quantity": 1, "unit_price": 100, "unit_cost": 100}])
-    client.post(f"/api/orders/{order['id']}/authorization", json={"status": "approved", "approved_by": "Jamie", "method": "in_person"})
+    save_estimate(
+        client,
+        order["id"],
+        [{"kind": "labor", "description": "Diag", "quantity": 1, "unit_price": 100, "unit_cost": 100}],
+    )
+    client.post(
+        f"/api/orders/{order['id']}/authorization",
+        json={"status": "approved", "approved_by": "Jamie", "method": "in_person"},
+    )
     res = client.post(f"/api/orders/{order['id']}/invoice", json={"actor": "Clay"})
     assert res.status_code == 201, res.text
 
@@ -259,9 +322,16 @@ def test_void_order_blocked_once_customer_invoiced(client):
 def test_authorization_flow(client):
     vehicle = make_recon_vehicle(client)
     order = make_recon_order(client, vehicle["id"])
-    save_estimate(client, order["id"], [{"kind": "labor", "description": "Diag", "quantity": 1, "unit_price": 50, "unit_cost": 50}])
+    save_estimate(
+        client,
+        order["id"],
+        [{"kind": "labor", "description": "Diag", "quantity": 1, "unit_price": 50, "unit_cost": 50}],
+    )
 
-    res = client.post(f"/api/orders/{order['id']}/authorization", json={"status": "approved", "approved_by": "Clay", "method": "in_person"})
+    res = client.post(
+        f"/api/orders/{order['id']}/authorization",
+        json={"status": "approved", "approved_by": "Clay", "method": "in_person"},
+    )
     assert res.status_code == 201
 
 
@@ -271,12 +341,31 @@ def test_estimate_stays_editable_after_approval_for_recon(client):
     correct a line at any point in the RO's life, even after approval."""
     vehicle = make_recon_vehicle(client)
     order = make_recon_order(client, vehicle["id"])
-    save_estimate(client, order["id"], [{"kind": "labor", "description": "Diag", "quantity": 1, "unit_price": 50, "unit_cost": 50}])
-    client.post(f"/api/orders/{order['id']}/authorization", json={"status": "approved", "approved_by": "Clay", "method": "in_person"})
+    save_estimate(
+        client,
+        order["id"],
+        [{"kind": "labor", "description": "Diag", "quantity": 1, "unit_price": 50, "unit_cost": 50}],
+    )
+    client.post(
+        f"/api/orders/{order['id']}/authorization",
+        json={"status": "approved", "approved_by": "Clay", "method": "in_person"},
+    )
 
     res = client.post(
         f"/api/orders/{order['id']}/estimate",
-        json={"actor": "Clay", "items": [{"kind": "part", "description": "Brake pads", "part_number": "BP-1", "quantity": 1, "unit_price": 45, "unit_cost": 45}]},
+        json={
+            "actor": "Clay",
+            "items": [
+                {
+                    "kind": "part",
+                    "description": "Brake pads",
+                    "part_number": "BP-1",
+                    "quantity": 1,
+                    "unit_price": 45,
+                    "unit_cost": 45,
+                }
+            ],
+        },
     )
     assert res.status_code == 200
     assert len(res.json()["items"]) == 1
@@ -285,10 +374,17 @@ def test_estimate_stays_editable_after_approval_for_recon(client):
 def test_findings_require_part_number(client):
     vehicle = make_recon_vehicle(client)
     order = make_recon_order(client, vehicle["id"])
-    save_estimate(client, order["id"], [{"kind": "labor", "description": "Diag", "quantity": 1, "unit_price": 50, "unit_cost": 50}])
+    save_estimate(
+        client,
+        order["id"],
+        [{"kind": "labor", "description": "Diag", "quantity": 1, "unit_price": 50, "unit_cost": 50}],
+    )
     res = client.post(
         f"/api/orders/{order['id']}/findings",
-        json={"summary": "Found worn pads", "items": [{"kind": "part", "description": "Pads", "quantity": 1, "unit_price": 10}]},
+        json={
+            "summary": "Found worn pads",
+            "items": [{"kind": "part", "description": "Pads", "quantity": 1, "unit_price": 10}],
+        },
     )
     assert res.status_code == 422
 
@@ -298,8 +394,15 @@ def test_retail_invoice_and_payment(client):
     old approved/closed status values -- an order can be marked complete
     freely, independent of whether its customer invoice is paid."""
     order = make_retail_order(client)
-    save_estimate(client, order["id"], [{"kind": "labor", "description": "Diag", "quantity": 1, "unit_price": 100, "unit_cost": 100}])
-    client.post(f"/api/orders/{order['id']}/authorization", json={"status": "approved", "approved_by": "Clay", "method": "in_person"})
+    save_estimate(
+        client,
+        order["id"],
+        [{"kind": "labor", "description": "Diag", "quantity": 1, "unit_price": 100, "unit_cost": 100}],
+    )
+    client.post(
+        f"/api/orders/{order['id']}/authorization",
+        json={"status": "approved", "approved_by": "Clay", "method": "in_person"},
+    )
     client.patch(f"/api/orders/{order['id']}/status", json={"status": "in_progress"})
 
     res = client.patch(f"/api/orders/{order['id']}/status", json={"status": "complete"})
@@ -329,8 +432,15 @@ def test_concurrent_payments_cannot_overdraw_invoice(client):
     from concurrent.futures import ThreadPoolExecutor
 
     order = make_retail_order(client)
-    save_estimate(client, order["id"], [{"kind": "labor", "description": "Diag", "quantity": 1, "unit_price": 100, "unit_cost": 100}])
-    client.post(f"/api/orders/{order['id']}/authorization", json={"status": "approved", "approved_by": "Clay", "method": "in_person"})
+    save_estimate(
+        client,
+        order["id"],
+        [{"kind": "labor", "description": "Diag", "quantity": 1, "unit_price": 100, "unit_cost": 100}],
+    )
+    client.post(
+        f"/api/orders/{order['id']}/authorization",
+        json={"status": "approved", "approved_by": "Clay", "method": "in_person"},
+    )
     invoice = client.post(f"/api/orders/{order['id']}/invoice", json={"actor": "Clay"}).json()
 
     def pay():

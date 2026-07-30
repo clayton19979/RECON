@@ -5,6 +5,7 @@ offers it to the whole shop. These tests cover how that folder gets filled
 over the internet -- and, mostly, the ways a fetch must refuse to leave
 anything half-trusted behind for that machinery to find.
 """
+
 from __future__ import annotations
 
 import json
@@ -46,6 +47,7 @@ def _transport(release: dict | None, requests: list | None = None, status: int =
 
 # --- when nothing is configured, nothing happens ---
 
+
 def test_no_config_file_means_off_and_no_network(tmp_path):
     def explode(_request):
         raise AssertionError("an unconfigured install must never touch the network")
@@ -62,6 +64,7 @@ def test_unreadable_or_incomplete_config_means_off(tmp_path):
 
 
 # --- the happy path ---
+
 
 def test_newer_release_lands_whole_in_the_updates_folder(tmp_path):
     _write_source(tmp_path)
@@ -92,6 +95,7 @@ def test_installer_is_picked_out_from_among_other_assets(tmp_path):
 
 
 # --- refusing to fetch what nobody needs ---
+
 
 def test_same_or_older_release_is_not_downloaded(tmp_path):
     _write_source(tmp_path)
@@ -126,6 +130,7 @@ def test_release_404_reads_as_nothing_to_offer(tmp_path):
 
 # --- failure must leave nothing behind ---
 
+
 def test_short_download_is_discarded_not_offered(tmp_path):
     """A size mismatch is a truncated or tampered file; leaving it under its
     real name would hand a broken installer to every PC in the shop."""
@@ -148,6 +153,7 @@ def test_network_failure_reports_instead_of_raising(tmp_path):
 
 
 # --- talking to a private repository ---
+
 
 def test_token_rides_along_and_asset_asks_for_bytes(tmp_path):
     _write_source(tmp_path, token="github_pat_test")

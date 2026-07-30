@@ -57,7 +57,9 @@ def post_invoice(client, **overrides):
         "subtotal": 45,
         "tax": 0,
         "total": 45,
-        "items": [{"part_number": "BP-100", "description": "Brake pads", "quantity": 1, "unit_cost": 45, "kind": "part"}],
+        "items": [
+            {"part_number": "BP-100", "description": "Brake pads", "quantity": 1, "unit_cost": 45, "kind": "part"}
+        ],
     }
     payload.update(overrides)
     return client.post("/api/agent/invoices/process", json=payload)
@@ -72,7 +74,9 @@ def test_vendor_crud_and_duplicate(client):
 
 def test_vendor_can_be_corrected(client):
     vendor = client.post("/api/vendors", json={"name": "Wrldpac Typo"}).json()
-    res = client.patch(f"/api/vendors/{vendor['id']}", json={"name": "WorldPac", "aliases": ["World Pac"], "account_number": "ACCT-1"})
+    res = client.patch(
+        f"/api/vendors/{vendor['id']}", json={"name": "WorldPac", "aliases": ["World Pac"], "account_number": "ACCT-1"}
+    )
     assert res.status_code == 200
     body = res.json()
     assert body["name"] == "WorldPac"
@@ -162,8 +166,13 @@ def test_large_invoice_no_longer_needs_approval(client):
     order = make_recon_order(client, vehicle["id"])
 
     body = post_invoice(
-        client, order_id=order["id"], subtotal=1750, total=1750,
-        items=[{"part_number": "TRANS-1", "description": "Transmission", "quantity": 1, "unit_cost": 1750, "kind": "part"}],
+        client,
+        order_id=order["id"],
+        subtotal=1750,
+        total=1750,
+        items=[
+            {"part_number": "TRANS-1", "description": "Transmission", "quantity": 1, "unit_cost": 1750, "kind": "part"}
+        ],
     ).json()
     assert body["status"] == "posted", body
     assert body["issues"] == []
@@ -177,10 +186,26 @@ def test_process_invoice_keeps_part_and_labor_separate_when_codes_collide(client
     client.post("/api/vendors", json={"name": "WorldPac"})
     vehicle = make_recon_vehicle(client, stock_number="R-5010")
     order = make_recon_order(client, vehicle["id"])
-    save_estimate(client, order["id"], [{"kind": "part", "description": "Misc part", "part_number": "MISC", "quantity": 1, "unit_price": 20, "unit_cost": 20}])
+    save_estimate(
+        client,
+        order["id"],
+        [
+            {
+                "kind": "part",
+                "description": "Misc part",
+                "part_number": "MISC",
+                "quantity": 1,
+                "unit_price": 20,
+                "unit_cost": 20,
+            }
+        ],
+    )
 
     res = post_invoice(
-        client, po_number=order["number"], subtotal=65, total=65,
+        client,
+        po_number=order["number"],
+        subtotal=65,
+        total=65,
         items=[
             {"part_number": "MISC", "description": "Misc part", "quantity": 1, "unit_cost": 20, "kind": "part"},
             {"part_number": "MISC", "description": "Shop labor", "quantity": 1.5, "unit_cost": 30, "kind": "labor"},
@@ -199,16 +224,26 @@ def test_process_invoice_posts_and_receives_parts(client):
     client.post("/api/vendors", json={"name": "WorldPac", "aliases": ["World Pac"]})
     vehicle = make_recon_vehicle(client, stock_number="R-5001")
     order = make_recon_order(client, vehicle["id"])
-    estimate = save_estimate(
+    save_estimate(
         client,
         order["id"],
-        [{"kind": "part", "description": "Brake pads", "part_number": "BP-100", "quantity": 2, "unit_price": 45, "unit_cost": 45}],
+        [
+            {
+                "kind": "part",
+                "description": "Brake pads",
+                "part_number": "BP-100",
+                "quantity": 2,
+                "unit_price": 45,
+                "unit_cost": 45,
+            }
+        ],
     )
     res = post_invoice(
         client,
         vendor_name="World Pac",  # alias match
         po_number=order["number"],
-        subtotal=90, total=90,
+        subtotal=90,
+        total=90,
         items=[{"part_number": "bp-100", "description": "Brake pads", "quantity": 2, "unit_cost": 45, "kind": "part"}],
     )
     body = res.json()
@@ -236,9 +271,28 @@ def test_void_ap_invoice_and_repost_under_same_number(client):
     client.post("/api/vendors", json={"name": "WorldPac"})
     vehicle = make_recon_vehicle(client, stock_number="R-5002")
     order = make_recon_order(client, vehicle["id"])
-    save_estimate(client, order["id"], [{"kind": "part", "description": "Brake pads", "part_number": "BP-1", "quantity": 1, "unit_price": 45, "unit_cost": 45}])
-    res = post_invoice(client, vendor_name="WorldPac", po_number=order["number"], subtotal=45, total=45,
-                        items=[{"part_number": "BP-1", "description": "Brake pads", "quantity": 1, "unit_cost": 45, "kind": "part"}])
+    save_estimate(
+        client,
+        order["id"],
+        [
+            {
+                "kind": "part",
+                "description": "Brake pads",
+                "part_number": "BP-1",
+                "quantity": 1,
+                "unit_price": 45,
+                "unit_cost": 45,
+            }
+        ],
+    )
+    res = post_invoice(
+        client,
+        vendor_name="WorldPac",
+        po_number=order["number"],
+        subtotal=45,
+        total=45,
+        items=[{"part_number": "BP-1", "description": "Brake pads", "quantity": 1, "unit_cost": 45, "kind": "part"}],
+    )
     invoice_id = client.get("/api/ap/invoices").json()[0]["id"]
     assert res.json()["status"] == "posted"
 
@@ -251,12 +305,31 @@ def test_void_ap_invoice_and_repost_under_same_number(client):
 
     vehicle2 = make_recon_vehicle(client, stock_number="R-5002B")
     order2 = make_recon_order(client, vehicle2["id"])
-    save_estimate(client, order2["id"], [{"kind": "part", "description": "Rotors", "part_number": "RT-1", "quantity": 1, "unit_price": 45, "unit_cost": 45}])
+    save_estimate(
+        client,
+        order2["id"],
+        [
+            {
+                "kind": "part",
+                "description": "Rotors",
+                "part_number": "RT-1",
+                "quantity": 1,
+                "unit_price": 45,
+                "unit_cost": 45,
+            }
+        ],
+    )
 
     # Re-posting the exact same invoice number now succeeds instead of
     # being rejected as a duplicate of the voided one.
-    res = post_invoice(client, vendor_name="WorldPac", po_number=order2["number"], subtotal=45, total=45,
-                        items=[{"part_number": "RT-1", "description": "Rotors", "quantity": 1, "unit_cost": 45, "kind": "part"}])
+    res = post_invoice(
+        client,
+        vendor_name="WorldPac",
+        po_number=order2["number"],
+        subtotal=45,
+        total=45,
+        items=[{"part_number": "RT-1", "description": "Rotors", "quantity": 1, "unit_cost": 45, "kind": "part"}],
+    )
     assert res.json()["status"] == "posted"
 
 
@@ -264,9 +337,28 @@ def test_void_ap_invoice_twice_rejected(client):
     client.post("/api/vendors", json={"name": "WorldPac"})
     vehicle = make_recon_vehicle(client, stock_number="R-5003")
     order = make_recon_order(client, vehicle["id"])
-    save_estimate(client, order["id"], [{"kind": "part", "description": "Brake pads", "part_number": "BP-1", "quantity": 1, "unit_price": 45, "unit_cost": 45}])
-    post_invoice(client, vendor_name="WorldPac", po_number=order["number"], subtotal=45, total=45,
-                 items=[{"part_number": "BP-1", "description": "Brake pads", "quantity": 1, "unit_cost": 45, "kind": "part"}])
+    save_estimate(
+        client,
+        order["id"],
+        [
+            {
+                "kind": "part",
+                "description": "Brake pads",
+                "part_number": "BP-1",
+                "quantity": 1,
+                "unit_price": 45,
+                "unit_cost": 45,
+            }
+        ],
+    )
+    post_invoice(
+        client,
+        vendor_name="WorldPac",
+        po_number=order["number"],
+        subtotal=45,
+        total=45,
+        items=[{"part_number": "BP-1", "description": "Brake pads", "quantity": 1, "unit_cost": 45, "kind": "part"}],
+    )
     invoice_id = client.get("/api/ap/invoices").json()[0]["id"]
 
     client.patch(f"/api/ap/invoices/{invoice_id}/void", json={"actor": "Clay"})
@@ -290,12 +382,22 @@ def test_process_invoice_matches_po_by_stock_number(client):
     save_estimate(
         client,
         order["id"],
-        [{"kind": "part", "description": "Brake pads", "part_number": "BP-1", "quantity": 1, "unit_price": 45, "unit_cost": 45}],
+        [
+            {
+                "kind": "part",
+                "description": "Brake pads",
+                "part_number": "BP-1",
+                "quantity": 1,
+                "unit_price": 45,
+                "unit_cost": 45,
+            }
+        ],
     )
     res = post_invoice(
         client,
         po_number="r-9201",  # lowercase, exactly what a vendor might scrawl on an invoice
-        subtotal=45, total=45,
+        subtotal=45,
+        total=45,
         items=[{"part_number": "BP-1", "description": "Brake pads", "quantity": 1, "unit_cost": 45, "kind": "part"}],
     )
     assert res.json()["status"] == "posted", res.text
@@ -309,9 +411,21 @@ def test_process_invoice_duplicate_rejected(client):
     save_estimate(
         client,
         order["id"],
-        [{"kind": "part", "description": "Brake pads", "part_number": "BP-1", "quantity": 1, "unit_price": 45, "unit_cost": 45}],
+        [
+            {
+                "kind": "part",
+                "description": "Brake pads",
+                "part_number": "BP-1",
+                "quantity": 1,
+                "unit_price": 45,
+                "unit_cost": 45,
+            }
+        ],
     )
-    kwargs = dict(po_number=order["number"], items=[{"part_number": "BP-1", "description": "Brake pads", "quantity": 1, "unit_cost": 45, "kind": "part"}])
+    kwargs = {
+        "po_number": order["number"],
+        "items": [{"part_number": "BP-1", "description": "Brake pads", "quantity": 1, "unit_cost": 45, "kind": "part"}],
+    }
     first = post_invoice(client, **kwargs)
     assert first.json()["status"] == "posted"
     second = post_invoice(client, **kwargs)
@@ -325,12 +439,22 @@ def test_process_invoice_over_receipt_blocked(client):
     save_estimate(
         client,
         order["id"],
-        [{"kind": "part", "description": "Brake pads", "part_number": "BP-1", "quantity": 1, "unit_price": 45, "unit_cost": 45}],
+        [
+            {
+                "kind": "part",
+                "description": "Brake pads",
+                "part_number": "BP-1",
+                "quantity": 1,
+                "unit_price": 45,
+                "unit_cost": 45,
+            }
+        ],
     )
     res = post_invoice(
         client,
         po_number=order["number"],
-        subtotal=90, total=90,
+        subtotal=90,
+        total=90,
         items=[{"part_number": "BP-1", "description": "Brake pads", "quantity": 2, "unit_cost": 45, "kind": "part"}],
     )
     body = res.json()
@@ -345,9 +469,22 @@ def test_ap_invoices_filterable_by_date(client):
     save_estimate(
         client,
         order["id"],
-        [{"kind": "part", "description": "Brake pads", "part_number": "BP-1", "quantity": 1, "unit_price": 45, "unit_cost": 45}],
+        [
+            {
+                "kind": "part",
+                "description": "Brake pads",
+                "part_number": "BP-1",
+                "quantity": 1,
+                "unit_price": 45,
+                "unit_cost": 45,
+            }
+        ],
     )
-    post_invoice(client, po_number=order["number"], items=[{"part_number": "BP-1", "description": "Brake pads", "quantity": 1, "unit_cost": 45, "kind": "part"}])
+    post_invoice(
+        client,
+        po_number=order["number"],
+        items=[{"part_number": "BP-1", "description": "Brake pads", "quantity": 1, "unit_cost": 45, "kind": "part"}],
+    )
 
     all_invoices = client.get("/api/ap/invoices").json()
     assert any(i["invoice_number"] == "INV-100" for i in all_invoices)
@@ -366,7 +503,16 @@ def test_process_invoice_totals_mismatch(client):
     save_estimate(
         client,
         order["id"],
-        [{"kind": "part", "description": "Brake pads", "part_number": "BP-1", "quantity": 1, "unit_price": 45, "unit_cost": 45}],
+        [
+            {
+                "kind": "part",
+                "description": "Brake pads",
+                "part_number": "BP-1",
+                "quantity": 1,
+                "unit_price": 45,
+                "unit_cost": 45,
+            }
+        ],
     )
     res = post_invoice(client, po_number=order["number"], subtotal=999, total=999)
     body = res.json()

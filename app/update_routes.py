@@ -1,4 +1,5 @@
 """What this install is running, and what the shop PC has to offer it."""
+
 from __future__ import annotations
 
 from pathlib import Path

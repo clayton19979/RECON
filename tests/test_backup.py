@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from app.backup import (
     backup_database,
@@ -15,7 +15,7 @@ from app.backup import (
 )
 from app.db import init_db
 
-NOW = datetime(2026, 7, 27, 12, 0, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 7, 27, 12, 0, 0, tzinfo=UTC)
 
 
 def _make_backup_at(destination_dir, moment):
@@ -139,7 +139,7 @@ def test_database_changed_since_detects_writes(tmp_path):
     assert database_changed_since(source, None) is True
     # Nothing written since a moment in the future.
     assert database_changed_since(source, NOW + timedelta(days=3650)) is False
-    assert database_changed_since(source, datetime(2000, 1, 1, tzinfo=timezone.utc)) is True
+    assert database_changed_since(source, datetime(2000, 1, 1, tzinfo=UTC)) is True
 
 
 def test_most_recent_backup_age_hours_none_when_no_backups(tmp_path):
@@ -178,7 +178,9 @@ def test_restore_database_replaces_live_db_and_saves_current_aside(tmp_path):
     live = tmp_path / "shop.db"
     init_db(live)
     db = sqlite3.connect(live)
-    db.execute("INSERT INTO customers(name,phone,email,is_shop_owned,created_at) VALUES('Original','','',0,'2026-01-01')")
+    db.execute(
+        "INSERT INTO customers(name,phone,email,is_shop_owned,created_at) VALUES('Original','','',0,'2026-01-01')"
+    )
     db.commit()
     db.close()
 
@@ -187,7 +189,9 @@ def test_restore_database_replaces_live_db_and_saves_current_aside(tmp_path):
 
     # Live db changes after the backup was taken.
     db = sqlite3.connect(live)
-    db.execute("INSERT INTO customers(name,phone,email,is_shop_owned,created_at) VALUES('Added later','','',0,'2026-01-02')")
+    db.execute(
+        "INSERT INTO customers(name,phone,email,is_shop_owned,created_at) VALUES('Added later','','',0,'2026-01-02')"
+    )
     db.commit()
     db.close()
 
@@ -270,13 +274,24 @@ def test_restore_database_round_trips_every_kind_of_record(tmp_path):
 
     restored = sqlite3.connect(fresh)
     restored.row_factory = sqlite3.Row
-    assert restored.execute("SELECT name, vin FROM vehicles JOIN customers ON customers.id=vehicles.customer_id WHERE vehicles.id=1").fetchone()[:] == ("Jane Doe", "1FTFW1E5XKFA00001")
-    assert restored.execute("SELECT stock_number, status FROM recon_vehicles WHERE id=1").fetchone()[:] == ("R-1001", "acquired")
+    assert restored.execute(
+        "SELECT name, vin FROM vehicles JOIN customers ON customers.id=vehicles.customer_id WHERE vehicles.id=1"
+    ).fetchone()[:] == ("Jane Doe", "1FTFW1E5XKFA00001")
+    assert restored.execute("SELECT stock_number, status FROM recon_vehicles WHERE id=1").fetchone()[:] == (
+        "R-1001",
+        "acquired",
+    )
     assert restored.execute("SELECT total FROM estimates WHERE id=1").fetchone()[0] == 535.0
     assert restored.execute("SELECT description FROM estimate_items WHERE estimate_id=1").fetchone()[0] == "Brake pads"
-    assert restored.execute("SELECT invoice_number, total FROM ap_invoices WHERE order_id=1").fetchone()[:] == ("INV-9001", 160.5)
+    assert restored.execute("SELECT invoice_number, total FROM ap_invoices WHERE order_id=1").fetchone()[:] == (
+        "INV-9001",
+        160.5,
+    )
     assert restored.execute("SELECT title FROM tasks WHERE order_id=1").fetchone()[0] == "Call Jane about pickup"
-    assert restored.execute("SELECT action, actor FROM activity_events WHERE order_id=1").fetchone()[:] == ("status_changed", "Clay")
+    assert restored.execute("SELECT action, actor FROM activity_events WHERE order_id=1").fetchone()[:] == (
+        "status_changed",
+        "Clay",
+    )
     restored.close()
 
 

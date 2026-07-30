@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import socket
 import time
-from typing import Callable
+from collections.abc import Callable
 
 DISCOVERY_PORT = 47823
 DISCOVER_MSG = b"DISCOUNT_AUTO_OPS_DISCOVER"
@@ -26,7 +26,7 @@ def find_master(port: int, timeout: float = 1.5) -> str | None:
             sock.settimeout(remaining)
             try:
                 data, addr = sock.recvfrom(256)
-            except socket.timeout:
+            except TimeoutError:
                 return None
             if data.startswith(HERE_PREFIX):
                 return addr[0]
@@ -52,7 +52,7 @@ def run_responder(port: int, should_stop: Callable[[], bool]) -> None:
         while not should_stop():
             try:
                 data, addr = sock.recvfrom(256)
-            except socket.timeout:
+            except TimeoutError:
                 continue
             if data == DISCOVER_MSG:
                 sock.sendto(HERE_PREFIX + str(port).encode(), addr)

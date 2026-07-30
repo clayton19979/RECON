@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import sqlite3
-from typing import Callable, Literal
+from collections.abc import Callable
+from typing import Literal
 
 from fastapi import APIRouter
 
@@ -9,7 +10,9 @@ from .db import normalize_vin
 from .recon import unit_lifetime, vehicle_board_rows
 
 
-def vehicle_profit_rows(db: sqlite3.Connection, start: str | None, end: str | None, vin: str | None = None) -> list[dict]:
+def vehicle_profit_rows(
+    db: sqlite3.Connection, start: str | None, end: str | None, vin: str | None = None
+) -> list[dict]:
     """One row per physical car: what it cost, what it sold for, what's left.
 
     Keyed on the unit rather than on a recon record or a we-owe promise, which
@@ -43,13 +46,15 @@ def vehicle_profit_rows(db: sqlite3.Connection, start: str | None, end: str | No
     result = []
     for row in rows:
         lifetime = unit_lifetime(db, row["id"])
-        result.append({
-            **lifetime,
-            "vin": row["vin"] or lifetime["vin"],
-            "stock_number": row["stock_number"] or "",
-            "vehicle": row["description"] or "",
-            "acquired_at": row["created_at"],
-        })
+        result.append(
+            {
+                **lifetime,
+                "vin": row["vin"] or lifetime["vin"],
+                "stock_number": row["stock_number"] or "",
+                "vehicle": row["description"] or "",
+                "acquired_at": row["created_at"],
+            }
+        )
     return result
 
 
@@ -80,13 +85,15 @@ def technician_productivity_rows(db: sqlite3.Connection, start: str | None, end:
             {"tech_id": tech["id"], "start": start, "end": end_bound},
         ).fetchone()
         labor_hours, labor_cost = totals[0], totals[1]
-        result.append({
-            "technician": tech["name"],
-            "ro_count": len(orders),
-            "completed_count": sum(1 for row in orders if row["status"] == "complete"),
-            "labor_hours": round(labor_hours, 2),
-            "labor_cost": round(labor_cost, 2),
-        })
+        result.append(
+            {
+                "technician": tech["name"],
+                "ro_count": len(orders),
+                "completed_count": sum(1 for row in orders if row["status"] == "complete"),
+                "labor_hours": round(labor_hours, 2),
+                "labor_cost": round(labor_cost, 2),
+            }
+        )
     return result
 
 
@@ -94,7 +101,9 @@ def build_reports_router(connect: Callable[[], sqlite3.Connection]) -> APIRouter
     router = APIRouter(prefix="/api")
 
     @router.get("/reports/vehicle-spend")
-    def vehicle_spend(start: str | None = None, end: str | None = None, segment: Literal["recon", "we_owe"] | None = None):
+    def vehicle_spend(
+        start: str | None = None, end: str | None = None, segment: Literal["recon", "we_owe"] | None = None
+    ):
         with connect() as db:
             return vehicle_board_rows(db, start, end, segment)
 

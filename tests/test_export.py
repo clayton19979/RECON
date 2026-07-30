@@ -3,7 +3,12 @@ from __future__ import annotations
 import csv
 import io
 
-from tests.helpers import make_recon_order, make_recon_vehicle, make_we_owe, save_estimate
+from tests.helpers import (
+    make_recon_order,
+    make_recon_vehicle,
+    make_we_owe,
+    save_estimate,
+)
 
 
 def test_export_vehicles_csv(client):
@@ -13,7 +18,16 @@ def test_export_vehicles_csv(client):
     estimate = save_estimate(
         client,
         order["id"],
-        [{"kind": "part", "description": "Brake pads", "part_number": "BP-1", "quantity": 1, "unit_price": 10, "unit_cost": 10}],
+        [
+            {
+                "kind": "part",
+                "description": "Brake pads",
+                "part_number": "BP-1",
+                "quantity": 1,
+                "unit_price": 10,
+                "unit_cost": 10,
+            }
+        ],
     )
     item_id = estimate["items"][0]["id"]
     client.post(
@@ -30,8 +44,15 @@ def test_export_vehicles_csv(client):
     rows = list(csv.reader(io.StringIO(res.text)))
     header, body = rows[0], rows[1:]
     assert header == [
-        "Stock #/Customer", "Vehicle", "VIN", "Segment", "Status", "Age (days)",
-        "What's In It", "Linked Vendor Invoices", "Updated At",
+        "Stock #/Customer",
+        "Vehicle",
+        "VIN",
+        "Segment",
+        "Status",
+        "Age (days)",
+        "What's In It",
+        "Linked Vendor Invoices",
+        "Updated At",
     ]
     assert "Purchase Price" not in header
     assert not any("9999" in cell for row in body for cell in row)  # purchase price never leaks into the export
@@ -55,12 +76,16 @@ def test_export_vehicle_spend_report_csv(client):
     file can't quietly disagree with what's on screen."""
     vehicle = make_recon_vehicle(client, stock_number="R-8001")
     order = make_recon_order(client, vehicle["id"])
-    save_estimate(client, order["id"], [
-        {"kind": "labor", "description": "Diag", "quantity": 2, "unit_price": 60, "unit_cost": 45},
-        # Quoted but never received, so Quoted and Cost have to differ -- a
-        # file that reported one number for both would look right otherwise.
-        {"kind": "part", "description": "Rotor", "quantity": 1, "unit_price": 90, "unit_cost": 60},
-    ])
+    save_estimate(
+        client,
+        order["id"],
+        [
+            {"kind": "labor", "description": "Diag", "quantity": 2, "unit_price": 60, "unit_cost": 45},
+            # Quoted but never received, so Quoted and Cost have to differ -- a
+            # file that reported one number for both would look right otherwise.
+            {"kind": "part", "description": "Rotor", "quantity": 1, "unit_price": 90, "unit_cost": 60},
+        ],
+    )
     make_we_owe(client, description="Touch up paint")
 
     res = client.get("/api/export/report/vehicle-spend.csv")
@@ -70,14 +95,23 @@ def test_export_vehicle_spend_report_csv(client):
 
     header, body = _rows(res)
     assert header == [
-        "Stock #", "Vehicle", "VIN", "Type", "Status", "Technicians",
-        "Quoted", "Cost", "Customer Paid", "Net to Shop", "Age (days)",
+        "Stock #",
+        "Vehicle",
+        "VIN",
+        "Type",
+        "Status",
+        "Technicians",
+        "Quoted",
+        "Cost",
+        "Customer Paid",
+        "Net to Shop",
+        "Age (days)",
     ]
     assert len(body) == 2
     recon_row = next(r for r in body if r[0] == "R-8001")
     assert recon_row[3] == "Recon"
     assert recon_row[6] == "150.00"  # 2 x $45 labor + the $60 rotor, quoted in full
-    assert recon_row[7] == "90.00"   # only the labor has actually landed
+    assert recon_row[7] == "90.00"  # only the labor has actually landed
 
     # The segment filter has to reach the file, or "Recon only" on screen
     # downloads every vehicle in the shop.
@@ -93,9 +127,13 @@ def test_export_technician_report_csv(client):
     technician = client.post("/api/staff", json={"name": "Wes", "role": "technician"}).json()
     vehicle = make_recon_vehicle(client, stock_number="R-8002")
     order = make_recon_order(client, vehicle["id"])
-    save_estimate(client, order["id"], [
-        {"kind": "labor", "description": "Brakes", "quantity": 3, "unit_price": 80, "unit_cost": 50},
-    ])
+    save_estimate(
+        client,
+        order["id"],
+        [
+            {"kind": "labor", "description": "Brakes", "quantity": 3, "unit_price": 80, "unit_cost": 50},
+        ],
+    )
     client.put(f"/api/orders/{order['id']}/assignment", json={"technician_id": technician["id"]})
 
     res = client.get("/api/export/report/technicians.csv")

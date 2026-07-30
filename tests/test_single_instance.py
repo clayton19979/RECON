@@ -1,5 +1,6 @@
 """The single-instance guard is the fix for two servers racing for port 8000,
 so it is worth proving rather than assuming."""
+
 from __future__ import annotations
 
 import sys
@@ -10,7 +11,7 @@ import pytest
 
 pytestmark = pytest.mark.skipif(sys.platform != "win32", reason="Windows named objects")
 
-from app.single_instance import SingleInstance  # noqa: E402
+from app.single_instance import SingleInstance
 
 
 def test_first_instance_is_not_flagged_as_running():
@@ -52,7 +53,7 @@ def test_second_launch_signals_the_first_to_show_itself():
     first = SingleInstance("RECONtest-signal")
     try:
         first.listen(shown.set)
-        time.sleep(0.2)                      # let the wait thread arm
+        time.sleep(0.2)  # let the wait thread arm
 
         second = SingleInstance("RECONtest-signal")
         try:

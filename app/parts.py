@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import sqlite3
-from typing import Annotated, Callable, Literal
+from collections.abc import Callable
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
@@ -163,8 +164,10 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
             ).fetchone()[0]
             vendor = db.execute("SELECT name FROM vendors WHERE id=?", (invoice["vendor_id"],)).fetchone()
             return {
-                "invoice_id": invoice["id"], "invoice_number": invoice["invoice_number"],
-                "vendor_name": vendor["name"] if vendor else "", "posted_at": invoice["posted_at"],
+                "invoice_id": invoice["id"],
+                "invoice_number": invoice["invoice_number"],
+                "vendor_name": vendor["name"] if vendor else "",
+                "posted_at": invoice["posted_at"],
                 "other_item_count": other_items,
             }
 
@@ -219,9 +222,31 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
                     )
                     reassigned_invoice_id = invoice["id"]
 
-            record_activity(db, order_id, "estimate_item_moved_out", item.actor, {"item_id": item_id, "target_order_id": item.target_order_id, "reassigned_invoice_id": reassigned_invoice_id}, now_fn)
-            record_activity(db, item.target_order_id, "estimate_item_moved_in", item.actor, {"item_id": item_id, "source_order_id": order_id, "reassigned_invoice_id": reassigned_invoice_id}, now_fn)
-        return {"id": item_id, "moved_to_order_id": item.target_order_id, "reassigned_invoice_id": reassigned_invoice_id}
+            record_activity(
+                db,
+                order_id,
+                "estimate_item_moved_out",
+                item.actor,
+                {
+                    "item_id": item_id,
+                    "target_order_id": item.target_order_id,
+                    "reassigned_invoice_id": reassigned_invoice_id,
+                },
+                now_fn,
+            )
+            record_activity(
+                db,
+                item.target_order_id,
+                "estimate_item_moved_in",
+                item.actor,
+                {"item_id": item_id, "source_order_id": order_id, "reassigned_invoice_id": reassigned_invoice_id},
+                now_fn,
+            )
+        return {
+            "id": item_id,
+            "moved_to_order_id": item.target_order_id,
+            "reassigned_invoice_id": reassigned_invoice_id,
+        }
 
     @router.patch("/orders/{order_id}/estimate/items/{item_id}/core-return")
     def set_core_return(order_id: int, item_id: int, item: CoreReturnIn):
@@ -245,7 +270,10 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
             # Sending the new part back reverses the whole line -- there is no
             # old unit owed to anyone, so there's no core to send with it.
             if item.returned and row["part_returned"]:
-                raise HTTPException(400, "This part is going back to the vendor, so its core charge reverses with it — there's no core to return")
+                raise HTTPException(
+                    400,
+                    "This part is going back to the vendor, so its core charge reverses with it — there's no core to return",
+                )
             # A fresh return has no credit yet, and undoing a return can't
             # leave a stale credit number behind -- cleared either way.
             db.execute(
@@ -253,8 +281,12 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
                 (1 if item.returned else 0, now_fn() if item.returned else "", item_id),
             )
             record_activity(
-                db, order_id, "core_returned" if item.returned else "core_return_undone", item.actor,
-                {"item_id": item_id}, now_fn,
+                db,
+                order_id,
+                "core_returned" if item.returned else "core_return_undone",
+                item.actor,
+                {"item_id": item_id},
+                now_fn,
             )
         return {"id": item_id, "core_returned": item.returned}
 
@@ -285,8 +317,12 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
                 (invoice_number, item_id),
             )
             record_activity(
-                db, order_id, "core_credit_recorded", item.actor,
-                {"item_id": item_id, "invoice_number": invoice_number}, now_fn,
+                db,
+                order_id,
+                "core_credit_recorded",
+                item.actor,
+                {"item_id": item_id, "invoice_number": invoice_number},
+                now_fn,
             )
         return {"id": item_id, "core_return_invoice_number": invoice_number}
 
@@ -318,8 +354,12 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
                 (1 if item.returned else 0, now_fn() if item.returned else "", item_id),
             )
             record_activity(
-                db, order_id, "part_returned" if item.returned else "part_return_undone", item.actor,
-                {"item_id": item_id}, now_fn,
+                db,
+                order_id,
+                "part_returned" if item.returned else "part_return_undone",
+                item.actor,
+                {"item_id": item_id},
+                now_fn,
             )
         return {"id": item_id, "part_returned": item.returned}
 
@@ -345,8 +385,12 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
             stamp = now_fn() if item.picked_up else ""
             db.execute("UPDATE estimate_items SET part_picked_up_at=? WHERE id=?", (stamp, item_id))
             record_activity(
-                db, order_id, "part_picked_up" if item.picked_up else "part_pickup_undone", item.actor,
-                {"item_id": item_id}, now_fn,
+                db,
+                order_id,
+                "part_picked_up" if item.picked_up else "part_pickup_undone",
+                item.actor,
+                {"item_id": item_id},
+                now_fn,
             )
         return {"id": item_id, "part_picked_up_at": stamp}
 
@@ -381,17 +425,24 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
             credit_total = -round(quantity * unit_cost, 2)
 
             result = create_ap_invoice_record(
-                db, now_fn,
-                vendor_id=item.vendor_id, order_id=order_id,
-                invoice_number=item.credit_number, po_number=current_order["number"],
-                items=[InvoiceItemIn(
-                    part_number=row["part_number"] or "N/A",
-                    description=row["description"],
-                    quantity=quantity,
-                    unit_cost=unit_cost,
-                    kind="credit",
-                )],
-                subtotal=credit_total, tax=0, total=credit_total,
+                db,
+                now_fn,
+                vendor_id=item.vendor_id,
+                order_id=order_id,
+                invoice_number=item.credit_number,
+                po_number=current_order["number"],
+                items=[
+                    InvoiceItemIn(
+                        part_number=row["part_number"] or "N/A",
+                        description=row["description"],
+                        quantity=quantity,
+                        unit_cost=unit_cost,
+                        kind="credit",
+                    )
+                ],
+                subtotal=credit_total,
+                tax=0,
+                total=credit_total,
                 source="part_return",
             )
             if result["status"] == "duplicate":
@@ -408,8 +459,16 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
                 (item.credit_number.strip(), now_fn(), item_id),
             )
             record_activity(
-                db, order_id, "part_return_credited", item.actor,
-                {"item_id": item_id, "vendor_id": item.vendor_id, "credit_number": item.credit_number.strip(), "credit_total": credit_total},
+                db,
+                order_id,
+                "part_return_credited",
+                item.actor,
+                {
+                    "item_id": item_id,
+                    "vendor_id": item.vendor_id,
+                    "credit_number": item.credit_number.strip(),
+                    "credit_total": credit_total,
+                },
                 now_fn,
             )
             return {"ap_invoice_id": result["ap_invoice_id"], "credit_total": credit_total}
@@ -457,7 +516,9 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
                 if value["received_invoice_number"]:
                     invoice = find_received_invoice(db, value["order_id"], value["received_invoice_number"])
                     if invoice:
-                        vendor = db.execute("SELECT id,name FROM vendors WHERE id=?", (invoice["vendor_id"],)).fetchone()
+                        vendor = db.execute(
+                            "SELECT id,name FROM vendors WHERE id=?", (invoice["vendor_id"],)
+                        ).fetchone()
                         if vendor:
                             vendor_id, vendor_name = vendor["id"], vendor["name"]
                 value["vendor_id"] = vendor_id
@@ -514,7 +575,9 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
                 if value["received_invoice_number"]:
                     invoice = find_received_invoice(db, value["order_id"], value["received_invoice_number"])
                     if invoice:
-                        vendor = db.execute("SELECT id,name FROM vendors WHERE id=?", (invoice["vendor_id"],)).fetchone()
+                        vendor = db.execute(
+                            "SELECT id,name FROM vendors WHERE id=?", (invoice["vendor_id"],)
+                        ).fetchone()
                         if vendor:
                             vendor_id, vendor_name = vendor["id"], vendor["name"]
                 value["vendor_id"] = vendor_id
@@ -549,22 +612,30 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
                     raise HTTPException(409, f"'{row['description']}' has already been fully received")
                 unit_cost = item.cost_overrides.get(row["id"], row["unit_cost"])
                 remaining_by_id[row["id"]] = (remaining, unit_cost)
-                invoice_items.append(InvoiceItemIn(
-                    part_number=row["part_number"] or "N/A",
-                    description=row["description"],
-                    quantity=remaining,
-                    unit_cost=unit_cost,
-                    kind="part",
-                ))
+                invoice_items.append(
+                    InvoiceItemIn(
+                        part_number=row["part_number"] or "N/A",
+                        description=row["description"],
+                        quantity=remaining,
+                        unit_cost=unit_cost,
+                        kind="part",
+                    )
+                )
 
             subtotal = round(sum(i.quantity * i.unit_cost for i in invoice_items), 2)
             total = round(subtotal + item.tax, 2)
 
             result = create_ap_invoice_record(
-                db, now_fn,
-                vendor_id=item.vendor_id, order_id=order_id,
-                invoice_number=item.invoice_number, po_number=current_order["number"],
-                items=invoice_items, subtotal=subtotal, tax=item.tax, total=total,
+                db,
+                now_fn,
+                vendor_id=item.vendor_id,
+                order_id=order_id,
+                invoice_number=item.invoice_number,
+                po_number=current_order["number"],
+                items=invoice_items,
+                subtotal=subtotal,
+                tax=item.tax,
+                total=total,
                 source="ticket_receive",
             )
             if result["status"] == "duplicate":
@@ -579,7 +650,10 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
 
             recompute_estimate_totals(db, estimate["id"])
             record_activity(
-                db, order_id, "parts_received", item.actor,
+                db,
+                order_id,
+                "parts_received",
+                item.actor,
                 {"invoice_number": item.invoice_number.strip(), "vendor_id": item.vendor_id, "item_ids": unique_ids},
                 now_fn,
             )

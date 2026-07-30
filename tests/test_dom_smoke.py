@@ -46,7 +46,7 @@ def test_front_end_screen_runs_in_a_real_dom(script: Path) -> None:
     if LOCAL_MODULES.is_dir():
         env["NODE_PATH"] = os.pathsep.join(filter(None, [str(LOCAL_MODULES), env.get("NODE_PATH", "")]))
 
-    result = subprocess.run([node, str(script)], capture_output=True, text=True, env=env, timeout=180)
+    result = subprocess.run([node, str(script)], capture_output=True, text=True, env=env, timeout=180, check=False)
     if result.returncode != 0 and "Cannot find module 'jsdom'" in result.stderr:
         pytest.skip("jsdom is not installed -- run `npm install jsdom` in tests/dom")
     assert result.returncode == 0, f"{script.name} failed:\n{result.stderr or result.stdout}"

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from contextlib import closing
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 RECON_SHOP_CUSTOMER_ID = -1
@@ -20,6 +20,7 @@ def normalize_vin(vin: str | None) -> str | None:
     """
     cleaned = "".join((vin or "").split()).replace("-", "").upper()
     return cleaned or None
+
 
 SCHEMA = """
 PRAGMA journal_mode=WAL;
@@ -383,7 +384,7 @@ CREATE TABLE IF NOT EXISTS suggestions (
 
 
 def now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return datetime.now(UTC).isoformat(timespec="seconds")
 
 
 def _migrate(db: sqlite3.Connection) -> None:

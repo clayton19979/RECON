@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from decimal import Decimal, ROUND_HALF_UP
-from typing import Callable, Literal
+from collections.abc import Callable
+from decimal import ROUND_HALF_UP, Decimal
+from typing import Literal
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
@@ -80,6 +81,7 @@ class SegmentMoveIn(BaseModel):
     on that side it attaches to. Retail is deliberately not a destination:
     a retail ticket is a customer's own car with no lot record behind it, so
     there's nothing for the cost to move onto."""
+
     segment: Literal["recon", "we_owe"]
     recon_vehicle_id: int | None = None
     we_owe_id: int | None = None
@@ -118,7 +120,7 @@ SEGMENT_LABEL = {"recon": "recon", "we_owe": "we-owe", "retail": "retail"}
 
 
 def cents(value: float | str | Decimal) -> int:
-    return int((Decimal(str(value)) * 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+    return int((Decimal(str(value)) * 100).quantize(Decimal(1), rounding=ROUND_HALF_UP))
 
 
 def dollars(value: int) -> float:
@@ -142,7 +144,9 @@ def touch_order(db: sqlite3.Connection, order_id: int, now_fn: Callable[[], str]
     db.execute("UPDATE orders SET last_activity_at=? WHERE id=?", (now_fn(), order_id))
 
 
-def record_activity(db: sqlite3.Connection, order_id: int, action: str, actor: str, details: dict, now_fn: Callable[[], str]) -> None:
+def record_activity(
+    db: sqlite3.Connection, order_id: int, action: str, actor: str, details: dict, now_fn: Callable[[], str]
+) -> None:
     db.execute(
         "INSERT INTO activity_events(order_id,action,actor,details,created_at) VALUES(?,?,?,?,?)",
         (order_id, action, actor.strip() or "unknown", json.dumps(details, sort_keys=True), now_fn()),
@@ -150,7 +154,9 @@ def record_activity(db: sqlite3.Connection, order_id: int, action: str, actor: s
     touch_order(db, order_id, now_fn)
 
 
-def initialize_order_workflow(db: sqlite3.Connection, order_id: int, now_fn: Callable[[], str], actor: str = "ui") -> None:
+def initialize_order_workflow(
+    db: sqlite3.Connection, order_id: int, now_fn: Callable[[], str], actor: str = "ui"
+) -> None:
     # Date In defaults to the moment the ticket itself was created -- the
     # advisor can still correct it (e.g. the car actually arrived a day
     # earlier than the ticket got typed up) via the Assigned card's save.
@@ -211,10 +217,20 @@ def workflow_detail(db: sqlite3.Connection, order_id: int) -> dict:
     inspection = db.execute("SELECT * FROM inspections WHERE order_id=?", (order_id,)).fetchone()
     inspection_value = dict(inspection) if inspection else None
     if inspection_value:
-        inspection_value["items"] = [dict(row) for row in db.execute("SELECT * FROM inspection_items WHERE inspection_id=? ORDER BY id", (inspection["id"],))]
-    authorization = db.execute("SELECT * FROM estimate_authorizations WHERE order_id=? ORDER BY id DESC LIMIT 1", (order_id,)).fetchone()
+        inspection_value["items"] = [
+            dict(row)
+            for row in db.execute(
+                "SELECT * FROM inspection_items WHERE inspection_id=? ORDER BY id", (inspection["id"],)
+            )
+        ]
+    authorization = db.execute(
+        "SELECT * FROM estimate_authorizations WHERE order_id=? ORDER BY id DESC LIMIT 1", (order_id,)
+    ).fetchone()
     invoice = db.execute("SELECT * FROM customer_invoices WHERE order_id=?", (order_id,)).fetchone()
-    findings = [dict(row) for row in db.execute("SELECT * FROM technician_findings WHERE order_id=? ORDER BY id DESC", (order_id,))]
+    findings = [
+        dict(row)
+        for row in db.execute("SELECT * FROM technician_findings WHERE order_id=? ORDER BY id DESC", (order_id,))
+    ]
     activity = []
     for row in db.execute("SELECT * FROM activity_events WHERE order_id=? ORDER BY id", (order_id,)):
         value = dict(row)
@@ -223,7 +239,9 @@ def workflow_detail(db: sqlite3.Connection, order_id: int) -> dict:
     return {
         "assignment": dict(assignment) if assignment else None,
         "inspection": inspection_value,
-        "notes": [dict(row) for row in db.execute("SELECT * FROM order_notes WHERE order_id=? ORDER BY id DESC", (order_id,))],
+        "notes": [
+            dict(row) for row in db.execute("SELECT * FROM order_notes WHERE order_id=? ORDER BY id DESC", (order_id,))
+        ],
         "authorization": dict(authorization) if authorization else None,
         "invoice": invoice_dict(db, invoice),
         "findings": findings,
@@ -243,7 +261,11 @@ def build_workflow_router(connect: Callable[[], sqlite3.Connection], now_fn: Cal
     @router.get("/staff")
     def list_staff(include_inactive: bool = False):
         with connect() as db:
-            query = "SELECT * FROM staff ORDER BY name" if include_inactive else "SELECT * FROM staff WHERE active=1 ORDER BY name"
+            query = (
+                "SELECT * FROM staff ORDER BY name"
+                if include_inactive
+                else "SELECT * FROM staff WHERE active=1 ORDER BY name"
+            )
             return [dict(row) for row in db.execute(query)]
 
     def _assert_name_free(db, name: str, exclude_id: int | None = None) -> None:
@@ -262,7 +284,9 @@ def build_workflow_router(connect: Callable[[], sqlite3.Connection], now_fn: Cal
     def create_staff(item: StaffIn):
         with connect() as db:
             _assert_name_free(db, item.name.strip())
-            cur = db.execute("INSERT INTO staff(name,role,created_at) VALUES(?,?,?)", (item.name.strip(), item.role, now_fn()))
+            cur = db.execute(
+                "INSERT INTO staff(name,role,created_at) VALUES(?,?,?)", (item.name.strip(), item.role, now_fn())
+            )
             return dict(db.execute("SELECT * FROM staff WHERE id=?", (cur.lastrowid,)).fetchone())
 
     @router.patch("/staff/{staff_id}")
@@ -297,7 +321,9 @@ def build_workflow_router(connect: Callable[[], sqlite3.Connection], now_fn: Cal
             new_name = item.name.strip() if item.name is not None else old_name
             tasks_moved = 0
             if new_name != old_name:
-                for task in db.execute("SELECT id, assigned_to FROM tasks WHERE assigned_to LIKE '%' || ? || '%'", (old_name,)):
+                for task in db.execute(
+                    "SELECT id, assigned_to FROM tasks WHERE assigned_to LIKE '%' || ? || '%'", (old_name,)
+                ):
                     names = json.loads(task["assigned_to"]) if task["assigned_to"] else []
                     if old_name in names:
                         db.execute(
@@ -308,13 +334,18 @@ def build_workflow_router(connect: Callable[[], sqlite3.Connection], now_fn: Cal
             # tasks_moved rides along so the UI can say "3 tasks moved with
             # them" instead of the rename looking like it touched nothing.
             # It's response metadata, not a staff column.
-            return dict(db.execute("SELECT * FROM staff WHERE id=?", (staff_id,)).fetchone()) | {"tasks_moved": tasks_moved}
+            return dict(db.execute("SELECT * FROM staff WHERE id=?", (staff_id,)).fetchone()) | {
+                "tasks_moved": tasks_moved
+            }
 
     @router.put("/orders/{order_id}/assignment")
     def save_assignment(order_id: int, item: AssignmentIn):
         with connect() as db:
             assert_vehicle_editable(db, order(db, order_id))
-            for staff_id, roles, label in ((item.advisor_id, {"advisor", "manager"}, "Advisor"), (item.technician_id, {"technician"}, "Technician")):
+            for staff_id, roles, label in (
+                (item.advisor_id, {"advisor", "manager"}, "Advisor"),
+                (item.technician_id, {"technician"}, "Technician"),
+            ):
                 if staff_id is None:
                     continue
                 staff = db.execute("SELECT role,active FROM staff WHERE id=?", (staff_id,)).fetchone()
@@ -336,7 +367,14 @@ def build_workflow_router(connect: Callable[[], sqlite3.Connection], now_fn: Cal
                 "INSERT INTO order_notes(order_id,visibility,text,actor,created_at) VALUES(?,?,?,?,?)",
                 (order_id, item.visibility, item.text.strip(), item.actor, now_fn()),
             )
-            record_activity(db, order_id, "note_added", item.actor, {"note_id": cur.lastrowid, "visibility": item.visibility}, now_fn)
+            record_activity(
+                db,
+                order_id,
+                "note_added",
+                item.actor,
+                {"note_id": cur.lastrowid, "visibility": item.visibility},
+                now_fn,
+            )
             return dict(db.execute("SELECT * FROM order_notes WHERE id=?", (cur.lastrowid,)).fetchone())
 
     @router.put("/orders/{order_id}/inspection")
@@ -346,17 +384,36 @@ def build_workflow_router(connect: Callable[[], sqlite3.Connection], now_fn: Cal
             existing = db.execute("SELECT id FROM inspections WHERE order_id=?", (order_id,)).fetchone()
             if existing:
                 inspection_id = existing["id"]
-                db.execute("UPDATE inspections SET status=?,updated_at=? WHERE id=?", (item.status, now_fn(), inspection_id))
+                db.execute(
+                    "UPDATE inspections SET status=?,updated_at=? WHERE id=?", (item.status, now_fn(), inspection_id)
+                )
                 db.execute("DELETE FROM inspection_items WHERE inspection_id=?", (inspection_id,))
             else:
-                cur = db.execute("INSERT INTO inspections(order_id,status,created_at,updated_at) VALUES(?,?,?,?)", (order_id, item.status, now_fn(), now_fn()))
+                cur = db.execute(
+                    "INSERT INTO inspections(order_id,status,created_at,updated_at) VALUES(?,?,?,?)",
+                    (order_id, item.status, now_fn(), now_fn()),
+                )
                 inspection_id = cur.lastrowid
             for value in item.items:
                 db.execute(
                     "INSERT INTO inspection_items(inspection_id,category,name,condition,measurement,notes) VALUES(?,?,?,?,?,?)",
-                    (inspection_id, value.category.strip(), value.name.strip(), value.condition, value.measurement.strip(), value.notes.strip()),
+                    (
+                        inspection_id,
+                        value.category.strip(),
+                        value.name.strip(),
+                        value.condition,
+                        value.measurement.strip(),
+                        value.notes.strip(),
+                    ),
                 )
-            record_activity(db, order_id, "inspection_saved", item.actor, {"status": item.status, "item_count": len(item.items)}, now_fn)
+            record_activity(
+                db,
+                order_id,
+                "inspection_saved",
+                item.actor,
+                {"status": item.status, "item_count": len(item.items)},
+                now_fn,
+            )
             return workflow_detail(db, order_id)["inspection"]
 
     @router.post("/orders/{order_id}/findings", status_code=201)
@@ -377,16 +434,43 @@ def build_workflow_router(connect: Callable[[], sqlite3.Connection], now_fn: Cal
             for line in item.items:
                 db.execute(
                     "INSERT INTO estimate_items(estimate_id,kind,description,part_number,quantity,unit_price,unit_cost,received_quantity,line_total,source,review_required) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-                    (estimate["id"], line.kind, line.description.strip(), line.part_number.strip().upper(), line.quantity, line.unit_price, line.unit_cost, 0, round(line.quantity * line.unit_price, 2), "technician_finding", 1),
+                    (
+                        estimate["id"],
+                        line.kind,
+                        line.description.strip(),
+                        line.part_number.strip().upper(),
+                        line.quantity,
+                        line.unit_price,
+                        line.unit_cost,
+                        0,
+                        round(line.quantity * line.unit_price, 2),
+                        "technician_finding",
+                        1,
+                    ),
                 )
             subtotal, taxable = db.execute(
                 "SELECT coalesce(sum(line_total),0),coalesce(sum(CASE WHEN kind='part' THEN line_total ELSE 0 END),0) FROM estimate_items WHERE estimate_id=?",
                 (estimate["id"],),
             ).fetchone()
             tax = round(float(taxable) * float(estimate["tax_rate"]), 2)
-            db.execute("UPDATE estimates SET subtotal=?,tax=?,total=?,status='draft' WHERE id=?", (round(float(subtotal), 2), tax, round(float(subtotal) + tax, 2), estimate["id"]))
-            record_activity(db, order_id, "technician_findings_recorded", item.actor, {"finding_id": finding_cur.lastrowid, "draft_lines_added": len(item.items)}, now_fn)
-            return {"id": finding_cur.lastrowid, "order_id": order_id, "draft_lines_added": len(item.items), "review_required": True}
+            db.execute(
+                "UPDATE estimates SET subtotal=?,tax=?,total=?,status='draft' WHERE id=?",
+                (round(float(subtotal), 2), tax, round(float(subtotal) + tax, 2), estimate["id"]),
+            )
+            record_activity(
+                db,
+                order_id,
+                "technician_findings_recorded",
+                item.actor,
+                {"finding_id": finding_cur.lastrowid, "draft_lines_added": len(item.items)},
+                now_fn,
+            )
+            return {
+                "id": finding_cur.lastrowid,
+                "order_id": order_id,
+                "draft_lines_added": len(item.items),
+                "review_required": True,
+            }
 
     @router.patch("/orders/{order_id}/status")
     def update_status(order_id: int, item: StatusIn):
@@ -407,7 +491,9 @@ def build_workflow_router(connect: Callable[[], sqlite3.Connection], now_fn: Cal
             assert_vehicle_editable(db, current_row)
             concern = item.concern.strip()
             db.execute("UPDATE orders SET concern=? WHERE id=?", (concern, order_id))
-            record_activity(db, order_id, "concern_updated", item.actor, {"from": current_row["concern"], "to": concern}, now_fn)
+            record_activity(
+                db, order_id, "concern_updated", item.actor, {"from": current_row["concern"], "to": concern}, now_fn
+            )
             return {"id": order_id, "concern": concern}
 
     @router.patch("/orders/{order_id}/segment")
@@ -454,15 +540,21 @@ def build_workflow_router(connect: Callable[[], sqlite3.Connection], now_fn: Cal
                 customer_id, vehicle_id = target["customer_id"], target["vehicle_id"]
                 recon_vehicle_id, we_owe_id = None, item.we_owe_id
             if target["archived_at"]:
-                raise HTTPException(409, "That vehicle is archived to History -- reopen it before moving a ticket onto it")
+                raise HTTPException(
+                    409, "That vehicle is archived to History -- reopen it before moving a ticket onto it"
+                )
 
             db.execute(
                 "UPDATE orders SET segment=?,recon_vehicle_id=?,we_owe_id=?,customer_id=?,vehicle_id=? WHERE id=?",
                 (item.segment, recon_vehicle_id, we_owe_id, customer_id, vehicle_id, order_id),
             )
             record_activity(
-                db, order_id, "segment_changed", item.actor,
-                {"from": current_row["segment"], "to": item.segment}, now_fn,
+                db,
+                order_id,
+                "segment_changed",
+                item.actor,
+                {"from": current_row["segment"], "to": item.segment},
+                now_fn,
             )
             return dict(db.execute("SELECT * FROM orders WHERE id=?", (order_id,)).fetchone())
 
@@ -474,7 +566,10 @@ def build_workflow_router(connect: Callable[[], sqlite3.Connection], now_fn: Cal
             # rejects any edit to an order that's already voided).
             assert_vehicle_editable(db, current_row)
             if db.execute("SELECT 1 FROM customer_invoices WHERE order_id=?", (order_id,)).fetchone():
-                raise HTTPException(409, "This order has already been invoiced to the customer -- voiding would leave its cost excluded while the invoice still shows it as billed")
+                raise HTTPException(
+                    409,
+                    "This order has already been invoiced to the customer -- voiding would leave its cost excluded while the invoice still shows it as billed",
+                )
             db.execute("UPDATE orders SET status='complete', voided=1 WHERE id=?", (order_id,))
             record_activity(db, order_id, "order_voided", item.actor, {"from": current_row["status"]}, now_fn)
             return {"id": order_id, "status": "complete", "voided": True}
@@ -486,16 +581,37 @@ def build_workflow_router(connect: Callable[[], sqlite3.Connection], now_fn: Cal
             estimate = db.execute("SELECT * FROM estimates WHERE order_id=?", (order_id,)).fetchone()
             if not estimate:
                 raise HTTPException(409, "Repair order has no estimate to authorize")
-            if item.status == "approved" and db.execute(
-                "SELECT 1 FROM estimate_items WHERE estimate_id=? AND review_required=1 LIMIT 1", (estimate["id"],)
-            ).fetchone():
-                raise HTTPException(409, "AI and technician draft lines require advisor review before customer authorization")
+            if (
+                item.status == "approved"
+                and db.execute(
+                    "SELECT 1 FROM estimate_items WHERE estimate_id=? AND review_required=1 LIMIT 1", (estimate["id"],)
+                ).fetchone()
+            ):
+                raise HTTPException(
+                    409, "AI and technician draft lines require advisor review before customer authorization"
+                )
             cur = db.execute(
                 "INSERT INTO estimate_authorizations(order_id,estimate_id,status,approved_by,method,note,actor,created_at) VALUES(?,?,?,?,?,?,?,?)",
-                (order_id, estimate["id"], item.status, item.approved_by.strip(), item.method, item.note.strip(), item.actor, now_fn()),
+                (
+                    order_id,
+                    estimate["id"],
+                    item.status,
+                    item.approved_by.strip(),
+                    item.method,
+                    item.note.strip(),
+                    item.actor,
+                    now_fn(),
+                ),
             )
             db.execute("UPDATE estimates SET status=? WHERE id=?", (item.status, estimate["id"]))
-            record_activity(db, order_id, f"estimate_{item.status}", item.actor, {"authorization_id": cur.lastrowid, "approved_by": item.approved_by, "method": item.method}, now_fn)
+            record_activity(
+                db,
+                order_id,
+                f"estimate_{item.status}",
+                item.actor,
+                {"authorization_id": cur.lastrowid, "approved_by": item.approved_by, "method": item.method},
+                now_fn,
+            )
             return dict(db.execute("SELECT * FROM estimate_authorizations WHERE id=?", (cur.lastrowid,)).fetchone())
 
     @router.post("/orders/{order_id}/invoice", status_code=201)
@@ -508,18 +624,48 @@ def build_workflow_router(connect: Callable[[], sqlite3.Connection], now_fn: Cal
             estimate = db.execute("SELECT * FROM estimates WHERE order_id=?", (order_id,)).fetchone()
             if not estimate or estimate["status"] != "approved":
                 raise HTTPException(409, "An approved estimate is required before invoicing")
-            subtotal_value, tax_value, total_value = cents(estimate["subtotal"]), cents(estimate["tax"]), cents(estimate["total"])
+            subtotal_value, tax_value, total_value = (
+                cents(estimate["subtotal"]),
+                cents(estimate["tax"]),
+                cents(estimate["total"]),
+            )
             cur = db.execute(
                 "INSERT INTO customer_invoices(order_id,number,subtotal_cents,tax_cents,total_cents,balance_cents,status,created_at) VALUES(?,?,?,?,?,?,?,?)",
-                (order_id, f"INV-{current['number']}", subtotal_value, tax_value, total_value, total_value, "open", now_fn()),
+                (
+                    order_id,
+                    f"INV-{current['number']}",
+                    subtotal_value,
+                    tax_value,
+                    total_value,
+                    total_value,
+                    "open",
+                    now_fn(),
+                ),
             )
             invoice_id = cur.lastrowid
-            for line in db.execute("SELECT * FROM estimate_items WHERE estimate_id=? ORDER BY sort_order, id", (estimate["id"],)):
+            for line in db.execute(
+                "SELECT * FROM estimate_items WHERE estimate_id=? ORDER BY sort_order, id", (estimate["id"],)
+            ):
                 db.execute(
                     "INSERT INTO customer_invoice_items(invoice_id,kind,description,part_number,quantity,unit_price_cents,line_total_cents) VALUES(?,?,?,?,?,?,?)",
-                    (invoice_id, line["kind"], line["description"], line["part_number"], line["quantity"], cents(line["unit_price"]), cents(line["line_total"])),
+                    (
+                        invoice_id,
+                        line["kind"],
+                        line["description"],
+                        line["part_number"],
+                        line["quantity"],
+                        cents(line["unit_price"]),
+                        cents(line["line_total"]),
+                    ),
                 )
-            record_activity(db, order_id, "invoice_created", item.actor, {"invoice_id": invoice_id, "total": dollars(total_value)}, now_fn)
+            record_activity(
+                db,
+                order_id,
+                "invoice_created",
+                item.actor,
+                {"invoice_id": invoice_id, "total": dollars(total_value)},
+                now_fn,
+            )
             return invoice_dict(db, db.execute("SELECT * FROM customer_invoices WHERE id=?", (invoice_id,)).fetchone())
 
     @router.post("/invoices/{invoice_id}/payments", status_code=201)
@@ -549,7 +695,14 @@ def build_workflow_router(connect: Callable[[], sqlite3.Connection], now_fn: Cal
                 "INSERT INTO payments(invoice_id,amount_cents,method,reference,actor,created_at) VALUES(?,?,?,?,?,?)",
                 (invoice_id, amount, item.method, item.reference.strip(), item.actor, now_fn()),
             )
-            record_activity(db, invoice["order_id"], "payment_recorded", item.actor, {"payment_id": payment_cur.lastrowid, "amount": dollars(amount), "method": item.method}, now_fn)
+            record_activity(
+                db,
+                invoice["order_id"],
+                "payment_recorded",
+                item.actor,
+                {"payment_id": payment_cur.lastrowid, "amount": dollars(amount), "method": item.method},
+                now_fn,
+            )
             payment = dict(db.execute("SELECT * FROM payments WHERE id=?", (payment_cur.lastrowid,)).fetchone())
             payment["amount"] = dollars(payment.pop("amount_cents"))
             updated = db.execute("SELECT * FROM customer_invoices WHERE id=?", (invoice_id,)).fetchone()

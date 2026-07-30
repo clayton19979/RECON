@@ -6,7 +6,11 @@ from tests.helpers import make_recon_order, make_recon_vehicle, save_estimate
 def test_create_job_and_list_on_order_detail(client):
     vehicle = make_recon_vehicle(client)
     order = make_recon_order(client, vehicle["id"])
-    save_estimate(client, order["id"], [{"kind": "labor", "description": "Diag", "quantity": 1, "unit_price": 50, "unit_cost": 50}])
+    save_estimate(
+        client,
+        order["id"],
+        [{"kind": "labor", "description": "Diag", "quantity": 1, "unit_price": 50, "unit_cost": 50}],
+    )
 
     res = client.post(f"/api/orders/{order['id']}/jobs", json={"title": "Front Brakes"})
     assert res.status_code == 201
@@ -52,7 +56,9 @@ def test_rename_and_reassign_job(client):
     technician = client.post("/api/staff", json={"name": "Antonio", "role": "technician"}).json()
     job = client.post(f"/api/orders/{order['id']}/jobs", json={"title": "Job"}).json()
 
-    res = client.put(f"/api/orders/{order['id']}/jobs/{job['id']}", json={"title": "Front Brakes", "technician_id": technician["id"]})
+    res = client.put(
+        f"/api/orders/{order['id']}/jobs/{job['id']}", json={"title": "Front Brakes", "technician_id": technician["id"]}
+    )
     assert res.status_code == 200
     assert res.json()["title"] == "Front Brakes"
     assert res.json()["technician_id"] == technician["id"]
@@ -67,8 +73,19 @@ def test_delete_job_nulls_item_job_id_without_deleting_items(client):
     order = make_recon_order(client, vehicle["id"])
     job = client.post(f"/api/orders/{order['id']}/jobs", json={"title": "Front Brakes"}).json()
     estimate = save_estimate(
-        client, order["id"],
-        [{"kind": "part", "description": "Pads", "part_number": "BP-1", "quantity": 1, "unit_price": 10, "unit_cost": 10, "job_id": job["id"]}],
+        client,
+        order["id"],
+        [
+            {
+                "kind": "part",
+                "description": "Pads",
+                "part_number": "BP-1",
+                "quantity": 1,
+                "unit_price": 10,
+                "unit_cost": 10,
+                "job_id": job["id"],
+            }
+        ],
     )
     item_id = estimate["items"][0]["id"]
     assert estimate["items"][0]["job_id"] == job["id"]
@@ -89,21 +106,56 @@ def test_save_estimate_round_trips_job_id(client):
     job_b = client.post(f"/api/orders/{order['id']}/jobs", json={"title": "Job B"}).json()
 
     estimate = save_estimate(
-        client, order["id"],
-        [{"kind": "part", "description": "Pads", "part_number": "BP-1", "quantity": 1, "unit_price": 10, "unit_cost": 10, "job_id": job_a["id"]}],
+        client,
+        order["id"],
+        [
+            {
+                "kind": "part",
+                "description": "Pads",
+                "part_number": "BP-1",
+                "quantity": 1,
+                "unit_price": 10,
+                "unit_cost": 10,
+                "job_id": job_a["id"],
+            }
+        ],
     )
     item = estimate["items"][0]
     assert item["job_id"] == job_a["id"]
 
     moved = save_estimate(
-        client, order["id"],
-        [{"id": item["id"], "kind": "part", "description": "Pads", "part_number": "BP-1", "quantity": 1, "unit_price": 10, "unit_cost": 10, "job_id": job_b["id"]}],
+        client,
+        order["id"],
+        [
+            {
+                "id": item["id"],
+                "kind": "part",
+                "description": "Pads",
+                "part_number": "BP-1",
+                "quantity": 1,
+                "unit_price": 10,
+                "unit_cost": 10,
+                "job_id": job_b["id"],
+            }
+        ],
     )
     assert moved["items"][0]["job_id"] == job_b["id"]
 
     cleared = save_estimate(
-        client, order["id"],
-        [{"id": item["id"], "kind": "part", "description": "Pads", "part_number": "BP-1", "quantity": 1, "unit_price": 10, "unit_cost": 10, "job_id": None}],
+        client,
+        order["id"],
+        [
+            {
+                "id": item["id"],
+                "kind": "part",
+                "description": "Pads",
+                "part_number": "BP-1",
+                "quantity": 1,
+                "unit_price": 10,
+                "unit_cost": 10,
+                "job_id": None,
+            }
+        ],
     )
     assert cleared["items"][0]["job_id"] is None
 
@@ -117,7 +169,20 @@ def test_save_estimate_rejects_job_id_from_other_estimate(client):
 
     res = client.post(
         f"/api/orders/{order_a['id']}/estimate",
-        json={"actor": "tester", "items": [{"kind": "part", "description": "Pads", "part_number": "BP-1", "quantity": 1, "unit_price": 10, "unit_cost": 10, "job_id": job_b["id"]}]},
+        json={
+            "actor": "tester",
+            "items": [
+                {
+                    "kind": "part",
+                    "description": "Pads",
+                    "part_number": "BP-1",
+                    "quantity": 1,
+                    "unit_price": 10,
+                    "unit_cost": 10,
+                    "job_id": job_b["id"],
+                }
+            ],
+        },
     )
     assert res.status_code == 422
 

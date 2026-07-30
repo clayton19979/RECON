@@ -4,7 +4,9 @@ from tests.helpers import make_recon_order, make_recon_vehicle, make_we_owe
 
 
 def test_create_and_list_tasks(client):
-    res = client.post("/api/tasks", json={"title": "Call John back about his Civic", "assigned_to": ["Antonio"], "actor": "Clay"})
+    res = client.post(
+        "/api/tasks", json={"title": "Call John back about his Civic", "assigned_to": ["Antonio"], "actor": "Clay"}
+    )
     assert res.status_code == 201
     body = res.json()
     assert body["title"] == "Call John back about his Civic"
@@ -17,7 +19,9 @@ def test_create_and_list_tasks(client):
 
 
 def test_task_can_have_multiple_assignees(client):
-    res = client.post("/api/tasks", json={"title": "Deep clean the shop", "assigned_to": ["Antonio", "Jamie", "Antonio"]})
+    res = client.post(
+        "/api/tasks", json={"title": "Deep clean the shop", "assigned_to": ["Antonio", "Jamie", "Antonio"]}
+    )
     assert res.status_code == 201
     # deduped, order preserved
     assert res.json()["assigned_to"] == ["Antonio", "Jamie"]
@@ -160,10 +164,13 @@ def test_bulk_assign_add_keeps_existing_assignees(client):
     """The reason assignment is three-valued rather than a plain overwrite.
     A replace would silently drop Antonio from the first task -- the kind of
     data loss nobody notices until the person dropped doesn't turn up."""
-    ids = _mktasks(client, [
-        {"title": "Has someone already", "assigned_to": ["Antonio"]},
-        {"title": "Nobody on it", "assigned_to": []},
-    ])
+    ids = _mktasks(
+        client,
+        [
+            {"title": "Has someone already", "assigned_to": ["Antonio"]},
+            {"title": "Nobody on it", "assigned_to": []},
+        ],
+    )
     res = client.post("/api/tasks/bulk", json={"ids": ids, "assigned_to": ["Dana"], "assign_mode": "add"})
     assert res.status_code == 200
     by_id = {t["id"]: t for t in res.json()["tasks"]}
@@ -292,10 +299,13 @@ def test_bulk_keeps_the_order_link_and_its_label(client):
 
 
 def test_bulk_create_makes_one_task_per_item(client):
-    res = client.post("/api/tasks/bulk-create", json={
-        "items": [{"title": "Follow up: R-0981"}, {"title": "Follow up: R-0977"}, {"title": "Follow up: R-0954"}],
-        "actor": "Clay",
-    })
+    res = client.post(
+        "/api/tasks/bulk-create",
+        json={
+            "items": [{"title": "Follow up: R-0981"}, {"title": "Follow up: R-0977"}, {"title": "Follow up: R-0954"}],
+            "actor": "Clay",
+        },
+    )
     assert res.status_code == 201
     body = res.json()
     assert body["created"] == 3
@@ -305,12 +315,15 @@ def test_bulk_create_makes_one_task_per_item(client):
 
 
 def test_bulk_create_applies_the_shared_fields_to_every_row(client):
-    res = client.post("/api/tasks/bulk-create", json={
-        "items": [{"title": "One"}, {"title": "Two"}],
-        "assigned_to": ["Antonio", "Dana", "Antonio"],
-        "due_date": "2026-08-01",
-        "urgent": True,
-    })
+    res = client.post(
+        "/api/tasks/bulk-create",
+        json={
+            "items": [{"title": "One"}, {"title": "Two"}],
+            "assigned_to": ["Antonio", "Dana", "Antonio"],
+            "due_date": "2026-08-01",
+            "urgent": True,
+        },
+    )
     tasks = res.json()["tasks"]
     assert all(t["assigned_to"] == ["Antonio", "Dana"] for t in tasks)
     assert all(t["due_date"] == "2026-08-01" and t["urgent"] == 1 for t in tasks)
@@ -330,10 +343,15 @@ def test_bulk_create_keeps_per_item_order_links_and_labels(client):
     first = make_recon_vehicle(client, stock_number="R-0981")
     second = make_recon_vehicle(client, stock_number="R-0977", vin="1HGCM82633A004353")
     orders = [make_recon_order(client, first["id"]), make_recon_order(client, second["id"])]
-    res = client.post("/api/tasks/bulk-create", json={"items": [
-        {"title": "Follow up: R-0981", "order_id": orders[0]["id"]},
-        {"title": "Follow up: R-0977", "order_id": orders[1]["id"], "notes": "41 days idle"},
-    ]})
+    res = client.post(
+        "/api/tasks/bulk-create",
+        json={
+            "items": [
+                {"title": "Follow up: R-0981", "order_id": orders[0]["id"]},
+                {"title": "Follow up: R-0977", "order_id": orders[1]["id"], "notes": "41 days idle"},
+            ]
+        },
+    )
     tasks = res.json()["tasks"]
     assert [t["order_label"] for t in tasks] == ["R-0981", "R-0977"]
     assert [t["order_recon_vehicle_id"] for t in tasks] == [first["id"], second["id"]]
@@ -344,10 +362,15 @@ def test_bulk_create_is_all_or_nothing_on_a_bad_order_link(client):
     """A partial create is the worst outcome for this caller: the user would
     have to work out which cars didn't take and re-select exactly those."""
     order = make_recon_order(client, make_recon_vehicle(client)["id"])
-    res = client.post("/api/tasks/bulk-create", json={"items": [
-        {"title": "Fine", "order_id": order["id"]},
-        {"title": "Bad link", "order_id": 99999},
-    ]})
+    res = client.post(
+        "/api/tasks/bulk-create",
+        json={
+            "items": [
+                {"title": "Fine", "order_id": order["id"]},
+                {"title": "Bad link", "order_id": 99999},
+            ]
+        },
+    )
     assert res.status_code == 404
     assert client.get("/api/tasks").json() == []
 
@@ -361,9 +384,12 @@ def test_bulk_create_rejects_an_empty_batch_and_a_blank_title(client):
 def test_bulk_create_allows_duplicate_titles(client):
     """Two cars can genuinely need the same follow-up; deduping here would
     silently drop one of them."""
-    body = client.post("/api/tasks/bulk-create", json={
-        "items": [{"title": "Chase the paint shop"}, {"title": "Chase the paint shop"}],
-    }).json()
+    body = client.post(
+        "/api/tasks/bulk-create",
+        json={
+            "items": [{"title": "Chase the paint shop"}, {"title": "Chase the paint shop"}],
+        },
+    ).json()
     assert body["created"] == 2
     assert len({t["id"] for t in body["tasks"]}) == 2
 

@@ -768,7 +768,9 @@ def build_recon_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
                 f"UPDATE recon_vehicles SET archived_at=?,edit_version=edit_version+1 WHERE id=?{guard}",
                 (now_fn(), recon_id, *guard_params),
             )
-            assert_version_won(cur, "Someone else changed this vehicle since you loaded it -- reload to see their update")
+            assert_version_won(
+                cur, "Someone else changed this vehicle since you loaded it -- reload to see their update"
+            )
             return recon_detail(db, recon_id)
 
     @router.post("/recon/vehicles/{recon_id}/reopen")
@@ -781,7 +783,9 @@ def build_recon_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
                 f"UPDATE recon_vehicles SET archived_at='',edit_version=edit_version+1 WHERE id=?{guard}",
                 (recon_id, *guard_params),
             )
-            assert_version_won(cur, "Someone else changed this vehicle since you loaded it -- reload to see their update")
+            assert_version_won(
+                cur, "Someone else changed this vehicle since you loaded it -- reload to see their update"
+            )
             return recon_detail(db, recon_id)
 
     @router.patch("/recon/vehicles/{recon_id}")

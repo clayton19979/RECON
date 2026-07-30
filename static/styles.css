@@ -2080,6 +2080,18 @@ th.sel-col, td.sel-col { width: 32px; padding-right: 0; }
 
 /* ---------- reports ---------- */
 #report-scope { min-height: 16px; }
+/* Lot report group bands. Walt reads this grouped, so the headings have to
+   survive a fast scan -- they sit on a tinted band rather than looking like
+   another data row, and they stick under the header when the list scrolls. */
+.lot-group-head td {
+  background: var(--accent-tint); border-top: 1px solid var(--line);
+  padding: 7px 10px; position: sticky; top: 30px; z-index: 1;
+}
+.lot-group-name { font-weight: 700; color: var(--accent-strong); letter-spacing: .01em; }
+.lot-group-note { color: var(--ink-soft); font-size: 11.5px; margin-left: 8px; }
+/* The answer to "what does it still need" is the widest thing on the row and
+   the reason the report exists; it gets room rather than being truncated. */
+.lot-needs { color: var(--ink-soft); min-width: 240px; }
 .cell-sub { color: var(--ink-faint); }
 #report-csv[aria-disabled="true"] { pointer-events: none; opacity: .5; }
 /* Custom-range state: when no chip is lit, the date inputs carry the "this

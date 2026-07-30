@@ -540,6 +540,9 @@
           <!-- Radiogroup, not tablist: four mutually exclusive filters over
                one result region, with no per-tab panels to point at. -->
           <div class="seg" id="report-type-seg" role="radiogroup" aria-label="Report">
+            <!-- Lot first: it is the report Walt actually asks for, and the
+                 only one that answers "how do things stand right now". -->
+            <button type="button" class="seg-btn" data-report-type="lot" role="radio" aria-checked="false">Lot Status</button>
             <button type="button" class="seg-btn active" data-report-type="vehicle-spend" role="radio" aria-checked="true">All Vehicles</button>
             <button type="button" class="seg-btn" data-report-type="vehicle-spend-recon" role="radio" aria-checked="false">Recon</button>
             <button type="button" class="seg-btn" data-report-type="vehicle-spend-we_owe" role="radio" aria-checked="false">We-Owe</button>
@@ -547,7 +550,7 @@
             <button type="button" class="seg-btn" data-report-type="technicians" role="radio" aria-checked="false">Technicians</button>
           </div>
           <div class="report-bar-gap"></div>
-          <div class="report-range">
+          <div class="report-range" id="report-range-controls">
             <button type="button" class="chip" data-report-range="today">Today</button>
             <button type="button" class="chip" data-report-range="week">This Week</button>
             <button type="button" class="chip" data-report-range="month">This Month</button>

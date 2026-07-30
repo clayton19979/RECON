@@ -160,6 +160,30 @@ def test_unsold_car_reports_no_profit_rather_than_a_loss(client):
     assert lifetime["margin_pct"] is None
 
 
+def test_sold_car_with_no_purchase_price_reports_no_profit(client):
+    """The lot's cost for a car isn't entered in this app -- Walt keeps that
+    figure (see CLAUDE.md). So a sold car with no purchase price on file has no
+    profit that can be worked out, and it must come back empty rather than
+    subtracting nothing from the sale price and reporting the entire sale as
+    margin. That number would go in front of the owner.
+
+    The cost side is still fully answerable, which is the whole point of the
+    app: total_invested is what the shop spent fixing the car.
+    """
+    # purchase_price=0 is what intake produces now that the field is gone from
+    # the UI; the helper's default of 4000 predates that.
+    recon = make_recon_vehicle(client, vin=VIN, purchase_price=0)
+    _spend(client, make_recon_order(client, recon["id"])["id"], 800)
+    client.patch(f"/api/recon/vehicles/{recon['id']}", json={"sale_price": 9000, "sale_date": "2026-07-20"})
+
+    lifetime = client.get(f"/api/recon/vehicles/{recon['id']}").json()["lifetime"]
+    assert lifetime["purchase_price"] == 0
+    assert lifetime["total_invested"] == 800, "what we put into it is still the number the shop needs"
+    assert lifetime["sale_price"] == 9000, "the sale itself is still recorded"
+    assert lifetime["profit"] is None, "9000 - 800 is not this car's profit; the purchase price is unknown"
+    assert lifetime["margin_pct"] is None
+
+
 def test_profit_report_is_one_row_per_car_not_per_ticket(client):
     """A car with both a recon record and a we-owe appears twice on the
     vehicle board; the profit report must not double-count it."""

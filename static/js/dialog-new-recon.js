@@ -64,7 +64,6 @@ export function wireReconDialog() {
           color: $("#recon-color").value.trim(),
           mileage: Number($("#recon-mileage").value || 0),
           odometer_broken: $("#recon-odo-broken").checked,
-          purchase_price: Number($("#recon-price").value || 0),
           acquisition_source: $("#recon-source").value.trim(),
           acquisition_date: $("#recon-date").value,
           notes: $("#recon-notes").value.trim(),

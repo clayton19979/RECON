@@ -81,12 +81,9 @@ export function wireWeOweDialog() {
       const [match] = await get(`/api/reports/vehicle-profit?vin=${encodeURIComponent(vin)}`);
       if (!match) return void (note.hidden = true);
       const bits = [`Already on file${match.stock_number ? ` as ${match.stock_number}` : ""}`];
-      if (match.purchase_price) bits.push(`bought for ${money(match.purchase_price)}`);
       if (match.recon_cost) bits.push(`${money(match.recon_cost)} of recon in it`);
-      note.textContent = `${bits.join(" · ")}. Its purchase price carries over — you don't need to re-enter it.`;
+      note.textContent = `${bits.join(" · ")}. This car has been through the shop before — its history carries over.`;
       note.hidden = false;
-      // Its history is the record; don't invite a second, conflicting figure.
-      $("#we-owe-new-purchase-price").placeholder = "Already on file";
     } catch {
       note.hidden = true;  // a failed lookup is not worth interrupting intake over
     }
@@ -131,7 +128,6 @@ export function wireWeOweDialog() {
         } else {
           vehicleId = Number(vehicleId);
         }
-        const purchasePrice = $("#we-owe-new-purchase-price").value.trim();
         const salePrice = $("#we-owe-new-sale-price").value.trim();
         await post("/api/we-owe", {
           customer_id: customerId,
@@ -142,9 +138,7 @@ export function wireWeOweDialog() {
           sale_reference: $("#we-owe-sale-ref").value.trim(),
           lot_stock_number: $("#we-owe-lot-stock").value.trim(),
           // Left out entirely when blank: the server only fills a gap, so an
-          // empty box must not arrive as a 0 that overwrites a real price
-          // already on file from this car's recon life.
-          ...(purchasePrice === "" ? {} : { purchase_price: Number(purchasePrice) }),
+          // empty box must not arrive as a 0 that overwrites what's on file.
           ...(salePrice === "" ? {} : { sale_price: Number(salePrice) }),
         });
         $("#we-owe-dialog").close();

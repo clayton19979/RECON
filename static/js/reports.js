@@ -258,21 +258,31 @@ function vehicleSpendStatCards(rows) {
 
 /* The owner's four numbers. Sold and unsold are kept apart deliberately: an
    unsold car has money in it and no profit yet, and averaging those zeros
-   into the margin would make a good month look like a bad one. */
+   into the margin would make a good month look like a bad one.
+
+   "Sold" and "profit is knowable" are two different questions now that the
+   lot's purchase price isn't entered here (Walt keeps that figure -- see
+   CLAUDE.md). A sold car whose purchase price nobody recorded has no honest
+   profit, but it is still sold, and counting it as stock on hand would be a
+   second wrong answer on top of the first. */
 function vehicleProfitStatCards(rows) {
-  const sold = rows.filter((r) => r.profit !== null && r.profit !== undefined);
+  const sold = rows.filter((r) => r.sale_price !== null && r.sale_price !== undefined);
+  const withProfit = sold.filter((r) => r.profit !== null && r.profit !== undefined);
   const invested = rows.reduce((s, r) => s + (r.total_invested || 0), 0);
-  const profit = sold.reduce((s, r) => s + r.profit, 0);
-  const revenue = sold.reduce((s, r) => s + (r.sale_price || 0), 0);
+  const profit = withProfit.reduce((s, r) => s + r.profit, 0);
+  const revenue = withProfit.reduce((s, r) => s + (r.sale_price || 0), 0);
   const weOwe = rows.reduce((s, r) => s + (r.we_owe_net_cost || 0), 0);
+  const unpriced = sold.length - withProfit.length;
   return [
     { label: "Vehicles", value: String(rows.length), sub: `${sold.length} sold · ${rows.length - sold.length} still in stock` },
-    { label: "Total Invested", value: money(invested), sub: "purchase + recon + we-owe" },
+    { label: "Total Invested", value: money(invested), sub: "what the shop spent: recon + we-owe" },
     {
       label: "Profit On Sold",
-      value: money(profit),
-      sub: revenue ? `${(profit / revenue * 100).toFixed(1)}% margin on ${money(revenue)}` : "nothing sold in this range",
-      tone: sold.length && profit < 0 ? "crit" : "",
+      value: withProfit.length ? money(profit) : "—",
+      sub: !withProfit.length
+        ? (unpriced ? `${unpriced} sold — profit needs a purchase price` : "nothing sold in this range")
+        : `${(profit / revenue * 100).toFixed(1)}% margin on ${money(revenue)}${unpriced ? ` · ${unpriced} without a purchase price` : ""}`,
+      tone: withProfit.length && profit < 0 ? "crit" : "",
     },
     {
       label: "We-Owe Cost",

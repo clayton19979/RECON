@@ -241,7 +241,6 @@ function renderDetailHead() {
   $("#vd-recon-model").value = item.model;
   $("#vd-recon-trim").value = item.trim || "";
   $("#vd-recon-color").value = item.color || "";
-  $("#vd-recon-purchase-price-row").style.display = segment === "recon" ? "" : "none";
   if (segment === "recon") {
     $("#vd-title").textContent = `${item.stock_number} — ${item.year} ${item.make} ${item.model}`;
     $("#vd-sub").textContent = [item.vin, item.mileage ? `${item.mileage.toLocaleString()} mi` : "", item.trim].filter(Boolean).join(" · ");
@@ -250,7 +249,6 @@ function renderDetailHead() {
     $("#vd-other-vehicles-card").style.display = "none";
     $("#vd-we-owe-status-card").style.display = "none";
     $("#vd-deposits-card").style.display = "none";
-    $("#vd-recon-purchase-price").value = item.purchase_price || 0;
   } else {
     // we_owe and retail share the customer-owned-car layout; only we_owe has
     // the promise machinery (status/category/target, dealer-paid deposits).
@@ -325,9 +323,10 @@ function renderVehicleInfoSummary() {
     ["Trim", esc(item.trim || "—")],
     ["Color", esc(item.color || "—")],
   ];
-  // Purchase price belongs to the car, so it shows on both segments now --
-  // a we-owe car was bought too, usually long before RECON ever saw it.
-  if (lifetime) rows.push(["Purchase price", money(lifetime.purchase_price || 0)]);
+  // What the lot paid isn't entered here any more -- Walt keeps that figure
+  // and this app answers "what did we spend fixing it". Cars carried over from
+  // when it *was* entered still show theirs rather than silently losing it.
+  if (lifetime?.purchase_price) rows.push(["Purchase price", money(lifetime.purchase_price)]);
   $("#vd-vehicle-info-summary").innerHTML = rows.map(([label, value]) => `<div class="kv-row"><span class="kv-label">${label}</span><span class="kv-value">${value}</span></div>`).join("");
 }
 
@@ -592,7 +591,7 @@ function applyArchivedLockUI(archived) {
     "vd-save-assignment", "vd-technician", "vd-advisor",
     "vd-save-timing", "vd-date-in", "vd-odometer", "vd-promised",
     "vd-edit-vehicle", "vd-recon-info-save", "vd-decode-vin", "vd-recon-vin", "vd-recon-mileage", "vd-recon-year",
-    "vd-recon-make", "vd-recon-model", "vd-recon-trim", "vd-recon-color", "vd-recon-purchase-price",
+    "vd-recon-make", "vd-recon-model", "vd-recon-trim", "vd-recon-color",
     "vd-edit-customer", "vd-we-owe-save", "vd-we-owe-description", "vd-we-owe-category", "vd-we-owe-target", "vd-we-owe-status",
     "vd-take-payment", "vd-deposit-add", "vd-deposit-amount", "vd-deposit-method", "vd-deposit-note",
   ];
@@ -2229,7 +2228,6 @@ export function wireVehicleDetail() {
           expected_version: item.edit_version,
         };
         if (segment === "recon") {
-          payload.purchase_price = Number($("#vd-recon-purchase-price").value || 0);
           await patch(`/api/recon/vehicles/${id}`, payload);
         } else if (segment === "retail") {
           await patch(`/api/retail/vehicles/${id}`, payload);

@@ -11,7 +11,8 @@ import pytest
 
 pytestmark = pytest.mark.skipif(sys.platform != "win32", reason="Windows named objects")
 
-from app.single_instance import SingleInstance
+if sys.platform == "win32":
+    from app.single_instance import SingleInstance
 
 
 def test_first_instance_is_not_flagged_as_running():

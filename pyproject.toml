@@ -37,6 +37,7 @@ ignore = ["B008", "DTZ005", "DTZ011"]
 
 [tool.pyright]
 pythonVersion = "3.12"
+pythonPlatform = "Windows"
 typeCheckingMode = "standard"
 include = ["app", "tests", "seed_mock_data.py"]
 venvPath = "."

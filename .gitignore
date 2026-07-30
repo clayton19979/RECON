@@ -1,6 +1,9 @@
 .venv/
 __pycache__/
 .pytest_cache/
+.ruff_cache/
+# Scratch output from a `pyright --outputjson` run, not a project document.
+pyright_out.json
 data/
 run/
 backups/

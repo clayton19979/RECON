@@ -43,7 +43,7 @@ def _round_mask(pts, corner: float, size: int) -> Image.Image:
     not, and the unevenness shows badly on a stretched hexagon."""
     m = Image.new("L", (size, size), 0)
     ImageDraw.Draw(m).polygon(pts, fill=255)
-    return m.filter(ImageFilter.GaussianBlur(corner)).point(lambda v: 255 if v >= 128 else 0)
+    return m.filter(ImageFilter.GaussianBlur(corner)).point(lambda v: 255 if v >= 128 else 0)  # pyright: ignore[reportOperatorIssue]
 
 
 def _vertical_gradient(top, bottom, mask: Image.Image, size: int) -> Image.Image:
@@ -52,7 +52,7 @@ def _vertical_gradient(top, bottom, mask: Image.Image, size: int) -> Image.Image
         t = y / (size - 1)
         g.putpixel((0, y), tuple(int(top[i] + (bottom[i] - top[i]) * t) for i in range(4)))
     out = Image.new("RGBA", (size, size), CLEAR)
-    out.paste(g.resize((size, size), Image.NEAREST), (0, 0), mask)
+    out.paste(g.resize((size, size), Image.Resampling.NEAREST), (0, 0), mask)
     return out
 
 
@@ -110,4 +110,4 @@ def render(
         letter_r_mask(cx - w / 2 - size * 0.006, cy - h / 2, w, h, size),
     )
 
-    return im.resize((out_size, out_size), Image.LANCZOS)
+    return im.resize((out_size, out_size), Image.Resampling.LANCZOS)

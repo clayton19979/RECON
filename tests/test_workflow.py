@@ -105,6 +105,7 @@ def test_reset_db_moves_old_database_aside(tmp_path):
 
     backup = reset_db(db_path, backup_suffix=".pre-test.bak")
 
+    assert backup is not None
     assert backup == tmp_path / "shop.db.pre-test.bak"
     assert backup.is_file()
     assert (tmp_path / "shop.db-wal.pre-test.bak").is_file()

@@ -7,10 +7,17 @@ import socket
 import threading
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING, cast
 
 import pystray
 import uvicorn
 from PIL import Image
+
+if TYPE_CHECKING:
+    # pystray assembles its public Icon/Menu/MenuItem per backend at import
+    # time, so `pystray.Icon` is a variable, not a class, to a type checker.
+    # The real classes every backend subclasses live in pystray._base.
+    from pystray._base import Icon, MenuItem
 
 from app import deployment, discovery, mark, online_updates, paths, updates, usb_backup
 from app.backup import (
@@ -149,11 +156,18 @@ ICON_OK = make_icon(mark.AZURE_LT, mark.AZURE)
 ICON_DOWN = make_icon(mark.CRIT_LT, mark.CRIT)
 
 
+def _dynamic(predicate) -> bool:
+    """pystray re-evaluates a callable MenuItem `visible` every time the menu
+    opens, but its unannotated signature (default True) reads as plain bool to
+    a type checker. Funnel the documented callable form through one cast."""
+    return cast(bool, predicate)
+
+
 class TrayApp:
     def __init__(self, guard: SingleInstance | None = None) -> None:
         self.server: uvicorn.Server | None = None
         self.thread: threading.Thread | None = None
-        self.icon: pystray.Icon | None = None
+        self.icon: Icon | None = None
         self.mode: str = deployment.MASTER
         self.master_ip: str | None = None
         self._responder_stop = threading.Event()
@@ -248,21 +262,21 @@ class TrayApp:
         self.server = None
         self.thread = None
 
-    def restart(self, _icon: pystray.Icon, _item: pystray.MenuItem) -> None:
+    def restart(self, _icon: Icon, _item: MenuItem) -> None:
         log.info("Restart requested from tray")
         self.stop_server()
         ok = self.start_server()
         if self.icon is not None:
             self.icon.icon = ICON_OK if ok else ICON_DOWN
 
-    def open_app(self, _icon: pystray.Icon | None = None, _item: pystray.MenuItem | None = None) -> None:
+    def open_app(self, _icon: Icon | None = None, _item: MenuItem | None = None) -> None:
         """'Open RECON' from the tray -- surfaces the existing window rather
         than spawning anything new."""
         if self.mode == deployment.CLIENT and not self.master_reachable():
             self.retry_master()
         self.window.show()
 
-    def promote_to_master(self, icon: pystray.Icon, _item: pystray.MenuItem) -> None:
+    def promote_to_master(self, icon: Icon, _item: MenuItem) -> None:
         """Escape hatch for when the shop PC is off and work cannot wait for
         it. Deliberately manual: an automatic takeover is exactly what caused
         two PCs to each start their own database.
@@ -288,7 +302,7 @@ class TrayApp:
             icon.icon = ICON_OK if ok else ICON_DOWN
             icon.notify("This PC is now the master. Other PCs can connect to it.", "RECON")
 
-    def toggle_network_mode(self, _icon: pystray.Icon, _item: pystray.MenuItem) -> None:
+    def toggle_network_mode(self, _icon: Icon, _item: MenuItem) -> None:
         if network_mode_enabled():
             NETWORK_FLAG.unlink(missing_ok=True)
             self._stop_responder()
@@ -306,7 +320,9 @@ class TrayApp:
             elif ok:
                 self.icon.notify("Network access off -- only this PC can reach it now.", "RECON")
 
-    def show_server_address(self, _icon: pystray.Icon, _item: pystray.MenuItem) -> None:
+    def show_server_address(self, _icon: Icon, _item: MenuItem) -> None:
+        if self.icon is None:
+            return
         if network_mode_enabled():
             self.icon.notify(f"Other PCs go to: {local_url()}", "RECON")
         else:
@@ -358,7 +374,7 @@ class TrayApp:
         if notify and self.icon is not None:
             self.icon.notify(f"Also copied to {label or target}", "RECON")
 
-    def backup_now(self, _icon: pystray.Icon, _item: pystray.MenuItem) -> None:
+    def backup_now(self, _icon: Icon, _item: MenuItem) -> None:
         self._run_backup(notify=True)
 
     def _remembered_destination(self) -> Path:
@@ -367,7 +383,7 @@ class TrayApp:
         yet, or when that drive isn't plugged in right now."""
         return usb_backup.resolve(usb_backup.load(DESTINATION_FILE)) or DEFAULT_BACKUPS_DIR
 
-    def backup_to_location(self, _icon: pystray.Icon, _item: pystray.MenuItem) -> None:
+    def backup_to_location(self, _icon: Icon, _item: MenuItem) -> None:
         """A one-off backup written wherever you point it, which also becomes
         the standing mirror target: every later backup, automatic ones
         included, lands here too whenever this drive is plugged in.
@@ -420,7 +436,7 @@ class TrayApp:
             self.icon.icon = ICON_OK if ok else ICON_DOWN
             self.icon.notify(f"Restored from {backup_path.name}. Server restarted.", "RECON")
 
-    def restore_latest_backup(self, _icon: pystray.Icon, _item: pystray.MenuItem) -> None:
+    def restore_latest_backup(self, _icon: Icon, _item: MenuItem) -> None:
         backups = list_backups(DEFAULT_BACKUPS_DIR)
         if not backups:
             if self.icon is not None:
@@ -428,7 +444,7 @@ class TrayApp:
             return
         self._restore_from_path(backups[0])
 
-    def restore_from_file(self, _icon: pystray.Icon, _item: pystray.MenuItem) -> None:
+    def restore_from_file(self, _icon: Icon, _item: MenuItem) -> None:
         """For moving to a fresh install/new PC: the backup being restored
         won't be sitting in the default backups folder under a name
         "Restore Latest Backup" would recognize, so this lets you point at
@@ -439,11 +455,11 @@ class TrayApp:
             return
         self._restore_from_path(chosen)
 
-    def show_backups_folder(self, _icon: pystray.Icon, _item: pystray.MenuItem) -> None:
+    def show_backups_folder(self, _icon: Icon, _item: MenuItem) -> None:
         DEFAULT_BACKUPS_DIR.mkdir(parents=True, exist_ok=True)
         os.startfile(DEFAULT_BACKUPS_DIR)
 
-    def show_updates_folder(self, _icon: pystray.Icon, _item: pystray.MenuItem) -> None:
+    def show_updates_folder(self, _icon: Icon, _item: MenuItem) -> None:
         """Opens the folder a new build gets dropped into.
 
         This is the whole update workflow on the shop PC's side: copy
@@ -455,7 +471,7 @@ class TrayApp:
         updates_dir.mkdir(parents=True, exist_ok=True)
         os.startfile(updates_dir)
 
-    def check_online_updates(self, _icon: pystray.Icon, _item: pystray.MenuItem) -> None:
+    def check_online_updates(self, _icon: Icon, _item: MenuItem) -> None:
         """Tray click: ask the release source right now instead of waiting for
         the daily check. On a thread because a 40 MB download must not hold
         the tray menu hostage."""
@@ -534,7 +550,7 @@ class TrayApp:
                 log.exception("Auto-backup check failed")
             time.sleep(AUTO_BACKUP_INTERVAL_MINUTES * 60)
 
-    def quit_app(self, icon: pystray.Icon | None = None, _item: pystray.MenuItem | None = None) -> None:
+    def quit_app(self, icon: Icon | None = None, _item: MenuItem | None = None) -> None:
         log.info("Exit requested")
         self._quitting = True
         self._stop_responder()
@@ -564,7 +580,7 @@ class TrayApp:
         self.quit_app()
         return True
 
-    def _on_ready(self, icon: pystray.Icon) -> None:
+    def _on_ready(self, icon: Icon) -> None:
         icon.visible = True
 
     def run(self) -> None:
@@ -593,53 +609,64 @@ class TrayApp:
                 "Allow other PCs on this network",
                 self.toggle_network_mode,
                 checked=lambda _item: network_mode_enabled(),
-                visible=lambda _item: self.mode == deployment.MASTER,
+                visible=_dynamic(lambda _item: self.mode == deployment.MASTER),
             ),
             pystray.MenuItem(
                 lambda _item: f"Connected to master at {self.master_ip} (click to become master)",
                 self.promote_to_master,
-                visible=lambda _item: self.mode == deployment.CLIENT,
+                visible=_dynamic(lambda _item: self.mode == deployment.CLIENT),
             ),
             pystray.MenuItem(
-                "Show Server Address", self.show_server_address, visible=lambda _item: self.mode == deployment.MASTER
+                "Show Server Address",
+                self.show_server_address,
+                visible=_dynamic(lambda _item: self.mode == deployment.MASTER),
             ),
             pystray.MenuItem(
-                "Backup Now (entire database)", self.backup_now, visible=lambda _item: self.mode == deployment.MASTER
+                "Backup Now (entire database)",
+                self.backup_now,
+                visible=_dynamic(lambda _item: self.mode == deployment.MASTER),
             ),
             pystray.MenuItem(
                 "Backup To USB or Folder...",
                 self.backup_to_location,
-                visible=lambda _item: self.mode == deployment.MASTER,
+                visible=_dynamic(lambda _item: self.mode == deployment.MASTER),
             ),
             pystray.MenuItem(
                 "Restore Latest Backup",
                 self.restore_latest_backup,
-                visible=lambda _item: self.mode == deployment.MASTER,
+                visible=_dynamic(lambda _item: self.mode == deployment.MASTER),
             ),
             pystray.MenuItem(
-                "Restore From File...", self.restore_from_file, visible=lambda _item: self.mode == deployment.MASTER
+                "Restore From File...",
+                self.restore_from_file,
+                visible=_dynamic(lambda _item: self.mode == deployment.MASTER),
             ),
             pystray.MenuItem(
-                "Show Backups Folder", self.show_backups_folder, visible=lambda _item: self.mode == deployment.MASTER
+                "Show Backups Folder",
+                self.show_backups_folder,
+                visible=_dynamic(lambda _item: self.mode == deployment.MASTER),
             ),
             # Master only: this PC is what hands updates to the workstations,
             # so it's the only one where dropping a build in achieves anything.
             pystray.MenuItem(
                 "Install Update From File...",
                 self.show_updates_folder,
-                visible=lambda _item: self.mode == deployment.MASTER,
+                visible=_dynamic(lambda _item: self.mode == deployment.MASTER),
             ),
             pystray.MenuItem(
                 "Check Online for Updates",
                 self.check_online_updates,
-                visible=lambda _item: self.mode == deployment.MASTER,
+                visible=_dynamic(lambda _item: self.mode == deployment.MASTER),
             ),
-            pystray.MenuItem("Restart Server", self.restart, visible=lambda _item: self.mode == deployment.MASTER),
+            pystray.MenuItem(
+                "Restart Server", self.restart, visible=_dynamic(lambda _item: self.mode == deployment.MASTER)
+            ),
             pystray.MenuItem("Exit", self.quit_app),
         )
-        self.icon = pystray.Icon("recon", icon_state, "RECON", menu)
+        icon = pystray.Icon("recon", icon_state, "RECON", menu)
+        self.icon = icon
         # Detached, because pywebview must own the main thread on Windows.
-        self.icon.run_detached(setup=self._on_ready)
+        icon.run_detached(setup=self._on_ready)
 
         if self._guard is not None:
             self._guard.listen(self.window.show)

@@ -76,7 +76,9 @@ def create_ap_invoice_record(
     db: sqlite3.Connection,
     now_fn: Callable[[], str],
     *,
-    vendor_id: int,
+    # None when the invoice named a vendor nobody configured -- the bill
+    # still posts (flagged as an issue), it just isn't tied to a vendor row.
+    vendor_id: int | None,
     order_id: int | None,
     invoice_number: str,
     po_number: str,

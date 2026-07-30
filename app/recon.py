@@ -8,10 +8,10 @@ from typing import Literal
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from .db import RECON_SHOP_CUSTOMER_ID, normalize_vin
+from .db import RECON_SHOP_CUSTOMER_ID, inserted_id, normalize_vin
 
 
-def age_days(created_at: str) -> int:
+def age_days(created_at: str | None) -> int:
     """Whole days since created_at (an ISO timestamp) -- how long a car has
     actually been sitting, the natural companion to "what we have in it".
     One malformed value (a hand-edited row, an old backup with a different
@@ -19,7 +19,7 @@ def age_days(created_at: str) -> int:
     age is computed in the same loop, so a single bad timestamp would take
     the whole list down with it rather than just looking wrong on one row."""
     try:
-        created = datetime.fromisoformat(created_at)
+        created = datetime.fromisoformat(created_at or "")
     except (TypeError, ValueError):
         return 0
     if created.tzinfo is None:
@@ -268,9 +268,9 @@ def resolve_unit(db: sqlite3.Connection, vehicle_id: int, vin: str | None, ts: s
         if found:
             db.execute("UPDATE vehicles SET unit_id=? WHERE id=?", (found["id"], vehicle_id))
             return found["id"]
-    unit_id = db.execute(
-        "INSERT INTO vehicle_units(vin_key,created_at,updated_at) VALUES(?,?,?)", (key, ts, ts)
-    ).lastrowid
+    unit_id = inserted_id(
+        db.execute("INSERT INTO vehicle_units(vin_key,created_at,updated_at) VALUES(?,?,?)", (key, ts, ts))
+    )
     db.execute("UPDATE vehicles SET unit_id=? WHERE id=?", (unit_id, vehicle_id))
     return unit_id
 
@@ -472,8 +472,9 @@ def vehicle_board_rows(
             # what drives the displayed status and in-progress/finished bucket.
             active_order = next((o for o in reversed(rollup["orders"]) if o["status"] != "complete"), None)
             latest_order = rollup["orders"][-1] if rollup["orders"] else None
+            current_order = active_order or latest_order
             has_closed_order = any(o["status"] == "complete" for o in rollup["orders"])
-            display_status = (active_order or latest_order)["status"] if (active_order or latest_order) else "acquired"
+            display_status = current_order["status"] if current_order else "acquired"
             activity_at = last_activity(db, "recon_vehicle_id", row["id"], row["created_at"])
             result.append(
                 {
@@ -502,7 +503,7 @@ def vehicle_board_rows(
                     # nothing (a car with no ticket yet). Tasks created off the
                     # board link through this, so "follow up on that stalled car"
                     # lands on the RO rather than floating unattached.
-                    "order_id": (active_order or latest_order)["id"] if (active_order or latest_order) else None,
+                    "order_id": current_order["id"] if current_order else None,
                     "updated_at": row["updated_at"],
                     "age_days": age_days(row["created_at"]),
                     "last_activity_at": activity_at,
@@ -526,15 +527,14 @@ def vehicle_board_rows(
             order_ids = [o["id"] for o in rollup["orders"]]
             active_order = next((o for o in reversed(rollup["orders"]) if o["status"] != "complete"), None)
             latest_order = rollup["orders"][-1] if rollup["orders"] else None
+            current_order = active_order or latest_order
             # fulfilled/waived is the authoritative "is this promise resolved"
             # signal (set explicitly by the advisor, separate from any
             # ticket) -- but while it's still open, what's actually changing
             # day to day is the linked ticket's own workflow status, so that's
             # what the board shows, same as recon already does.
             display_status = (
-                row["status"]
-                if row["status"] != "open"
-                else ((active_order or latest_order)["status"] if (active_order or latest_order) else "open")
+                row["status"] if row["status"] != "open" else (current_order["status"] if current_order else "open")
             )
             customer_paid = round(
                 db.execute(
@@ -574,7 +574,7 @@ def vehicle_board_rows(
                     # nothing (a car with no ticket yet). Tasks created off the
                     # board link through this, so "follow up on that stalled car"
                     # lands on the RO rather than floating unattached.
-                    "order_id": (active_order or latest_order)["id"] if (active_order or latest_order) else None,
+                    "order_id": current_order["id"] if current_order else None,
                     "updated_at": row["updated_at"],
                     "age_days": age_days(row["created_at"]),
                     "last_activity_at": activity_at,
@@ -715,12 +715,12 @@ def build_recon_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
             # What the car cost belongs to the car, not to this recon episode:
             # the same VIN coming back on a we-owe months later has to find
             # this number waiting for it.
-            unit_id = resolve_unit(db, vehicle_cur.lastrowid, item.vin, ts)
+            unit_id = resolve_unit(db, inserted_id(vehicle_cur), item.vin, ts)
             db.execute(
                 "UPDATE vehicle_units SET purchase_price=?,purchase_source=?,purchase_date=?,updated_at=? WHERE id=?",
                 (item.purchase_price, item.acquisition_source.strip(), item.acquisition_date.strip(), ts, unit_id),
             )
-            return recon_detail(db, recon_cur.lastrowid)
+            return recon_detail(db, inserted_id(recon_cur))
 
     @router.get("/recon/vehicles/{recon_id}")
     def get_recon_vehicle(recon_id: int):
@@ -882,7 +882,7 @@ def build_recon_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
                     "UPDATE vehicle_units SET sale_price=?,updated_at=? WHERE id=? AND sale_price IS NULL",
                     (item.sale_price, ts, unit_id),
                 )
-            return we_owe_detail(db, cur.lastrowid)
+            return we_owe_detail(db, inserted_id(cur))
 
     @router.get("/we-owe/{we_owe_id}")
     def get_we_owe_item(we_owe_id: int):

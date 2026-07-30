@@ -17,7 +17,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from . import paths
 from .accounting import build_accounting_router
 from .backup_routes import build_backup_router
-from .db import RECON_SHOP_CUSTOMER_ID, init_db, now
+from .db import RECON_SHOP_CUSTOMER_ID, init_db, inserted_id, now
 from .db import connect as db_connect
 from .export import build_export_router
 from .jobs import build_jobs_router
@@ -526,7 +526,7 @@ def create_app(db_path: Path = DEFAULT_DB, backups_dir: Path = DEFAULT_BACKUPS_D
             # Attach it to the physical car straight away, so a VIN that's
             # already been through the shop finds its own history immediately
             # rather than only once someone edits the record.
-            resolve_unit(db, cur.lastrowid, item.vin, ts)
+            resolve_unit(db, inserted_id(cur), item.vin, ts)
             return rowdict(db.execute("SELECT * FROM vehicles WHERE id=?", (cur.lastrowid,)).fetchone())
 
     @app.post("/api/vehicles/decode-plate")

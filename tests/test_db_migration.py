@@ -35,6 +35,7 @@ def test_status_migration_maps_old_values_and_is_idempotent(tmp_path):
                 "INSERT INTO orders(number,customer_id,vehicle_id,concern,segment,status,created_at) VALUES(?,?,?,?,?,?,?)",
                 (f"RO-LEGACY-{i:04d}", customer_id, vehicle_id, "Legacy row", "retail", status, "2026-01-01T00:00:00"),
             ).lastrowid
+            assert order_id is not None
             order_ids[status] = order_id
         db.commit()
 

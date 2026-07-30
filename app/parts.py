@@ -610,7 +610,8 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
                 remaining = float(row["quantity"]) - float(row["received_quantity"])
                 if remaining <= 0.001:
                     raise HTTPException(409, f"'{row['description']}' has already been fully received")
-                unit_cost = item.cost_overrides.get(row["id"], row["unit_cost"])
+                override = item.cost_overrides.get(row["id"])
+                unit_cost = float(row["unit_cost"]) if override is None else override
                 remaining_by_id[row["id"]] = (remaining, unit_cost)
                 invoice_items.append(
                     InvoiceItemIn(

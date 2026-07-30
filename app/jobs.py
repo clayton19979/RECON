@@ -6,6 +6,7 @@ from collections.abc import Callable
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
+from .db import inserted_id
 from .recon import assert_vehicle_editable
 from .workflow import assert_estimate_editable, get_or_create_estimate, record_activity
 
@@ -65,10 +66,11 @@ def build_jobs_router(connect: Callable[[], sqlite3.Connection], now_fn: Callabl
                 "INSERT INTO estimate_jobs(estimate_id,title,technician_id,sort_order,created_at) VALUES(?,?,?,?,?)",
                 (estimate["id"], item.title.strip(), item.technician_id, next_sort, now_fn()),
             )
+            job_id = inserted_id(cur)
             record_activity(
-                db, order_id, "job_created", item.actor, {"job_id": cur.lastrowid, "title": item.title.strip()}, now_fn
+                db, order_id, "job_created", item.actor, {"job_id": job_id, "title": item.title.strip()}, now_fn
             )
-            return job_dict(db, cur.lastrowid)
+            return job_dict(db, job_id)
 
     @router.put("/orders/{order_id}/jobs/{job_id}")
     def update_job(order_id: int, job_id: int, item: JobIn):

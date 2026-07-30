@@ -77,7 +77,9 @@ def test_newer_release_lands_whole_in_the_updates_folder(tmp_path):
     # Nothing partial left over for the offer machinery to trip on.
     assert list(folder.glob("*.part")) == []
     # ...and the LAN side now offers exactly this build.
-    assert updates.available_update(folder, "1.0.0")["version"] == "1.1.0"
+    offered = updates.available_update(folder, "1.0.0")
+    assert offered is not None
+    assert offered["version"] == "1.1.0"
 
 
 def test_installer_is_picked_out_from_among_other_assets(tmp_path):

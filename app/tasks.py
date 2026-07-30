@@ -7,6 +7,8 @@ from collections.abc import Callable
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
+from .db import inserted_id
+
 
 def _clean_names(names: list[str]) -> list[str]:
     """Trims and dedupes while keeping first-seen order."""
@@ -185,7 +187,7 @@ def build_tasks_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
                     "INSERT INTO tasks(title,notes,assigned_to,due_date,urgent,order_id,created_by,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
                     (entry.title.strip(), entry.notes.strip(), names, due, urgent, entry.order_id, actor, ts, ts),
                 )
-                new_ids.append(cur.lastrowid)
+                new_ids.append(inserted_id(cur))
             placeholders = ",".join("?" * len(new_ids))
             rows = db.execute(task_query + f" WHERE t.id IN ({placeholders})", new_ids).fetchall()
             return {"created": len(new_ids), "tasks": [task_dict(r) for r in rows]}

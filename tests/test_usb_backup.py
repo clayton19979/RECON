@@ -36,6 +36,7 @@ def test_resolve_recreates_the_folder_when_the_matching_stick_lost_it(tmp_path):
 
     found = resolve(record, drives=[drive], label_reader=lambda _root: "DiscAutoBackup")
 
+    assert found is not None
     assert found == drive / "RECON"
     assert found.is_dir()
 

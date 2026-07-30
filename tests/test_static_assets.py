@@ -383,7 +383,9 @@ def test_report_controls_refetch_rather_than_waiting_for_a_button(html: str, js:
 
     ranges = re.findall(r'data-report-range="(\w+)"', html)
     assert len(ranges) == len(set(ranges)) == 5, f"expected 5 distinct range chips, found {ranges}"
-    known = set(re.findall(r'"(\w+)"', re.search(r"const match = \[([^\]]+)\]", js).group(1)))
+    match_list = re.search(r"const match = \[([^\]]+)\]", js)
+    assert match_list is not None, "the report-range detection list is gone from app.js"
+    known = set(re.findall(r'"(\w+)"', match_list.group(1)))
     assert set(ranges) == known, (
         f"range chips {sorted(ranges)} don't match the ranges the app can detect {sorted(known)}"
     )
@@ -434,7 +436,9 @@ def test_parts_filter_toggle_is_not_a_segment_chip(js: str, html: str) -> None:
     so an unscoped selector either clears the toggle on every segment click
     or lights it up on every page load. Both must ask for [data-filter]."""
     assert 'id="vehicles-parts-filter"' in html, "the parts toggle is gone from the board toolbar"
-    assert "data-filter" not in re.search(r'<button[^>]*id="vehicles-parts-filter"[^>]*>', html).group(0), (
+    toggle = re.search(r'<button[^>]*id="vehicles-parts-filter"[^>]*>', html)
+    assert toggle is not None, "the parts toggle is no longer a <button>"
+    assert "data-filter" not in toggle.group(0), (
         "the parts toggle grew a data-filter and will be treated as a fifth segment"
     )
     unscoped = re.findall(r'\$\$\("#view-vehicles \.filters \.chip"\)', js)
@@ -529,9 +533,9 @@ def test_idle_bucket_filter_round_trips_with_the_other_preferences(js: str) -> N
         assert key in save, f"{key} isn't persisted with the board's view preferences"
         assert key in load, f"{key} is saved but never restored"
     assert "state.vehicleIdleBucket" in save, "Reset view won't appear for a board filtered to one idle bucket"
-    assert "chartOpen" not in re.search(r"const dirty = [^;]+;", save).group(0), (
-        "showing or hiding the chart counts as a dirty view -- it hides no rows"
-    )
+    dirty = re.search(r"const dirty = [^;]+;", save)
+    assert dirty is not None, "saveVehicleViewPrefs no longer computes a dirty flag"
+    assert "chartOpen" not in dirty.group(0), "showing or hiding the chart counts as a dirty view -- it hides no rows"
     assert 'state.vehicleIdleBucket = "";' in _function_source(js, "resetVehicleView"), (
         "Reset view leaves the idle bucket filter applied"
     )

@@ -665,6 +665,15 @@ class _ClosingConnection(sqlite3.Connection):
             self.close()
 
 
+def inserted_id(cur: sqlite3.Cursor) -> int:
+    """lastrowid immediately after an INSERT. sqlite3 types it Optional
+    because it is None after other statement kinds; after an INSERT it is
+    always set, and every caller wants a plain int for the new row."""
+    rowid = cur.lastrowid
+    assert rowid is not None
+    return rowid
+
+
 def connect(path: Path) -> sqlite3.Connection:
     db = sqlite3.connect(path, factory=_ClosingConnection)
     db.row_factory = sqlite3.Row

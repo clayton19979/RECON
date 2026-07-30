@@ -266,6 +266,7 @@ class AppWindow:
             window = webview.create_window(url=url, **kwargs)
         else:
             window = webview.create_window(html=OFFLINE_HTML, **kwargs)
+        assert window is not None  # typed Optional, but create_window never returns None
         window.events.closing += self._handle_closing
         self._api.bind(window)
         return window
@@ -298,12 +299,17 @@ class AppWindow:
         start_kwargs = {"private_mode": False, "storage_path": str(paths.data_root() / "webview")}
         if icon.is_file():
             start_kwargs["icon"] = str(icon)
+        # No `args` for on_ready: pywebview would splat whatever is passed
+        # there into the callback, and every on_ready in this app takes zero
+        # arguments. (Passing the window here used to make the callback die
+        # with a TypeError in pywebview's thread -- silently, because stderr
+        # goes nowhere in a windowed exe.)
         try:
-            webview.start(on_ready or (lambda: None), self._window, **start_kwargs)
+            webview.start(on_ready or (lambda: None), **start_kwargs)
         except TypeError:
             # Older pywebview builds don't accept `icon`; the window still works.
             start_kwargs.pop("icon", None)
-            webview.start(on_ready or (lambda: None), self._window, **start_kwargs)
+            webview.start(on_ready or (lambda: None), **start_kwargs)
 
     def show(self) -> None:
         """Bring the window back after a close-to-tray, or surface it when a

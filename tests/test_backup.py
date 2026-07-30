@@ -99,7 +99,7 @@ def test_tiered_prune_thins_older_history_without_erasing_it(tmp_path):
         _make_backup_at(destination_dir, NOW - timedelta(minutes=n))
 
     prune_backups_tiered(destination_dir, now=NOW)
-    survivors = sorted(backup_timestamp(p) for p in list_backups(destination_dir))
+    survivors = sorted(ts for p in list_backups(destination_dir) if (ts := backup_timestamp(p)) is not None)
 
     oldest = min(survivors)
     assert (NOW - oldest) >= timedelta(hours=40), "two days of history must not collapse into one hour"

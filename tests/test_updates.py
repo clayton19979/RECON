@@ -41,6 +41,16 @@ def test_installer_script_matches_version_module():
     assert parse(match.group(1)) == parse(VERSION)
 
 
+def test_pyproject_matches_version_module():
+    """pyproject's version sat at 0.1.0 while the app shipped 1.1.0 -- nothing
+    read it, but a wrong number lying around is exactly how one ends up in a
+    build artifact someday. If it exists, it agrees."""
+    text = (REPO / "pyproject.toml").read_text(encoding="utf-8")
+    match = re.search(r'^version\s*=\s*"([\d.]+)"', text, re.MULTILINE)
+    assert match, "pyproject.toml no longer declares a project version"
+    assert parse(match.group(1)) == parse(VERSION)
+
+
 # --- comparison ---
 
 
@@ -73,6 +83,7 @@ def test_offers_the_newest_installer_it_has(tmp_path):
     _installer(tmp_path, "1.1.0")
 
     update = updates.available_update(tmp_path, current="1.0.0")
+    assert update is not None
     assert update["version"] == "1.2.0"
     assert update["filename"] == "RECON-Setup-1.2.0.exe"
     assert update["size_bytes"] == 1024

@@ -1,6 +1,6 @@
 [project]
 name = "discount-auto-ops"
-version = "0.1.0"
+version = "1.1.0"
 description = "Discount Auto Ops -- vehicle-centric shop, recon, and we-owe management"
 requires-python = ">=3.12"
 dependencies = [
@@ -17,6 +17,7 @@ discount-auto-ops = "app.tray_app:main"
 
 [dependency-groups]
 dev = [
+    "pyright>=1.1.411",
     "pytest>=8.4,<9",
     "ruff>=0.16.0",
 ]
@@ -33,6 +34,13 @@ line-length = 120
 # DTZ005/DTZ011: naive local time is correct here -- RECON is a single-site
 # desktop app and RO numbers, export filenames, etc. are meant to be shop-local.
 ignore = ["B008", "DTZ005", "DTZ011"]
+
+[tool.pyright]
+pythonVersion = "3.12"
+typeCheckingMode = "standard"
+include = ["app", "tests", "seed_mock_data.py"]
+venvPath = "."
+venv = ".venv"
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

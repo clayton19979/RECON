@@ -1,0 +1,48 @@
+<!-- New Recon Vehicle Dialog -->
+<dialog id="recon-dialog">
+  <form class="modal" id="recon-form">
+    <div class="modal-head">
+      <div><p class="eyebrow">NEW STOCK</p><h2>Add Recon Vehicle</h2></div>
+      <button class="icon-btn" value="cancel" formnovalidate type="button" id="recon-cancel">×</button>
+    </div>
+    <div class="modal-body">
+      <label>Stock number<input id="recon-stock" required placeholder="R-1042"></label>
+      <div class="form-row">
+        <label>VIN<input id="recon-vin" placeholder="17-character VIN"></label>
+        <button type="button" class="btn btn-ghost" id="recon-decode-vin">Decode VIN</button>
+      </div>
+      <div class="form-row">
+        <label>Plate<input id="recon-plate" maxlength="12" placeholder="Optional"></label>
+        <label>State<input id="recon-plate-state" maxlength="2" placeholder="IL"></label>
+        <button type="button" class="btn btn-ghost" id="recon-decode-plate">Decode Plate</button>
+      </div>
+      <div class="form-row">
+        <label>Year<input id="recon-year" type="number" value="2020" required></label>
+        <label>Make<input id="recon-make" required placeholder="Honda"></label>
+        <label>Model<input id="recon-model" required placeholder="Civic"></label>
+      </div>
+      <div class="form-row">
+        <label>Trim<input id="recon-trim" placeholder="Optional"></label>
+        <label>Engine<input id="recon-engine" placeholder="Optional"></label>
+        <label>Color<input id="recon-color" placeholder="Optional"></label>
+      </div>
+      <div class="form-row">
+        <label>Mileage<input id="recon-mileage" type="number" value="0"></label>
+        <label class="checkbox-inline" style="align-self:flex-end;margin-bottom:12px">
+          <input type="checkbox" id="recon-odo-broken">
+          Odometer broken
+        </label>
+        <label>Purchase price<input id="recon-price" type="number" min="0" step="0.01" value="0"></label>
+      </div>
+      <div class="form-row">
+        <label>Source<input id="recon-source" placeholder="Auction / trade-in"></label>
+        <label>Acquired<input id="recon-date" type="date"></label>
+      </div>
+      <label>Notes<input id="recon-notes" placeholder="Optional"></label>
+    </div>
+    <div class="modal-actions">
+      <button value="cancel" class="btn btn-ghost" formnovalidate type="button" id="recon-cancel-2">Cancel</button>
+      <button class="btn btn-primary" type="submit">Save Recon Vehicle</button>
+    </div>
+  </form>
+</dialog>

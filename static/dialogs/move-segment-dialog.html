@@ -1,0 +1,19 @@
+<!-- Edit Vehicle Dialog -->
+<!-- Move Ticket Dialog -->
+<dialog id="move-segment-dialog">
+  <form class="modal" id="move-segment-form">
+    <div class="modal-head">
+      <div><p class="eyebrow">MOVE TICKET</p><h2>Move To Another Vehicle</h2></div>
+      <button class="icon-btn" formnovalidate type="button" id="move-segment-cancel">×</button>
+    </div>
+    <div class="modal-body">
+      <p class="page-desc" id="move-segment-desc"></p>
+      <label>Move to<select id="move-segment-target"></select></label>
+      <p class="field-note">Everything on this ticket — its estimate, parts, vendor invoices and history — moves with it, and its cost comes off the vehicle it's leaving.</p>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" formnovalidate type="button" id="move-segment-cancel-2">Cancel</button>
+      <button class="btn btn-primary" type="submit">Move Ticket</button>
+    </div>
+  </form>
+</dialog>

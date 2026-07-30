@@ -1,0 +1,21 @@
+<!-- Post a Vendor Credit for a Returned Part -->
+<dialog id="post-return-dialog">
+  <form class="modal" id="post-return-form">
+    <div class="modal-head">
+      <div><p class="eyebrow">RETURN</p><h2>Post Vendor Credit</h2></div>
+      <button class="icon-btn" formnovalidate type="button" id="post-return-cancel">×</button>
+    </div>
+    <div class="modal-body">
+      <p class="hint" id="post-return-desc"></p>
+      <label>Vendor<select id="post-return-vendor" required></select></label>
+      <p class="hint warn" id="post-return-vendor-warning" hidden>This part wasn't received against a vendor invoice, so the vendor couldn't be resolved — pick the one who supplied it.</p>
+      <label>Credit / RMA #<input id="post-return-credit-number" required minlength="2" placeholder="RMA-1234" autofocus></label>
+      <div class="cost-summary" id="post-return-total-summary"></div>
+      <p class="hint">Posts a credit invoice to A/P against this vendor and closes out the return.</p>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" formnovalidate type="button" id="post-return-cancel-2">Cancel</button>
+      <button class="btn btn-primary" type="submit">Post Credit</button>
+    </div>
+  </form>
+</dialog>

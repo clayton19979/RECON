@@ -1,0 +1,17 @@
+<!-- Add/Rename Job Dialog -->
+<dialog id="job-dialog">
+  <form class="modal" id="job-form">
+    <div class="modal-head">
+      <div><p class="eyebrow">JOB</p><h2 id="job-dialog-title">Add Job</h2></div>
+      <button class="icon-btn" formnovalidate type="button" id="job-cancel">×</button>
+    </div>
+    <div class="modal-body">
+      <label>Job name<input id="job-title-input" required placeholder="e.g. Front Brakes"></label>
+      <label>Technician<select id="job-technician-input"><option value="">Use ticket default</option></select></label>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" formnovalidate type="button" id="job-cancel-2">Cancel</button>
+      <button class="btn btn-primary" type="submit">Save Job</button>
+    </div>
+  </form>
+</dialog>

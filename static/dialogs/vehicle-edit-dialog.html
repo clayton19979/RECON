@@ -1,0 +1,33 @@
+<dialog id="vehicle-edit-dialog">
+  <form class="modal" id="vehicle-edit-form">
+    <div class="modal-head">
+      <div><p class="eyebrow">VEHICLE</p><h2>Edit Vehicle</h2></div>
+      <button class="icon-btn" formnovalidate type="button" id="vehicle-edit-cancel">×</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-row" style="align-items:flex-end">
+        <label style="flex:2">VIN<input id="vd-recon-vin"></label>
+        <button type="button" class="btn btn-ghost btn-sm" id="vd-decode-vin" style="margin-bottom:12px">Decode VIN</button>
+      </div>
+      <div class="form-row">
+        <label>Mileage<input id="vd-recon-mileage" type="number" min="0"></label>
+        <label>Year<input id="vd-recon-year" type="number" required></label>
+      </div>
+      <div class="form-row">
+        <label>Make<input id="vd-recon-make" required></label>
+        <label>Model<input id="vd-recon-model" required></label>
+      </div>
+      <div class="form-row">
+        <label>Trim<input id="vd-recon-trim"></label>
+        <label>Color<input id="vd-recon-color"></label>
+      </div>
+      <div class="form-row" id="vd-recon-purchase-price-row">
+        <label>Purchase price<input id="vd-recon-purchase-price" type="number" min="0" step="0.01"></label>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" formnovalidate type="button" id="vehicle-edit-cancel-2">Cancel</button>
+      <button class="btn btn-primary" type="submit" id="vd-recon-info-save">Save</button>
+    </div>
+  </form>
+</dialog>

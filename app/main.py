@@ -9,7 +9,7 @@ from typing import Any, Literal
 
 import httpx
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
@@ -21,6 +21,7 @@ from .db import RECON_SHOP_CUSTOMER_ID, init_db, inserted_id, now
 from .db import connect as db_connect
 from .export import build_export_router
 from .jobs import build_jobs_router
+from .pages import render_index
 from .parts import build_parts_router
 from .recon import (
     assert_vehicle_editable,
@@ -972,7 +973,9 @@ def create_app(db_path: Path = DEFAULT_DB, backups_dir: Path = DEFAULT_BACKUPS_D
 
     @app.get("/", include_in_schema=False)
     def index():
-        return FileResponse(static / "index.html")
+        # Assembled per request rather than served off disk: the dialogs live
+        # in their own files now. Still no build step -- edit and refresh.
+        return HTMLResponse(render_index(static))
 
     return app
 

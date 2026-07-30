@@ -57,8 +57,21 @@ export function flatAppJs() {
   return '"use strict";\n' + modules.join("\n;\n") + "\n" + strip(main);
 }
 
+/**
+ * index.html with the dialog partials spliced in -- the same assembly the
+ * server does in app/pages.py, which is why that stays a marker and a
+ * concatenation and nothing cleverer.
+ */
+export function assembledHtml() {
+  const template = fs.readFileSync(`${STATIC_DIR}/index.html`, "utf8");
+  const names = fs.readdirSync(`${STATIC_DIR}/dialogs`).filter((f) => f.endsWith(".html")).sort();
+  const dialogs = names.map((f) => fs.readFileSync(`${STATIC_DIR}/dialogs/${f}`, "utf8").replace(/\n+$/, "")).join("\n");
+  if (!template.includes("<!--DIALOGS-->")) throw new Error("index.html is missing its <!--DIALOGS--> marker");
+  return template.replace("<!--DIALOGS-->", dialogs);
+}
+
 export async function boot({ fetch: handler, expose = [], beforeBoot } = {}) {
-  const html = fs.readFileSync(`${STATIC_DIR}/index.html`, "utf8");
+  const html = assembledHtml();
   const js = flatAppJs();
   const dom = new JSDOM(html, { runScripts: "outside-only", url: "http://localhost/", pretendToBeVisual: true });
   const w = dom.window;

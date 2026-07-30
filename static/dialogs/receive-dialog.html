@@ -1,0 +1,23 @@
+<!-- Receive Parts Dialog -->
+<dialog id="receive-dialog">
+  <form class="modal" id="receive-form">
+    <div class="modal-head">
+      <div><p class="eyebrow">RECEIVE PARTS</p><h2>Post to A/P</h2></div>
+      <button class="icon-btn" formnovalidate type="button" id="receive-cancel">×</button>
+    </div>
+    <div class="modal-body">
+      <div id="receive-lines" class="kv-list" style="padding:0 0 12px"></div>
+      <label>Vendor<select id="receive-vendor"><option value="__new__">＋ New vendor…</option></select></label>
+      <div id="receive-new-vendor" style="display:none">
+        <label>New vendor name<input id="receive-new-vendor-name" placeholder="WorldPac"></label>
+      </div>
+      <label>Invoice #<input id="receive-invoice-number" required placeholder="INV-1234"></label>
+      <label>Tax<input id="receive-tax" type="number" min="0" step="0.01" value="0"></label>
+      <div class="cost-summary" id="receive-total-summary"></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" formnovalidate type="button" id="receive-cancel-2">Cancel</button>
+      <button class="btn btn-primary" type="submit">Post &amp; Receive</button>
+    </div>
+  </form>
+</dialog>

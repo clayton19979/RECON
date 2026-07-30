@@ -15,6 +15,8 @@ from pathlib import Path
 
 import pytest
 
+from app.pages import render_index
+
 STATIC = Path(__file__).resolve().parent.parent / "static"
 JS_DIR = STATIC / "js"
 MAIN_JS = JS_DIR / "main.js"
@@ -42,6 +44,7 @@ def flat_app_js() -> str:
         parts.append("\n".join(lines))
     return "\n;\n".join(parts)
 
+
 # IDs that app.js legitimately looks up but index.html never declares, because
 # they're created at runtime. Keep this list short and explain every entry --
 # a growing allowlist means the real check is being eroded.
@@ -67,7 +70,9 @@ def js() -> str:
 
 @pytest.fixture(scope="module")
 def html() -> str:
-    return INDEX_HTML.read_text(encoding="utf-8")
+    """The assembled page, dialogs spliced in -- what a browser actually gets.
+    Reading index.html raw would report every dialog's ids as missing."""
+    return render_index(STATIC)
 
 
 @pytest.fixture(scope="module")

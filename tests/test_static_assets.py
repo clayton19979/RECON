@@ -622,6 +622,41 @@ def test_stalled_threshold_agrees_across_the_stack(js: str) -> None:
     )
 
 
+def test_stalled_excludes_finished_cars_on_both_sides_of_the_wire(js: str) -> None:
+    """The threshold is only half the rule. The other half is that a car whose
+    work is finished is never stalled, however long it has sat -- and both ends
+    have to hold it or the board and the server report different lots.
+
+    The front end carries it as a flag on the Stalled *selection* rather than
+    an extra clause wherever stalled is computed, which is what makes the
+    card's number and the filter behind it the same question: both go through
+    matchesIdleSelection. Spelling it out again at any one call site is how
+    they start to drift.
+    """
+    from app.recon import is_stalled
+
+    assert is_stalled({"status_bucket": "in_progress", "idle_days": 30}), (
+        "the server stopped flagging a car that still needs work and has sat a month"
+    )
+    assert not is_stalled({"status_bucket": "finished", "idle_days": 300}), (
+        "the server counts a finished car as stalled, so its Stalled number can only ever go up"
+    )
+
+    # The entry ends at the closing brace of IDLE_SELECTIONS, and a plain
+    # [^}]* would stop early on the `${STALLED_AFTER_DAYS}` in its own label.
+    selections = re.search(r"const IDLE_SELECTIONS = \{.*?\n\};", js, re.DOTALL)
+    assert selections, "IDLE_SELECTIONS is gone"
+    stalled_selection = selections.group(0)[selections.group(0).index("stalled: {") :]
+    assert "unfinishedOnly: true" in stalled_selection, "the front end's Stalled span no longer excludes finished cars"
+    assert 'sel.unfinishedOnly && v && v.status_bucket === "finished"' in _function_source(
+        js, "matchesIdleSelection"
+    ), "matchesIdleSelection doesn't honour unfinishedOnly, so the flag above does nothing"
+    assert "matchesIdleSelection(v, IDLE_SELECTIONS.stalled)" in _function_source(js, "isStalled"), (
+        "isStalled restates the rule instead of resolving it through the selection the filter uses, "
+        "so the Stalled card's count and the rows it filters to can now disagree"
+    )
+
+
 def test_stalled_span_is_matched_by_range_not_bucket_identity(js: str) -> None:
     """ "Stalled" covers two buckets, so filtering by comparing bucket keys
     would silently match nothing. One range test serves both kinds of

@@ -1,5 +1,29 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta
+
+from app.db import connect
+
+
+def days_ago(days: int) -> str:
+    """A timestamp `days` in the past, on the same shop-local clock app/db.py
+    stamps records with -- see its now() for why that isn't UTC."""
+    return (datetime.now() - timedelta(days=days)).isoformat(timespec="seconds")
+
+
+def backdate_activity(db_path, order_id: int, when: str) -> None:
+    """Push a ticket's last activity back in time.
+
+    There's no API for "pretend nobody has touched this for a month" -- every
+    write moves the clock forward, which is the point of it -- and freezing the
+    clock app-wide would only prove the arithmetic, not that the column is
+    wired to the right source. So the test opens the same database file the
+    app is using, which is what the db_path fixture exists for.
+    """
+    with connect(db_path) as db:
+        db.execute("UPDATE orders SET last_activity_at=? WHERE id=?", (when, order_id))
+        db.commit()
+
 
 def make_recon_vehicle(client, stock_number="R-1001", **overrides):
     payload = {

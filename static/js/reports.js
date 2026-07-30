@@ -4,7 +4,7 @@ import { emptyState } from "./empty-states.js";
 import { skeletonCards, skeletonRows } from "./skeletons.js";
 import { STATUS_LABEL, state } from "./state.js";
 import { renderViewFailure } from "./error-boundary.js";
-import { STALLED_AFTER_DAYS, vehicleStatusPillClass } from "./vehicles-board.js";
+import { STALLED_AFTER_DAYS, isStalled, vehicleStatusPillClass } from "./vehicles-board.js";
 import { openVehicleDetail } from "./vehicle-detail.js";
 
 /* ==================================================================
@@ -284,7 +284,10 @@ function lotStatCards(rows) {
   const count = (key) => rows.filter((r) => r.lot_bucket === key).length;
   const spent = rows.reduce((s, r) => s + (r.actual_cost || 0), 0);
   const left = rows.reduce((s, r) => s + (r.remaining_cost || 0), 0);
-  const stalled = rows.filter((r) => r.lot_bucket !== "ready" && r.idle_days >= STALLED_AFTER_DAYS).length;
+  // The same isStalled the board's card counts by, imported rather than
+  // restated -- this screen and the board are two views of one lot, and a
+  // second copy of the rule is a second answer waiting to happen.
+  const stalled = rows.filter(isStalled).length;
   const waiting = count("waiting");
   return [
     { label: "Ready To Sell", value: String(count("ready")), sub: `of ${rows.length} on the lot`, tone: count("ready") ? "good" : "" },
@@ -519,7 +522,7 @@ function renderLotTable(rows) {
   const line = (r) => {
     const refId = r.segment === "recon" ? r.recon_id : r.we_owe_id;
     const clickable = refId != null;
-    const stalled = r.lot_bucket !== "ready" && r.idle_days >= STALLED_AFTER_DAYS;
+    const stalled = isStalled(r);
     return `<tr${clickable ? ` class="clickable" data-seg="${esc(r.segment)}" data-ref-id="${refId}" tabindex="0" title="Open this vehicle"` : ""}>
       <td class="num">${esc(r.stock_number || "—")}</td>
       <td>${esc(r.vehicle)}${r.customer_name ? ` <span class="cell-sub">(${esc(r.customer_name)})</span>` : ""}</td>

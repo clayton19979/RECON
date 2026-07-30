@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from app.db import connect
-from app.recon import age_days
+from app.recon import age_days, is_stalled
 from tests.helpers import (
+    backdate_activity,
+    days_ago,
     make_recon_order,
     make_recon_vehicle,
     make_we_owe,
@@ -583,15 +585,6 @@ def board_row(client, recon_id):
     return next(r for r in client.get("/api/vehicles-board").json() if r["recon_id"] == recon_id)
 
 
-def backdate_activity(db_path, order_id: int, when: str) -> None:
-    """Push a ticket's last activity back in time. There's no API for "pretend
-    nobody has touched this for a month" and freezing the clock would only
-    prove the arithmetic, not that the column is wired to the right source."""
-    with connect(db_path) as db:
-        db.execute("UPDATE orders SET last_activity_at=? WHERE id=?", (when, order_id))
-        db.commit()
-
-
 def test_board_row_reports_idle_time_from_ticket_activity(client, db_path):
     """A car with no ticket falls back to its own timestamp; starting a ticket
     and then working on it is what moves the clock."""
@@ -872,3 +865,105 @@ def test_we_owe_board_rows_carry_an_order_id(client):
     order = client.post("/api/orders", json={"concern": "Mirror", "segment": "we_owe", "we_owe_id": item["id"]}).json()
     row = next(r for r in client.get("/api/vehicles-board").json() if r["we_owe_id"] == item["id"])
     assert row["order_id"] == order["id"]
+
+
+# Stalled: a car that still needs work and nobody has touched in a week.
+#
+# Idle and stalled used to be the same test, and the difference matters more
+# the longer the app runs. Nothing ever happens to a finished car again, so its
+# idle count climbs forever -- counting those meant the board's red Stalled
+# number could only ever go up, until it described the shop's history instead
+# of its morning, and it put "make a follow-up task" on work that was
+# deliberately closed. is_stalled is the one rule; static/js/vehicles-board.js
+# has the front-end half and says the same thing.
+
+
+def test_a_car_left_alone_for_a_week_is_stalled(client, db_path):
+    vehicle = make_recon_vehicle(client, stock_number="R-STALL")
+    order = make_recon_order(client, vehicle["id"])
+    client.patch(f"/api/orders/{order['id']}/status", json={"status": "in_progress", "actor": "tester"})
+    backdate_activity(db_path, order["id"], days_ago(30))
+
+    row = board_row(client, vehicle["id"])
+    assert row["status_bucket"] == "in_progress"
+    assert row["idle_days"] >= 30
+    assert is_stalled(row)
+
+
+def test_a_finished_recon_car_is_not_stalled_however_long_it_sits(client, db_path):
+    """The completed ticket nobody archived. It is not waiting on anyone."""
+    vehicle = make_recon_vehicle(client, stock_number="R-DONE-OLD")
+    order = make_recon_order(client, vehicle["id"])
+    client.patch(f"/api/orders/{order['id']}/status", json={"status": "complete", "actor": "tester"})
+    backdate_activity(db_path, order["id"], days_ago(120))
+
+    row = board_row(client, vehicle["id"])
+    assert row["status_bucket"] == "finished", "precondition: the ticket is closed"
+    assert row["idle_days"] >= 120, "precondition: the car really has been sitting"
+    assert not is_stalled(row), "a car with no open work is being reported as neglected"
+
+
+def test_a_waived_promise_is_not_stalled(client, db_path):
+    """Waiving is how an advisor closes a promise the shop is not going to
+    keep. Nagging about it every day afterwards is the opposite of useful."""
+    item = make_we_owe(client, description="Replace tie rod")
+    order = client.post("/api/orders", json={"concern": "Tie rod", "segment": "we_owe", "we_owe_id": item["id"]}).json()
+    backdate_activity(db_path, order["id"], days_ago(60))
+    detail = client.get(f"/api/we-owe/{item['id']}").json()
+    res = client.patch(
+        f"/api/we-owe/{item['id']}", json={"status": "waived", "expected_version": detail["edit_version"]}
+    )
+    assert res.status_code == 200, res.text
+    backdate_activity(db_path, order["id"], days_ago(60))
+
+    row = next(r for r in client.get("/api/vehicles-board").json() if r["we_owe_id"] == item["id"])
+    assert row["status_bucket"] == "finished"
+    assert row["idle_days"] >= 60
+    assert not is_stalled(row)
+
+
+def test_reopening_a_car_makes_it_stallable_again(client, db_path):
+    """Finished is a state, not a one-way door: writing a second ticket puts
+    the car back in the shop, and the flag has to come back with it."""
+    vehicle = make_recon_vehicle(client, stock_number="R-REOPEN")
+    first = make_recon_order(client, vehicle["id"])
+    client.patch(f"/api/orders/{first['id']}/status", json={"status": "complete", "actor": "tester"})
+    backdate_activity(db_path, first["id"], days_ago(45))
+    assert not is_stalled(board_row(client, vehicle["id"]))
+
+    second = make_recon_order(client, vehicle["id"], concern="Came back with a noise")
+    backdate_activity(db_path, second["id"], days_ago(45))
+    row = board_row(client, vehicle["id"])
+    assert row["status_bucket"] == "in_progress", "a newly opened ticket didn't reopen the car"
+    assert is_stalled(row), "a car back in the shop and untouched for six weeks isn't being flagged"
+
+
+def test_the_detail_page_is_told_whether_the_car_is_finished(client):
+    """The detail page draws the same stalled line the board's card counts, so
+    it needs the same finished/in-progress answer -- without it the page had no
+    way to tell a car that has gone quiet from one that is simply done."""
+    vehicle = make_recon_vehicle(client, stock_number="R-BUCKET")
+    order = make_recon_order(client, vehicle["id"])
+    assert client.get(f"/api/recon/vehicles/{vehicle['id']}").json()["status_bucket"] == "in_progress"
+    client.patch(f"/api/orders/{order['id']}/status", json={"status": "complete", "actor": "tester"})
+    assert client.get(f"/api/recon/vehicles/{vehicle['id']}").json()["status_bucket"] == "finished"
+
+    item = make_we_owe(client, description="Fix mirror")
+    assert client.get(f"/api/we-owe/{item['id']}").json()["status_bucket"] == "in_progress"
+    detail = client.get(f"/api/we-owe/{item['id']}").json()
+    client.patch(f"/api/we-owe/{item['id']}", json={"status": "fulfilled", "expected_version": detail["edit_version"]})
+    assert client.get(f"/api/we-owe/{item['id']}").json()["status_bucket"] == "finished"
+
+
+def test_the_detail_page_and_the_board_never_disagree(client, db_path):
+    """Two views of one car. If these two ever answer differently, one screen
+    calls a car neglected while the other calls it done."""
+    vehicle = make_recon_vehicle(client, stock_number="R-AGREE")
+    order = make_recon_order(client, vehicle["id"])
+    for status in ("in_progress", "complete"):
+        client.patch(f"/api/orders/{order['id']}/status", json={"status": status, "actor": "tester"})
+        backdate_activity(db_path, order["id"], days_ago(20))
+        detail = client.get(f"/api/recon/vehicles/{vehicle['id']}").json()
+        assert detail["status_bucket"] == board_row(client, vehicle["id"])["status_bucket"], (
+            f"the detail page and the board disagree about a {status} car"
+        )

@@ -178,6 +178,10 @@ export function renderVehicleStatusOptions() {
    is a number you stop trusting. So it counts over the pool with the idle
    filter lifted, the same rule the chart's own bars follow.
 
+   Stalled also counts through isStalled rather than off idle_days directly,
+   which is what keeps finished cars out of it -- see isStalled for why that
+   matters more the longer the app has been in use.
+
    The two cards that aren't controls (Vehicles, Cost) describe the table
    exactly, because that's the only thing they could honestly describe. */
 function boardStats(rows, idlePool = rows) {
@@ -359,6 +363,12 @@ const IDLE_SELECTIONS = {
   stalled: {
     key: "stalled", label: "Stalled", short: `${STALLED_AFTER_DAYS}+ days`,
     min: STALLED_AFTER_DAYS, max: Infinity, tone: "over", span: true,
+    // The one thing separating the Stalled span from the two bars it covers.
+    // It's a flag on the selection rather than an extra clause at each call
+    // site because the card's count, the card's filter, the row colouring and
+    // the bulk task titles all run through matchesIdleSelection -- so they
+    // cannot end up disagreeing about which cars are in trouble.
+    unfinishedOnly: true,
   },
 };
 
@@ -366,13 +376,27 @@ function idleSelection(key) {
   return IDLE_SELECTIONS[key] || null;
 }
 
-// The one definition of stalled, used by the summary card, the card's filter
-// and the row nudge on the detail page.
-function isStalled(v) {
-  return Math.max(0, (v && v.idle_days) || 0) >= STALLED_AFTER_DAYS;
+/* The one definition of stalled: still needs work, and untouched for a week.
+
+   Idle and stalled are different questions and only one of them is an alarm.
+   Idle is a measurement every car has, finished ones included -- "when did
+   anything last happen here" is a fair question about a car that's done, so
+   the chart's bars, the bucket filters and the Idle column all read it
+   straight. Stalled is the judgement, and a car whose work is finished is
+   never stalled however long it has sat.
+
+   Getting that wrong doesn't stay small. A fulfilled we-owe or a completed
+   recon car is never touched again, so its idle count climbs forever: the
+   Stalled card counted them, which meant the red number only ever went up and
+   ended up describing the shop's history rather than its morning. It also put
+   "Stalled 34 days — make a task" on a promise the advisor had deliberately
+   waived. app/recon.py::is_stalled is the server's half of this. */
+export function isStalled(v) {
+  return matchesIdleSelection(v, IDLE_SELECTIONS.stalled);
 }
 
 function matchesIdleSelection(v, sel) {
+  if (sel.unfinishedOnly && v && v.status_bucket === "finished") return false;
   const n = Math.max(0, (v && v.idle_days) || 0);
   return n >= sel.min && n <= sel.max;
 }
@@ -386,13 +410,21 @@ function idleClass(days) {
 
 // "0d" reads like a broken cell; the day something happened is the one case
 // worth spelling out. Everything else is the same compact Nd as Age.
+//
+// The warning colours are the Stalled card's judgement in the row, so they
+// follow the same rule: a finished car states its idle days plainly instead
+// of in alarm red. A waived promise from five weeks ago is not a problem, and
+// painting it like one trains you to ignore the cars that are.
 function idleCellHtml(v) {
   const days = v.idle_days || 0;
   const when = v.last_activity_at ? String(v.last_activity_at).slice(0, 10) : "";
+  const finished = v.status_bucket === "finished";
   const title = when
     ? `Last activity ${when} — ${days === 0 ? "today" : `${days} day${days === 1 ? "" : "s"} ago`}`
+      + (finished && days >= STALLED_AFTER_DAYS ? " — work is finished, so this isn't stalled" : "")
     : "No activity recorded";
-  return `<span class="idle-cell ${idleClass(days)}" title="${esc(title)}">${days === 0 ? "today" : `${days}d`}</span>`;
+  const tone = finished ? "age-ok" : idleClass(days);
+  return `<span class="idle-cell ${tone}" title="${esc(title)}">${days === 0 ? "today" : `${days}d`}</span>`;
 }
 
 /* The board's one chart. Cost-by-vehicle already exists on Reports and would
@@ -450,7 +482,14 @@ function renderIdleChart(rows) {
   // touch users never see.
   const legendBits = [`<span class="legend-item">Click a bar to filter</span>`];
   if (sel && sel.span) {
-    legendBits.unshift(`<span class="legend-item"><span class="legend-swatch marker" style="background:var(--crit);opacity:1"></span>Counted as stalled</span>`);
+    // The marked bars hold every car that has been sitting this long; the
+    // Stalled count is the subset of them that still needs work. Naming the
+    // number here is what stops the marker reading as a claim that all of
+    // them are stalled -- the card beside the chart says 3 and the two bars
+    // may well add up to 5, and an unexplained gap between the two is exactly
+    // the kind of thing that makes both numbers untrustworthy.
+    const stalledInPool = pool.filter(isStalled).length;
+    legendBits.unshift(`<span class="legend-item"><span class="legend-swatch marker" style="background:var(--crit);opacity:1"></span>${stalledInPool} stalled — finished cars aren't counted</span>`);
   }
   target.innerHTML = barChart({
     title: "Time since anything happened",
@@ -516,9 +555,11 @@ function vehiclesEmptyState() {
       title: idleSel.span
         ? "Nothing is stalled"
         : cold ? `Nothing has been sitting ${idleSel.short}` : "No vehicles in that bucket",
-      hint: cold
-        ? `Every vehicle in this view has been worked on within the last ${idleSel.min} days.`
-        : `No vehicle in this view was last touched ${idleSel.short}.`,
+      hint: idleSel.span
+        ? `Every vehicle in this view that still needs work has been touched within the last ${idleSel.min} days.`
+        : cold
+          ? `Every vehicle in this view has been worked on within the last ${idleSel.min} days.`
+          : `No vehicle in this view was last touched ${idleSel.short}.`,
       actions: `<button type="button" class="btn btn-ghost btn-sm" data-empty-action="clear-idle">Show all vehicles</button>`,
     };
   }

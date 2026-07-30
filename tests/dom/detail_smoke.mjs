@@ -23,7 +23,9 @@ let vehicle = {
   vin: "1HGCV1F34JA123456", mileage: 52300, trim: "EX-L", color: "Grey",
   purchase_price: 4200, sale_price: null, status: "in_repair", archived_at: "",
   edit_version: 3, created_at: daysAgo(30), updated_at: new Date(NOW - 120000).toISOString().slice(0, 19),
-  orders: [], total_cost: 0, quoted_cost: 0, profit: null,
+  // status_bucket is what tells this page a car has gone quiet rather than
+  // simply finished -- the same field the board's rows carry.
+  orders: [], total_cost: 0, quoted_cost: 0, profit: null, status_bucket: "in_progress",
   last_activity: { at: daysAgo(9), idle_days: 9, action: "parts_received", actor: "Dana Ruiz" },
 };
 
@@ -136,6 +138,32 @@ ok(!worked.classList.contains("stalled"), "a car worked on today is flagged as s
 ok(!doc.querySelector("#vd-worked-nudge"), "a car worked on today still shows the stalled nudge");
 ok(/Last worked on today/.test(worked.textContent),
    `expected "today" rather than a relative time, got "${worked.textContent.trim()}"`);
+
+/* ---------- a car that's finished, however long it has sat ----------
+
+   The board's Stalled card stopped counting finished cars because their idle
+   count only ever climbs; the same rule has to hold here or the two screens
+   disagree about the car in front of you. A car whose work is done isn't
+   waiting on anybody, and offering to raise a follow-up task about it is
+   busywork the advisor then has to close.
+
+   The line itself stays: "last worked on 40 days ago" is still worth knowing
+   about a completed car. It's the alarm tone and the nudge that go. */
+vehicle = {
+  ...vehicle, status_bucket: "finished",
+  last_activity: { at: daysAgo(40), idle_days: 40, action: "status_changed", actor: "Priya" },
+};
+await w.openVehicleDetail("recon", 7);
+await settle();
+ok(!worked.classList.contains("stalled"),
+   "a car whose work is finished is still flagged as stalled after sitting 40 days");
+ok(!doc.querySelector("#vd-worked-nudge"),
+   "a finished car still offers to make a follow-up task about work that's done");
+ok(/Last worked on/.test(worked.textContent),
+   `the last-worked line vanished on a finished car: "${worked.textContent.trim()}"`);
+// Back to an ordinary in-progress car for everything below, so a later
+// section can't quietly inherit "finished" and stop testing what it says.
+vehicle = { ...vehicle, status_bucket: "in_progress" };
 
 /* ---------- an unlogged write: when, but not who ----------
    The estimate grid autosaves without logging an event, so a car worked on

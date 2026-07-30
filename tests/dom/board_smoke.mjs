@@ -50,8 +50,14 @@ let board = [
   // chip. Distinct values so a batch that sent one order_id for every item
   // can't pass. The other three stay null -- a car can sit on the board
   // before anyone opens an RO on it, and that has to survive the same path.
-  veh({ recon_id: 3, order_id: 71, stock_number: "C007", vehicle: "2015 Chevy Silverado", vin: "3GCUKREC0FG", status: "complete", status_bucket: "finished", technicians: ["Bo"], age_days: 9, quoted_cost: 1200, actual_cost: 1180, idle_days: 9, last_activity_at: "2026-07-16T14:00:00" }),
-  veh({ segment: "we_owe", we_owe_id: 6, order_id: 72, stock_number: "D451", vehicle: "2020 Subaru Outback", customer_name: "T. Nguyen", status: "fulfilled", status_bucket: "finished", technicians: [], age_days: 15, quoted_cost: 0, actual_cost: 0, idle_days: 21, last_activity_at: "2026-07-04T10:00:00" }),
+  //
+  // Both are unfinished, and that is load-bearing rather than incidental: a
+  // finished car is never stalled however long it has sat (see isStalled), so
+  // a fixture whose only long-idle cars were a completed RO and a fulfilled
+  // promise was asserting the exact bug this file now guards against. The
+  // finished case gets its own scoped section further down.
+  veh({ recon_id: 3, order_id: 71, stock_number: "C007", vehicle: "2015 Chevy Silverado", vin: "3GCUKREC0FG", status: "in_progress", technicians: ["Bo"], age_days: 9, quoted_cost: 1200, actual_cost: 1180, idle_days: 9, last_activity_at: "2026-07-16T14:00:00" }),
+  veh({ segment: "we_owe", we_owe_id: 6, order_id: 72, stock_number: "D451", vehicle: "2020 Subaru Outback", customer_name: "T. Nguyen", status: "open", status_bucket: "in_progress", technicians: [], age_days: 15, quoted_cost: 0, actual_cost: 0, idle_days: 21, last_activity_at: "2026-07-04T10:00:00" }),
 ];
 
 const bulkCreateBodies = [];
@@ -599,6 +605,53 @@ ok(!doc.querySelector("#stat-stalled").classList.contains("crit"), "a zero stall
 ok(card("stat-stalled-sub") === "nothing over 6 days", `zero Stalled sub reads "${card("stat-stalled-sub")}"`);
 stalledCard().click();
 ok(!w.state.vehicleIdleBucket, "a disabled Stalled card still applied its filter");
+w.state.vehicles = board;
+w.renderVehiclesTable();
+
+/* ---------- a finished car is never stalled ----------
+
+   The lot's longest-idle rows are usually the ones nobody will ever touch
+   again: a completed recon ticket, a we-owe the advisor waived. Nothing moves
+   on them, so their idle count climbs forever -- counting them made the red
+   Stalled card a number that could only ever go up, until it described the
+   shop's history instead of its morning, and it put "Stalled 21 days — make a
+   task" on a promise that was closed on purpose.
+
+   Idle and stalled part company here. Idle stays a plain measurement, still
+   true of a finished car and still shown: the Idle column and the chart's
+   bars don't move. Stalled is the judgement, and it drops them. */
+const finishedBoard = board.map((v) =>
+  v.recon_id === 3 ? { ...v, status: "complete", status_bucket: "finished" }
+    : v.we_owe_id === 6 ? { ...v, status: "fulfilled", status_bucket: "finished" }
+      : v);
+w.state.vehicleChartOpen = true;
+w.state.vehicles = finishedBoard;
+w.renderVehiclesTable();
+ok(card("stat-stalled") === "0",
+   `two finished cars idle 9 and 21 days still read as ${card("stat-stalled")} stalled`);
+ok(!finishedBoard.some(w.isStalled), "isStalled still counts a car whose work is finished");
+// The measurement is untouched -- it's still true, and the chart still shows
+// where the lot's time is going.
+ok(idleCell("we_owe:6").textContent.trim() === "21d",
+   `a finished car stopped reporting how long it has sat, reads "${idleCell("we_owe:6").textContent.trim()}"`);
+ok(barCount("frozen") === "1",
+   `the 14+ day bar dropped a car for being finished, reads ${barCount("frozen")}`);
+// ...but the row stops shouting about it, because there is nothing to do.
+ok(idleCell("we_owe:6").classList.contains("age-ok"),
+   "a finished car's Idle cell is still painted as an alarm");
+ok(/isn't stalled/.test(idleCell("we_owe:6").title),
+   `the Idle tooltip doesn't explain why a long-sitting finished car isn't flagged: "${idleCell("we_owe:6").title}"`);
+// The card's filter agrees with the number printed on it, which is the whole
+// point of running the count and the filter through one rule.
+w.state.vehicleIdleBucket = "stalled";
+w.renderVehiclesTable();
+ok(dataRows().length === 0,
+   `the Stalled filter kept ${dataRows().length} finished car(s) the card didn't count`);
+// And a follow-up written off the board stops claiming neglect that isn't there.
+const finishedOutback = finishedBoard.find((v) => v.we_owe_id === 6);
+ok(w.bulkTaskTitle(finishedOutback) === "Follow up: D451 2020 Subaru Outback",
+   `a finished car's task title reads "${w.bulkTaskTitle(finishedOutback)}"`);
+w.state.vehicleIdleBucket = "";
 w.state.vehicles = board;
 w.renderVehiclesTable();
 

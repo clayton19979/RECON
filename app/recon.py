@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
@@ -67,6 +67,48 @@ def idle_days(last_activity_at: str) -> int:
 # the API all have to agree about which cars are stalled -- and it's the same
 # boundary the "cold" idle bucket starts at in app.js.
 STALLED_AFTER_DAYS = 7
+
+
+def is_stalled(row: Mapping[str, Any]) -> bool:
+    """Is this car sitting when it shouldn't be?
+
+    Idle and stalled are not the same question, and conflating them is what
+    this exists to stop. Idle is a plain measurement -- days since anything
+    happened -- and every car has one. Stalled is a judgement: *this car still
+    needs work and nobody has touched it in a week*. A car whose work is
+    finished has no such problem, however long it has sat.
+
+    That distinction matters more the longer the app runs. A fulfilled we-owe
+    or a completed recon car never gets touched again, so its idle count climbs
+    forever: counting those as stalled meant the board's red alarm only ever
+    went up, until the number said "17 cars in trouble" on a lot where three
+    were. An alarm that is always on is an alarm nobody reads.
+    """
+    if row.get("status_bucket") == "finished":
+        return False
+    return max(0, int(row.get("idle_days") or 0)) >= STALLED_AFTER_DAYS
+
+
+def order_status_bucket(orders: list[dict]) -> str:
+    """Finished or still in progress, judged by the repair tickets themselves.
+
+    Recon records carry a status field of their own but nobody maintains it,
+    so the ticket is what the answer has to come from: finished means every
+    ticket that exists is closed, and at least one exists. A car with no
+    ticket at all has not finished anything -- it has not started.
+    """
+    active = next((o for o in reversed(orders) if o["status"] != "complete"), None)
+    has_closed = any(o["status"] == "complete" for o in orders)
+    return "finished" if (active is None and has_closed) else "in_progress"
+
+
+def we_owe_status_bucket(status: str) -> str:
+    """A promise is done when the advisor says it is -- fulfilled or waived.
+
+    Unlike recon, this doesn't read the ticket: waiving a promise closes it
+    with no work done and often no ticket at all.
+    """
+    return "finished" if status in ("fulfilled", "waived") else "in_progress"
 
 
 def last_activity_detail(
@@ -489,7 +531,6 @@ def vehicle_board_rows(
             active_order = next((o for o in reversed(rollup["orders"]) if o["status"] != "complete"), None)
             latest_order = rollup["orders"][-1] if rollup["orders"] else None
             current_order = active_order or latest_order
-            has_closed_order = any(o["status"] == "complete" for o in rollup["orders"])
             display_status = current_order["status"] if current_order else "acquired"
             activity_at = last_activity(db, "recon_vehicle_id", row["id"], row["created_at"])
             result.append(
@@ -501,7 +542,7 @@ def vehicle_board_rows(
                     "vehicle": f"{row['year']} {row['make']} {row['model']}",
                     "vin": row["vin"],
                     "status": display_status,
-                    "status_bucket": "finished" if (active_order is None and has_closed_order) else "in_progress",
+                    "status_bucket": order_status_bucket(rollup["orders"]),
                     # From the unit, not recon_vehicles' legacy column of the same
                     # name -- one car, one purchase price, whichever half of its
                     # life you happen to be looking at.
@@ -570,7 +611,7 @@ def vehicle_board_rows(
                     "customer_name": row["customer_name"],
                     "description": row["description"],
                     "status": display_status,
-                    "status_bucket": "finished" if row["status"] in ("fulfilled", "waived") else "in_progress",
+                    "status_bucket": we_owe_status_bucket(row["status"]),
                     # A we-owe car has a purchase price too -- it's just usually
                     # entered here, because the shop bought and recon'd it long
                     # before RECON ever saw it.
@@ -650,6 +691,11 @@ def build_recon_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
         detail["total_cost"] = rollup["total_cost"]
         detail["quoted_cost"] = rollup["quoted_cost"]
         detail["labor_hours"] = rollup["labor_hours"]
+        # The same finished/in-progress answer the board gives, so the detail
+        # page can tell a car that has gone quiet from one that is simply done
+        # -- see is_stalled. Without it the page had no way to know, and put a
+        # "Stalled 41 days -- make a task" nudge on finished work.
+        detail["status_bucket"] = order_status_bucket(rollup["orders"])
         # Purchase and sale price come off the unit, which is what makes them
         # survive the car being sold and coming back on a we-owe. The legacy
         # recon_vehicles columns of the same name are no longer authoritative.
@@ -693,6 +739,8 @@ def build_recon_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
         detail["total_cost"] = rollup["total_cost"]
         detail["quoted_cost"] = rollup["quoted_cost"]
         detail["labor_hours"] = rollup["labor_hours"]
+        # Same reason as recon_detail: a waived promise is closed, not stalled.
+        detail["status_bucket"] = we_owe_status_bucket(row["status"])
         payments = [
             dict(p)
             for p in db.execute("SELECT * FROM we_owe_payments WHERE we_owe_id=? ORDER BY id DESC", (we_owe_id,))

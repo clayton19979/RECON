@@ -127,6 +127,28 @@ def dollars(value: int) -> float:
     return float(Decimal(value) / 100)
 
 
+CREDIT_KINDS = frozenset({"credit"})
+
+
+def estimate_line_total(kind: str, quantity: float, unit_price: float) -> float:
+    """What one estimate line contributes to the estimate's subtotal.
+
+    A vendor credit -- a returned part, a refunded core -- is stored the way it
+    reads on the vendor's own paperwork: positive quantity, positive cost, so
+    "1 x $150.00" round-trips through the grid and prints legibly. The fact
+    that it SUBTRACTS is therefore not visible in the row's numbers, and every
+    place that summed quantity * unit_price got it backwards: a $150 credit
+    raised the car's cost by $150.
+
+    That sign lives here so there is one answer. Getting it wrong is silent --
+    a credit that adds looks like an ordinary cost increase, and the lifetime
+    profit the vehicle_units design exists to answer is simply wrong, with
+    nothing on screen to notice.
+    """
+    total = round(quantity * unit_price, 2)
+    return -total if kind in CREDIT_KINDS else total
+
+
 def touch_order(db: sqlite3.Connection, order_id: int, now_fn: Callable[[], str]) -> None:
     """Mark a ticket as having just been worked on.
 

@@ -218,7 +218,14 @@ def cost_rollup(db: sqlite3.Connection, column: str, ref_id: int, segment: str |
                -- and the hours the techs flagged were invisible everywhere.
                coalesce(sum(CASE WHEN ei.kind='labor' THEN ei.quantity ELSE 0 END),0) labor_hours,
                coalesce(sum(CASE WHEN ei.kind='fee'   THEN ei.quantity*ei.unit_cost ELSE 0 END),0) fee_cost,
-               coalesce(sum(ei.quantity*ei.unit_cost),0) quoted_cost,
+               -- A credit line (a returned part, a refunded core) is stored
+               -- positive, the way the vendor prints it, so the sign has to be
+               -- applied here: summing it raw made a $150 credit RAISE the
+               -- car's quoted cost by $150. Actual cost needs no matching term
+               -- -- parts_cost above already drops a returned line via
+               -- part_returned, and subtracting the credit as well would count
+               -- the same money back twice.
+               coalesce(sum(CASE WHEN ei.kind='credit' THEN -ei.quantity*ei.unit_cost ELSE ei.quantity*ei.unit_cost END),0) quoted_cost,
                coalesce(sum(CASE WHEN ei.kind='part' AND ei.status='ordered' AND ei.part_returned=0 THEN 1 ELSE 0 END),0) parts_pending,
                coalesce(sum(CASE WHEN ei.kind='part' AND ei.status='ordered' AND ei.part_returned=0 THEN ei.quantity*ei.unit_cost ELSE 0 END),0) parts_pending_value
            FROM orders o
@@ -588,8 +595,32 @@ def build_recon_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
     router = APIRouter(prefix="/api")
 
     def assert_current_version(row: sqlite3.Row, expected_version: int | None) -> None:
+        """Fail fast, with a clear message, before doing any work.
+
+        This is a courtesy check, not the guarantee -- see version_guard. On its
+        own it is check-then-act: two saves can both read the same version and
+        both pass here before either writes.
+        """
         if expected_version is not None and expected_version != row["edit_version"]:
             raise HTTPException(409, "Someone else changed this since you loaded it -- reload to see their update")
+
+    def version_guard(expected_version: int | None) -> tuple[str, tuple[object, ...]]:
+        """SQL fragment making an UPDATE apply only if the row is still at the
+        version the client loaded.
+
+        Appended to the UPDATE that bumps edit_version, so the comparison
+        happens against what is actually committed at write time rather than
+        what was read moments earlier. Callers must treat rowcount == 0 as a
+        409: the row is known to exist (the *_row helpers already 404), so the
+        only way to match nothing is that someone else got there first.
+        """
+        if expected_version is None:
+            return "", ()
+        return " AND edit_version=?", (expected_version,)
+
+    def assert_version_won(cur: sqlite3.Cursor, message: str) -> None:
+        if cur.rowcount == 0:
+            raise HTTPException(409, message)
 
     def recon_row(db: sqlite3.Connection, recon_id: int) -> sqlite3.Row:
         row = db.execute(
@@ -732,9 +763,12 @@ def build_recon_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
         with connect() as db:
             row = recon_row(db, recon_id)
             assert_current_version(row, item.expected_version)
-            db.execute(
-                "UPDATE recon_vehicles SET archived_at=?,edit_version=edit_version+1 WHERE id=?", (now_fn(), recon_id)
+            guard, guard_params = version_guard(item.expected_version)
+            cur = db.execute(
+                f"UPDATE recon_vehicles SET archived_at=?,edit_version=edit_version+1 WHERE id=?{guard}",
+                (now_fn(), recon_id, *guard_params),
             )
+            assert_version_won(cur, "Someone else changed this vehicle since you loaded it -- reload to see their update")
             return recon_detail(db, recon_id)
 
     @router.post("/recon/vehicles/{recon_id}/reopen")
@@ -742,7 +776,12 @@ def build_recon_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
         with connect() as db:
             row = recon_row(db, recon_id)
             assert_current_version(row, item.expected_version)
-            db.execute("UPDATE recon_vehicles SET archived_at='',edit_version=edit_version+1 WHERE id=?", (recon_id,))
+            guard, guard_params = version_guard(item.expected_version)
+            cur = db.execute(
+                f"UPDATE recon_vehicles SET archived_at='',edit_version=edit_version+1 WHERE id=?{guard}",
+                (recon_id, *guard_params),
+            )
+            assert_version_won(cur, "Someone else changed this vehicle since you loaded it -- reload to see their update")
             return recon_detail(db, recon_id)
 
     @router.patch("/recon/vehicles/{recon_id}")
@@ -825,7 +864,15 @@ def build_recon_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
                 params.append(ts)
                 fields.append("edit_version=edit_version+1")
                 params.append(recon_id)
-                db.execute(f"UPDATE recon_vehicles SET {','.join(fields)} WHERE id=?", params)
+                guard, guard_params = version_guard(item.expected_version)
+                params.extend(guard_params)
+                cur = db.execute(f"UPDATE recon_vehicles SET {','.join(fields)} WHERE id=?{guard}", params)
+                # Raising here rolls back the vehicles/vehicle_units writes
+                # above too -- they share this connection's transaction -- so a
+                # lost race leaves nothing half-applied.
+                assert_version_won(
+                    cur, "Someone else changed this vehicle since you loaded it -- reload to see their update"
+                )
 
             return recon_detail(db, recon_id)
 
@@ -894,9 +941,12 @@ def build_recon_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
         with connect() as db:
             row = we_owe_row(db, we_owe_id)
             assert_current_version(row, item.expected_version)
-            db.execute(
-                "UPDATE we_owe_items SET archived_at=?,edit_version=edit_version+1 WHERE id=?", (now_fn(), we_owe_id)
+            guard, guard_params = version_guard(item.expected_version)
+            cur = db.execute(
+                f"UPDATE we_owe_items SET archived_at=?,edit_version=edit_version+1 WHERE id=?{guard}",
+                (now_fn(), we_owe_id, *guard_params),
             )
+            assert_version_won(cur, "Someone else changed this item since you loaded it -- reload to see their update")
             return we_owe_detail(db, we_owe_id)
 
     @router.post("/we-owe/{we_owe_id}/reopen")
@@ -904,7 +954,12 @@ def build_recon_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
         with connect() as db:
             row = we_owe_row(db, we_owe_id)
             assert_current_version(row, item.expected_version)
-            db.execute("UPDATE we_owe_items SET archived_at='',edit_version=edit_version+1 WHERE id=?", (we_owe_id,))
+            guard, guard_params = version_guard(item.expected_version)
+            cur = db.execute(
+                f"UPDATE we_owe_items SET archived_at='',edit_version=edit_version+1 WHERE id=?{guard}",
+                (we_owe_id, *guard_params),
+            )
+            assert_version_won(cur, "Someone else changed this item since you loaded it -- reload to see their update")
             return we_owe_detail(db, we_owe_id)
 
     @router.patch("/we-owe/{we_owe_id}")
@@ -981,7 +1036,14 @@ def build_recon_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
                 params.append(ts)
                 fields.append("edit_version=edit_version+1")
                 params.append(we_owe_id)
-                db.execute(f"UPDATE we_owe_items SET {','.join(fields)} WHERE id=?", params)
+                guard, guard_params = version_guard(item.expected_version)
+                params.extend(guard_params)
+                cur = db.execute(f"UPDATE we_owe_items SET {','.join(fields)} WHERE id=?{guard}", params)
+                # Rolls back the vehicles/vehicle_units writes above with it --
+                # same transaction, so a lost race applies nothing.
+                assert_version_won(
+                    cur, "Someone else changed this item since you loaded it -- reload to see their update"
+                )
             return we_owe_detail(db, we_owe_id)
 
     @router.delete("/we-owe/{we_owe_id}", status_code=204)

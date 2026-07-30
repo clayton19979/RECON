@@ -518,3 +518,121 @@ def test_process_invoice_totals_mismatch(client):
     body = res.json()
     assert body["status"] == "review_required"
     assert any("subtotal" in issue.lower() for issue in body["issues"])
+
+
+def test_vendor_credit_subtracts_from_the_cars_cost_instead_of_adding(client):
+    """A credit is stored the way the vendor prints it -- positive quantity,
+    positive unit cost -- so nothing in the row's own numbers says it subtracts.
+    It used to add: a $150 credit raised the car's recon cost by $150, and the
+    lifetime profit the vehicle_units design exists to answer was simply wrong,
+    with nothing on screen to notice."""
+    client.post("/api/vendors", json={"name": "WorldPac"})
+    vehicle = make_recon_vehicle(client, stock_number="R-9100")
+    order = make_recon_order(client, vehicle["id"])
+    save_estimate(
+        client,
+        order["id"],
+        [
+            {
+                "kind": "part",
+                "description": "Alternator",
+                "part_number": "ALT-1",
+                "quantity": 1,
+                "unit_price": 500,
+                "unit_cost": 500,
+            }
+        ],
+    )
+    assert client.get(f"/api/recon/vehicles/{vehicle['id']}").json()["quoted_cost"] == 500
+
+    # The ordinary mixed invoice: the replacement part billed, the one it
+    # replaced credited back. 500 - 150 = 350 is the vendor's own subtotal.
+    body = post_invoice(
+        client,
+        invoice_number="INV-CR-1",
+        order_id=order["id"],
+        subtotal=350,
+        tax=0,
+        total=350,
+        items=[
+            {"part_number": "ALT-2", "description": "Alternator (replacement)", "quantity": 1, "unit_cost": 500},
+            {
+                "part_number": "ALT-1",
+                "description": "Returned alternator",
+                "quantity": 1,
+                "unit_cost": 150,
+                "kind": "credit",
+            },
+        ],
+    ).json()
+    # The arithmetic check has to agree the invoice adds up, or an everyday
+    # mixed invoice gets held for review over a credit it accounted for.
+    assert body["status"] == "posted", body
+
+    detail = client.get(f"/api/recon/vehicles/{vehicle['id']}").json()
+    # 500 quoted + 500 replacement - 150 credit
+    assert detail["quoted_cost"] == 850
+
+    estimate = client.get(f"/api/orders/{order['id']}").json()["estimate"]
+    credit = next(i for i in estimate["items"] if i["kind"] == "credit")
+    assert credit["line_total"] == -150, "a credit that stores positive is a credit that adds"
+    assert estimate["subtotal"] == 850
+
+
+def test_an_estimate_carrying_a_credit_line_can_still_be_saved(client):
+    """The grid resends every row it is showing on each autosave, credits
+    included. 'credit' was not an accepted kind, so one credit on a ticket made
+    the whole estimate unsaveable -- a 422 naming a field the advisor never
+    touched -- and the credit's sign had to survive the round-trip too."""
+    client.post("/api/vendors", json={"name": "WorldPac"})
+    vehicle = make_recon_vehicle(client, stock_number="R-9101")
+    order = make_recon_order(client, vehicle["id"])
+    save_estimate(
+        client,
+        order["id"],
+        [
+            {
+                "kind": "part",
+                "description": "Alternator",
+                "part_number": "ALT-1",
+                "quantity": 1,
+                "unit_price": 500,
+                "unit_cost": 500,
+            }
+        ],
+    )
+    post_invoice(
+        client,
+        invoice_number="INV-CR-2",
+        order_id=order["id"],
+        subtotal=350,
+        tax=0,
+        total=350,
+        items=[
+            {"part_number": "ALT-2", "description": "Replacement", "quantity": 1, "unit_cost": 500},
+            {"part_number": "ALT-1", "description": "Returned", "quantity": 1, "unit_cost": 150, "kind": "credit"},
+        ],
+    )
+    estimate = client.get(f"/api/orders/{order['id']}").json()["estimate"]
+
+    # Resend exactly what the grid would be holding, the credit row included.
+    resent = [
+        {
+            "id": i["id"],
+            "kind": i["kind"],
+            "description": i["description"],
+            "part_number": i["part_number"],
+            "quantity": i["quantity"],
+            "unit_price": i["unit_price"],
+            "unit_cost": i["unit_cost"],
+        }
+        for i in estimate["items"]
+    ]
+    res = client.post(f"/api/orders/{order['id']}/estimate", json={"actor": "tester", "items": resent})
+    assert res.status_code == 200, res.text
+
+    saved = res.json()
+    credit = next(i for i in saved["items"] if i["kind"] == "credit")
+    assert credit["line_total"] == -150, "re-saving must not flip the credit back to positive"
+    assert saved["subtotal"] == 850
+    assert client.get(f"/api/recon/vehicles/{vehicle['id']}").json()["quoted_cost"] == 850

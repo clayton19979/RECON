@@ -10,7 +10,7 @@ from typing import Any, Literal
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from .workflow import record_activity
+from .workflow import estimate_line_total, record_activity
 
 
 def _check_auth(request: Request) -> None:
@@ -383,7 +383,13 @@ def build_accounting_router(connect: Callable[[], sqlite3.Connection], now: Call
             # (duplicate number, unknown vendor, arithmetic that doesn't add
             # up, over-receipt) all still hold an invoice back.
 
-            line_subtotal = round(sum(item.quantity * item.unit_cost for item in invoice.items), 2)
+            # Signed, so a credit line subtracts here exactly as it does on the
+            # vendor's own paperwork. Summing credits as positives made an
+            # ordinary mixed invoice (a part, plus a credit for the one it
+            # replaced) fail its own arithmetic check and get held for review.
+            line_subtotal = round(
+                sum(estimate_line_total(item.kind, item.quantity, item.unit_cost) for item in invoice.items), 2
+            )
             if abs(line_subtotal - invoice.subtotal) > 0.02:
                 issues.append(f"Line items total {line_subtotal:.2f}, but invoice subtotal is {invoice.subtotal:.2f}")
             calculated_total = round(invoice.subtotal + invoice.tax, 2)
@@ -519,7 +525,7 @@ def build_accounting_router(connect: Callable[[], sqlite3.Connection], now: Call
                             item.unit_cost,
                             item.unit_cost,
                             0,
-                            round(item.quantity * item.unit_cost, 2),
+                            estimate_line_total("credit", item.quantity, item.unit_cost),
                             "received",
                         ),
                     )

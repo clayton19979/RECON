@@ -36,6 +36,7 @@ from .update_routes import build_update_router
 from .workflow import (
     assert_estimate_editable,
     build_workflow_router,
+    estimate_line_total,
     get_or_create_estimate,
     initialize_order_workflow,
     touch_order,
@@ -212,7 +213,12 @@ class RetailVehiclePatch(BaseModel):
 
 class EstimateItem(BaseModel):
     id: int | None = None
-    kind: Literal["part", "labor", "fee"]
+    # "credit" is not something the advisor picks -- it's written by vendor
+    # invoice ingest (a returned part, a refunded core). It has to be accepted
+    # here anyway, because the grid resends every row it is showing on each
+    # autosave: without it, one credit line on a ticket made the whole estimate
+    # unsaveable with a 422 that named a field the advisor never touched.
+    kind: Literal["part", "labor", "fee", "credit"]
     description: str = Field(min_length=1)
     quantity: float = Field(gt=0)
     unit_price: float = Field(ge=0)
@@ -825,10 +831,28 @@ def create_app(db_path: Path = DEFAULT_DB, backups_dir: Path = DEFAULT_BACKUPS_D
                 )
             estimate_id = get_or_create_estimate(db, order_id, now)["id"]
             if old:
-                db.execute(
-                    "UPDATE estimates SET labor_rate=?,tax_rate=?,status='draft',edit_version=edit_version+1 WHERE id=?",
-                    (estimate.labor_rate, estimate.tax_rate, estimate_id),
+                # The check above is a courtesy -- it fails fast with a clear
+                # message before any work is done -- but it is NOT the guard.
+                # Reading the version, comparing it, and writing it back as
+                # three separate steps lets two nearly-simultaneous saves both
+                # read the same version, both pass the comparison, and both
+                # write: the second silently replaces the first advisor's whole
+                # line-item set, which is the exact loss this feature exists to
+                # prevent. The version goes in the WHERE clause so it is
+                # evaluated against what is actually committed at UPDATE time,
+                # and rowcount tells us whether we won. Same shape as the
+                # payment compare-and-set in workflow.record_payment.
+                guard = " AND edit_version=?" if estimate.expected_version is not None else ""
+                guard_params = (estimate.expected_version,) if estimate.expected_version is not None else ()
+                cur = db.execute(
+                    "UPDATE estimates SET labor_rate=?,tax_rate=?,status='draft',edit_version=edit_version+1"
+                    f" WHERE id=?{guard}",
+                    (estimate.labor_rate, estimate.tax_rate, estimate_id, *guard_params),
                 )
+                if cur.rowcount == 0:
+                    raise HTTPException(
+                        409, "Someone else changed this estimate since you loaded it -- reload to see their update"
+                    )
             else:
                 # A job may have already lazily created this estimate row with
                 # placeholder zeros -- fill in the real requested values now,
@@ -862,7 +886,7 @@ def create_app(db_path: Path = DEFAULT_DB, backups_dir: Path = DEFAULT_BACKUPS_D
                             item.quantity,
                             item.unit_price,
                             item.unit_cost,
-                            round(item.quantity * item.unit_price, 2),
+                            estimate_line_total(item.kind, item.quantity, item.unit_price),
                             estimate.actor,
                             now(),
                             position,
@@ -882,7 +906,7 @@ def create_app(db_path: Path = DEFAULT_DB, backups_dir: Path = DEFAULT_BACKUPS_D
                             item.quantity,
                             item.unit_price,
                             item.unit_cost,
-                            round(item.quantity * item.unit_price, 2),
+                            estimate_line_total(item.kind, item.quantity, item.unit_price),
                             item.source,
                             0,
                             estimate.actor,
@@ -916,7 +940,13 @@ def create_app(db_path: Path = DEFAULT_DB, backups_dir: Path = DEFAULT_BACKUPS_D
             final_rows = db.execute(
                 "SELECT quantity, unit_price, kind FROM estimate_items WHERE estimate_id=?", (estimate_id,)
             ).fetchall()
-            subtotal = round(sum(r["quantity"] * r["unit_price"] for r in final_rows), 2)
+            subtotal = round(sum(estimate_line_total(r["kind"], r["quantity"], r["unit_price"]) for r in final_rows), 2)
+            # Tax basis stays parts-only and credit-free on purpose: a vendor
+            # credit is a cost-side event between the shop and its supplier,
+            # not a reduction in what this customer owes sales tax on. If the
+            # shop's accountant wants returned parts to come off the taxable
+            # base, that is a deliberate change to make here, not a side effect
+            # of fixing the subtotal's sign.
             taxable = sum(r["quantity"] * r["unit_price"] for r in final_rows if r["kind"] == "part")
             tax = round(taxable * estimate.tax_rate, 2)
             total = round(subtotal + tax, 2)

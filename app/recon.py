@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException
@@ -22,9 +22,12 @@ def age_days(created_at: str | None) -> int:
         created = datetime.fromisoformat(created_at or "")
     except (TypeError, ValueError):
         return 0
-    if created.tzinfo is None:
-        created = created.replace(tzinfo=UTC)
-    return (datetime.now(UTC) - created).days
+    # Timestamps are shop-local and naive now (see db.now). Rows written before
+    # that change carry a UTC offset, so convert those to local rather than
+    # reading them five hours off.
+    if created.tzinfo is not None:
+        created = created.astimezone().replace(tzinfo=None)
+    return (datetime.now() - created).days
 
 
 def last_activity(db: sqlite3.Connection, column: str, ref_id: int, fallback: str, segment: str | None = None) -> str:
@@ -338,8 +341,14 @@ def unit_lifetime(db: sqlite3.Connection, unit_id: int) -> dict:
     reachable from every recon episode AND every we-owe promise on this VIN,
     then nets out whatever the customer chipped in on the we-owe side.
 
-    profit is None when there's no sale price -- an unsold car has a cost, not
-    a profit, and showing 0 or a negative would read as a loss it hasn't taken.
+    profit is None when it cannot honestly be worked out, which is either of
+    two cases. No sale price: an unsold car has a cost, not a profit, and
+    showing 0 or a negative would read as a loss it hasn't taken. No purchase
+    price: the lot's cost for the car is deliberately not tracked in this app
+    (Walt keeps that figure -- see CLAUDE.md), and subtracting an absent
+    purchase from a real sale price would report the whole sale as margin. A
+    missing number has to stay missing rather than become a flattering one.
+    Cars from when purchase price *was* entered still get a real profit.
     """
     unit = db.execute("SELECT * FROM vehicle_units WHERE id=?", (unit_id,)).fetchone()
     if unit is None:
@@ -377,7 +386,7 @@ def unit_lifetime(db: sqlite3.Connection, unit_id: int) -> dict:
     we_owe_net = round(we_owe_cost - customer_paid, 2)
     total_invested = round(purchase_price + recon_cost + we_owe_net, 2)
     sale_price = unit["sale_price"]
-    profit = round(sale_price - total_invested, 2) if sale_price is not None else None
+    profit = round(sale_price - total_invested, 2) if sale_price is not None and purchase_price > 0 else None
     return {
         "unit_id": unit_id,
         "vin": unit["vin_key"] or "",

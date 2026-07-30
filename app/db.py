@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from contextlib import closing
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 
 RECON_SHOP_CUSTOMER_ID = -1
@@ -384,7 +384,22 @@ CREATE TABLE IF NOT EXISTS suggestions (
 
 
 def now() -> str:
-    return datetime.now(UTC).isoformat(timespec="seconds")
+    """Shop-local wall-clock time, deliberately naive.
+
+    This used to stamp UTC, and that quietly broke the report the whole app
+    exists to produce. Every date filter in the UI is a local calendar date --
+    a date picker, or a "This Month" chip -- and Indiana runs five hours behind
+    UTC. So a car written down at 8pm Tuesday was stamped Wednesday, fell
+    outside Tuesday's range, and vanished from the day's numbers; a car added
+    on the evening of the 31st landed in the next month's report. The shop
+    works evenings, so this was the normal case, not an edge case.
+
+    One clock, the one on the wall, for everything an advisor filters or reads.
+    Backup filenames keep their own UTC stamps -- those are sortable
+    identifiers nobody filters by date, and they are consistent among
+    themselves.
+    """
+    return datetime.now().isoformat(timespec="seconds")
 
 
 def _migrate(db: sqlite3.Connection) -> None:

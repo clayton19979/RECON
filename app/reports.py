@@ -25,6 +25,21 @@ def vehicle_profit_rows(
     not on when each cost landed: a car bought in March whose we-owe work
     lands in May still belongs to March's numbers, because that's the car
     whose margin the range is asking about.
+
+    Only the lot's own cars are listed -- a car with a recon record or a we-owe
+    promise on it. A retail customer's car has a unit of its own the moment a
+    ticket is written for it, and those were being listed too: the lot never
+    bought them and never sold them, so every one arrived as a permanent
+    all-zero row that could not be filtered out and never went away. On a shop
+    that writes retail tickets every day they outnumber the lot's cars within
+    weeks and bury the handful of rows the report exists for. Worse, the
+    summary above the table counted them, so a lot holding three unsold cars
+    reported fifteen "still in stock".
+
+    A VIN lookup is exempt, because it is a different question. It is asked at
+    we-owe intake -- "do we already know this car?" -- about a car that may
+    only ever have been through here as a retail customer's, and answering
+    "never seen it" would be how a second, conflicting record gets typed.
     """
     end_bound = f"{end}T23:59:59" if end else None
     rows = db.execute(
@@ -39,6 +54,11 @@ def vehicle_profit_rows(
             WHERE (:start IS NULL OR u.created_at >= :start)
               AND (:end IS NULL OR u.created_at <= :end)
               AND (:vin IS NULL OR u.vin_key = :vin)
+              AND (:vin IS NOT NULL
+                   OR EXISTS (SELECT 1 FROM recon_vehicles rv JOIN vehicles v ON v.id = rv.vehicle_id
+                               WHERE v.unit_id = u.id)
+                   OR EXISTS (SELECT 1 FROM we_owe_items w JOIN vehicles v ON v.id = w.vehicle_id
+                               WHERE v.unit_id = u.id))
             ORDER BY u.created_at DESC""",
         {"start": start, "end": end_bound, "vin": vin},
     ).fetchall()

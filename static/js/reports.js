@@ -398,8 +398,17 @@ function vehicleSpendStatCards(rows) {
    lot's purchase price isn't entered here (Walt keeps that figure -- see
    CLAUDE.md). A sold car whose purchase price nobody recorded has no honest
    profit, but it is still sold, and counting it as stock on hand would be a
-   second wrong answer on top of the first. */
+   second wrong answer on top of the first.
+
+   "In stock" means an unsold car of the lot's own. A we-owe car belongs to the
+   customer who already bought it and drove it away -- the shop owes work on
+   it, not a car it can sell -- so it is counted on its own rather than folded
+   into the stock figure. The three counts partition the table exactly, so the
+   sub-line always adds up to the number beside it. */
 function vehicleProfitStatCards(rows) {
+  const lot = rows.filter((r) => (r.recon_count || 0) > 0);
+  const soldLot = lot.filter((r) => r.sale_price !== null && r.sale_price !== undefined);
+  const weOweOnly = rows.length - lot.length;
   const sold = rows.filter((r) => r.sale_price !== null && r.sale_price !== undefined);
   const withProfit = sold.filter((r) => r.profit !== null && r.profit !== undefined);
   const invested = rows.reduce((s, r) => s + (r.total_invested || 0), 0);
@@ -408,7 +417,15 @@ function vehicleProfitStatCards(rows) {
   const weOwe = rows.reduce((s, r) => s + (r.we_owe_net_cost || 0), 0);
   const unpriced = sold.length - withProfit.length;
   return [
-    { label: "Vehicles", value: String(rows.length), sub: `${sold.length} sold · ${rows.length - sold.length} still in stock` },
+    {
+      label: "Vehicles",
+      value: String(rows.length),
+      sub: [
+        `${soldLot.length} sold`,
+        `${lot.length - soldLot.length} still in stock`,
+        ...(weOweOnly ? [`${weOweOnly} we-owe`] : []),
+      ].join(" · "),
+    },
     { label: "Total Invested", value: money(invested), sub: "what the shop spent: recon + we-owe" },
     {
       label: "Profit On Sold",
@@ -647,8 +664,12 @@ function renderLotTable(rows) {
    and until now was invisible on any profit number the shop could produce. */
 function renderProfitTable(rows) {
   const sum = (fn) => rows.reduce((s, r) => s + (fn(r) || 0), 0);
-  const sold = rows.filter((r) => r.profit !== null && r.profit !== undefined);
-  const totalProfit = sold.reduce((s, r) => s + r.profit, 0);
+  // Sold and profitable-on-paper are two different counts, and the footer used
+  // one number for both: a car sold with no purchase price on file has no
+  // knowable profit, so it dropped out of the "N sold" tally and the footer
+  // disagreed with the card above it about how many cars the lot moved.
+  const sold = rows.filter((r) => r.sale_price !== null && r.sale_price !== undefined);
+  const totalProfit = rows.reduce((s, r) => s + (r.profit || 0), 0);
   const cell = (r) => {
     // An unsold car has no profit yet -- a dash, not a zero and not a loss.
     const unsold = r.profit === null || r.profit === undefined;
@@ -834,7 +855,9 @@ function renderPrintReport(rows, type, start, end) {
       </table>`;
   } else if (shape === "vehicle-profit") {
     const sum = (fn) => rows.reduce((s, r) => s + (fn(r) || 0), 0);
-    const sold = rows.filter((r) => r.profit !== null && r.profit !== undefined);
+    // Same count the screen's footer uses -- paper and screen have to agree
+    // about how many cars the lot sold. See renderProfitTable.
+    const sold = rows.filter((r) => r.sale_price !== null && r.sale_price !== undefined);
     body = `
       <table class="print-table report">
         <thead><tr><th>Stock #</th><th>Vehicle</th><th>VIN</th><th class="num-col">Hours</th><th class="num-col">Purchase</th><th class="num-col">Total In</th><th class="num-col">Sold For</th><th class="num-col">Profit</th><th class="num-col">Margin</th></tr></thead>
@@ -848,7 +871,7 @@ function renderPrintReport(rows, type, start, end) {
           <tr><td colspan="3">Report Total (${rows.length} vehicle${rows.length === 1 ? "" : "s"}, ${sold.length} sold)</td>
             <td class="num-col">${fmtHours(sum((r) => r.labor_hours))}</td>
             <td class="num-col">${money(sum((r) => r.purchase_price))}</td><td class="num-col">${money(sum((r) => r.total_invested))}</td>
-            <td class="num-col">${money(sum((r) => r.sale_price))}</td><td class="num-col">${money(sold.reduce((s, r) => s + r.profit, 0))}</td><td class="num-col"></td></tr>
+            <td class="num-col">${money(sum((r) => r.sale_price))}</td><td class="num-col">${money(sum((r) => r.profit))}</td><td class="num-col"></td></tr>
           <tr class="tfoot-space" aria-hidden="true"><td colspan="9"></td></tr>
         </tfoot>
       </table>`;

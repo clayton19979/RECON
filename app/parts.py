@@ -248,6 +248,39 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
             "reassigned_invoice_id": reassigned_invoice_id,
         }
 
+    def posted_core_deposit(db: sqlite3.Connection, order_id: int, row: sqlite3.Row) -> tuple[int, float] | None:
+        """The live vendor invoice line that charged this part's core deposit,
+        as (vendor_id, amount) -- or None if there isn't one.
+
+        Deposits only started riding on the vendor invoice from this version
+        on, and an invoice can be voided after the fact, so "there is a deposit
+        to give back" has to be looked up rather than assumed. A core recorded
+        against a bill that never carried its deposit still closes out on the
+        cores board; it just has nothing in A/P to reverse.
+        """
+        if not row["received_invoice_number"]:
+            return None
+        invoice = find_received_invoice(db, order_id, row["received_invoice_number"])
+        if not invoice or invoice["vendor_id"] is None:
+            return None
+        billed = db.execute(
+            "SELECT coalesce(sum(line_total),0) FROM ap_invoice_items"
+            " WHERE ap_invoice_id=? AND estimate_item_id=? AND kind='core_charge'",
+            (invoice["id"], row["id"]),
+        ).fetchone()[0]
+        amount = round(float(billed), 2)
+        return (invoice["vendor_id"], amount) if amount > 0 else None
+
+    def posted_core_credit(db: sqlite3.Connection, order_id: int, row: sqlite3.Row) -> sqlite3.Row | None:
+        """The live A/P credit that already gave this core's deposit back."""
+        if not row["core_return_invoice_number"]:
+            return None
+        return db.execute(
+            "SELECT * FROM ap_invoices WHERE order_id=? AND invoice_number=?"
+            " AND source='core_return' AND status!='voided' ORDER BY id DESC LIMIT 1",
+            (order_id, row["core_return_invoice_number"]),
+        ).fetchone()
+
     @router.patch("/orders/{order_id}/estimate/items/{item_id}/core-return")
     def set_core_return(order_id: int, item_id: int, item: CoreReturnIn):
         """Marks a part's core deposit as returned to the vendor (or undoes
@@ -260,7 +293,7 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
             assert_vehicle_editable(db, order_row(db, order_id))
             estimate = estimate_for_order(db, order_id)
             row = db.execute(
-                "SELECT id, core_charge, part_returned FROM estimate_items WHERE id=? AND estimate_id=?",
+                "SELECT * FROM estimate_items WHERE id=? AND estimate_id=?",
                 (item_id, estimate["id"]),
             ).fetchone()
             if not row:
@@ -273,6 +306,15 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
                 raise HTTPException(
                     400,
                     "This part is going back to the vendor, so its core charge reverses with it — there's no core to return",
+                )
+            # Undoing the return clears the credit number below, which would
+            # put the deposit back into the car's cost while the vendor credit
+            # it was given back under is still sitting in A/P. The money has to
+            # move in one direction at a time, so the A/P side goes first.
+            if not item.returned and posted_core_credit(db, order_id, row):
+                raise HTTPException(
+                    400,
+                    "The vendor's credit for this core is posted to Accounts Payable — void it there first",
                 )
             # A fresh return has no credit yet, and undoing a return can't
             # leave a stale credit number behind -- cleared either way.
@@ -295,7 +337,14 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
         """Records the vendor's credit/invoice number for a core that already
         went back -- the paperwork arrives after the vendor receives the old
         unit, so this is a separate step from marking it returned. A non-empty
-        core_return_invoice_number is what moves the core into Credited."""
+        core_return_invoice_number is what moves the core into Credited.
+
+        The deposit was charged on the vendor's invoice when the part came in,
+        so getting it back posts the matching negative A/P row -- the same
+        shape post_return_credit uses for a returned part. Without it, A/P
+        would carry every deposit the shop has ever paid and none of the money
+        that came back.
+        """
         with connect() as db:
             current_order = order_row(db, order_id)
             assert_vehicle_editable(db, current_order)
@@ -312,6 +361,38 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
             if row["core_return_invoice_number"]:
                 raise HTTPException(409, "A credit has already been recorded for this core")
             invoice_number = item.invoice_number.strip()
+
+            ap_invoice_id = None
+            credit_total = 0.0
+            deposit = posted_core_deposit(db, order_id, row)
+            if deposit:
+                vendor_id, amount = deposit
+                credit_total = -amount
+                result = create_ap_invoice_record(
+                    db,
+                    now_fn,
+                    vendor_id=vendor_id,
+                    order_id=order_id,
+                    invoice_number=invoice_number,
+                    po_number=current_order["number"],
+                    items=[
+                        InvoiceItemIn(
+                            part_number=row["part_number"] or "N/A",
+                            description=f"Core deposit refund — {row['description']}",
+                            quantity=1,
+                            unit_cost=amount,
+                            kind="credit",
+                        )
+                    ],
+                    subtotal=credit_total,
+                    tax=0,
+                    total=credit_total,
+                    source="core_return",
+                )
+                if result["status"] == "duplicate":
+                    raise HTTPException(409, "This credit number is already posted for this vendor")
+                ap_invoice_id = result["ap_invoice_id"]
+
             db.execute(
                 "UPDATE estimate_items SET core_return_invoice_number=? WHERE id=?",
                 (invoice_number, item_id),
@@ -321,10 +402,15 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
                 order_id,
                 "core_credit_recorded",
                 item.actor,
-                {"item_id": item_id, "invoice_number": invoice_number},
+                {"item_id": item_id, "invoice_number": invoice_number, "credit_total": credit_total},
                 now_fn,
             )
-        return {"id": item_id, "core_return_invoice_number": invoice_number}
+        return {
+            "id": item_id,
+            "core_return_invoice_number": invoice_number,
+            "ap_invoice_id": ap_invoice_id,
+            "credit_total": credit_total,
+        }
 
     @router.patch("/orders/{order_id}/estimate/items/{item_id}/part-return")
     def set_part_return(order_id: int, item_id: int, item: PartReturnIn):
@@ -540,7 +626,12 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
         so undoing the part return brings the core obligation straight back."""
         with connect() as db:
             rows = db.execute(
-                """SELECT ei.id, ei.description, ei.part_number, ei.core_charge,
+                """SELECT ei.id, ei.description, ei.part_number, ei.core_charge, ei.quantity,
+                       -- The deposit is charged per unit, so two calipers owe
+                       -- two deposits. The board summed the per-unit figure and
+                       -- under-reported anything bought in pairs -- which on a
+                       -- brake job is most of them.
+                       round(ei.quantity*ei.core_charge, 2) core_total,
                        ei.core_returned, ei.core_returned_at, ei.core_return_invoice_number,
                        ei.received_invoice_number,
                        o.id order_id, o.number ro_number, o.voided, o.segment,
@@ -605,6 +696,7 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
                 raise HTTPException(404, "One or more selected parts were not found on this repair order")
 
             invoice_items: list[InvoiceItemIn] = []
+            invoice_links: list[int | None] = []
             remaining_by_id: dict[int, tuple[float, float]] = {}
             for row in rows:
                 remaining = float(row["quantity"]) - float(row["received_quantity"])
@@ -622,6 +714,25 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
                         kind="part",
                     )
                 )
+                invoice_links.append(row["id"])
+                # The core deposit is on the vendor's paper invoice, so it has
+                # to be on ours. Leaving it off meant the total RECON posted
+                # was short by every deposit on the bill and there was no way
+                # to make the two agree. It rides as its own line, linked to
+                # the part it came with, so post_core_credit can find and
+                # reverse exactly this deposit when the old unit goes back.
+                core_charge = float(row["core_charge"] or 0)
+                if core_charge > 0:
+                    invoice_items.append(
+                        InvoiceItemIn(
+                            part_number=row["part_number"] or "N/A",
+                            description=f"Core deposit — {row['description']}",
+                            quantity=remaining,
+                            unit_cost=core_charge,
+                            kind="core_charge",
+                        )
+                    )
+                    invoice_links.append(row["id"])
 
             result = receive_onto_invoice(
                 db,
@@ -633,7 +744,7 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
                 items=invoice_items,
                 # Same order the invoice lines were built in just above, so
                 # each billed line points back at the part it paid for.
-                estimate_item_ids=[row["id"] for row in rows],
+                estimate_item_ids=invoice_links,
                 tax=item.tax,
             )
             if result["status"] == "duplicate":

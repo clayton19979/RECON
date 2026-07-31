@@ -246,6 +246,17 @@ def cost_rollup(db: sqlite3.Connection, column: str, ref_id: int, segment: str |
     again once sent back to the vendor (part_returned). quoted_cost (full
     quantity regardless of receipt) is returned alongside for comparison.
 
+    A core deposit is money out of the shop's pocket that comes back only when
+    the old unit does, so an outstanding one counts as part of what the car
+    cost -- quoted and actual alike, so a deposit can never make a car read as
+    over its own quote. It stops counting the moment the vendor's credit is
+    recorded (core_return_invoice_number), which is the same "outstanding"
+    line the Cores board draws. A car whose alternator core never went back
+    really did cost that $45, and leaving it out understated every such car
+    forever while the only place the money appeared was a board nobody had a
+    money reason to work. A returned part takes its deposit with it: there is
+    no old unit owed to anyone once the new part goes back.
+
     parts_pending counts part lines that have been ordered from a vendor but
     haven't shown up yet (status='ordered'; 'received' means it landed,
     'quoted' means nobody has actually ordered it). That's the single most
@@ -253,9 +264,13 @@ def cost_rollup(db: sqlite3.Connection, column: str, ref_id: int, segment: str |
     only visible by opening the ticket -- see the board's Parts column.
     Returned parts are excluded: a line sent back to the vendor isn't
     something the shop is still waiting on."""
+    # An outstanding deposit: charged per unit, so it scales with quantity the
+    # same way the part's own cost does.
+    core_owing = "ei.kind='part' AND ei.part_returned=0 AND ei.core_return_invoice_number='' AND ei.core_charge>0"
     rows = db.execute(
         f"""SELECT o.id, o.number, o.status, o.voided,
-               coalesce(sum(CASE WHEN ei.kind='part' AND ei.part_returned=0 THEN ei.received_quantity*ei.unit_cost ELSE 0 END),0) parts_cost,
+               coalesce(sum(CASE WHEN ei.kind='part' AND ei.part_returned=0 THEN ei.received_quantity*ei.unit_cost ELSE 0 END),0)
+                 + coalesce(sum(CASE WHEN {core_owing} THEN ei.received_quantity*ei.core_charge ELSE 0 END),0) parts_cost,
                coalesce(sum(CASE WHEN ei.kind='labor' THEN ei.quantity*ei.unit_cost ELSE 0 END),0) labor_cost,
                -- Hours in their own right, not just as an input to cost. On
                -- recon and we-owe the labor rate is always 0 (in-house time
@@ -270,9 +285,13 @@ def cost_rollup(db: sqlite3.Connection, column: str, ref_id: int, segment: str |
                -- -- parts_cost above already drops a returned line via
                -- part_returned, and subtracting the credit as well would count
                -- the same money back twice.
-               coalesce(sum(CASE WHEN ei.kind='credit' THEN -ei.quantity*ei.unit_cost ELSE ei.quantity*ei.unit_cost END),0) quoted_cost,
+               coalesce(sum(CASE WHEN ei.kind='credit' THEN -ei.quantity*ei.unit_cost ELSE ei.quantity*ei.unit_cost END),0)
+                 + coalesce(sum(CASE WHEN {core_owing} THEN ei.quantity*ei.core_charge ELSE 0 END),0) quoted_cost,
                coalesce(sum(CASE WHEN ei.kind='part' AND ei.status='ordered' AND ei.part_returned=0 THEN 1 ELSE 0 END),0) parts_pending,
-               coalesce(sum(CASE WHEN ei.kind='part' AND ei.status='ordered' AND ei.part_returned=0 THEN ei.quantity*ei.unit_cost ELSE 0 END),0) parts_pending_value
+               -- Core deposits ride in here too: they land on the same vendor
+               -- invoice as the part, so this is what that bill will say.
+               coalesce(sum(CASE WHEN ei.kind='part' AND ei.status='ordered' AND ei.part_returned=0 THEN ei.quantity*ei.unit_cost ELSE 0 END),0)
+                 + coalesce(sum(CASE WHEN {core_owing} AND ei.status='ordered' THEN ei.quantity*ei.core_charge ELSE 0 END),0) parts_pending_value
            FROM orders o
            LEFT JOIN estimates e ON e.order_id=o.id
            LEFT JOIN estimate_items ei ON ei.estimate_id=e.id

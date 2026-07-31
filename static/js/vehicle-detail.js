@@ -697,7 +697,12 @@ function renderEstimate(order) {
     const isPart = item.kind === "part";
     const L = fieldLabels(item.kind);
     return `
-    <div class="part-row" draggable="true" data-index="${i}" data-id="${item.id || ""}" data-source="${item.source || "manual"}" data-received-quantity="${item.received_quantity ?? 0}">
+    ${/* data-core-counts: whether an outstanding core deposit on this line is
+          still the shop's money. A part sent back takes its deposit with it,
+          and a deposit the vendor has already credited is back in the till --
+          either way it stops counting toward the car. Kept on the row so the
+          live-typing totals can honour it without a round-trip. */""}
+    <div class="part-row" draggable="true" data-index="${i}" data-id="${item.id || ""}" data-source="${item.source || "manual"}" data-received-quantity="${item.received_quantity ?? 0}" data-core-counts="${!item.part_returned && !item.core_return_invoice_number ? 1 : 0}">
       ${cell("handle", "", `<span class="row-drag-handle" title="Drag to reorder">⋮⋮</span>`)}
       ${cell("check", "", receivable ? `<input type="checkbox" class="ei-receive-check" data-id="${item.id}" title="Select to receive against a vendor invoice">` : "")}
       ${cell("kind", "Kind", `<select class="ei-kind">
@@ -855,11 +860,18 @@ function updateReceiveButtonState() {
 // unit_price) -- this panel has never shown customer-facing markup.
 // Split out of renderEstimate because an in-place sync has to recompute
 // these without touching the rows.
+//
+// A core deposit the vendor hasn't credited back yet is in both figures, on
+// the same terms cost_rollup uses server-side: it is money the shop paid for
+// this car and won't see again until the old unit goes back. Counting it in
+// the quote as well as the actual is what stops a deposit from reading as
+// "over quote" the day the part lands.
+const coreOwing = (i) => i.kind === "part" && !i.part_returned && !i.core_return_invoice_number ? (i.core_charge || 0) : 0;
 function renderEstimateTotals(order) {
   const items = order.estimate ? order.estimate.items : [];
   const notReturned = (i) => !(i.kind === "part" && i.part_returned);
-  const quotedTotal = items.filter(notReturned).reduce((s, i) => s + i.quantity * i.unit_cost, 0);
-  const actualParts = items.filter((i) => i.kind === "part" && !i.part_returned).reduce((s, i) => s + i.received_quantity * i.unit_cost, 0);
+  const quotedTotal = items.filter(notReturned).reduce((s, i) => s + i.quantity * (i.unit_cost + coreOwing(i)), 0);
+  const actualParts = items.filter((i) => i.kind === "part" && !i.part_returned).reduce((s, i) => s + i.received_quantity * (i.unit_cost + coreOwing(i)), 0);
   const actualOther = items.filter((i) => i.kind !== "part").reduce((s, i) => s + i.quantity * i.unit_cost, 0);
   const actual = actualParts + actualOther;
   $("#vd-quoted-cost").textContent = money(quotedTotal);
@@ -903,9 +915,14 @@ function updateEstimateTotalsFromDom() {
   for (const row of $$(".part-row:not(.head)", box)) {
     const qty = num(row.querySelector(".ei-qty")) || 0;
     const cost = num(row.querySelector(".ei-cost"));
-    quoted += qty * cost;
+    // Same rule as renderEstimateTotals' coreOwing, read off the grid: an
+    // uncredited deposit on a part still on the car is money spent on it.
+    const core = row.dataset.coreCounts === "1" && row.querySelector(".ei-core-on")?.checked
+      ? num(row.querySelector(".ei-core"))
+      : 0;
+    quoted += qty * (cost + core);
     actual += row.querySelector(".ei-kind")?.value === "part"
-      ? (parseFloat(row.dataset.receivedQuantity || "0") || 0) * cost
+      ? (parseFloat(row.dataset.receivedQuantity || "0") || 0) * (cost + core)
       : qty * cost;
   }
   $("#vd-quoted-cost").textContent = money(quoted);
@@ -1816,10 +1833,17 @@ function renderPrintTicket() {
   const customerLabel = isWeOwe ? (item.customer_name || "") : "";
   const items = order.estimate ? order.estimate.items : [];
   const jobs = order.estimate?.jobs ?? [];
-  const quotedTotal = items.filter((i) => !(i.kind === "part" && i.part_returned)).reduce((s, i) => s + i.quantity * i.unit_cost, 0);
-  const actualParts = items.filter((i) => i.kind === "part" && !i.part_returned).reduce((s, i) => s + i.received_quantity * i.unit_cost, 0);
+  // Same basis as the on-screen panel, core deposits included -- a printed
+  // ticket whose total disagrees with the screen it was printed from is the
+  // one number nobody can reconcile afterwards.
+  const quotedTotal = items.filter((i) => !(i.kind === "part" && i.part_returned)).reduce((s, i) => s + i.quantity * (i.unit_cost + coreOwing(i)), 0);
+  const actualParts = items.filter((i) => i.kind === "part" && !i.part_returned).reduce((s, i) => s + i.received_quantity * (i.unit_cost + coreOwing(i)), 0);
   const actualOther = items.filter((i) => i.kind !== "part").reduce((s, i) => s + i.quantity * i.unit_cost, 0);
   const actualTotal = actualParts + actualOther;
+  // Broken out on the totals block rather than folded into each part's unit
+  // price: the deposit is a separate charge on the vendor's own invoice, and
+  // whoever reconciles the paper needs to see it as one.
+  const coreDeposits = items.reduce((s, i) => s + i.quantity * coreOwing(i), 0);
   const a = order.assignment;
   const techName = (a && a.technician_name) || "Unassigned";
   const advisorName = (a && a.advisor_name) || "Unassigned";
@@ -1846,8 +1870,14 @@ function renderPrintTicket() {
       else if ((i.received_quantity ?? 0) > 0 && i.received_quantity < i.quantity) status = `Received ${i.received_quantity}/${i.quantity}`;
       else status = ITEM_STATUS_LABEL[i.status] || "Quoted";
     }
+    // The deposit is in this row's own total when it's still owed back, so
+    // say which it is -- a printed line that reads "Core charge $45" but adds
+    // $45 into some rows and not others is unauditable on paper.
+    // Say where the deposit stands, since it is in the totals below only
+    // while it's still owed back.
     const coreSub = i.kind === "part" && (i.core_charge || 0) > 0
-      ? `<div class="pt-desc-sub">Core charge ${money(i.core_charge)}</div>` : "";
+      ? `<div class="pt-desc-sub">Core charge ${money(i.core_charge)}${coreOwing(i) ? " — owed back" : i.core_return_invoice_number ? " — credited back" : " — reversed with the return"}</div>`
+      : "";
     return `<tr><td>${esc(i.description)}${coreSub}</td><td>${i.part_number ? esc(i.part_number) : ""}</td>
       <td class="num-col">${i.quantity}</td><td class="num-col">${money(returned ? 0 : i.unit_cost)}</td>
       <td class="num-col">${money(returned ? 0 : i.quantity * i.unit_cost)}</td><td>${status}</td></tr>`;
@@ -1888,7 +1918,11 @@ function renderPrintTicket() {
 
   // Invoice-style totals. With deposits (we-owe), the balance is the grand
   // row; without them Actual Cost is the bottom line itself.
-  const totalsRows = [`<div class="tl-row"><span>Total Quote</span><span class="num">${money(quotedTotal)}</span></div>`];
+  const totalsRows = [];
+  if (coreDeposits > 0) {
+    totalsRows.push(`<div class="tl-row muted"><span>Core deposits owed back</span><span class="num">${money(coreDeposits)}</span></div>`);
+  }
+  totalsRows.push(`<div class="tl-row"><span>Total Quote</span><span class="num">${money(quotedTotal)}</span></div>`);
   if (paid > 0) {
     totalsRows.push(`<div class="tl-row"><span>Actual Cost</span><span class="num">${money(actualTotal)}</span></div>`);
     // The API returns payments newest-first; paper reads oldest-first.

@@ -136,8 +136,8 @@ def _insert_invoice_items(
     links = list(estimate_item_ids or [None] * len(items))
     assert len(links) == len(items), "every billed line needs a link slot, even an empty one"
     db.executemany(
-        "INSERT INTO ap_invoice_items(ap_invoice_id,part_number,description,quantity,unit_cost,line_total,estimate_item_id)"
-        " VALUES(?,?,?,?,?,?,?)",
+        "INSERT INTO ap_invoice_items(ap_invoice_id,part_number,description,quantity,unit_cost,line_total,kind,estimate_item_id)"
+        " VALUES(?,?,?,?,?,?,?,?)",
         [
             (
                 ap_invoice_id,
@@ -146,6 +146,7 @@ def _insert_invoice_items(
                 item.quantity,
                 item.unit_cost,
                 round(item.quantity * item.unit_cost, 2),
+                item.kind,
             )
             + (link,)
             for item, link in zip(items, links, strict=True)

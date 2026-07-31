@@ -11,23 +11,59 @@ from pydantic import BaseModel, Field
 from .db import RECON_SHOP_CUSTOMER_ID, inserted_id, normalize_vin
 
 
-def age_days(created_at: str | None) -> int:
-    """Whole days since created_at (an ISO timestamp) -- how long a car has
-    actually been sitting, the natural companion to "what we have in it".
-    One malformed value (a hand-edited row, an old backup with a different
-    format) must never 500 the entire vehicle board -- every other row's
-    age is computed in the same loop, so a single bad timestamp would take
-    the whole list down with it rather than just looking wrong on one row."""
+def parse_stamp(value: str | None) -> datetime | None:
+    """An ISO timestamp or plain date as shop-local naive time, or None if it
+    isn't one.
+
+    None rather than an exception because every caller here runs in a loop over
+    the whole vehicle board: one malformed value (a hand-edited row, an old
+    backup with a different format) must make one row look wrong, not take the
+    entire list down with it.
+    """
     try:
-        created = datetime.fromisoformat(created_at or "")
+        parsed = datetime.fromisoformat(value or "")
     except (TypeError, ValueError):
-        return 0
+        return None
     # Timestamps are shop-local and naive now (see db.now). Rows written before
     # that change carry a UTC offset, so convert those to local rather than
     # reading them five hours off.
-    if created.tzinfo is not None:
-        created = created.astimezone().replace(tzinfo=None)
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone().replace(tzinfo=None)
+    return parsed
+
+
+def age_days(created_at: str | None) -> int:
+    """Whole days since created_at (an ISO timestamp) -- how long a car has
+    actually been sitting, the natural companion to "what we have in it"."""
+    created = parse_stamp(created_at)
+    if created is None:
+        return 0
     return (datetime.now() - created).days
+
+
+def lot_age_days(acquisition_date: str | None, created_at: str | None) -> int:
+    """How long the car has been on the lot -- counted from the day it arrived,
+    not the day somebody got round to typing it into RECON.
+
+    Those are the same day when the write-up happens at the drop-off, and they
+    are not remotely the same day when three cars come off a Friday auction run
+    and get written up on Monday. Counting from the record's created_at put
+    every one of them on the board reading 0d while they sat, and "how long has
+    this been here" is half of what the Age column is for -- it is the number
+    Walt reads to ask why a car hasn't moved.
+
+    Falls back to created_at when there's no acquisition date on file: it is an
+    optional field on the write-up form, and every car written down before this
+    existed has none. The answer then is exactly what it always was.
+
+    An arrival date in the future is a typed year, not a car that hasn't shown
+    up yet, so it floors at 0 -- a negative age on the board would be a number
+    the app can't stand behind.
+    """
+    arrived = parse_stamp(acquisition_date)
+    if arrived is None:
+        return age_days(created_at)
+    return max(0, (datetime.now() - arrived).days)
 
 
 def last_activity(db: sqlite3.Connection, column: str, ref_id: int, fallback: str, segment: str | None = None) -> str:
@@ -175,6 +211,12 @@ class RecondVehiclePatch(BaseModel):
     # Core vehicle info -- correcting a typo (wrong purchase price, VIN, etc.)
     # shouldn't require touching the database directly.
     purchase_price: float | None = Field(default=None, ge=0)
+    # The day the car actually landed on the lot. It drives the board's Age
+    # column and the lot sheet's Days On Lot, so a wrong one has to be
+    # fixable -- until now it was write-once at the write-up and stuck.
+    # "" is allowed and means "we don't know", which falls the age count back
+    # to when the record was written down.
+    acquisition_date: str | None = None
     vin: str | None = None
     year: int | None = Field(default=None, ge=1900, le=2100)
     make: str | None = Field(default=None, min_length=1)
@@ -562,7 +604,11 @@ def vehicle_board_rows(
                     # lands on the RO rather than floating unattached.
                     "order_id": current_order["id"] if current_order else None,
                     "updated_at": row["updated_at"],
-                    "age_days": age_days(row["created_at"]),
+                    # Carried alongside the count so the board can say what it
+                    # is counting from -- "34d" is worth arguing with, "on the
+                    # lot since June 27" is worth acting on.
+                    "acquired_at": row["acquisition_date"] or "",
+                    "age_days": lot_age_days(row["acquisition_date"], row["created_at"]),
                     "last_activity_at": activity_at,
                     "idle_days": idle_days(activity_at),
                 }
@@ -633,6 +679,10 @@ def vehicle_board_rows(
                     # lands on the RO rather than floating unattached.
                     "order_id": current_order["id"] if current_order else None,
                     "updated_at": row["updated_at"],
+                    # No arrival date on this side, and none wanted: a we-owe's
+                    # clock starts when the promise was made, which is what
+                    # created_at already is. The car itself was sold weeks ago.
+                    "acquired_at": "",
                     "age_days": age_days(row["created_at"]),
                     "last_activity_at": activity_at,
                     "idle_days": idle_days(activity_at),
@@ -878,6 +928,16 @@ def build_recon_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
             if item.purchase_price is not None:
                 fields.append("purchase_price=?")
                 params.append(item.purchase_price)
+            acquisition_date = item.acquisition_date.strip() if item.acquisition_date is not None else None
+            if acquisition_date is not None:
+                # This one is read as a date, not just displayed, so a value
+                # that isn't one has to be refused here rather than quietly
+                # falling back and leaving the board reporting an age nobody
+                # can account for.
+                if acquisition_date and parse_stamp(acquisition_date) is None:
+                    raise HTTPException(400, "Acquired date must be a calendar date, e.g. 2026-07-31")
+                fields.append("acquisition_date=?")
+                params.append(acquisition_date)
             # Core vehicle info (VIN, make/model, etc.) lives on the shared
             # vehicles table, not recon_vehicles -- correcting a typo here
             # shouldn't require touching the database directly.
@@ -914,6 +974,10 @@ def build_recon_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
                 ("purchase_price", item.purchase_price),
                 ("sale_price", item.sale_price),
                 ("sale_date", item.sale_date.strip() if item.sale_date is not None else None),
+                # Creating the car writes the arrival date to both places;
+                # correcting it has to do the same, or the unit ledger keeps
+                # the wrong one for the rest of the car's life.
+                ("purchase_date", acquisition_date),
             ):
                 if value is not None:
                     unit_fields.append(f"{name}=?")

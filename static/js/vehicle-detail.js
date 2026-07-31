@@ -246,6 +246,10 @@ function renderDetailHead() {
   $("#vd-recon-model").value = item.model;
   $("#vd-recon-trim").value = item.trim || "";
   $("#vd-recon-color").value = item.color || "";
+  // Arrival date is a recon-only fact: a we-owe car was bought and sold long
+  // before this shop wrote it down, so there is no lot arrival to record.
+  $("#vd-acquired-row").hidden = segment !== "recon";
+  $("#vd-recon-acquired").value = segment === "recon" ? item.acquisition_date || "" : "";
   if (segment === "recon") {
     $("#vd-title").textContent = `${item.stock_number} — ${item.year} ${item.make} ${item.model}`;
     $("#vd-sub").textContent = [item.vin, item.mileage ? `${item.mileage.toLocaleString()} mi` : "", item.trim].filter(Boolean).join(" · ");
@@ -312,7 +316,7 @@ function renderCostSummary() {
 // Compact read-only summary replacing the old always-open inline edit form --
 // the full form still exists verbatim, just relocated into #vehicle-edit-dialog.
 function renderVehicleInfoSummary() {
-  const { item } = state.detail;
+  const { segment, item } = state.detail;
   const lifetime = item.lifetime;
   const rows = [
     // A VIN gets retyped into parts catalogues and vendor sites all day long,
@@ -328,6 +332,15 @@ function renderVehicleInfoSummary() {
     ["Trim", esc(item.trim || "—")],
     ["Color", esc(item.color || "—")],
   ];
+  // The day the car landed, on the card rather than buried in the edit
+  // dialog: it is what the board's Age column counts from, so a wrong one is
+  // only ever noticed if somebody can see it. Recon only -- a we-owe car has
+  // no arrival on this lot to record.
+  if (segment === "recon") {
+    rows.push(["Arrived on the lot", item.acquisition_date
+      ? esc(item.acquisition_date)
+      : `<span title="Age counts from the day this car was written up instead">Not recorded</span>`]);
+  }
   // What the lot paid isn't entered here any more -- Walt keeps that figure
   // and this app answers "what did we spend fixing it". Cars carried over from
   // when it *was* entered still show theirs rather than silently losing it.
@@ -596,7 +609,7 @@ function applyArchivedLockUI(archived) {
     "vd-save-assignment", "vd-technician", "vd-advisor",
     "vd-save-timing", "vd-date-in", "vd-odometer", "vd-promised",
     "vd-edit-vehicle", "vd-recon-info-save", "vd-decode-vin", "vd-recon-vin", "vd-recon-mileage", "vd-recon-year",
-    "vd-recon-make", "vd-recon-model", "vd-recon-trim", "vd-recon-color",
+    "vd-recon-make", "vd-recon-model", "vd-recon-trim", "vd-recon-color", "vd-recon-acquired",
     "vd-edit-customer", "vd-we-owe-save", "vd-we-owe-description", "vd-we-owe-category", "vd-we-owe-target", "vd-we-owe-status",
     "vd-take-payment", "vd-deposit-add", "vd-deposit-amount", "vd-deposit-method", "vd-deposit-note",
   ];
@@ -2262,6 +2275,9 @@ export function wireVehicleDetail() {
           expected_version: item.edit_version,
         };
         if (segment === "recon") {
+          // Only recon carries an arrival date, and only recon's endpoint
+          // knows the field -- see the row's hidden state above.
+          payload.acquisition_date = $("#vd-recon-acquired").value;
           await patch(`/api/recon/vehicles/${id}`, payload);
         } else if (segment === "retail") {
           await patch(`/api/retail/vehicles/${id}`, payload);

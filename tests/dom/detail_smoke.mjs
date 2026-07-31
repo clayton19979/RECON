@@ -47,6 +47,7 @@ const order = {
 let suggestCalls = [];
 let suggestMode = "results"; // "results" | "empty" | "error"
 const customerPatchBodies = []; // what the editor actually saved
+const reconPatchBodies = []; // ...and what the Edit Vehicle dialog saved
 
 const { w, doc, fetchLog, settle, ok, finish, rejections } = await boot({
   expose: ["state", "openVehicleDetail", "renderLastWorked", "activityLabel", "ACTIVITY_LABEL",
@@ -66,6 +67,10 @@ const { w, doc, fetchLog, settle, ok, finish, rejections } = await boot({
       ];
     }
     if (url.startsWith("/api/vehicles-board")) return [];
+    if (/^\/api\/recon\/vehicles\/7$/.test(url) && opts.method === "PATCH") {
+      reconPatchBodies.push(JSON.parse(opts.body));
+      return vehicle;
+    }
     if (/^\/api\/recon\/vehicles\/7$/.test(url)) return vehicle;
     // Plain /api/orders is what the Tasks screen builds its link dropdown
     // from, so it has to answer too -- not just the detail page's ?segment=
@@ -401,6 +406,41 @@ await settle();
 ok(customerPatches() === 4, `a valid phone should PATCH exactly once more, saw ${customerPatches()}`);
 ok(customerPatchBodies[3].phone === "(219) 555-0100", `phone should save masked, sent "${customerPatchBodies[3].phone}"`);
 
+/* ---------- the arrival date ----------
+   The day the car landed drives the board's Age column, so a wrong one has to
+   be visible and fixable from the car's own page. It was write-once at the
+   write-up before this and stuck there for the life of the record.
+
+   Two things worth holding: the read-only card shows it (a value nobody can
+   see is a value nobody corrects), and Save actually sends it. */
+const infoRows = () => [...doc.querySelectorAll("#vd-vehicle-info-summary .kv-row")]
+  .map((r) => [r.querySelector(".kv-label").textContent, r.querySelector(".kv-value").textContent]);
+
+vehicle = { ...vehicle, acquisition_date: "2026-06-09" };
+await w.openVehicleDetail("recon", 7);
+await settle();
+ok(infoRows().some(([l, v]) => l === "Arrived on the lot" && v === "2026-06-09"),
+   `the Vehicle Info card doesn't show the arrival date: ${JSON.stringify(infoRows())}`);
+ok(doc.querySelector("#vd-recon-acquired").value === "2026-06-09",
+   `the edit field didn't load the arrival date, reads "${doc.querySelector("#vd-recon-acquired").value}"`);
+ok(!doc.querySelector("#vd-acquired-row").hidden, "the arrival date row is hidden on a recon car");
+
+// A car with no arrival date says so rather than leaving a blank that reads
+// as "today" -- the count silently falls back to the write-up date.
+vehicle = { ...vehicle, acquisition_date: "" };
+await w.openVehicleDetail("recon", 7);
+await settle();
+ok(infoRows().some(([l, v]) => l === "Arrived on the lot" && v === "Not recorded"),
+   `a missing arrival date should read "Not recorded": ${JSON.stringify(infoRows())}`);
+
+// Saving sends it. Correcting the date is the whole point of the field.
+doc.querySelector("#vd-recon-acquired").value = "2026-05-04";
+doc.querySelector("#vehicle-edit-form").dispatchEvent(new w.Event("submit", { bubbles: true, cancelable: true }));
+await settle();
+ok(reconPatchBodies.length === 1, `Save should PATCH the recon vehicle once, saw ${reconPatchBodies.length}`);
+ok(reconPatchBodies[0].acquisition_date === "2026-05-04",
+   `Save sent acquisition_date "${reconPatchBodies[0].acquisition_date}"`);
+
 ok(rejections.length === 0, `unhandled rejections during the run: ${rejections.map((e) => e && e.message).join(" | ")}`);
 
-finish("vehicle detail: last-worked-on line, stalled nudge, activity labels, address autocomplete + validation");
+finish("vehicle detail: last-worked-on line, stalled nudge, activity labels, address autocomplete + validation, arrival date");

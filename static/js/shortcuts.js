@@ -116,6 +116,19 @@ export function fmtDate(value) {
   if (Number.isNaN(d.getTime())) return value;
   return d.toLocaleString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" });
 }
+/* A calendar date the way a <input type="date"> wants it, read off the wall
+   clock in Merrillville.
+
+   Never toISOString(): that converts to UTC first, so from about 7 PM onward
+   it hands back *tomorrow*. The shop works evenings, so "today" defaulted into
+   a date field after closing time was routinely a day that hadn't started --
+   a car written up at eight o'clock went on file as arriving the next morning.
+   The same rule the back end follows (see app/db.py::now), which is why it
+   lives here once instead of being re-derived per screen. */
+export function todayLocal(date = new Date()) {
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
 // Awareness for the two-people-editing-the-same-car case: seeing "updated 2
 // minutes ago" is often enough to make someone check with a coworker before
 // saving over their still-fresh change.

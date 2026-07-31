@@ -1,5 +1,5 @@
 import { $, $$, get } from "./core.js";
-import { esc, money } from "./shortcuts.js";
+import { esc, fmtDay, money } from "./shortcuts.js";
 import { emptyRow } from "./empty-states.js";
 import { BOARD_COLUMNS, showPlaceholders } from "./skeletons.js";
 import { STATUS_LABEL, STATUS_PILL_CLASS, state } from "./state.js";
@@ -60,6 +60,7 @@ export function loadVehicleViewPrefs() {
   }
   if (typeof saved.partsOnly === "boolean") state.vehiclePartsOnly = saved.partsOnly;
   if (typeof saved.overOnly === "boolean") state.vehicleOverOnly = saved.overOnly;
+  if (typeof saved.lateOnly === "boolean") state.vehicleLateOnly = saved.lateOnly;
   if (typeof saved.idleBucket === "string" && (saved.idleBucket === "" || IDLE_SELECTIONS[saved.idleBucket])) {
     state.vehicleIdleBucket = saved.idleBucket;
   }
@@ -110,6 +111,7 @@ function saveVehicleViewPrefs() {
     localStorage.setItem(VEHICLE_PREFS_KEY, JSON.stringify({
       filter: state.filter, status: state.vehicleStatus, sort: state.vehicleSort,
       partsOnly: state.vehiclePartsOnly, overOnly: state.vehicleOverOnly,
+      lateOnly: state.vehicleLateOnly,
       idleBucket: state.vehicleIdleBucket,
       chartOpen: state.vehicleChartOpen,
     }));
@@ -118,7 +120,7 @@ function saveVehicleViewPrefs() {
   // doesn't hide any rows, so offering to reset the view over it would be
   // noise. Every other pref here changes which cars you can see.
   const dirty = !!(state.filter || state.vehicleStatus || state.vehicleSort.key || state.search
-    || state.vehiclePartsOnly || state.vehicleOverOnly || state.vehicleIdleBucket);
+    || state.vehiclePartsOnly || state.vehicleOverOnly || state.vehicleLateOnly || state.vehicleIdleBucket);
   $("#vehicles-reset-view").hidden = !dirty;
 }
 
@@ -127,6 +129,7 @@ export function resetVehicleView() {
   state.vehicleStatus = "";
   state.vehiclePartsOnly = false;
   state.vehicleOverOnly = false;
+  state.vehicleLateOnly = false;
   state.vehicleIdleBucket = "";
   state.vehicleSort = { key: "", dir: "desc" };
   state.search = "";
@@ -187,7 +190,10 @@ export function renderVehicleStatusOptions() {
 function boardStats(rows, idlePool = rows) {
   const overs = rows.filter(isOverQuote);
   const stalled = idlePool.filter(isStalled);
+  const late = rows.filter(isPromiseLate);
   return {
+    lateCount: late.length,
+    lateWorst: late.reduce((worst, v) => Math.max(worst, v.promise_days_late || 0), 0),
     count: rows.length,
     recon: rows.filter((v) => v.segment === "recon").length,
     weOwe: rows.filter((v) => v.segment === "we_owe").length,
@@ -245,6 +251,13 @@ function renderStats(rows) {
     ? `${money(s.overAmount)} past estimate`
     : "none past estimate";
 
+  // Same shape as Stalled, and for the same reason: the count says how many
+  // people to ring, the worst one says whether it can wait until tomorrow.
+  setValue("#stat-late-promises", s.lateCount, s.lateCount ? "crit" : null);
+  $("#stat-late-promises-sub").textContent = s.lateCount
+    ? `worst ${s.lateWorst} day${s.lateWorst === 1 ? "" : "s"} over`
+    : "no promise past due";
+
   // Naming the worst car's idle time rather than repeating the count: "3" and
   // "3 vehicles" side by side is a wasted line, and how long the worst one has
   // been sitting is the number that decides whether you act today.
@@ -280,6 +293,8 @@ function syncBoardStatCards(s) {
           "Show only vehicles past their estimate");
   setCard('[data-board-filter="stalled"]', state.vehicleIdleBucket === "stalled", s.stalledCount,
           `Show only vehicles untouched for ${STALLED_AFTER_DAYS}+ days`);
+  setCard('[data-board-filter="late"]', state.vehicleLateOnly, s.lateCount,
+          "Show only we-owe promises past the date the customer was given");
   syncPartsFilterChip();
 }
 
@@ -297,6 +312,7 @@ function boardScopeLabel() {
   if (state.vehicleStatus) parts.push(STATUS_LABEL[state.vehicleStatus] || state.vehicleStatus);
   if (state.vehiclePartsOnly) parts.push("waiting on parts");
   if (state.vehicleOverOnly) parts.push("over quote");
+  if (state.vehicleLateOnly) parts.push("past the promised date");
   const b = idleSelection(state.vehicleIdleBucket);
   if (b) parts.push(b.key === "today" ? "active today" : b.span ? `stalled ${b.short}` : `idle ${b.short}`);
   if (state.search) parts.push(`matching “${state.search}”`);
@@ -547,6 +563,17 @@ function vehiclesEmptyState() {
       actions: `<button type="button" class="btn btn-ghost btn-sm" data-empty-action="clear-over">Show all vehicles</button>`,
     };
   }
+  // And again: an empty "past promised" filter is the good answer, not an
+  // empty lot. It also has to be said as a fact about promises rather than
+  // about vehicles -- recon cars have no promise to be late on.
+  if (state.vehicleLateOnly) {
+    return {
+      icon: "check",
+      title: "No promise is past due",
+      hint: "Every we-owe in this view is either still inside the date the customer was given, or already fulfilled or waived.",
+      actions: `<button type="button" class="btn btn-ghost btn-sm" data-empty-action="clear-late">Show all vehicles</button>`,
+    };
+  }
   const idleSel = idleSelection(state.vehicleIdleBucket);
   if (idleSel) {
     const cold = idleSel.min >= 3;
@@ -602,7 +629,13 @@ function vehiclesEmptyState() {
    the order they'd have been in anyway. Text columns compare
    case-insensitively and always sort blanks last regardless of direction: a
    we-owe with no stock number is missing data, not "the first car", and
-   burying it at the bottom either way is what every list app does. */
+   burying it at the bottom either way is what every list app does.
+
+   NO_PROMISE is where a row with no live promised date sorts: far below any
+   real "days late" a shop could produce, and finite because -Infinity minus
+   -Infinity is NaN and would scramble the whole comparison. */
+const NO_PROMISE = -1e9;
+
 const VEHICLE_SORTS = {
   stock: { label: "Stock #", type: "text", value: (v) => v.stock_number || "" },
   vehicle: { label: "Vehicle", type: "text", value: (v) => v.vehicle || "" },
@@ -612,6 +645,13 @@ const VEHICLE_SORTS = {
   parts: { label: "Parts", type: "number", value: (v) => v.parts_pending || 0 },
   age: { label: "Age", type: "number", value: (v) => v.age_days },
   idle: { label: "Idle", type: "number", value: (v) => v.idle_days || 0 },
+  // Sorted by how late the promise is, not by the date on it: descending puts
+  // the promise you have already broken at the top, which is the reason to
+  // click this header at all. Everything with no live promise -- every recon
+  // car, a we-owe with no date, one already fulfilled or waived -- shares the
+  // NO_PROMISE sentinel, so they group together at the far end and keep the
+  // server's order among themselves.
+  promised: { label: "Promised", type: "number", value: (v) => (v.promise_days_late == null ? NO_PROMISE : v.promise_days_late) },
   quoted: { label: "Quoted", type: "number", value: (v) => v.quoted_cost },
   cost: { label: "Cost", type: "number", value: (v) => v.actual_cost },
 };
@@ -641,6 +681,7 @@ export function visibleVehicles({ ignoreIdle = false } = {}) {
   if (state.vehicleStatus) rows = rows.filter((v) => v.status === state.vehicleStatus);
   if (state.vehiclePartsOnly) rows = rows.filter((v) => (v.parts_pending || 0) > 0);
   if (state.vehicleOverOnly) rows = rows.filter(isOverQuote);
+  if (state.vehicleLateOnly) rows = rows.filter(isPromiseLate);
   const idleSel = ignoreIdle ? null : idleSelection(state.vehicleIdleBucket);
   if (idleSel) rows = rows.filter((v) => matchesIdleSelection(v, idleSel));
   if (state.search) {
@@ -705,6 +746,52 @@ function partsCellHtml(v) {
       ${n}</span>`;
 }
 
+/* ---------- promised dates ----------
+
+   A we-owe is a promise a salesman made to close a car deal, and the date the
+   customer was given is the one thing about it that has a deadline. It was
+   asked for at intake, stored, and then shown on no screen anybody makes a
+   decision on -- so the only way to find out a promise had gone past its date
+   was to remember the car and open it.
+
+   The server does the arithmetic (see recon.promise_days_late) so the board,
+   the Past Promised card and the lot sheet cannot each reach a different
+   answer about the same promise on the same morning. */
+export function isPromiseLate(v) {
+  const late = v && v.promise_days_late;
+  return typeof late === "number" && late > 0;
+}
+
+/* "Jul 30" on a promise due this year, "Jul 30, 2025" on one that isn't.
+   The board is the widest table in the app and already scrolls sideways on a
+   1280px window; a year every row shares is 40px of that spent saying
+   nothing. It comes back the moment it's carrying information -- and the
+   tooltip always spells the whole date out. */
+function promisedLabel(value) {
+  const full = fmtDay(value);
+  const suffix = `, ${new Date().getFullYear()}`;
+  return full.endsWith(suffix) ? full.slice(0, -suffix.length) : full;
+}
+
+/* Blank for anything with no promised date, which is every recon car -- a
+   column of dashes down the recon half would draw the eye to the rows with
+   nothing to say. A settled promise keeps its date but drops the countdown
+   and the colour: it was met (or waived), and painting it red forever is how
+   the Stalled card used to lie.
+
+   Days are abbreviated the way Age and Idle already abbreviate theirs ("3d"),
+   so the three day-counting columns read as one family. */
+function promisedCellHtml(v) {
+  if (!v.target_date) return "";
+  const full = esc(fmtDay(v.target_date));
+  const label = esc(promisedLabel(v.target_date));
+  const late = v.promise_days_late;
+  if (late == null) return `<span class="promise-cell promise-settled" title="Promised for ${full} — this promise is closed">${label}</span>`;
+  if (late > 0) return `<span class="promise-cell promise-late" title="Promised for ${full} — ${late} day${late === 1 ? "" : "s"} past due">${label} <span class="promise-tag">${late}d late</span></span>`;
+  if (late === 0) return `<span class="promise-cell promise-today" title="Promised for ${full} — due today">${label} <span class="promise-tag">today</span></span>`;
+  return `<span class="promise-cell" title="Promised for ${full} — ${-late} day${late === -1 ? "" : "s"} to go">${label}</span>`;
+}
+
 function vehicleRowHtml(v) {
   const key = vehicleKey(v);
   const over = costCellClass(v);
@@ -727,6 +814,7 @@ function vehicleRowHtml(v) {
       <td class="col-parts">${partsCellHtml(v)}</td>
       <td class="num-col age-col ${ageClass(v.age_days)}">${v.age_days ?? "—"}${v.age_days == null ? "" : "d"}</td>
       <td class="num-col idle-col">${idleCellHtml(v)}</td>
+      <td class="promised-col">${promisedCellHtml(v)}</td>
       <td class="num-col quoted-col">${v.quoted_cost ? money(v.quoted_cost) : `<span class="muted-dash">—</span>`}</td>
       <td class="num-col ${over}"${over ? ` title="Over the estimate by ${money(v.actual_cost - v.quoted_cost)}"` : ""}>${money(v.actual_cost)}</td>`;
 }
@@ -738,6 +826,7 @@ function vehicleRowSignature(v) {
   return [
     v.stock_number, v.vehicle, v.vin, v.customer_name, v.segment, v.status, v.status_bucket,
     v.technicians.join("|"), v.age_days, v.idle_days, v.last_activity_at,
+    v.target_date, v.promise_days_late,
     v.quoted_cost, v.actual_cost, v.parts_pending, v.parts_pending_value,
     state.vehicleSelection.has(vehicleKey(v)) ? 1 : 0,
   ].join("");

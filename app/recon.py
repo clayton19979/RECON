@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Callable, Mapping
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException
@@ -87,6 +87,33 @@ def is_stalled(row: Mapping[str, Any]) -> bool:
     if row.get("status_bucket") == "finished":
         return False
     return max(0, int(row.get("idle_days") or 0)) >= STALLED_AFTER_DAYS
+
+
+def promise_days_late(target_date: str | None, status_bucket: str) -> int | None:
+    """How many days past its promised date a we-owe promise is.
+
+    Negative counts days still to go and 0 means it is due today, so one
+    number answers both "have we broken this promise" and "how long have I
+    got". None means the question does not apply: no date was written down,
+    the stored value is not a date anyone can read, or the promise is already
+    settled.
+
+    Settled promises are excluded for the same reason is_stalled excludes
+    finished cars. A fulfilled or waived we-owe cannot still be late, and the
+    dates on old promises never move -- counting them would give a number that
+    only ever climbs, which is an alarm nobody reads by the end of the month.
+
+    The comparison is against the shop's own calendar date (see db.now), not
+    UTC: "promised Thursday" means Thursday in Merrillville, and the shop
+    works evenings.
+    """
+    if status_bucket == "finished":
+        return None
+    try:
+        target = date.fromisoformat((target_date or "").strip())
+    except ValueError:
+        return None
+    return (datetime.now().date() - target).days
 
 
 def order_status_bucket(orders: list[dict]) -> str:
@@ -600,6 +627,7 @@ def vehicle_board_rows(
                 2,
             )
             activity_at = last_activity(db, "we_owe_id", row["id"], row["created_at"])
+            status_bucket = we_owe_status_bucket(row["status"])
             result.append(
                 {
                     "segment": "we_owe",
@@ -611,7 +639,14 @@ def vehicle_board_rows(
                     "customer_name": row["customer_name"],
                     "description": row["description"],
                     "status": display_status,
-                    "status_bucket": we_owe_status_bucket(row["status"]),
+                    "status_bucket": status_bucket,
+                    # What the salesman told the customer they'd get their car
+                    # back by. It was captured at intake and then shown nowhere
+                    # anybody makes decisions -- the board, the summary cards
+                    # and the lot sheet all read these two fields now, so a
+                    # promise going past due is visible without opening the car.
+                    "target_date": row["target_date"],
+                    "promise_days_late": promise_days_late(row["target_date"], status_bucket),
                     # A we-owe car has a purchase price too -- it's just usually
                     # entered here, because the shop bought and recon'd it long
                     # before RECON ever saw it.

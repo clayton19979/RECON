@@ -67,7 +67,7 @@ const { w, doc, fetchLog, settle, ok, finish, rejections } = await boot({
            "vehicleKey", "loadVehicleViewPrefs", "renderVehicleStatusOptions", "VEHICLE_SORTS",
            "VEHICLE_PREFS_KEY", "resetVehicleView", "boardStats", "isOverQuote", "BOARD_COLUMNS",
            "IDLE_BUCKETS", "idleBucket", "IDLE_SELECTIONS", "STALLED_AFTER_DAYS", "isStalled",
-           "bulkTaskTitle"],
+           "bulkTaskTitle", "isPromiseLate", "fmtDay"],
   fetch: async (url, opts) => {
     if (url.startsWith("/api/vehicles-board")) return url.includes("archived=true") ? [] : board;
     if (/^\/api\/(recon\/vehicles|we-owe)\/\d+$/.test(url)) return { id: 1, archived_at: "", stock_number: "B204", vehicle: "2019 Ford F-150" };
@@ -839,6 +839,132 @@ ok(empty && Number(empty.querySelector("td").getAttribute("colspan")) === headCe
    `the empty row spans ${empty && empty.querySelector("td").getAttribute("colspan")} of ${headCells} columns`);
 body.querySelector('[data-empty-action="clear-search"]').click();
 ok(dataRows().length === 5, "the empty state's Clear search button didn't restore the board");
+
+/* ---------- promised dates ----------
+
+   A we-owe is a promise a salesman made to close a car deal, and the date the
+   customer was given is the only part of it with a deadline. The date was
+   captured at intake and then shown nowhere anyone decides anything, so a
+   promise could go a fortnight past its day with nothing on screen saying so.
+
+   Scoped fixture, because the promise cases only exist on we-owe rows and the
+   main board above is built to exercise idle buckets. Dates are built from the
+   current year rather than hardcoded, so the "drop a year everybody shares"
+   rule stays testable after New Year instead of quietly inverting.
+
+   promise_days_late is the server's answer (app/recon.py::promise_days_late),
+   not something the browser recomputes -- one arithmetic, so the column, the
+   card and the printed lot sheet cannot disagree about the same promise. */
+const YEAR = new Date().getFullYear();
+const promiseBoard = [
+  veh({ segment: "we_owe", we_owe_id: 11, vehicle: "2020 Kia Soul", customer_name: "J. Whitfield",
+        status: "open", target_date: `${YEAR}-07-30`, promise_days_late: 3 }),
+  veh({ segment: "we_owe", we_owe_id: 12, vehicle: "2019 Toyota RAV4", customer_name: "R. Silva",
+        status: "in_progress", target_date: `${YEAR}-08-04`, promise_days_late: 0 }),
+  veh({ segment: "we_owe", we_owe_id: 13, vehicle: "2018 Honda Accord", customer_name: "M. Doyle",
+        status: "open", target_date: `${YEAR}-08-10`, promise_days_late: -6 }),
+  // Fulfilled: keeps its date, drops the countdown. A closed promise cannot be
+  // late, and one that stayed red forever is exactly how the Stalled card used
+  // to end up describing the shop's history instead of its morning.
+  veh({ segment: "we_owe", we_owe_id: 14, vehicle: "2017 Jeep Cherokee", customer_name: "I. Chandler",
+        status: "fulfilled", status_bucket: "finished", target_date: `${YEAR - 1}-06-15`,
+        promise_days_late: null }),
+  // A lot car: nobody was promised anything, so the server sends no field.
+  veh({ recon_id: 21, stock_number: "E900", vehicle: "2016 Ford Fusion" }),
+];
+w.state.vehicles = promiseBoard;
+w.state.vehicleSelection.clear();
+w.renderVehiclesTable();
+
+const promiseCell = (key) => rowFor(key).querySelector(".promised-col");
+const lateCard = () => doc.querySelector('[data-board-filter="late"]');
+
+// The header exists and is sortable, and the row has a cell under it.
+ok(th("promised"), "the board has no Promised column header");
+ok(w.VEHICLE_SORTS.promised, "the Promised header has no comparator");
+
+// A bare YYYY-MM-DD is UTC midnight, so feeding it to Date lands the evening
+// before anywhere west of Greenwich -- which is what put every date on the
+// printed ticket a day early. fmtDay must not go near Date for these.
+ok(w.fmtDay(`${YEAR}-07-30`) === `Jul 30, ${YEAR}`,
+   `fmtDay("${YEAR}-07-30") gave "${w.fmtDay(`${YEAR}-07-30`)}" -- a day-early answer means it went through Date`);
+ok(w.fmtDay("2026-01-01") === "Jan 1, 2026", `fmtDay across a year boundary gave "${w.fmtDay("2026-01-01")}"`);
+ok(w.fmtDay("") === "", "fmtDay invented a date out of nothing");
+
+// Past due: red, and says how far past. The year is dropped because every row
+// shares it; the tooltip still spells the whole date out.
+ok(promiseCell("we_owe:11").textContent.replace(/\s+/g, " ").trim() === "Jul 30 3d late",
+   `an overdue promise reads "${promiseCell("we_owe:11").textContent.replace(/\s+/g, " ").trim()}"`);
+ok(promiseCell("we_owe:11").querySelector(".promise-late"), "an overdue promise isn't marked late");
+ok(/Jul 30, \d{4}/.test(promiseCell("we_owe:11").querySelector("span").title),
+   `the overdue tooltip drops the year too: "${promiseCell("we_owe:11").querySelector("span").title}"`);
+
+// Due today is its own state: worth seeing, not yet an alarm.
+ok(promiseCell("we_owe:12").textContent.replace(/\s+/g, " ").trim() === "Aug 4 today",
+   `a promise due today reads "${promiseCell("we_owe:12").textContent.replace(/\s+/g, " ").trim()}"`);
+ok(promiseCell("we_owe:12").querySelector(".promise-today") && !promiseCell("we_owe:12").querySelector(".promise-late"),
+   "a promise due today is painted as already broken");
+
+// Still in hand: the date, no tag, no colour.
+ok(promiseCell("we_owe:13").textContent.trim() === "Aug 10",
+   `a promise still to come reads "${promiseCell("we_owe:13").textContent.trim()}"`);
+ok(!promiseCell("we_owe:13").querySelector(".promise-tag"), "a promise still in hand is being tagged");
+
+// Settled: keeps the date (history stays readable) and the year, since it
+// isn't this one -- but carries no lateness at all.
+ok(promiseCell("we_owe:14").textContent.trim() === `Jun 15, ${YEAR - 1}`,
+   `a fulfilled promise reads "${promiseCell("we_owe:14").textContent.trim()}"`);
+ok(!promiseCell("we_owe:14").querySelector(".promise-late"), "a fulfilled promise is still flagged late");
+ok(!w.isPromiseLate(promiseBoard[3]), "a fulfilled promise counts as late");
+
+// Recon: blank, not a dash. Most of a full board would be dashes otherwise,
+// drawing the eye to exactly the rows with nothing to say.
+ok(promiseCell("recon:21").textContent.trim() === "", "a recon car shows something in the Promised column");
+ok(!w.isPromiseLate(promiseBoard[4]), "a recon car counts as a late promise");
+
+/* the card counts what the column paints red -- one rule, so they can't drift */
+ok(card("stat-late-promises") === "1", `Past Promised card reads "${card("stat-late-promises")}"`);
+ok(card("stat-late-promises-sub") === "worst 3 days over",
+   `Past Promised sub reads "${card("stat-late-promises-sub")}"`);
+
+/* and, like the other three, the number you're reading is the thing you click */
+lateCard().click();
+ok(w.state.vehicleLateOnly, "the Past Promised card didn't apply its filter");
+ok(dataRows().length === 1 && dataRows()[0].dataset.key === "we_owe:11",
+   `Past Promised should leave the Kia Soul, got ${dataRows().map((tr) => tr.dataset.key).join(",")}`);
+ok(card("stat-late-promises") === "1", "the Past Promised card moved when it was clicked");
+ok(cards().scope === "Showing vehicles: past the promised date.", `scope line reads "${cards().scope}"`);
+ok(JSON.parse(w.localStorage.getItem("dao-vehicle-view")).lateOnly === true,
+   "the Past Promised filter wasn't persisted");
+
+// An empty result here is the good answer, and has to be said about promises
+// rather than about vehicles -- recon cars have no promise to be late on.
+chip("recon").click();
+ok(dataRows().length === 0, "recon + past promised should be empty");
+const lateEmpty = body.querySelector("tr");
+ok(lateEmpty.textContent.includes("No promise is past due"),
+   `past-promised empty state reads "${lateEmpty.textContent.trim().slice(0, 60)}"`);
+ok(Number(lateEmpty.querySelector("td").getAttribute("colspan")) === w.BOARD_COLUMNS,
+   "the past-promised empty row doesn't span the table");
+lateEmpty.querySelector('[data-empty-action="clear-late"]').click();
+ok(!w.state.vehicleLateOnly, "the empty state's button didn't clear the Past Promised filter");
+chip("").click();
+
+/* Sorted by how late, not by the date: descending has to put the promise you
+   have already broken at the top, and park everything with no live promise --
+   recon cars and settled promises alike -- at the bottom rather than
+   interleaved among the real answers. */
+th("promised").click();
+ok(dataRows().map((tr) => tr.dataset.key).slice(0, 3).join(",") === "we_owe:11,we_owe:12,we_owe:13",
+   `Promised descending gave ${dataRows().map((tr) => tr.dataset.key).join(",")}`);
+ok(dataRows().map((tr) => tr.dataset.key).slice(3).sort().join(",") === "recon:21,we_owe:14",
+   "rows with no live promise didn't sink to the bottom of a Promised sort");
+
+w.resetVehicleView();
+await settle();
+ok(!w.state.vehicleLateOnly, "Reset view left the Past Promised filter on");
+w.state.vehicles = board;
+w.renderVehiclesTable();
 
 /* ---------- escaping ---------- */
 w.state.vehicles = [veh({ recon_id: 9, stock_number: '<img src=x onerror="window.__pwned=1">', vehicle: "X" })];

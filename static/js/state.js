@@ -17,6 +17,7 @@ export const state = {
   vehicleStatus: "",                      // "" == any status
   vehiclePartsOnly: false,                // "Waiting on parts" toggle
   vehicleOverOnly: false,                 // "Over Quote" card toggle
+  vehicleLateOnly: false,                 // "Past Promised" card toggle -- we-owe promises past their date
   vehicleIdleBucket: "",                  // "" == any; else an IDLE_SELECTIONS key (a chart bar, or "stalled" from the card)
   vehicleChartOpen: true,                 // the idle-bucket chart above the table
   vehicleCursor: null,                    // key of the keyboard-focused row

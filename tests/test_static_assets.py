@@ -473,6 +473,49 @@ def test_board_card_elements_all_exist(declared_ids: set[str], js: str) -> None:
     assert not missing, f"renderStats writes into ids index.html doesn't declare: {sorted(missing)}"
 
 
+def test_ticket_money_has_exactly_one_definition() -> None:
+    """A ticket's quote and actual cost are shown in four places -- the cost
+    card, the totals that follow each keystroke, the job subtotals and the
+    printed ticket -- and each one used to do the arithmetic itself. That is
+    how a vendor credit came to ADD to the ticket card while subtracting from
+    the board and the Lot Report an inch away, and how paper went out of the
+    printer disagreeing with the screen it was printed from.
+
+    estimate-money.js is the only place the rule lives now. Anything summing
+    quantity times unit_cost by hand somewhere else is a fifth copy waiting to
+    drift, so it fails here rather than in front of an advisor.
+    """
+    money_js = (JS_DIR / "estimate-money.js").read_text(encoding="utf-8")
+    assert 'kind === "credit"' in money_js, "estimate-money.js no longer applies the credit sign"
+
+    # Scoped to the vehicle screen: the A/P entry form sums its own lines too,
+    # but those are a vendor's invoice being typed in, every kind of them
+    # positive, and none of this applies to them.
+    detail_js = (JS_DIR / "vehicle-detail.js").read_text(encoding="utf-8")
+    hand_rolled = [
+        line.strip()
+        for line in detail_js.split("\n")
+        if re.search(r"(?:received_)?quantity\s*\*\s*\w*\.?unit_cost", line)
+    ]
+    assert not hand_rolled, (
+        "the vehicle screen sums ticket money itself instead of asking estimate-money.js:\n" + "\n".join(hand_rolled)
+    )
+
+
+def test_credit_lines_are_never_dropped_from_a_grouped_ticket(js: str) -> None:
+    """Vendor-invoice ingest writes kind="credit" lines nobody picked by hand.
+    The grid's job layout grouped by a fixed Parts/Labor/Fees list, so those
+    lines had no row on screen at all -- the total moved and nothing explained
+    why. Both the grid and the printed ticket group through kindGroupsOf now,
+    which is exhaustive over the kinds actually on the ticket."""
+    assert js.count("function kindGroupsOf(") == 1, "kindGroupsOf is no longer the single grouping helper"
+    grouping = re.findall(r"kindGroupsOf\(", js)
+    assert len(grouping) >= 3, (
+        f"only {len(grouping)} references to kindGroupsOf -- has a caller gone back to its own list?"
+    )
+    assert 'credit: "Credits"' in js, "KIND_GROUP_LABEL has no heading for credit lines"
+
+
 def test_over_quote_rule_has_exactly_one_definition(js: str) -> None:
     """The Over Quote card counts the cars whose Cost cell is red. Two copies
     of the 10%-past-estimate rule is two chances for the count and the

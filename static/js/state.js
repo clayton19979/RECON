@@ -116,8 +116,12 @@ export const STATUS_PILL_CLASS = {
   estimate: "pill-status-estimate", pending_approval: "pill-status-pending",
   in_progress: "pill-status-progress", complete: "pill-status-complete",
 };
+// The three groups a person builds a ticket out of, in the order they read.
+// "credit" is deliberately not one of them -- nobody adds a credit by hand, it
+// arrives on a vendor invoice -- but it is a kind that turns up on real
+// tickets, so it needs a heading wherever lines are grouped by kind.
 export const KIND_GROUP_ORDER = ["part", "labor", "fee"];
-export const KIND_GROUP_LABEL = { part: "Parts", labor: "Labor", fee: "Fees" };
+export const KIND_GROUP_LABEL = { part: "Parts", labor: "Labor", fee: "Fees", credit: "Credits" };
 
 /* The same three database columns mean different things per line kind, and an
    RO is read by people who know what a labor line looks like. estimate_items

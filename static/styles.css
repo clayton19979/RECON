@@ -767,7 +767,11 @@ textarea { min-height: 70px; resize: vertical; font-family: inherit; }
 .job-group { border-bottom: 1px solid var(--line); }
 .job-group:last-child { border-bottom: none; }
 .job-group-head {
-  display: flex; align-items: center; gap: 8px; padding: 9px 16px;
+  /* Wrapping rather than overflowing. On a wide screen nothing ever reaches
+     the edge and this changes nothing; on a narrow one the row's controls
+     used to run off the side of the card and become unreachable, which the
+     Done tick made more likely by adding one more of them. */
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 9px 16px;
   background: var(--paper-raise); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line-soft);
   font-size: 12px; font-weight: 700;
 }
@@ -790,6 +794,41 @@ textarea { min-height: 70px; resize: vertical; font-family: inherit; }
   padding: 2px 6px; white-space: nowrap;
 }
 .job-mini-add:hover { text-decoration: underline; }
+
+/* ---------- job completion ----------
+   A finished repair stays on the ticket -- its parts and its cost are still
+   the car's history -- so it is dimmed and struck through rather than moved
+   or hidden. What's left to do is whatever is still in normal ink. */
+.job-done-toggle {
+  /* flex-direction and margin-bottom are re-stated, not inherited: the base
+     `label` rule stacks its contents in a column with 12px under it, which is
+     right for a form field and wrong for a tick box beside its own word --
+     without these the box sits above "Done" and the header grows 20px taller. */
+  display: inline-flex; flex-direction: row; align-items: center; gap: 5px; margin-bottom: 0;
+  cursor: pointer; user-select: none;
+  font-size: 11px; font-weight: 700; color: var(--ink-faint); white-space: nowrap;
+  text-transform: uppercase; letter-spacing: 0.03em;
+  /* The header is a nowrap flex row and this is the narrowest thing in it, so
+     without this it is the first item squeezed when a job title runs long. */
+  flex: none;
+}
+.job-done-toggle input[type="checkbox"] { width: auto; accent-color: var(--good); }
+/* The job title is the one thing in the header that can afford to lose room:
+   everything else is a control. */
+.job-group-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.job-done-toggle input { cursor: pointer; margin: 0; }
+.job-done-toggle input:disabled { cursor: default; }
+.job-group.job-done .job-done-toggle { color: var(--good); }
+.job-group.job-done .job-group-title { text-decoration: line-through; color: var(--ink-faint); }
+.job-group.job-done .job-group-head { background: var(--paper); }
+
+/* One line above the grid: how far through this car we are. The ticket's own
+   status is a single flag for the whole car and cannot say this. */
+.job-progress {
+  padding: 8px 16px; font-size: 11.5px; font-weight: 700; color: var(--ink-soft);
+  text-transform: uppercase; letter-spacing: 0.04em; border-bottom: 1px solid var(--line-soft);
+}
+.job-progress.all-done { color: var(--good); }
 
 /* ---------- cost summary ---------- */
 .cost-summary { padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; }

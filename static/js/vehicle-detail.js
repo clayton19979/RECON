@@ -790,7 +790,17 @@ function renderEstimate(order) {
     })}</div>`);
   } else {
     const buckets = [...jobs, { id: null, title: "General" }];
-    box.innerHTML = buckets.map((bucket) => {
+    // How far through the car we are, in one line, above the work itself.
+    // The ticket's own status is a single flag for the whole car and cannot
+    // say this; without it a ticket with four repairs looked identical
+    // whether three were finished or none were.
+    const doneCount = jobs.filter((j) => j.completed_at).length;
+    const progress = `<div class="job-progress${doneCount === jobs.length ? " all-done" : ""}">${
+      doneCount === jobs.length
+        ? `All ${jobs.length} repair${jobs.length === 1 ? "" : "s"} finished`
+        : `${doneCount} of ${jobs.length} repair${jobs.length === 1 ? "" : "s"} finished`
+    }</div>`;
+    box.innerHTML = progress + buckets.map((bucket) => {
       const bucketItems = items.filter((i) => (i.job_id ?? null) === bucket.id);
       const isGeneral = bucket.id === null;
       const jobSubtotal = bucketItems.filter(notReturned).reduce((s, i) => s + i.quantity * i.unit_cost, 0);
@@ -801,9 +811,25 @@ function renderEstimate(order) {
       const kindGroups = KIND_GROUP_ORDER
         .map((kind) => ({ kind, kindItems: bucketItems.filter((i) => i.kind === kind) }))
         .filter((g) => g.kindItems.length);
+      const jobDone = !isGeneral && !!bucket.completed_at;
       return `
-        <div class="job-group" data-job-id="${bucket.id ?? ""}">
+        <div class="job-group${jobDone ? " job-done" : ""}" data-job-id="${bucket.id ?? ""}">
           <div class="job-group-head">
+            ${/* One click is the whole interaction, on purpose: this gets
+                 ticked with a part in the other hand, and anything that
+                 needed a dialog would simply not get done on a busy morning.
+                 General has no checkbox -- it is the ungrouped leftovers, not
+                 a repair somebody can finish. */""}
+            ${/* "by Unspecified" is worse than saying nothing: that's the
+                 placeholder the Working-as picker uses when nobody has
+                 chosen a name, not somebody's answer. */""}
+            ${isGeneral ? "" : `<label class="job-done-toggle" title="${bucket.completed_at ? `Finished${bucket.completed_by && bucket.completed_by !== "Unspecified" ? ` by ${esc(bucket.completed_by)}` : ""} — click to reopen` : "Tick when this repair is finished"}">
+              ${/* job-control rides on the input, not the label: that's the
+                   class the archived-vehicle pass disables, and disabling a
+                   <label> does nothing at all. */""}
+              <input type="checkbox" class="ei-job-done job-control" data-job-id="${bucket.id}" ${jobDone ? "checked" : ""} aria-label="${esc(bucket.title)} is finished">
+              <span>Done</span>
+            </label>`}
             <span class="job-group-title">${esc(bucket.title)}</span>
             ${bucketItems.length ? `<span class="job-group-subtotal">${money(jobSubtotal)}</span>` : ""}
             ${isGeneral ? "" : `
@@ -962,7 +988,10 @@ function estimateShape(order) {
   const jobs = order.estimate?.jobs ?? [];
   const items = order.estimate?.items ?? [];
   return JSON.stringify([
-    jobs.map((j) => [j.id, j.title, j.technician_id ?? null]),
+    // completed_at is in the shape (not just synced in place) because ticking
+    // a job changes the group's classes, its title's styling and the progress
+    // line above the grid -- none of which syncEstimateInPlace touches.
+    jobs.map((j) => [j.id, j.title, j.technician_id ?? null, j.completed_at ? 1 : 0]),
     items.map((i) => [
       i.id ?? null,
       i.kind,
@@ -1163,6 +1192,7 @@ export function wireEstimateGrid() {
     if (t.matches(".ei-receive-check")) return void updateReceiveButtonState();
     if (t.matches(".ei-status")) return void onEstimateStatusChange(t);
     if (t.matches(".ei-job-tech")) return void onJobTechnicianChange(t);
+    if (t.matches(".ei-job-done")) return void onJobDoneChange(t);
   });
 
   // Keystroke-level feedback. The change handler above only fires on blur, so
@@ -1384,6 +1414,25 @@ async function onJobTechnicianChange(sel) {
     toast("Job technician updated");
     await loadVehicleDetail();
   } catch (err) {
+    toast(err.message, true);
+  }
+}
+
+/* Ticking a repair off. No confirmation either way -- it is one click to undo,
+   and a dialog in front of the most-repeated action on the screen is how a
+   feature stops being used. The checkbox is put back if the save fails, so a
+   tick that never reached the server can't sit on screen looking saved. */
+async function onJobDoneChange(box) {
+  const order = state.detail.order;
+  const job = currentEstimateJob(box.dataset.jobId);
+  if (!order || !job) return;
+  const done = box.checked;
+  try {
+    await patch(`/api/orders/${order.id}/jobs/${job.id}/done`, { done, actor: currentActor() });
+    toast(done ? `“${job.title}” ticked off` : `“${job.title}” reopened`);
+    await loadVehicleDetail();
+  } catch (err) {
+    box.checked = !done;
     toast(err.message, true);
   }
 }
@@ -1721,6 +1770,8 @@ const ACTIVITY_LABEL = {
   job_created: "Job added",
   job_updated: "Job updated",
   job_deleted: "Job removed",
+  job_completed: "Repair finished",
+  job_reopened: "Repair reopened",
   estimate_approved: "Estimate approved",
   estimate_declined: "Estimate declined",
   estimate_item_moved_in: "Line moved onto this ticket",
@@ -1882,7 +1933,12 @@ function renderPrintTicket() {
       if (!bucketItems.length) return "";
       const jobTech = bucket.id === null ? "" : (bucket.technician_name || "Use ticket default");
       const jobSubtotal = bucketItems.filter((i) => !(i.kind === "part" && i.part_returned)).reduce((s, i) => s + i.quantity * i.unit_cost, 0);
-      return `<tbody class="print-job"><tr class="print-job-head"><td colspan="4">${esc(bucket.title)}${jobTech ? ` — ${esc(jobTech)}` : ""}</td><td class="num-col">${money(jobSubtotal)}</td><td></td></tr>${kindGroupRows(bucketItems)}</tbody>`;
+      // A technician handed this sheet needs to know which repairs are
+      // already off the list before he starts pulling parts. "DONE" in words
+      // rather than a tick -- these come off a laser printer that has been
+      // low on toner since March.
+      const doneMark = bucket.id !== null && bucket.completed_at ? " — DONE" : "";
+      return `<tbody class="print-job"><tr class="print-job-head"><td colspan="4">${esc(bucket.title)}${jobTech ? ` — ${esc(jobTech)}` : ""}${doneMark}</td><td class="num-col">${money(jobSubtotal)}</td><td></td></tr>${kindGroupRows(bucketItems)}</tbody>`;
     }).join("") || `<tbody><tr><td colspan="6">No parts or labor lines.</td></tr></tbody>`;
   }
 

@@ -302,6 +302,49 @@ def cost_rollup(db: sqlite3.Connection, column: str, ref_id: int, segment: str |
     }
 
 
+# How many outstanding repairs the "still needs" sentence names before it
+# gives up and counts the rest. Three fits a printed cell; a car with nine
+# open jobs would otherwise take a whole line to itself and push everything
+# else on the row out of sight.
+NEEDS_JOB_LIMIT = 3
+
+
+def job_progress(db: sqlite3.Connection, column: str, ref_id: int, segment: str | None = None) -> dict:
+    """Which repairs on this car are done and which are still owed.
+
+    A ticket's status is one flag for the whole car, so on its own it can only
+    say "in progress" -- it cannot tell Walt that the brakes are finished and
+    the windshield is not. Jobs already carve a ticket into the individual
+    repairs; this reads how many of them have been ticked off, and keeps the
+    titles of the ones that haven't so the answer can be given in words
+    instead of in dollars.
+
+    One query for the whole vehicle rather than one per ticket: a car with
+    several ROs is the normal case, and the board builds this for every row.
+
+    Voided tickets are excluded for the same reason cost_rollup excludes them
+    -- that work was cancelled, so its jobs are not outstanding work.
+    """
+    rows = db.execute(
+        """SELECT ej.title, ej.completed_at
+           FROM estimate_jobs ej
+           JOIN estimates e ON e.id=ej.estimate_id
+           JOIN orders o ON o.id=e.order_id
+           WHERE o."""
+        + column
+        + "=? AND o.voided=0"
+        + (" AND o.segment=?" if segment else "")
+        + " ORDER BY o.id, ej.sort_order, ej.id",
+        (ref_id, segment) if segment else (ref_id,),
+    ).fetchall()
+    open_titles = [row["title"] for row in rows if not row["completed_at"]]
+    return {
+        "jobs_total": len(rows),
+        "jobs_done": sum(1 for row in rows if row["completed_at"]),
+        "jobs_open": open_titles,
+    }
+
+
 def resolve_unit(db: sqlite3.Connection, vehicle_id: int, vin: str | None, ts: str) -> int:
     """Attach a vehicle row to the physical car it describes, found by VIN.
 
@@ -554,6 +597,7 @@ def vehicle_board_rows(
                     "labor_hours": rollup["labor_hours"],
                     "parts_pending": rollup["parts_pending"],
                     "parts_pending_value": rollup["parts_pending_value"],
+                    **job_progress(db, "recon_vehicle_id", row["id"]),
                     "technicians": technician_names(db, order_ids),
                     # The ticket a board-level action should attach itself to:
                     # the open one if there is one, else the most recent, else
@@ -623,6 +667,7 @@ def vehicle_board_rows(
                     "labor_hours": rollup["labor_hours"],
                     "parts_pending": rollup["parts_pending"],
                     "parts_pending_value": rollup["parts_pending_value"],
+                    **job_progress(db, "we_owe_id", row["id"]),
                     "customer_paid": customer_paid,
                     "net_cost": round(rollup["total_cost"] - customer_paid, 2),
                     "technicians": technician_names(db, order_ids),

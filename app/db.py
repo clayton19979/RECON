@@ -197,7 +197,15 @@ CREATE TABLE IF NOT EXISTS estimate_jobs (
   title TEXT NOT NULL,
   technician_id INTEGER REFERENCES staff(id),
   sort_order INTEGER NOT NULL DEFAULT 0,
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  -- A job is one repair on the car ("front brakes", "windshield"). Ticking it
+  -- off is the only per-repair progress the app has: without it a car with
+  -- four jobs reads exactly the same whether three are finished or none are,
+  -- and "what does this car still need" could only ever be answered in money.
+  -- Empty string, not NULL, so every "is it done" test is the same string
+  -- test the other *_at flags on estimate_items already use.
+  completed_at TEXT NOT NULL DEFAULT '',
+  completed_by TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS staff (
@@ -559,6 +567,15 @@ def _migrate(db: sqlite3.Connection) -> None:
         except (json.JSONDecodeError, TypeError):
             pass
         db.execute("UPDATE tasks SET assigned_to=? WHERE id=?", (json.dumps([raw] if raw else []), task_id))
+
+    # Per-repair progress on a ticket. Purely additive: every job in an
+    # existing database comes back as not-yet-done, which is exactly what the
+    # app assumed before this column existed, so no live record changes
+    # meaning and nothing has to be re-entered.
+    job_columns = {row[1] for row in db.execute("PRAGMA table_info(estimate_jobs)")}
+    for column in ("completed_at", "completed_by"):
+        if column not in job_columns:
+            db.execute(f"ALTER TABLE estimate_jobs ADD COLUMN {column} TEXT NOT NULL DEFAULT ''")
 
     workflow_columns = {row[1] for row in db.execute("PRAGMA table_info(order_workflow)")}
     if "date_in" not in workflow_columns:

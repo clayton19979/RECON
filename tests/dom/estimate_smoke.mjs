@@ -71,6 +71,43 @@ for (const [label, jobs] of [["flat", []], ["jobs", [{ id: 7, title: "Front brak
   ok(w.document.querySelector("#vd-quoted-cost").textContent !== "$0.00", `${label}: quoted total not computed`);
 }
 
+/* ------------------------------------------------------------------
+   Job completion: the tick that says a repair is finished.
+
+   A ticket's status is one flag for the whole car, so the only way to see
+   that the brakes are done and the windshield isn't is per-job. What this
+   guards: the checkbox renders on every real job and never on General
+   (which is leftovers, not a repair somebody can finish), a finished job is
+   visibly struck through rather than hidden, and the progress line counts.
+   ------------------------------------------------------------------ */
+{
+  const jobs = [
+    { id: 7, title: "Front brakes", technician_id: null, completed_at: "2026-07-31T09:00:00", completed_by: "Antonio" },
+    { id: 8, title: "Windshield", technician_id: null, completed_at: "", completed_by: "" },
+  ];
+  const jobOrder = mkOrder(jobs);
+  w.state.detail = { segment: "recon", id: 1, item: {}, order: jobOrder };
+  w.renderEstimate(jobOrder);
+  const box = w.document.querySelector("#vd-estimate-items");
+  const groups = [...box.querySelectorAll(".job-group")];
+  ok(groups.length === 3, `expected 2 jobs + General, got ${groups.length} groups`);
+  ok(box.querySelectorAll(".ei-job-done").length === 2,
+     "the Done tick is missing from a job, or General grew one it should not have");
+  ok(groups[0].classList.contains("job-done"), "a finished job is not marked as finished");
+  ok(!groups[1].classList.contains("job-done"), "an unfinished job is marked finished");
+  ok(groups[0].querySelector(".ei-job-done").checked, "a finished job's tick is not ticked");
+  ok(groups[0].querySelector(".ei-job-done").classList.contains("job-control"),
+     "the tick is not a .job-control -- an archived vehicle would leave it clickable");
+  ok(groups.at(-1).querySelector(".ei-job-done") === null, "General should not have a Done tick");
+  const progress = box.querySelector(".job-progress");
+  ok(progress && progress.textContent.includes("1 of 2"), `progress line wrong: ${progress && progress.textContent}`);
+  // Ticking a job changes classes and the progress line, none of which the
+  // in-place sync path touches -- so it has to force a full redraw.
+  const shapeDone = w.estimateShape(jobOrder);
+  const shapeOpen = w.estimateShape(mkOrder(jobs.map((j) => ({ ...j, completed_at: "" }))));
+  ok(shapeDone !== shapeOpen, "estimateShape ignores job completion -- the tick would not redraw");
+}
+
 // addEstimateRow's transient row matches the rendered ones
 w.state.detail.order = mkOrder([]);
 w.renderEstimate(w.state.detail.order);

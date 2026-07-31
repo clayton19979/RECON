@@ -497,9 +497,48 @@ def test_parts_filter_toggle_is_not_a_segment_chip(js: str, html: str) -> None:
     )
     unscoped = re.findall(r'\$\$\("#view-vehicles \.filters \.chip"\)', js)
     assert not unscoped, "a segment-chip selector isn't scoped to [data-filter] and will sweep up the parts toggle"
-    assert len(re.findall(r'\$\$\("#view-vehicles \.filters \.chip\[data-filter\]"\)', js)) >= 3, (
-        "the segment chips are no longer selected by [data-filter] in all three places"
+    scoped = re.findall(r'\$\$\("#view-vehicles \.filters \.chip\[data-filter\]"\)', js)
+    assert scoped, "nothing selects the segment chips any more -- has the toolbar moved?"
+    # This used to require three copies, one per place that lit a chip. They
+    # are one function now (syncSegmentChips), which is what a fourth caller
+    # -- the search reach line's jump into History -- made worth doing: the
+    # count is not the property worth holding, having a single writer is.
+    assert "function syncSegmentChips" in js, (
+        "the segment chips have no single writer -- state.filter and the lit chip will drift apart"
     )
+    assert 'classList.add("active")' not in _function_source(js, "wireVehiclesView"), (
+        "the board's chip handler lights its own chip again instead of going through syncSegmentChips"
+    )
+
+
+def test_vehicle_search_rule_has_exactly_one_definition(js: str) -> None:
+    """Three call sites ask "does this car match what was typed?": the rows on
+    screen, the rows this view's filters are hiding, and the rows in the half
+    of the board that isn't loaded. A second copy of the rule is how the board
+    ends up telling someone a car isn't findable while the same query finds it
+    one line further down."""
+    assert js.count('(v.customer_name || "").toLowerCase().includes(q)') == 1, (
+        "the search-match rule has more than one definition -- matchesVehicleSearch should be the only one"
+    )
+    assert "matchesVehicleSearch(v, state.search)" in _function_source(js, "visibleVehicles"), (
+        "the board's own rows no longer go through the shared search rule"
+    )
+    assert "matchesVehicleSearch" in _function_source(js, "searchReach"), (
+        "the reach count no longer goes through the shared search rule"
+    )
+
+
+def test_search_reach_offers_only_actions_the_board_handles(js: str, html: str) -> None:
+    """Show all matches and Open History are rendered in two places -- the
+    line above the table and the empty state inside it -- and handled in a
+    third. A button naming an action nothing handles doesn't fail, it just
+    quietly does nothing, on the screen whose whole job is to stop a car being
+    lost."""
+    assert 'id="vehicles-search-reach"' in html, "the board has nowhere to say a match is somewhere else"
+    offered = set(re.findall(r'data-search-reach="([\w-]+)"', js))
+    assert offered, "nothing offers to reach past the current view any more"
+    handled = set(re.findall(r'name === "([\w-]+)"', _function_source(js, "runSearchReachAction")))
+    assert offered == handled, f"offered {sorted(offered)} but runSearchReachAction handles {sorted(handled)}"
 
 
 def test_board_view_preferences_round_trip_every_filter(js: str) -> None:

@@ -395,6 +395,17 @@ button { font-family: inherit; }
 .filters-note { font-size: 12px; color: var(--ink-faint); }
 .filters-search { width: 220px; padding: 6px 10px; font-size: 12.5px; }
 
+/* "Your search also matched cars this view can't show." Quieter than the bulk
+   bar beneath it -- it's information, not a mode you're in -- but it has to be
+   noticed, because the alternative is believing the car doesn't exist. */
+.search-reach {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
+  background: var(--paper-raise); border: 1px solid var(--line);
+  border-radius: var(--radius); padding: 7px 14px; margin-bottom: 12px;
+  font-size: 12.5px; color: var(--ink-soft);
+}
+.search-reach-sep { color: var(--ink-faint); }
+
 .bulk-bar {
   display: flex; align-items: center; gap: 10px; background: var(--accent-tint);
   border: 1px solid var(--accent); border-radius: var(--radius); padding: 8px 14px;

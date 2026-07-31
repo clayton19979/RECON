@@ -123,6 +123,19 @@ function sittingText(days) {
   return `${n} day${n === 1 ? "" : "s"}`;
 }
 
+/* How long this tech's quietest open ticket has sat, coloured on the same
+   week boundary the board's Idle column uses so the two screens agree about
+   which work has been forgotten. A tech holding nothing gets a dash rather
+   than "today", which would read as "touched today" on an empty hand. */
+function technicianIdleCell(row) {
+  if (!row.open_count) return `<td class="num-col"><span class="muted-dash">—</span></td>`;
+  const stalled = row.worst_idle_days >= STALLED_AFTER_DAYS;
+  const title = stalled
+    ? "Nothing has happened on this technician's quietest open ticket in over a week"
+    : "Days since anything happened on this technician's quietest open ticket";
+  return `<td class="num-col${stalled ? " money-bad" : ""}" title="${title}">${esc(sittingText(row.worst_idle_days))}</td>`;
+}
+
 /* Which car this row is, in one cell: the vehicle, then whether it's one of
    Walt's lot cars or a promise made to a customer (and to whom). Type used to
    be a column of its own, which cost a column's width to say one word. */
@@ -283,8 +296,9 @@ const REPORT_SORTS = {
     technician: { label: "Technician",  type: "text",   value: (r) => r.technician || "" },
     ros:        { label: "ROs",         type: "number", value: (r) => r.ro_count },
     completed:  { label: "Completed",   type: "number", value: (r) => r.completed_count },
-    hours:      { label: "Labor Hours", type: "number", value: (r) => r.labor_hours },
-    cost:       { label: "Labor Cost",  type: "number", value: (r) => r.labor_cost },
+    open:       { label: "Still Open",  type: "number", value: (r) => r.open_count },
+    idle:       { label: "Sitting",     type: "number", value: (r) => (r.open_count ? r.worst_idle_days : -1) },
+    hours:      { label: "Hours",       type: "number", value: (r) => r.labor_hours },
   },
 };
 
@@ -301,7 +315,9 @@ const DEFAULT_SORT = {
   lot: { key: "stock", dir: "asc" },
   "vehicle-spend": { key: "cost", dir: "desc" },
   "vehicle-profit": { key: "cost", dir: "desc" },
-  technicians: { key: "cost", dir: "desc" },
+  // No money column to sort on -- labor here is never charged out -- so the
+  // technician report opens on the tech carrying the most hours.
+  technicians: { key: "hours", dir: "desc" },
 };
 
 function defaultSortFor(shape) {
@@ -432,12 +448,25 @@ function technicianStatCards(rows) {
   const ros = rows.reduce((s, r) => s + r.ro_count, 0);
   const done = rows.reduce((s, r) => s + r.completed_count, 0);
   const hours = rows.reduce((s, r) => s + r.labor_hours, 0);
-  const cost = rows.reduce((s, r) => s + r.labor_cost, 0);
+  const open = rows.reduce((s, r) => s + r.open_count, 0);
+  const worstIdle = rows.reduce((s, r) => Math.max(s, r.open_count ? r.worst_idle_days : 0), 0);
   return [
     { label: "Technicians Working", value: String(active.length), sub: `of ${rows.length} on staff` },
     { label: "Repair Orders", value: String(ros), sub: `${done} completed${ros ? ` · ${Math.round((done / ros) * 100)}%` : ""}` },
     { label: "Labor Hours", value: String(Math.round(hours * 10) / 10), sub: ros ? `${(hours / ros).toFixed(1)} avg per RO` : "no orders in this range" },
-    { label: "Labor Cost", value: money(cost), sub: hours ? `${money(cost / hours)} per hour` : "no hours logged" },
+    // Replaces a labor-cost card that was structurally $0.00 -- labor on
+    // recon and we-owe is never charged out. What somebody acts on is which
+    // tech is still holding a ticket and how long it has sat.
+    {
+      label: "Still Open",
+      value: String(open),
+      // "worst sitting 0 days" is a sentence nobody says. Everything moving is
+      // the good case and should read like one.
+      sub: !open ? "nothing left with a tech"
+        : worstIdle === 0 ? "all touched today"
+        : `worst sitting ${sittingText(worstIdle)}`,
+      tone: worstIdle >= STALLED_AFTER_DAYS ? "warn" : "",
+    },
   ];
 }
 
@@ -485,19 +514,19 @@ const CHART_LIMIT = 12;
 function renderReportChart(rows, shape) {
   const target = $("#report-chart");
   if (shape === "technicians") {
-    // Hours with $0 unit cost are still work -- don't drop the tech from
-    // the chart the table shows.
-    const withLabor = rows.filter((r) => r.labor_cost > 0 || r.labor_hours > 0)
-      .sort((a, b) => b.labor_cost - a.labor_cost);
+    // Hours, not dollars. Labor here is never charged out, so charting labor
+    // cost drew one flat empty bar per technician and called it a result.
+    const withLabor = rows.filter((r) => r.labor_hours > 0)
+      .sort((a, b) => b.labor_hours - a.labor_hours);
     const items = withLabor.slice(0, CHART_LIMIT)
-      .map((r) => ({ label: r.technician, value: r.labor_cost, display: money(r.labor_cost) }));
+      .map((r) => ({ label: r.technician, value: r.labor_hours, display: fmtHours(r.labor_hours) }));
     target.innerHTML = barChart({
-      title: "Labor cost by technician",
+      title: "Hours logged by technician",
       note: withLabor.length > CHART_LIMIT
         ? `Top ${CHART_LIMIT} of ${withLabor.length} technicians with logged labor`
         : (items.length ? `${items.length} technician${items.length === 1 ? "" : "s"} with logged labor` : ""),
       items,
-    }) || chartNothingToPlot(rows.length, "labor cost");
+    }) || chartNothingToPlot(rows.length, "hours");
     return;
   }
   if (shape === "vehicle-profit") {
@@ -555,7 +584,7 @@ function reportEmptyState(shape) {
     return `<div class="panel">${emptyState({
       icon: "staff",
       title: "No technicians on staff",
-      hint: "Add your technicians in Staff and their repair orders, hours and labor cost will roll up here.",
+      hint: "Add your technicians in Staff and their repair orders, hours and open work will roll up here.",
       actions: `<button type="button" class="btn btn-ghost btn-sm" data-nav="staff">Go to Staff</button>`,
     })}</div>`;
   }
@@ -585,7 +614,8 @@ function reportHeaderRow(shape, hasDeposits) {
       + ["cost", "left", "idle"].map((k) => reportSortHeader("lot", k, "num-col")).join("");
   }
   if (shape === "technicians") {
-    return `${reportSortHeader("technicians", "technician")}${reportSortHeader("technicians", "ros", "num-col")}${reportSortHeader("technicians", "completed", "num-col")}${reportSortHeader("technicians", "hours", "num-col")}${reportSortHeader("technicians", "cost", "num-col")}`;
+    return reportSortHeader("technicians", "technician")
+      + ["ros", "completed", "open", "idle", "hours"].map((k) => reportSortHeader("technicians", k, "num-col")).join("");
   }
   if (shape === "vehicle-profit") {
     return ["stock", "vehicle", "vin"].map((k) => reportSortHeader("vehicle-profit", k)).join("")
@@ -695,12 +725,13 @@ function renderReportTable(rows, shape) {
     const totRos = rows.reduce((s, r) => s + r.ro_count, 0);
     const totDone = rows.reduce((s, r) => s + r.completed_count, 0);
     const totHours = Math.round(rows.reduce((s, r) => s + r.labor_hours, 0) * 100) / 100;
-    const totCost = rows.reduce((s, r) => s + r.labor_cost, 0);
+    const totOpen = rows.reduce((s, r) => s + r.open_count, 0);
+    const worstIdle = rows.reduce((s, r) => Math.max(s, r.open_count ? r.worst_idle_days : 0), 0);
     return `<div class="panel"><div class="table-wrap table-scroll"><table class="sticky-head"><thead><tr>
       ${reportHeaderRow("technicians")}
       </tr></thead>
-      <tbody>${rows.map((r) => `<tr${r.ro_count ? "" : ' class="row-muted"'}><td>${esc(r.technician)}</td><td class="num-col">${r.ro_count}</td><td class="num-col">${r.completed_count}</td><td class="num-col">${Math.round(r.labor_hours * 100) / 100}</td><td class="num-col">${money(r.labor_cost)}</td></tr>`).join("")}</tbody>
-      <tfoot><tr><td>Total (${working} working)</td><td class="num-col">${totRos}</td><td class="num-col">${totDone}</td><td class="num-col">${totHours}</td><td class="num-col">${money(totCost)}</td></tr></tfoot>
+      <tbody>${rows.map((r) => `<tr${r.ro_count ? "" : ' class="row-muted"'}><td>${esc(r.technician)}</td><td class="num-col">${r.ro_count}</td><td class="num-col">${r.completed_count}</td><td class="num-col">${r.open_count || "—"}</td>${technicianIdleCell(r)}<td class="num-col">${Math.round(r.labor_hours * 100) / 100}</td></tr>`).join("")}</tbody>
+      <tfoot><tr><td>Total (${working} working)</td><td class="num-col">${totRos}</td><td class="num-col">${totDone}</td><td class="num-col">${totOpen || "—"}</td><td class="num-col">${totOpen ? esc(sittingText(worstIdle)) : "—"}</td><td class="num-col">${totHours}</td></tr></tfoot>
       </table></div></div>`;
   }
   if (shape === "lot") return renderLotTable(rows);
@@ -822,14 +853,15 @@ function renderPrintReport(rows, type, start, end) {
     const totRos = rows.reduce((s, r) => s + r.ro_count, 0);
     const totDone = rows.reduce((s, r) => s + r.completed_count, 0);
     const totalHours = rows.reduce((s, r) => s + r.labor_hours, 0);
-    const totalCost = rows.reduce((s, r) => s + r.labor_cost, 0);
+    const totalOpen = rows.reduce((s, r) => s + r.open_count, 0);
+    const worstIdle = rows.reduce((s, r) => Math.max(s, r.open_count ? r.worst_idle_days : 0), 0);
     body = `
       <table class="print-table report">
-        <thead><tr><th>Technician</th><th class="num-col">ROs</th><th class="num-col">Completed</th><th class="num-col">Labor Hours</th><th class="num-col">Labor Cost</th></tr></thead>
-        <tbody>${rows.map((r) => `<tr${r.ro_count ? "" : ' class="idle"'}><td>${esc(r.technician)}</td><td class="num-col">${r.ro_count}</td><td class="num-col">${r.completed_count}</td><td class="num-col">${Math.round(r.labor_hours * 100) / 100}</td><td class="num-col">${money(r.labor_cost)}</td></tr>`).join("")}</tbody>
+        <thead><tr><th>Technician</th><th class="num-col">ROs</th><th class="num-col">Completed</th><th class="num-col">Still Open</th><th class="num-col">Sitting</th><th class="num-col">Hours</th></tr></thead>
+        <tbody>${rows.map((r) => `<tr${r.ro_count ? "" : ' class="idle"'}><td>${esc(r.technician)}</td><td class="num-col">${r.ro_count}</td><td class="num-col">${r.completed_count}</td><td class="num-col">${r.open_count || "—"}</td><td class="num-col">${r.open_count ? esc(sittingText(r.worst_idle_days)) : "—"}</td><td class="num-col">${Math.round(r.labor_hours * 100) / 100}</td></tr>`).join("")}</tbody>
         <tfoot>
-          <tr><td>Report Total (${working} of ${rows.length} working)</td><td class="num-col">${totRos}</td><td class="num-col">${totDone}</td><td class="num-col">${Math.round(totalHours * 100) / 100}</td><td class="num-col">${money(totalCost)}</td></tr>
-          <tr class="tfoot-space" aria-hidden="true"><td colspan="5"></td></tr>
+          <tr><td>Report Total (${working} of ${rows.length} working)</td><td class="num-col">${totRos}</td><td class="num-col">${totDone}</td><td class="num-col">${totalOpen || "—"}</td><td class="num-col">${totalOpen ? esc(sittingText(worstIdle)) : "—"}</td><td class="num-col">${Math.round(totalHours * 100) / 100}</td></tr>
+          <tr class="tfoot-space" aria-hidden="true"><td colspan="6"></td></tr>
         </tfoot>
       </table>`;
   } else if (shape === "vehicle-profit") {
@@ -920,7 +952,7 @@ function showReportPlaceholders() {
   // height or flash the header in once data lands. Rendered at the max
   // column count (deposits included) so the real table only ever narrows.
   const shape = reportShape(state.reportType);
-  const cols = shape === "technicians" ? 5 : 8;
+  const cols = shape === "technicians" ? 6 : 8;
   $("#report-output").innerHTML = `<div class="panel"><div class="table-wrap table-scroll"><table class="sticky-head"><thead><tr>
     ${reportHeaderRow(shape, true)}
     </tr></thead><tbody>${skeletonRows(cols)}</tbody></table></div></div>`;

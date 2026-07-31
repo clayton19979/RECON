@@ -32,11 +32,13 @@ const spend = [
   veh({ recon_id: 3, stock_number: "C007", vehicle: "2015 Chevy Silverado", status: "complete", status_bucket: "finished", technicians: ["Bo"], quoted_cost: 0, actual_cost: 0 }),
 ];
 
-// 3 on the roster, 2 with work; 6 ROs, 3 completed; 25 hours, $1000 -> $40/hr.
+// 3 on the roster, 2 with work; 6 ROs, 3 completed; 25 hours; 3 still open,
+// the quietest of them sitting 9 days. No money: labor here is never charged
+// out, so the report carries no cost field at all.
 const techs = [
-  { technician: "Bo", ro_count: 4, completed_count: 2, labor_hours: 15, labor_cost: 600 },
-  { technician: "Chris", ro_count: 2, completed_count: 1, labor_hours: 10, labor_cost: 400 },
-  { technician: "Dana", ro_count: 0, completed_count: 0, labor_hours: 0, labor_cost: 0 },
+  { technician: "Bo", ro_count: 4, completed_count: 2, open_count: 2, worst_idle_days: 9, labor_hours: 15 },
+  { technician: "Chris", ro_count: 2, completed_count: 1, open_count: 1, worst_idle_days: 0, labor_hours: 10 },
+  { technician: "Dana", ro_count: 0, completed_count: 0, open_count: 0, worst_idle_days: 0, labor_hours: 0 },
 ];
 
 let failNextReport = false;
@@ -160,16 +162,36 @@ const t = stats();
 ok(t[0].value === "2" && t[0].sub === "of 3 on staff", `technicians working reads ${t[0].value} / "${t[0].sub}"`);
 ok(t[1].value === "6" && t[1].sub === "3 completed · 50%", `repair orders card reads ${t[1].value} / "${t[1].sub}"`);
 ok(t[2].value === "25", `labor hours reads ${t[2].value}, expected 25`);
-ok(t[3].value === "$1,000.00" && t[3].sub === "$40.00 per hour", `labor cost card reads ${t[3].value} / "${t[3].sub}"`);
+// The fourth card used to be Labor Cost, which on recon and we-owe work is
+// always $0.00. What is actually actionable is who is still holding a car.
+ok(t[3].label === "Still Open" && t[3].value === "3" && t[3].sub === "worst sitting 9 days",
+   `fourth card reads "${t[3].label}" ${t[3].value} / "${t[3].sub}"`);
+ok(doc.querySelectorAll("#report-stats .stat")[3].querySelector(".stat-value").classList.contains("warn"),
+   "9 days of silence should be flagged on the card, the same week boundary the board uses");
+ok(!stats().some((s) => /cost|\$/i.test(s.label) || /\$/.test(s.value)),
+   `the technician report is showing money: ${JSON.stringify(stats())}`);
 ok(bars().length === 2, `expected 2 technician bars (Dana logged nothing), got ${bars().length}`);
 ok(doc.querySelector("#report-output tbody tr.row-muted"), "the technician with no work isn't muted");
 
 // "stock" doesn't exist on this shape; carrying it over would leave the
 // table sorted by nothing at all, with no header claiming to be sorted.
-ok(w.state.reportSort.key === "cost", `sort key after switching shape is ${w.state.reportSort.key}, expected the cost fallback`);
+// There is no money column here to fall back to, so the shape opens on hours.
+ok(w.state.reportSort.key === "hours", `sort key after switching shape is ${w.state.reportSort.key}, expected hours`);
 ok(doc.querySelector("#report-output th.sorted"), "no column is marked sorted after the shape changed");
-click(w, th("hours"));
-ok(cells(0)[col("hours")] === "15", `sorting by hours put ${cells(0)[col("hours")]} first`);
+ok(cells(0)[col("hours")] === "15", `opening sorted by hours put ${cells(0)[col("hours")]} first`);
+
+// A tech holding nothing gets a dash, not "today" -- an empty hand is not
+// the same as a car touched this morning.
+ok(cells(0)[col("idle")] === "9 days", `Bo's sitting cell reads "${cells(0)[col("idle")]}"`);
+const danaRow = [...doc.querySelectorAll("#report-output tbody tr")]
+  .map((r) => [...r.querySelectorAll("td")].map((c) => c.textContent.trim()))
+  .find((r) => r[0] === "Dana");
+ok(danaRow && danaRow[col("idle")] === "—", `the technician with nothing open reads "${danaRow && danaRow[col("idle")]}"`);
+
+// Sitting is coloured on the same week boundary the board's Idle column uses.
+const sittingCells = [...doc.querySelectorAll("#report-output tbody tr")].map((r) => r.querySelectorAll("td")[col("idle")]);
+ok(sittingCells.filter((c) => c.classList.contains("money-bad")).length === 1,
+   "only the technician past a week of silence should be flagged");
 
 /* ---------- range ---------- */
 click(w, doc.querySelector('[data-report-range="today"]'));

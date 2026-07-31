@@ -598,7 +598,7 @@ const HELP_TOPICS = [
     title: "Seeing what each technician produced",
     view: "reports",
     aliases: ["productivity", "tech report", "hours", "who did what", "labor", "performance", "technician report"],
-    summary: "Repair orders, hours and labor cost broken out per technician, over any date range.",
+    summary: "Repair orders, hours, and what each technician still has open, over any date range.",
     steps: [
       "Open Reports and pick the Technicians tab, or click 'Productivity Report' from the Staff screen.",
       "Choose a date range across the top.",

@@ -67,9 +67,12 @@ const { w, doc, fetchLog, settle, ok, finish, rejections } = await boot({
     }
     if (url.startsWith("/api/vehicles-board")) return [];
     if (/^\/api\/recon\/vehicles\/7$/.test(url)) return vehicle;
-    // Plain /api/orders is what the Tasks screen builds its link dropdown
-    // from, so it has to answer too -- not just the detail page's ?segment=
-    // variant. Getting this wrong is what an empty dropdown looks like.
+    // The Tasks screen builds its link dropdown from this, so it has to answer
+    // before the /api/tasks catch-all below. Getting it wrong is what an empty
+    // dropdown -- and a "+ Task" that doesn't preselect this car -- looks like.
+    if (url === "/api/tasks/linkable-orders") {
+      return [{ id: 42, segment: "recon", group: "Recon", label: "R-0981 — 2019 Ford Edge" }];
+    }
     if (url === "/api/orders" || url.startsWith("/api/orders?")) return [order];
     if (/^\/api\/orders\/42$/.test(url)) return order;
     if (url.startsWith("/api/staff")) return [{ id: 1, name: "Dana Ruiz", role: "technician", active: 1 }];

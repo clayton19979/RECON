@@ -976,6 +976,12 @@ textarea { min-height: 70px; resize: vertical; font-family: inherit; }
    jump to (retail ROs). Reads as a label, not a dead button. */
 .task-order-link.is-static { cursor: default; color: var(--ink-soft); background: var(--line-soft); }
 .task-order-link.is-static:hover { text-decoration: none; }
+/* "voided" / "in History" riding inside the chip. Quieter than the stock
+   number it follows -- it qualifies the car, it isn't the name of it. */
+.task-order-state {
+  margin-left: 5px; padding-left: 5px; border-left: 1px solid currentColor;
+  font-weight: 600; opacity: .72; text-transform: none;
+}
 /* Chip + its unlink × travel as one unit so wrapping can't strand the ×. */
 .task-order-wrap { display: inline-flex; align-items: center; gap: 2px; }
 .task-link-clear {

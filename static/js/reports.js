@@ -4,7 +4,7 @@ import { emptyState } from "./empty-states.js";
 import { skeletonCards, skeletonRows } from "./skeletons.js";
 import { STATUS_LABEL, state } from "./state.js";
 import { renderViewFailure } from "./error-boundary.js";
-import { vehicleStatusPillClass } from "./vehicles-board.js";
+import { STALLED_AFTER_DAYS, vehicleStatusPillClass } from "./vehicles-board.js";
 import { openVehicleDetail } from "./vehicle-detail.js";
 
 /* ==================================================================
@@ -35,6 +35,7 @@ export function computeQuickRange(kind) {
    Two shapes underneath: a per-vehicle spend table and a per-technician
    productivity table. */
 const REPORT_TITLES = {
+  lot: "Lot Status",
   "vehicle-spend": "All Vehicles (Combined)",
   "vehicle-spend-recon": "Recon Vehicles Only",
   "vehicle-spend-we_owe": "We-Owe Only",
@@ -57,16 +58,31 @@ const REPORT_SEGMENT = {
 const reportShape = (type) =>
   type === "technicians" ? "technicians"
   : type === "vehicle-profit" ? "vehicle-profit"
+  : type === "lot" ? "lot"
   : "vehicle-spend";
 
 // Which /api/reports/… and /api/export/report/… each shape is backed by.
 const REPORT_ENDPOINT = {
+  lot: "lot",
   "vehicle-spend": "vehicle-spend",
   "vehicle-profit": "vehicle-profit",
   technicians: "technicians",
 };
 
+/* The lot report answers "how do things stand right now", so a date range
+   would only ever hide a car for being old -- which is the car worth asking
+   about. The range chips are hidden for it rather than disabled, so nobody
+   is left wondering why clicking them does nothing. */
+const IGNORES_DATE_RANGE = new Set(["lot"]);
+
+const LOT_GROUPS = [
+  { key: "ready", label: "Ready to sell", blurb: "work finished — can go back on the lot" },
+  { key: "working", label: "In the shop", blurb: "being worked on now" },
+  { key: "waiting", label: "Not started", blurb: "nothing done yet" },
+];
+
 const REPORT_STAT_CARDS = {
+  lot: (rows) => lotStatCards(rows),
   "vehicle-spend": (rows) => vehicleSpendStatCards(rows),
   "vehicle-profit": (rows) => vehicleProfitStatCards(rows),
   technicians: (rows) => technicianStatCards(rows),
@@ -140,10 +156,16 @@ function syncReportControls() {
   // looks like nothing is selected.
   const custom = !state.reportRange && (state.reportStart || state.reportEnd);
   $$("#view-reports .report-date").forEach((el) => el.classList.toggle("custom", !!custom));
+  // A report that ignores dates must not show date controls -- leaving chips
+  // there that quietly do nothing is worse than not offering them.
+  $("#report-range-controls").hidden = IGNORES_DATE_RANGE.has(state.reportType);
 }
 
 function reportParams() {
   const params = new URLSearchParams();
+  // The lot report is a snapshot of now; sending it a range would be asking
+  // it to hide cars for being old, which is the opposite of its job.
+  if (IGNORES_DATE_RANGE.has(state.reportType)) return params;
   if (state.reportStart) params.set("start", state.reportStart);
   if (state.reportEnd) params.set("end", state.reportEnd);
   const segment = REPORT_SEGMENT[state.reportType];
@@ -165,6 +187,16 @@ function reportCsvHref() {
 /* ---------- sorting ---------- */
 
 const REPORT_SORTS = {
+  lot: {
+    // Grouping is the point of this report, so sorting is within a group.
+    idle:    { label: "Days Idle",      type: "number", value: (r) => r.idle_days || 0 },
+    stock:   { label: "Stock #",        type: "text",   value: (r) => r.stock_number || "" },
+    vehicle: { label: "Vehicle",        type: "text",   value: (r) => r.vehicle || "" },
+    needs:   { label: "Needs",          type: "text",   value: (r) => r.needs || "" },
+    cost:    { label: "Spent",          type: "number", value: (r) => r.actual_cost },
+    left:    { label: "Still To Spend", type: "number", value: (r) => r.remaining_cost || 0 },
+    age:     { label: "Days On Lot",    type: "number", value: (r) => r.age_days || 0 },
+  },
   "vehicle-spend": {
     // What the cell shows, not what the row knows: a we-owe row displays a
     // dash here (its customer is in the Vehicle column), so sorting it by
@@ -243,6 +275,28 @@ function renderReportStats(rows, shape) {
         <div class="stat-value${c.tone ? ` ${c.tone}` : ""}">${esc(c.value)}</div>
         <div class="stat-sub">${esc(c.sub)}</div>
       </div>`).join("");
+}
+
+/* Walt's four questions as four numbers: what can go out, what's moving,
+   what hasn't been touched, and what the lot has cost so far. The counts are
+   the headline -- the money is what he does his own arithmetic on. */
+function lotStatCards(rows) {
+  const count = (key) => rows.filter((r) => r.lot_bucket === key).length;
+  const spent = rows.reduce((s, r) => s + (r.actual_cost || 0), 0);
+  const left = rows.reduce((s, r) => s + (r.remaining_cost || 0), 0);
+  const stalled = rows.filter((r) => r.lot_bucket !== "ready" && r.idle_days >= STALLED_AFTER_DAYS).length;
+  const waiting = count("waiting");
+  return [
+    { label: "Ready To Sell", value: String(count("ready")), sub: `of ${rows.length} on the lot`, tone: count("ready") ? "good" : "" },
+    { label: "In The Shop", value: String(count("working")), sub: "being worked on now" },
+    {
+      label: "Not Started",
+      value: String(waiting),
+      sub: stalled ? `${stalled} untouched ${STALLED_AFTER_DAYS}+ days` : "nothing stalled",
+      tone: stalled ? "warn" : "",
+    },
+    { label: "Spent On The Lot", value: money(spent), sub: left ? `${money(left)} of quoted work still to do` : "nothing else quoted" },
+  ];
 }
 
 function vehicleSpendStatCards(rows) {
@@ -441,6 +495,12 @@ function reportEmptyState(shape) {
 // forced true (the max shape) so the real table only ever narrows once data
 // lands, never widens.
 function reportHeaderRow(shape, hasDeposits) {
+  if (shape === "lot") {
+    return ["stock", "vehicle"].map((k) => reportSortHeader("lot", k)).join("")
+      + `<th>Type</th><th>Status</th>`
+      + reportSortHeader("lot", "needs")
+      + ["cost", "left", "idle"].map((k) => reportSortHeader("lot", k, "num-col")).join("");
+  }
   if (shape === "technicians") {
     return `${reportSortHeader("technicians", "technician")}${reportSortHeader("technicians", "ros", "num-col")}${reportSortHeader("technicians", "completed", "num-col")}${reportSortHeader("technicians", "hours", "num-col")}${reportSortHeader("technicians", "cost", "num-col")}`;
   }
@@ -449,6 +509,46 @@ function reportHeaderRow(shape, hasDeposits) {
       + ["hours", "purchase", "cost", "sale", "profit", "margin"].map((k) => reportSortHeader("vehicle-profit", k, "num-col")).join("");
   }
   return `${reportSortHeader("vehicle-spend", "stock")}${reportSortHeader("vehicle-spend", "vehicle")}${reportSortHeader("vehicle-spend", "segment")}${reportSortHeader("vehicle-spend", "status")}${reportSortHeader("vehicle-spend", "tech")}${reportSortHeader("vehicle-spend", "cost", "num-col")}${hasDeposits ? reportSortHeader("vehicle-spend", "paid", "num-col") + reportSortHeader("vehicle-spend", "net", "num-col") : ""}`;
+}
+
+/* The lot, grouped the way Walt asks about it rather than as one flat list.
+   The group headings are the answer to "what's ready / what's being worked
+   on"; the Needs column is the answer to "what does that one still need".
+   Rows stay clickable so a question about a car ends on that car's page. */
+function renderLotTable(rows) {
+  const line = (r) => {
+    const refId = r.segment === "recon" ? r.recon_id : r.we_owe_id;
+    const clickable = refId != null;
+    const stalled = r.lot_bucket !== "ready" && r.idle_days >= STALLED_AFTER_DAYS;
+    return `<tr${clickable ? ` class="clickable" data-seg="${esc(r.segment)}" data-ref-id="${refId}" tabindex="0" title="Open this vehicle"` : ""}>
+      <td class="num">${esc(r.stock_number || "—")}</td>
+      <td>${esc(r.vehicle)}${r.customer_name ? ` <span class="cell-sub">(${esc(r.customer_name)})</span>` : ""}</td>
+      <td>${r.segment === "recon" ? "Recon" : "We-Owe"}</td>
+      <td><span class="pill ${vehicleStatusPillClass(r)}">${esc(STATUS_LABEL[r.status] || r.status)}</span></td>
+      <td class="lot-needs">${esc(r.needs || "—")}</td>
+      <td class="num-col">${money(r.actual_cost)}</td>
+      <td class="num-col">${r.remaining_cost ? money(r.remaining_cost) : "—"}</td>
+      <td class="num-col${stalled ? " money-bad" : ""}" title="${stalled ? "Nothing has happened on this car in over a week" : "Days since anything happened"}">${r.idle_days}</td>
+    </tr>`;
+  };
+  const sections = LOT_GROUPS.map((group) => {
+    const inGroup = rows.filter((r) => r.lot_bucket === group.key);
+    if (!inGroup.length) return "";
+    const spent = inGroup.reduce((s, r) => s + (r.actual_cost || 0), 0);
+    return `<tr class="lot-group-head"><td colspan="8">
+        <span class="lot-group-name">${esc(group.label)}</span>
+        <span class="lot-group-note">${inGroup.length} car${inGroup.length === 1 ? "" : "s"} · ${esc(group.blurb)} · ${money(spent)} spent</span>
+      </td></tr>${inGroup.map(line).join("")}`;
+  }).join("");
+  const totalSpent = rows.reduce((s, r) => s + (r.actual_cost || 0), 0);
+  const totalLeft = rows.reduce((s, r) => s + (r.remaining_cost || 0), 0);
+  return `<div class="panel"><div class="table-wrap table-scroll"><table class="sticky-head"><thead><tr>
+    ${reportHeaderRow("lot")}
+    </tr></thead>
+    <tbody>${sections}</tbody>
+    <tfoot><tr><td colspan="5">Whole lot (${rows.length} car${rows.length === 1 ? "" : "s"})</td>
+      <td class="num-col">${money(totalSpent)}</td><td class="num-col">${totalLeft ? money(totalLeft) : "—"}</td><td></td></tr></tfoot>
+    </table></div></div>`;
 }
 
 /* One row per physical car, whatever mix of recon records and we-owe
@@ -513,6 +613,7 @@ function renderReportTable(rows, shape) {
       <tfoot><tr><td>Total (${working} working)</td><td class="num-col">${totRos}</td><td class="num-col">${totDone}</td><td class="num-col">${totHours}</td><td class="num-col">${money(totCost)}</td></tr></tfoot>
       </table></div></div>`;
   }
+  if (shape === "lot") return renderLotTable(rows);
   if (shape === "vehicle-profit") return renderProfitTable(rows);
   const totalActual = rows.reduce((s, r) => s + r.actual_cost, 0);
   const totalPaid = rows.reduce((s, r) => s + (r.customer_paid || 0), 0);
@@ -533,6 +634,16 @@ function renderReportTable(rows, shape) {
     </table></div></div>`;
 }
 
+/* What the report is scoped to, in words. The lot report has no range, so
+   saying "All time" would be a lie of a different kind -- it is a snapshot,
+   and a printed one needs to say when it was taken. */
+function reportScopeLabel(type, start, end) {
+  if (IGNORES_DATE_RANGE.has(type)) {
+    return `As it stands ${new Date().toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" })}`;
+  }
+  return reportDateRangeLabel(start, end);
+}
+
 function reportDateRangeLabel(start, end) {
   if (!start && !end) return "All time";
   const fmt = (d) => new Date(`${d}T00:00:00`).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
@@ -546,7 +657,7 @@ function reportDateRangeLabel(start, end) {
 // never depends on hiding every other panel correctly.
 function renderPrintReport(rows, type, start, end) {
   const generated = new Date().toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" });
-  const rangeLabel = reportDateRangeLabel(start, end);
+  const rangeLabel = reportScopeLabel(type, start, end);
   const shape = reportShape(type);
   // The printout keeps the screen's reading order: summary numbers first,
   // then the table -- a spend report with no total line is a worse artifact
@@ -565,7 +676,33 @@ function renderPrintReport(rows, type, start, end) {
     <span>· sorted by ${esc(sortSpec.label)}, ${dirWord}</span>
   </div>`;
   let body;
-  if (shape === "technicians") {
+  if (shape === "lot") {
+    // The paper Walt is handed. Same three groups, same wording as the
+    // screen, with the group headings doing the work the colours do on
+    // screen -- there is no colour on the printer he uses.
+    const sections = LOT_GROUPS.map((group) => {
+      const inGroup = rows.filter((r) => r.lot_bucket === group.key);
+      if (!inGroup.length) return "";
+      const spent = inGroup.reduce((s, r) => s + (r.actual_cost || 0), 0);
+      return `<div class="print-subhead">${esc(group.label)} — ${inGroup.length} car${inGroup.length === 1 ? "" : "s"}, ${money(spent)} spent</div>
+        <table class="print-table report">
+          <thead><tr><th>Stock #</th><th>Vehicle</th><th>Type</th><th>Needs</th><th class="num">Spent</th><th class="num">Left</th><th class="num">Idle</th></tr></thead>
+          <tbody>${inGroup.map((r) => `<tr>
+            <td class="num">${esc(r.stock_number || "—")}</td>
+            <td>${esc(r.vehicle)}${r.customer_name ? ` (${esc(r.customer_name)})` : ""}</td>
+            <td>${r.segment === "recon" ? "Recon" : "We-Owe"}</td>
+            <td>${esc(r.needs || "—")}</td>
+            <td class="num">${money(r.actual_cost)}</td>
+            <td class="num">${r.remaining_cost ? money(r.remaining_cost) : "—"}</td>
+            <td class="num">${r.idle_days}d</td>
+          </tr>`).join("")}</tbody>
+        </table>`;
+    }).join("");
+    const totalSpent = rows.reduce((s, r) => s + (r.actual_cost || 0), 0);
+    const totalLeft = rows.reduce((s, r) => s + (r.remaining_cost || 0), 0);
+    body = `${sections}<div class="print-totals"><div class="tl-row"><span>Spent on the lot</span><span class="num">${money(totalSpent)}</span></div>
+      <div class="tl-row"><span>Quoted work still to do</span><span class="num">${money(totalLeft)}</span></div></div>`;
+  } else if (shape === "technicians") {
     const working = rows.filter((r) => r.ro_count > 0).length;
     const totRos = rows.reduce((s, r) => s + r.ro_count, 0);
     const totDone = rows.reduce((s, r) => s + r.completed_count, 0);
@@ -688,7 +825,7 @@ function renderReport() {
   // The scope line states in words what the cards are counting -- report,
   // range, row count -- so the numbers can't be misread.
   $("#report-scope").textContent =
-    `${REPORT_TITLES[state.report.type]} · ${reportDateRangeLabel(state.report.start, state.report.end)} · ${rows.length} row${rows.length === 1 ? "" : "s"}`;
+    `${REPORT_TITLES[state.report.type]} · ${reportScopeLabel(state.report.type, state.report.start, state.report.end)} · ${rows.length} row${rows.length === 1 ? "" : "s"}`;
   $("#report-print").disabled = !rows.length;
   // <a> has no native disabled attribute -- aria-disabled + the CSS rule
   // that kills pointer-events is what actually stops the click, matching

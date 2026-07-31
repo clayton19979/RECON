@@ -91,8 +91,7 @@ def build_svg() -> str:
     )
 
     def hx(c):
-        r, g, b = c[:3]
-        return f"#{r:02x}{g:02x}{b:02x}"
+        return "#{:02x}{:02x}{:02x}".format(*c[:3])
 
     return f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {VB} {VB}" width="{VB}" height="{VB}">
   <title>RECON</title>

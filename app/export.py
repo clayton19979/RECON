@@ -11,7 +11,7 @@ from fastapi import APIRouter, Response
 
 from .db import normalize_vin
 from .recon import vehicle_board_rows
-from .reports import technician_productivity_rows, vehicle_profit_rows
+from .reports import LOT_GROUP_LABEL, lot_rows, technician_productivity_rows, vehicle_profit_rows
 from .workflow import STATUS_LABEL
 
 
@@ -137,6 +137,46 @@ def build_export_router(connect: Callable[[], sqlite3.Connection], now_fn: Calla
                 for row in rows
             ],
             f"vehicle-spend-{segment}" if segment else "vehicle-spend",
+        )
+
+    @router.get("/export/report/lot.csv")
+    def export_lot_csv():
+        # No date parameters on purpose: this report is the lot as it stands.
+        with connect() as db:
+            rows = lot_rows(db)
+        return _csv_response(
+            [
+                "Group",
+                "Stock #",
+                "Vehicle",
+                "VIN",
+                "Type",
+                "Status",
+                "Technicians",
+                "Needs",
+                "Spent",
+                "Still To Spend",
+                "Days Idle",
+                "Days On Lot",
+            ],
+            [
+                [
+                    LOT_GROUP_LABEL[row["lot_bucket"]],
+                    row["stock_number"] or row.get("customer_name", ""),
+                    row["vehicle"],
+                    row.get("vin", ""),
+                    "Recon" if row["segment"] == "recon" else "We-Owe",
+                    STATUS_LABEL.get(row["status"], row["status"]),
+                    ", ".join(row.get("technicians") or []),
+                    row["needs"],
+                    f"{row['actual_cost']:.2f}",
+                    f"{row['remaining_cost']:.2f}",
+                    row["idle_days"],
+                    row["age_days"],
+                ]
+                for row in rows
+            ],
+            "lot-status",
         )
 
     @router.get("/export/report/vehicle-profit.csv")

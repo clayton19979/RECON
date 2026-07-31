@@ -37,9 +37,6 @@ ignore = ["B008", "DTZ005", "DTZ011"]
 
 [tool.pyright]
 pythonVersion = "3.12"
-# RECON only ever ships as a Windows desktop app (see tray_app.py, single_instance.py,
-# usb_backup.py) -- pin the platform so `ctypes.WinDLL`/`windll`/`os.startfile` type-check
-# the same way on a Linux or Mac dev machine as they do on the shop PC.
 pythonPlatform = "Windows"
 typeCheckingMode = "standard"
 include = ["app", "tests", "seed_mock_data.py"]

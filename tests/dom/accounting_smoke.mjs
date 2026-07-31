@@ -74,7 +74,9 @@ const { w, doc, fetchLog, settle, ok, finish, rejections } = await boot({
       patches.push({ url, body: JSON.parse(opts.body) });
       const id = Number(url.split("/")[4]);
       invoices = invoices.map((a) => (a.id === id ? { ...a, status: "voided" } : a));
-      return { ok: true };
+      // The server reports what the void undid on the tickets behind the
+      // invoice -- two parts put back on order, $250 off the car.
+      return { ok: true, unreceived_items: 2, unreceived_value: 250, credits_cleared: 0 };
     }
     if (url === "/api/agent/invoices/process" && opts.method === "POST") {
       const body = JSON.parse(opts.body);
@@ -271,6 +273,12 @@ await settle();
 const confirm = $("#confirm-dialog");
 ok(confirm.open, "Void fired without asking");
 ok(/INV-8990/.test($("#confirm-title").textContent), "the confirm doesn't name the invoice it's about to void");
+// Voiding a bill moves money off a car -- the ask has to say so, because
+// that consequence is the whole reason it's the right move for a mis-posted
+// invoice and the whole reason it needs confirming.
+const confirmBody = $("#confirm-dialog").textContent.replace(/\s+/g, " ");
+ok(/go back to Ordered/i.test(confirmBody) && /cost comes off the vehicle/i.test(confirmBody),
+   `the confirm doesn't say what voiding does to the car: "${confirmBody.trim()}"`);
 $("#confirm-cancel").click();
 await settle();
 ok(patches.length === patchesBefore, "cancelling a void sent the PATCH anyway");
@@ -281,6 +289,12 @@ $("#confirm-accept").click();
 await settle();
 ok(patches.some((p) => p.url === "/api/ap/invoices/1/void"), "confirming the void never hit the endpoint");
 ok($$("#ap-table .voided-row").length === 2, "the voided invoice didn't re-render as voided");
+// "Invoice voided" alone hides the half that matters: a bare confirmation
+// beside a car whose cost just dropped by $250 is how the two screens end up
+// disagreeing with nobody noticing.
+const voidToast = $("#toast").textContent;
+ok(/2 parts back on order/.test(voidToast) && /\$250\.00/.test(voidToast),
+   `the void toast doesn't report what came off the car: "${voidToast}"`);
 
 /* ---------- vendor chips open the editor pre-filled ---------- */
 const chip = $$("#vendor-list .vendor-chip").find((c) => /WorldPac/.test(c.textContent));

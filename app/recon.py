@@ -8,7 +8,7 @@ from typing import Any, Literal
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from .db import RECON_SHOP_CUSTOMER_ID, inserted_id, normalize_vin
+from .db import RECON_SHOP_CUSTOMER_ID, inserted_id, normalize_stock_number, normalize_vin
 
 
 def age_days(created_at: str | None) -> int:
@@ -452,6 +452,78 @@ def unit_lifetime(db: sqlite3.Connection, unit_id: int) -> dict:
     }
 
 
+def recon_match(db: sqlite3.Connection, stock_number: str | None, vin: str | None) -> dict:
+    """Is this car already on the board?
+
+    Intake is the one place a physical car becomes a record, and it is the one
+    place the app can still tell the difference. Once the same car is written
+    down twice, every question the owner asks about it splits in half: the lot
+    count is one too high, "what did we spend on this car" is answered twice
+    with two partial numbers, and neither row knows the other exists.
+
+    Two ways in, both seen in the wild:
+
+    * the stock number typed with the dash one day and without it the next --
+      the exact-match check this replaces let R-1042 and R1042 both through;
+    * a car re-entered under a fresh stock number, which the stock check could
+      never have caught because the stock number really is new.
+
+    Returns whichever recon record already exists for either key, live records
+    preferred over archived ones -- a car sitting on the lot right now is a
+    more useful thing to be told about than one retired months ago. Both are
+    reported, because they mean different things to the caller: a live match
+    is a mistake, an archived one is usually a car coming back.
+    """
+    stock_key = normalize_stock_number(stock_number)
+    vin_key = normalize_vin(vin)
+    if not stock_key and not vin_key:
+        return {"stock_number": None, "vin": None}
+
+    rows = db.execute(
+        """SELECT rv.id, rv.stock_number, rv.archived_at, v.vin,
+                  v.year || ' ' || v.make || ' ' || v.model description
+             FROM recon_vehicles rv JOIN vehicles v ON v.id = rv.vehicle_id
+            ORDER BY rv.id"""
+    ).fetchall()
+
+    def described(row: sqlite3.Row) -> dict:
+        return {
+            "recon_id": row["id"],
+            "stock_number": row["stock_number"],
+            "vehicle": row["description"],
+            "vin": row["vin"],
+            "archived": bool(row["archived_at"]),
+        }
+
+    def best(matches: list[sqlite3.Row]) -> dict | None:
+        # Live before archived, and within each the most recent record -- the
+        # one somebody would actually be looking for.
+        live = [row for row in matches if not row["archived_at"]]
+        chosen = (live or matches)[-1] if matches else None
+        return described(chosen) if chosen else None
+
+    return {
+        "stock_number": best([r for r in rows if normalize_stock_number(r["stock_number"]) == stock_key])
+        if stock_key
+        else None,
+        "vin": best([r for r in rows if normalize_vin(r["vin"]) == vin_key]) if vin_key else None,
+    }
+
+
+def _already_here(subject: str, match: dict) -> str:
+    """The refusal, written so the next move is obvious.
+
+    "Stock number already in use" was true and useless -- it named neither the
+    car holding the number nor what to do about it, and if that car had been
+    archived to History the advisor could look down the whole board without
+    ever finding it.
+    """
+    car = f"{match['stock_number']} — {match['vehicle']}".strip(" —")
+    if match["archived"]:
+        return f"{subject} belongs to {car}, which is in History. Reopen that vehicle instead of adding it again"
+    return f"{subject} belongs to {car}, which is already on the board"
+
+
 def _assert_not_archived(row: sqlite3.Row) -> None:
     if row["archived_at"]:
         raise HTTPException(409, "This vehicle is archived to History -- reopen it to make changes")
@@ -764,12 +836,32 @@ def build_recon_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
 
     # --- Recon vehicles ---
 
+    @router.get("/recon/vehicles/lookup")
+    def lookup_recon_vehicle(stock_number: str = "", vin: str = ""):
+        """What the intake form asks before anybody fills the rest of it in.
+
+        Same matcher the save uses, so the dialog cannot say a car is clear
+        and then be refused a moment later. Read-only and cheap: the point is
+        to answer while the advisor's cursor is still in the field, not after
+        ten more keystrokes have been spent on a car that is already here.
+        """
+        with connect() as db:
+            return recon_match(db, stock_number, vin)
+
     @router.post("/recon/vehicles", status_code=201)
     def create_recon_vehicle(item: RecondVehicleIn):
         stock_number = item.stock_number.strip().upper()
         with connect() as db:
-            if db.execute("SELECT 1 FROM recon_vehicles WHERE stock_number=?", (stock_number,)).fetchone():
-                raise HTTPException(409, "Stock number already in use")
+            match = recon_match(db, stock_number, item.vin)
+            if match["stock_number"]:
+                raise HTTPException(409, _already_here("Stock number", match["stock_number"]))
+            # A VIN that belongs to a car already on the lot is the same car
+            # written down twice. A VIN last seen on an archived car is not:
+            # Walt buys cars back, and a second recon episode on one VIN is
+            # exactly what unit_lifetime exists to add up. So this blocks the
+            # live case only, and the intake form says the rest out loud.
+            if match["vin"] and not match["vin"]["archived"]:
+                raise HTTPException(409, _already_here("That VIN", match["vin"]))
             ts = now_fn()
             vehicle_cur = db.execute(
                 "INSERT INTO vehicles(customer_id,year,make,model,vin,mileage,odometer_broken,plate,plate_state,trim,engine,color,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",

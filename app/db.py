@@ -22,6 +22,19 @@ def normalize_vin(vin: str | None) -> str | None:
     return cleaned or None
 
 
+def normalize_stock_number(stock_number: str | None) -> str | None:
+    """The key two records of the same *stock number* have to agree on.
+
+    Same idea as normalize_vin, and for the same reason: R-1042 off the lot's
+    sheet, R1042 typed in a hurry and "r 1042" read off a windshield are one
+    car with one stock number, and the shop only ever means one of them. Only
+    the separators go -- letters and digits are kept exactly as typed, so
+    R-1042 and R-1043 stay the two different cars they are.
+    """
+    cleaned = "".join(ch for ch in (stock_number or "") if ch.isalnum()).upper()
+    return cleaned or None
+
+
 SCHEMA = """
 PRAGMA journal_mode=WAL;
 PRAGMA foreign_keys=ON;

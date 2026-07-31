@@ -2031,6 +2031,14 @@ tr.apl-invalid input.apl-desc { border-color: var(--crit); box-shadow: 0 0 0 3px
   margin: 2px 0 10px; font-size: 12.5px; color: var(--accent-strong);
   background: var(--accent-tint); border-radius: 6px; padding: 7px 10px;
 }
+/* The variant that carries an action button beside its text. The button keeps
+   its own width so a note long enough to wrap squashes the sentence, not the
+   way out of it. */
+div.field-note { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+div.field-note > .btn { flex: none; }
+/* Same note, but about something the form is going to refuse -- worth
+   reading before another ten fields get typed. */
+.field-note.warn { color: var(--warn); background: var(--warn-tint); }
 
 /* Inline copy affordance -- sits quietly beside the value it copies and only
    gains weight on hover, so it never competes with the value itself. */

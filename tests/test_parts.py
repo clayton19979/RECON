@@ -131,6 +131,71 @@ def test_receive_parts_posts_single_ap_invoice_for_multiple_lines(client):
     assert matching[0]["order_id"] == order["id"]
 
 
+def test_receiving_at_the_invoiced_price_moves_the_line_and_the_ap_bill_together(client):
+    """The price on the vendor's invoice is rarely the price that was quoted --
+    used and junkyard parts are the norm here and get priced when they're
+    pulled. Receiving is the one moment the app writes both what the car cost
+    and what the shop owes the vendor, so a corrected price has to land in
+    both: the estimate line, the vehicle's actual cost, and the A/P invoice
+    must all report the same number afterwards. Correcting the line by hand
+    later only ever moves one of the three.
+    """
+    vendor = client.post("/api/vendors", json={"name": "Pull-A-Part"}).json()
+    vehicle = make_recon_vehicle(client, stock_number="R-3302")
+    order = make_recon_order(client, vehicle["id"])
+    estimate = save_estimate(
+        client,
+        order["id"],
+        [
+            {
+                "kind": "part",
+                "description": "Used tail light, right",
+                "part_number": "TL-R",
+                "quantity": 1,
+                "unit_price": 60,
+                "unit_cost": 60,
+            },
+            {
+                "kind": "part",
+                "description": "Wiper blades",
+                "part_number": "WB-22",
+                "quantity": 2,
+                "unit_price": 14.5,
+                "unit_cost": 14.5,
+            },
+        ],
+    )
+    tail_light, wipers = estimate["items"][0]["id"], estimate["items"][1]["id"]
+
+    res = client.post(
+        f"/api/orders/{order['id']}/estimate/receive-parts",
+        json={
+            "item_ids": [tail_light, wipers],
+            "vendor_id": vendor["id"],
+            "invoice_number": "PAP-8812",
+            "tax": 6.20,
+            # The yard charged less for the tail light and more for the
+            # wipers; only the lines that moved are sent.
+            "cost_overrides": {str(tail_light): 45, str(wipers): 16.25},
+        },
+    )
+    assert res.status_code == 200, res.text
+
+    items = {i["id"]: i for i in client.get(f"/api/orders/{order['id']}").json()["estimate"]["items"]}
+    assert items[tail_light]["unit_cost"] == 45
+    assert items[wipers]["unit_cost"] == 16.25
+    assert items[tail_light]["received_invoice_number"] == "PAP-8812"
+
+    # 1 x 45 + 2 x 16.25 -- what the shop actually spent on this car.
+    detail = client.get(f"/api/recon/vehicles/{vehicle['id']}").json()
+    assert detail["total_cost"] == 77.5
+
+    invoice = next(i for i in client.get("/api/ap/invoices").json() if i["invoice_number"] == "PAP-8812")
+    assert invoice["subtotal"] == 77.5
+    assert invoice["tax"] == 6.20
+    assert invoice["total"] == 83.7
+
+
 def test_receive_parts_rejects_negative_cost_override(client):
     vendor = client.post("/api/vendors", json={"name": "WorldPac"}).json()
     vehicle = make_recon_vehicle(client)

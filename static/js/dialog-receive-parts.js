@@ -6,7 +6,44 @@ import { loadVehicleDetail } from "./vehicle-detail.js";
 
 /* ==================================================================
    RECEIVE PARTS DIALOG
+
+   Receiving does two things at once: it moves the line to "received" (so it
+   starts counting toward what the car cost) and it posts a vendor invoice
+   into A/P. Both used to be written at the *quoted* price, with no way to
+   say otherwise -- so when the invoice came in at a different number, which
+   on used and junkyard parts is the normal case, the only repair was to edit
+   the estimate line afterwards. That fixes the car's cost and leaves the A/P
+   invoice showing what the shop guessed the part would be, which is a bill
+   that doesn't match the vendor's.
+
+   So the price is entered here, against the invoice, and both records are
+   written from the same figure. Each box starts at the quoted price, so a
+   part that came in as expected is still just Vendor, Invoice #, Post.
    ================================================================== */
+
+// A cost box's value, or null if it's blank or not a number -- the two cases
+// that must block the post rather than quietly post $0 to the vendor's bill.
+function lineCostValue(input) {
+  const raw = (input.value || "").trim();
+  if (!raw) return null;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+}
+
+function receiveLineRow(line) {
+  return `
+    <div class="receive-line" data-id="${line.id}">
+      <div class="rl-main">
+        <span class="rl-desc">${esc(line.desc)}</span>
+        <span class="rl-note" hidden></span>
+      </div>
+      <span class="rl-qty">${line.remaining} ×</span>
+      <input class="rl-cost" type="number" min="0" step="0.01" value="${line.quoted}"
+             data-id="${line.id}" aria-label="Invoice price for ${esc(line.desc)}">
+      <span class="rl-total">${money(line.remaining * line.quoted)}</span>
+    </div>`;
+}
+
 export async function openReceiveDialog() {
   const box = $("#vd-estimate-items");
   const checked = $$(".ei-receive-check:checked", box);
@@ -18,13 +55,20 @@ export async function openReceiveDialog() {
     const receivedQty = Number(row.dataset.receivedQuantity || 0);
     const remaining = qty - receivedQty;
     const cost = parseFloat(row.querySelector(".ei-cost").value || "0");
-    return { id: Number(cb.dataset.id), desc, remaining, cost };
+    // `quoted` is what the ticket says and never changes while the dialog is
+    // open; it's what the entered price is compared against and what decides
+    // whether this line needs an override sent at all.
+    return { id: Number(cb.dataset.id), desc, remaining, quoted: cost };
   });
   state.receiveLines = lines;
 
-  $("#receive-lines").innerHTML = lines.map((l) => `
-    <div class="kv-row"><span class="kv-label">${esc(l.desc)}</span><span class="kv-value">${l.remaining} × ${money(l.cost)}</span></div>
-  `).join("");
+  $("#receive-lines").innerHTML = `
+    <div class="receive-line head">
+      <span class="rl-main">Part</span>
+      <span class="rl-qty">Qty</span>
+      <span class="rl-cost-head">Invoice price</span>
+      <span class="rl-total">Line total</span>
+    </div>` + lines.map(receiveLineRow).join("");
   updateReceiveTotalSummary();
 
   const vendors = await get("/api/vendors").catch(() => []);
@@ -37,11 +81,55 @@ export async function openReceiveDialog() {
   $("#receive-dialog").showModal();
 }
 
+/* Repaints every number the dialog shows from what's currently in the boxes:
+   each line's total, the "was quoted" note on the lines that moved, and the
+   invoice subtotal/total. One writer for all of them, so the note beside a
+   line and the total at the bottom can't disagree about the same edit. */
 function updateReceiveTotalSummary() {
   const lines = state.receiveLines || [];
   const tax = parseFloat($("#receive-tax")?.value || "0");
-  const subtotal = lines.reduce((s, l) => s + l.remaining * l.cost, 0);
-  $("#receive-total-summary").innerHTML = `
+  let subtotal = 0;
+  let quotedTotal = 0;
+  let changed = 0;
+  for (const line of lines) {
+    quotedTotal += line.remaining * line.quoted;
+    const row = $(`.receive-line[data-id="${line.id}"]`, $("#receive-lines"));
+    if (!row) continue;
+    const entered = lineCostValue($(".rl-cost", row));
+    const note = $(".rl-note", row);
+    const total = $(".rl-total", row);
+    if (entered === null) {
+      row.classList.add("bad");
+      note.hidden = false;
+      note.className = "rl-note bad";
+      note.textContent = "Enter the price from the invoice";
+      total.textContent = "—";
+      continue;
+    }
+    row.classList.remove("bad");
+    subtotal += line.remaining * entered;
+    total.textContent = money(line.remaining * entered);
+    const diff = entered - line.quoted;
+    if (Math.abs(diff) < 0.005) {
+      note.hidden = true;
+      note.textContent = "";
+    } else {
+      changed += 1;
+      note.hidden = false;
+      note.className = `rl-note ${diff > 0 ? "over" : "under"}`;
+      note.textContent = `Quoted ${money(line.quoted)} — ${money(Math.abs(diff))} ${diff > 0 ? "more" : "less"} each`;
+    }
+  }
+
+  const diff = subtotal - quotedTotal;
+  // Only worth a line of its own once something actually moved: on the
+  // ordinary receive (everything came in at the quoted price) this row would
+  // just be the subtotal written twice.
+  const quotedLine = changed
+    ? `<div class="cost-line"><span>Quoted for these lines</span><span class="num">${money(quotedTotal)}</span></div>
+       <div class="cost-line"><span>${diff > 0 ? "Over" : "Under"} the quote</span><span class="num ${diff > 0 ? "over" : "under"}">${money(Math.abs(diff))}</span></div>`
+    : "";
+  $("#receive-total-summary").innerHTML = quotedLine + `
     <div class="cost-line"><span>Subtotal</span><span class="num">${money(subtotal)}</span></div>
     <div class="cost-line total"><span>Total</span><span class="num">${money(subtotal + tax)}</span></div>
   `;
@@ -54,10 +142,32 @@ export function wireReceiveDialog() {
     $("#receive-new-vendor").style.display = $("#receive-vendor").value === "__new__" ? "" : "none";
   });
   $("#receive-tax").addEventListener("input", updateReceiveTotalSummary);
+  // Delegated: the line rows are rebuilt every time the dialog opens.
+  $("#receive-lines").addEventListener("input", (e) => {
+    if (e.target instanceof Element && e.target.matches(".rl-cost")) updateReceiveTotalSummary();
+  });
   $("#receive-form").addEventListener("submit", async (e) => {
     e.preventDefault();
     await withLoading(e.submitter, "Posting…", async () => {
       try {
+        // Prices first: a blank or negative box must stop the post before a
+        // vendor gets created for an invoice that then fails to save.
+        const lines = state.receiveLines || [];
+        const overrides = {};
+        let changed = 0;
+        for (const line of lines) {
+          const input = $(`.receive-line[data-id="${line.id}"] .rl-cost`, $("#receive-lines"));
+          const entered = input ? lineCostValue(input) : null;
+          if (entered === null) {
+            if (input) input.focus();
+            return toast(`Enter the invoice price for “${line.desc}”`, true);
+          }
+          if (Math.abs(entered - line.quoted) >= 0.005) {
+            overrides[line.id] = entered;
+            changed += 1;
+          }
+        }
+
         let vendorId = $("#receive-vendor").value;
         if (vendorId === "__new__") {
           const name = $("#receive-new-vendor-name").value.trim();
@@ -70,14 +180,19 @@ export function wireReceiveDialog() {
         const invoiceNumber = $("#receive-invoice-number").value.trim();
         if (!invoiceNumber) return toast("Enter an invoice number", true);
         await post(`/api/orders/${state.detail.order.id}/estimate/receive-parts`, {
-          item_ids: (state.receiveLines || []).map((l) => l.id),
+          item_ids: lines.map((l) => l.id),
           vendor_id: vendorId,
           invoice_number: invoiceNumber,
           tax: parseFloat($("#receive-tax").value || "0"),
+          cost_overrides: overrides,
           actor: currentActor(),
         });
         $("#receive-dialog").close();
-        toast("Parts received and posted to A/P");
+        // Says out loud when a price was corrected: that edit changes what
+        // the car cost, and it should not land silently.
+        toast(changed
+          ? `Parts received and posted to A/P — ${changed} price${changed === 1 ? "" : "s"} updated from the invoice`
+          : "Parts received and posted to A/P");
         await loadVehicleDetail();
       } catch (err) {
         toast(err.message, true);

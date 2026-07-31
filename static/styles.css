@@ -796,6 +796,33 @@ textarea { min-height: 70px; resize: vertical; font-family: inherit; }
 .cost-line { display: flex; justify-content: space-between; font-size: 13px; }
 .cost-line span:last-child { font-family: "IBM Plex Mono", "Cascadia Mono", Consolas, monospace; font-weight: 600; }
 .cost-line.total { border-top: 1px solid var(--line); padding-top: 8px; font-weight: 700; font-size: 14.5px; }
+.cost-line .num.over { color: var(--crit); }
+.cost-line .num.under { color: var(--good); }
+
+/* ---------- receive parts lines ----------
+   Description / qty / an editable price / that line's total. The price is a
+   real input rather than a printed figure because the vendor's invoice is
+   what's being typed in, and it is the number that decides both what the car
+   cost and what the shop owes. */
+.receive-lines { padding: 4px 0 12px; display: flex; flex-direction: column; gap: 6px; }
+.receive-line {
+  display: grid; grid-template-columns: 1fr auto 92px 78px; gap: 10px;
+  align-items: center; font-size: 12.5px;
+}
+.receive-line.head { color: var(--ink-faint); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+.receive-line .rl-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.receive-line .rl-desc { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.receive-line .rl-note { font-size: 11px; color: var(--ink-faint); }
+.receive-line .rl-note.over { color: var(--crit); }
+.receive-line .rl-note.under { color: var(--good); }
+.receive-line .rl-note.bad { color: var(--crit); }
+.receive-line .rl-qty { color: var(--ink-faint); font-variant-numeric: tabular-nums; }
+.receive-line input.rl-cost { width: 92px; text-align: right; padding: 5px 8px; font-size: 12.5px; }
+.receive-line.bad input.rl-cost { border-color: var(--crit); }
+.receive-line .rl-total, .receive-line .rl-cost-head { text-align: right; }
+.receive-line:not(.head) .rl-total {
+  font-family: "IBM Plex Mono", "Cascadia Mono", Consolas, monospace; font-weight: 600;
+}
 
 /* ---------- kv list ---------- */
 .kv-list { padding: 14px 16px; display: flex; flex-direction: column; gap: 9px; }

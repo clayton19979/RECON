@@ -579,6 +579,14 @@ def build_accounting_router(connect: Callable[[], sqlite3.Connection], now: Call
                 estimate_id = cur.lastrowid
                 estimate = db.execute("SELECT * FROM estimates WHERE id=?", (estimate_id,)).fetchone()
             estimate_id = estimate["id"]
+            # None of the inserts below set quoted_unit_cost, on purpose. A
+            # line that arrives on a vendor invoice and was never on the
+            # ticket was never quoted, so it has no estimate to be measured
+            # against; leaving the column NULL makes every reader price it at
+            # what it cost, which is the only figure that exists for it. The
+            # UPDATE branch further down (a billed line matching a part
+            # already on the ticket) likewise leaves the quote alone -- that
+            # is the whole point of keeping it in its own column.
             for (_kind, part_key), item in merged_items.items():
                 if item.kind == "labor":
                     # At-cost shop: no markup, unit_price is just unit_cost.

@@ -246,6 +246,21 @@ def cost_rollup(db: sqlite3.Connection, column: str, ref_id: int, segment: str |
     again once sent back to the vendor (part_returned). quoted_cost (full
     quantity regardless of receipt) is returned alongside for comparison.
 
+    quoted_cost is priced at quoted_unit_cost -- what the line was written
+    down at -- not at unit_cost, which receiving overwrites with the price the
+    vendor's invoice actually said. Using unit_cost for both made every
+    comparison self-referential: the moment a part was received, its quote
+    became its cost and the overrun vanished. Rows from before that column
+    existed carry NULL and fall back to unit_cost, which is the answer they
+    have always given.
+
+    open_cost is the other half of that split: what finishing this car should
+    still cost, priced at the quote, counting only part lines that have not
+    landed yet. It used to be worked out as quoted minus actual, which is only
+    the same number while receiving is busy rewriting the quote -- with a real
+    quote kept, a part that came in $40 UNDER its estimate would otherwise
+    read as $40 of work still to do on a car nobody owes anything else on.
+
     parts_pending counts part lines that have been ordered from a vendor but
     haven't shown up yet (status='ordered'; 'received' means it landed,
     'quoted' means nobody has actually ordered it). That's the single most
@@ -270,7 +285,15 @@ def cost_rollup(db: sqlite3.Connection, column: str, ref_id: int, segment: str |
                -- -- parts_cost above already drops a returned line via
                -- part_returned, and subtracting the credit as well would count
                -- the same money back twice.
-               coalesce(sum(CASE WHEN ei.kind='credit' THEN -ei.quantity*ei.unit_cost ELSE ei.quantity*ei.unit_cost END),0) quoted_cost,
+               coalesce(sum(CASE WHEN ei.kind='credit' THEN -ei.quantity*coalesce(ei.quoted_unit_cost,ei.unit_cost)
+                                 ELSE ei.quantity*coalesce(ei.quoted_unit_cost,ei.unit_cost) END),0) quoted_cost,
+               -- Still to spend: the quoted value of every part line that has
+               -- not landed yet. Labor and fees are never outstanding -- they
+               -- count the moment they're logged -- and a line sent back to
+               -- the vendor is nobody's problem any more.
+               coalesce(sum(CASE WHEN ei.kind='part' AND ei.part_returned=0
+                                 THEN max(ei.quantity-ei.received_quantity,0)*coalesce(ei.quoted_unit_cost,ei.unit_cost)
+                                 ELSE 0 END),0) open_cost,
                coalesce(sum(CASE WHEN ei.kind='part' AND ei.status='ordered' AND ei.part_returned=0 THEN 1 ELSE 0 END),0) parts_pending,
                coalesce(sum(CASE WHEN ei.kind='part' AND ei.status='ordered' AND ei.part_returned=0 THEN ei.quantity*ei.unit_cost ELSE 0 END),0) parts_pending_value
            FROM orders o
@@ -296,6 +319,7 @@ def cost_rollup(db: sqlite3.Connection, column: str, ref_id: int, segment: str |
         "orders": orders,
         "total_cost": round(sum(o["total_cost"] for o in countable), 2),
         "quoted_cost": round(sum(o["quoted_cost"] for o in countable), 2),
+        "open_cost": round(sum(o["open_cost"] for o in countable), 2),
         "labor_hours": round(sum(o["labor_hours"] for o in countable), 2),
         "parts_pending": int(sum(o["parts_pending"] for o in countable)),
         "parts_pending_value": round(sum(o["parts_pending_value"] for o in countable), 2),
@@ -551,6 +575,7 @@ def vehicle_board_rows(
                     "unit_id": row["unit_id"],
                     "actual_cost": rollup["total_cost"],
                     "quoted_cost": rollup["quoted_cost"],
+                    "open_cost": rollup["open_cost"],
                     "labor_hours": rollup["labor_hours"],
                     "parts_pending": rollup["parts_pending"],
                     "parts_pending_value": rollup["parts_pending_value"],
@@ -620,6 +645,7 @@ def vehicle_board_rows(
                     "unit_id": row["unit_id"],
                     "actual_cost": rollup["total_cost"],
                     "quoted_cost": rollup["quoted_cost"],
+                    "open_cost": rollup["open_cost"],
                     "labor_hours": rollup["labor_hours"],
                     "parts_pending": rollup["parts_pending"],
                     "parts_pending_value": rollup["parts_pending_value"],
@@ -690,6 +716,7 @@ def build_recon_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
         detail["orders"] = rollup["orders"]
         detail["total_cost"] = rollup["total_cost"]
         detail["quoted_cost"] = rollup["quoted_cost"]
+        detail["open_cost"] = rollup["open_cost"]
         detail["labor_hours"] = rollup["labor_hours"]
         # The same finished/in-progress answer the board gives, so the detail
         # page can tell a car that has gone quiet from one that is simply done
@@ -740,6 +767,7 @@ def build_recon_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
         detail["orders"] = rollup["orders"]
         detail["total_cost"] = rollup["total_cost"]
         detail["quoted_cost"] = rollup["quoted_cost"]
+        detail["open_cost"] = rollup["open_cost"]
         detail["labor_hours"] = rollup["labor_hours"]
         # Same reason as recon_detail: a waived promise is closed, not stalled.
         detail["status_bucket"] = we_owe_status_bucket(row["status"])

@@ -657,6 +657,28 @@ function receivedSourceHtml(item) {
   }</span>`;
 }
 
+/* What the line was written down at, before any vendor invoice touched it.
+   unit_cost is overwritten with the price the invoice actually said when a
+   part is received, so it is the wrong figure to quote against -- comparing
+   it to itself is why the ticket could only ever say "On quote". Lines from
+   before the quote was kept separately have no quoted_unit_cost and fall
+   back to unit_cost, which is the answer they have always given. */
+function quotedUnitCost(item) {
+  return item.quoted_unit_cost ?? item.unit_cost ?? 0;
+}
+
+// Only worth saying when the bill and the estimate actually disagree; on an
+// ordinary line this would just be the same number printed twice.
+function quoteDiffersFromCost(item) {
+  return item.quoted_unit_cost != null && Math.abs(item.quoted_unit_cost - (item.unit_cost ?? 0)) >= 0.005;
+}
+
+// A returned line reads $0 and is out of every total, so there is nothing for
+// a quote to disagree with.
+function showQuoteNote(item) {
+  return quoteDiffersFromCost(item) && !item.part_returned;
+}
+
 function receivedFromTitle(item) {
   const vendor = item.received_vendor_name;
   const invoice = item.received_invoice_number;
@@ -688,8 +710,11 @@ function renderEstimate(order) {
   // data-label is what the narrow-screen layout prints above each field
   // (.pr-cell::before). An empty cell must not carry one, or a labor line
   // shows a "Part #"/"Core" caption with no field under it.
-  const cell = (cls, label, inner) =>
-    `<div class="pr-cell pr-${cls}${inner ? "" : " pr-spacer"}"${label && inner ? ` data-label="${label}"` : ""}>${inner}</div>`;
+  // `extra` is for a cell that needs a modifier of its own -- currently only
+  // the cost cell, which stacks a second line under the price on a part the
+  // vendor billed at something other than its estimate.
+  const cell = (cls, label, inner, extra = "") =>
+    `<div class="pr-cell pr-${cls}${extra ? ` ${extra}` : ""}${inner ? "" : " pr-spacer"}"${label && inner ? ` data-label="${label}"` : ""}>${inner}</div>`;
 
   const rowHtml = (item, i) => {
     const remaining = (item.quantity ?? 0) - (item.received_quantity ?? 0);
@@ -697,7 +722,7 @@ function renderEstimate(order) {
     const isPart = item.kind === "part";
     const L = fieldLabels(item.kind);
     return `
-    <div class="part-row" draggable="true" data-index="${i}" data-id="${item.id || ""}" data-source="${item.source || "manual"}" data-received-quantity="${item.received_quantity ?? 0}">
+    <div class="part-row" draggable="true" data-index="${i}" data-id="${item.id || ""}" data-source="${item.source || "manual"}" data-received-quantity="${item.received_quantity ?? 0}" data-quoted-unit-cost="${item.quoted_unit_cost ?? ""}">
       ${cell("handle", "", `<span class="row-drag-handle" title="Drag to reorder">⋮⋮</span>`)}
       ${cell("check", "", receivable ? `<input type="checkbox" class="ei-receive-check" data-id="${item.id}" title="Select to receive against a vendor invoice">` : "")}
       ${cell("kind", "Kind", `<select class="ei-kind">
@@ -717,9 +742,17 @@ function renderEstimate(order) {
       ${cell("desc", "Description", `<input class="ei-desc" value="${esc(item.description || "")}" placeholder="Description">`)}
       ${cell("part", L.part, `<input class="ei-part" value="${esc(item.part_number || "")}" placeholder="Part #"${isPart ? "" : " hidden"}>`)}
       ${cell("qty", L.qty, `<input class="ei-qty" type="number" min="0.01" step="0.01" value="${item.quantity ?? 1}"${item.kind === "labor" ? ` title="Hours"` : ""}>`)}
-      ${cell("cost", L.cost, item.part_returned
+      ${/* A line billed at something other than what it was quoted at says so
+            right here, next to the price that changed. The receive dialog
+            already showed this while the invoice was being keyed in; without
+            it on the row, the difference disappeared the moment the dialog
+            closed and nobody could see afterwards which part had moved. */""}
+      ${cell("cost", L.cost, (item.part_returned
         ? `<input class="ei-cost" type="number" value="0" disabled title="Returned to the vendor -- no longer counted" data-real-cost="${item.unit_cost ?? 0}">`
-        : `<input class="ei-cost" type="number" min="0" step="0.01" value="${item.unit_cost ?? 0}"${item.kind === "labor" ? ` title="Hourly rate"` : ""}>`)}
+        : `<input class="ei-cost" type="number" min="0" step="0.01" value="${item.unit_cost ?? 0}"${item.kind === "labor" ? ` title="Hourly rate"` : ""}>`)
+        + (showQuoteNote(item)
+          ? `<span class="ei-quote-note ${item.unit_cost > item.quoted_unit_cost ? "over" : "under"}" title="This line was quoted at ${money(item.quoted_unit_cost)} each">Quoted ${money(item.quoted_unit_cost)}</span>`
+          : ""), showQuoteNote(item) ? "has-quote-note" : "")}
       ${cell("core", L.core, item.kind === "part"
         ? `<label class="core-toggle" title="Tick only if this part carries a core deposit the vendor owes back">
              <input type="checkbox" class="ei-core-on" ${(item.core_charge ?? 0) > 0 ? "checked" : ""} aria-label="This part has a core charge">
@@ -858,7 +891,7 @@ function updateReceiveButtonState() {
 function renderEstimateTotals(order) {
   const items = order.estimate ? order.estimate.items : [];
   const notReturned = (i) => !(i.kind === "part" && i.part_returned);
-  const quotedTotal = items.filter(notReturned).reduce((s, i) => s + i.quantity * i.unit_cost, 0);
+  const quotedTotal = items.filter(notReturned).reduce((s, i) => s + i.quantity * quotedUnitCost(i), 0);
   const actualParts = items.filter((i) => i.kind === "part" && !i.part_returned).reduce((s, i) => s + i.received_quantity * i.unit_cost, 0);
   const actualOther = items.filter((i) => i.kind !== "part").reduce((s, i) => s + i.quantity * i.unit_cost, 0);
   const actual = actualParts + actualOther;
@@ -903,9 +936,15 @@ function updateEstimateTotalsFromDom() {
   for (const row of $$(".part-row:not(.head)", box)) {
     const qty = num(row.querySelector(".ei-qty")) || 0;
     const cost = num(row.querySelector(".ei-cost"));
-    quoted += qty * cost;
+    // Until a line has been received the Cost box IS the quote, so typing in
+    // it moves both figures. Once the part has landed, that box holds what
+    // the vendor billed and the quote is frozen on the row -- the same rule
+    // the server applies when it saves.
+    const received = parseFloat(row.dataset.receivedQuantity || "0") || 0;
+    const frozen = row.dataset.quotedUnitCost;
+    quoted += qty * (received > 0 && frozen !== undefined && frozen !== "" ? parseFloat(frozen) || 0 : cost);
     actual += row.querySelector(".ei-kind")?.value === "part"
-      ? (parseFloat(row.dataset.receivedQuantity || "0") || 0) * cost
+      ? received * cost
       : qty * cost;
   }
   $("#vd-quoted-cost").textContent = money(quoted);
@@ -1816,7 +1855,7 @@ function renderPrintTicket() {
   const customerLabel = isWeOwe ? (item.customer_name || "") : "";
   const items = order.estimate ? order.estimate.items : [];
   const jobs = order.estimate?.jobs ?? [];
-  const quotedTotal = items.filter((i) => !(i.kind === "part" && i.part_returned)).reduce((s, i) => s + i.quantity * i.unit_cost, 0);
+  const quotedTotal = items.filter((i) => !(i.kind === "part" && i.part_returned)).reduce((s, i) => s + i.quantity * quotedUnitCost(i), 0);
   const actualParts = items.filter((i) => i.kind === "part" && !i.part_returned).reduce((s, i) => s + i.received_quantity * i.unit_cost, 0);
   const actualOther = items.filter((i) => i.kind !== "part").reduce((s, i) => s + i.quantity * i.unit_cost, 0);
   const actualTotal = actualParts + actualOther;
@@ -1848,7 +1887,12 @@ function renderPrintTicket() {
     }
     const coreSub = i.kind === "part" && (i.core_charge || 0) > 0
       ? `<div class="pt-desc-sub">Core charge ${money(i.core_charge)}</div>` : "";
-    return `<tr><td>${esc(i.description)}${coreSub}</td><td>${i.part_number ? esc(i.part_number) : ""}</td>
+    // Without this the paper stops adding up: the Unit column prints what the
+    // vendor billed, so a line that came in off its estimate is the reason
+    // Total Quote and the line totals don't reconcile. Say which line moved.
+    const quoteSub = !returned && quoteDiffersFromCost(i)
+      ? `<div class="pt-desc-sub">Quoted ${money(i.quoted_unit_cost)} each</div>` : "";
+    return `<tr><td>${esc(i.description)}${coreSub}${quoteSub}</td><td>${i.part_number ? esc(i.part_number) : ""}</td>
       <td class="num-col">${i.quantity}</td><td class="num-col">${money(returned ? 0 : i.unit_cost)}</td>
       <td class="num-col">${money(returned ? 0 : i.quantity * i.unit_cost)}</td><td>${status}</td></tr>`;
   };

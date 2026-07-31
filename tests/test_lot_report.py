@@ -11,8 +11,16 @@ car worth asking about. This report has no date range at all.
 
 from __future__ import annotations
 
+from app.recon import is_stalled
 from app.reports import LOT_GROUP_LABEL
-from tests.helpers import make_recon_order, make_recon_vehicle, make_we_owe, save_estimate
+from tests.helpers import (
+    backdate_activity,
+    days_ago,
+    make_recon_order,
+    make_recon_vehicle,
+    make_we_owe,
+    save_estimate,
+)
 
 PART = {
     "kind": "part",
@@ -138,6 +146,59 @@ def test_money_already_spent_is_not_counted_as_still_to_spend(client):
     row = row_for(lot(client), "R-OVER")
     assert row["remaining_cost"] >= 0
     assert row["remaining_cost"] == max(row["quoted_cost"] - row["actual_cost"], 0)
+
+
+def test_a_finished_car_has_nothing_still_to_spend(client):
+    """A car that came in under its estimate was reporting the shortfall as
+    work still outstanding -- on the same row whose Needs cell read "Nothing --
+    ready to go", and into the lot's "still to do" total underneath.
+
+    Nothing is open on a finished car, so nobody is going to spend that money.
+    The under-quote fact is real and still lives on the board, in the Cost
+    against Quote column; it is not a job waiting to be done.
+    """
+    recon = make_recon_vehicle(client, stock_number="R-UNDER", purchase_price=0)
+    order = make_recon_order(client, recon["id"])
+    save_estimate(client, order["id"], [PART])
+    client.patch(f"/api/orders/{order['id']}/status", json={"status": "complete", "actor": "tester"})
+
+    row = row_for(lot(client), "R-UNDER")
+    assert row["lot_bucket"] == "ready", "precondition: the ticket is closed"
+    assert row["quoted_cost"] == 300, "precondition: the car was quoted work it never had done"
+    assert row["actual_cost"] == 0, "precondition: nothing was actually received"
+    assert row["remaining_cost"] == 0, "a finished car is still reporting quoted-but-unspent money as work outstanding"
+    assert "ready to go" in row["needs"].lower(), row["needs"]
+
+
+def test_a_finished_car_is_never_called_untouched(client, db_path):
+    """Nothing moves on a closed car, so its idle count climbs forever. Saying
+    "untouched 40 days" about one reads as a reproach for work that is done,
+    and it is the same rule the board's Stalled card follows -- one screen must
+    not call a car neglected while the other calls it ready."""
+    recon = make_recon_vehicle(client, stock_number="R-OLD", purchase_price=0)
+    order = make_recon_order(client, recon["id"])
+    client.patch(f"/api/orders/{order['id']}/status", json={"status": "complete", "actor": "tester"})
+
+    backdate_activity(db_path, order["id"], days_ago(40))
+    row = row_for(lot(client), "R-OLD")
+    assert row["idle_days"] >= 40, "precondition: the car really has been sitting"
+    assert row["status_bucket"] == "finished"
+    assert "untouched" not in row["needs"].lower(), row["needs"]
+    assert not is_stalled(row), "a finished car is being counted as stalled"
+
+
+def test_an_unfinished_car_left_alone_is_still_called_out(client, db_path):
+    """The other side of the same rule: the flag has to keep working, or all
+    that has happened is that the alarm was switched off."""
+    recon = make_recon_vehicle(client, stock_number="R-QUIET", purchase_price=0)
+    order = make_recon_order(client, recon["id"])
+    client.patch(f"/api/orders/{order['id']}/status", json={"status": "in_progress", "actor": "tester"})
+
+    backdate_activity(db_path, order["id"], days_ago(40))
+    row = row_for(lot(client), "R-QUIET")
+    assert row["status_bucket"] == "in_progress"
+    assert "untouched 40 days" in row["needs"].lower(), row["needs"]
+    assert is_stalled(row)
 
 
 def test_we_owe_promises_are_on_the_sheet_too(client):

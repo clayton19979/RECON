@@ -7,7 +7,7 @@ from typing import Literal
 from fastapi import APIRouter
 
 from .db import normalize_vin
-from .recon import STALLED_AFTER_DAYS, unit_lifetime, vehicle_board_rows
+from .recon import is_stalled, unit_lifetime, vehicle_board_rows
 
 
 def vehicle_profit_rows(
@@ -141,8 +141,10 @@ def lot_needs_text(row: dict) -> str:
         bits.append(f"${row['remaining_cost']:,.2f} of quoted work left")
 
     # Only worth saying once a car has actually gone quiet; every car is idle
-    # for a day or two between visits and flagging that is just noise.
-    if row["idle_days"] >= STALLED_AFTER_DAYS:
+    # for a day or two between visits and flagging that is just noise. Same
+    # is_stalled the board's card uses, so the two screens can't disagree
+    # about which cars have been forgotten.
+    if is_stalled(row):
         bits.append(f"untouched {row['idle_days']} days")
 
     if not bits:
@@ -193,7 +195,17 @@ def lot_rows(db: sqlite3.Connection) -> list[dict]:
         # Quoted but not yet spent: what finishing this car should still cost.
         # Floored at zero -- going over the estimate is real, but it is money
         # already counted in what we spent, not money still to come.
-        row["remaining_cost"] = max(round(row["quoted_cost"] - row["actual_cost"], 2), 0)
+        #
+        # Zero on a finished car, whatever the quote said. Nothing is open on
+        # it, so nobody is going to spend that money: a car that came in under
+        # its estimate was putting the difference in the "still to spend"
+        # column and into the lot's total, on the same row whose Needs cell
+        # read "Nothing -- ready to go". Two answers to one question, one line
+        # apart. The shortfall against the quote is still visible where it
+        # belongs, in the board's Cost-against-quote column.
+        row["remaining_cost"] = (
+            0.0 if row["lot_bucket"] == LOT_READY else max(round(row["quoted_cost"] - row["actual_cost"], 2), 0)
+        )
         row["needs"] = lot_needs_text(row)
     order = {LOT_READY: 0, LOT_WORKING: 1, LOT_WAITING: 2}
     # Within a group, the longest-idle car first: the one most likely to have

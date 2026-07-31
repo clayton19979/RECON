@@ -5,7 +5,7 @@ import { currentActor, esc, fmtDate, money, relativeTime, withLoading } from "./
 import { emptyState } from "./empty-states.js";
 import { AUTH_METHOD_LABEL, ITEM_STATUS_LABEL, KIND_GROUP_LABEL, KIND_GROUP_ORDER, PAY_METHOD_LABEL, STATUS_LABEL, STATUS_OPTIONS, STATUS_PILL_CLASS, fieldLabels, state } from "./state.js";
 import { showView } from "./error-boundary.js";
-import { STALLED_AFTER_DAYS } from "./vehicles-board.js";
+import { isStalled } from "./vehicles-board.js";
 import { openMoveSegmentDialog } from "./move-ticket.js";
 import { openReceiveDialog } from "./dialog-receive-parts.js";
 import { openAddVehicleDialog, openCustomerEditor } from "./customers.js";
@@ -145,8 +145,8 @@ async function selectOrder(orderId) {
    dropped you onto a page whose only timestamp said "Updated 3 minutes ago"
    (the vehicle record, moved by a VIN correction), with the real answer buried
    at the bottom of the activity log in the sidebar. Same number the board
-   sorted on, same STALLED_AFTER_DAYS boundary the card counts by, stated
-   where you land.
+   sorted on, same isStalled rule the card counts by, stated where you land --
+   which includes the card's rule that a finished car is never stalled.
 
    The server sends `last_activity` as {at, idle_days, action, actor} and
    leaves action/actor empty when it can't honestly attribute the timestamp --
@@ -166,7 +166,12 @@ function renderLastWorked() {
   }
   el.hidden = false;
   const days = Math.max(0, la.idle_days || 0);
-  const stalled = days >= STALLED_AFTER_DAYS;
+  // The tone and the nudge are a judgement about a car that still needs work,
+  // so a finished one gets neither: opening a we-owe waived last month used
+  // to greet you with a red line offering to make a follow-up task about a
+  // promise that was closed on purpose. status_bucket comes off the same
+  // detail payload the board's rows carry it on.
+  const stalled = isStalled({ idle_days: days, status_bucket: state.detail.item.status_bucket });
   const when = days === 0 ? "today" : relativeTime(la.at);
   const who = la.action ? `${activityLabel(la.action)}${la.actor ? ` by ${la.actor}` : ""}` : "";
   el.className = `detail-worked${stalled ? " stalled" : ""}`;

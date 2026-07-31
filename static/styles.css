@@ -2063,7 +2063,10 @@ tbody tr.voided-row td:nth-child(-n+3) { text-decoration: line-through; }
 /* "Pending credit" is money owed back, not work in progress -- accent, not
    amber, so the two tables' pending states read differently at a glance. */
 .pill-credit-pending { background: var(--accent); }
-.stats-cores { grid-template-columns: repeat(4, 1fr); margin-bottom: 16px; }
+/* Five now: On Order joined the four credit-chasing figures, and it's the one
+   that holds a car up, so it leads. Same neutral-edge rule as the board --
+   the colour is earned by the number, not by the position. */
+.stats-cores { grid-template-columns: repeat(5, 1fr); margin-bottom: 16px; }
 .stats-cores .stat { border-top-color: var(--line); }
 .stats-cores .stat:has(.stat-value.warn) { border-top-color: var(--warn); }
 .stats-cores .stat:has(.stat-value.crit) { border-top-color: var(--crit); }
@@ -2178,6 +2181,12 @@ input.overdue { border-color: var(--crit); color: var(--crit); }
    above -- so at equal specificity they always won, and none of the three
    ever actually collapsed on a narrow window. Re-apply the same breakpoints
    here, after their declarations, so they do. */
+/* Five cards, so .stats-cores needs the same early stop .stats-board has --
+   and it has to be declared here, after its own unconditional rule above,
+   for the same cascade reason this whole block exists. */
+@media (max-width: 1440px) {
+  .stats-cores { grid-template-columns: repeat(3, 1fr); }
+}
 @media (max-width: 1240px) {
   .stats-staff, .stats-ap, .stats-backup, .stats-cores { grid-template-columns: repeat(2, 1fr); }
 }

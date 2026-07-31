@@ -38,7 +38,7 @@
     </button>
     <button class="rail-item" data-view="cores">
       <svg viewBox="0 0 24 24"><path d="M17 2l4 4-4 4M3 11V9a4 4 0 014-4h14M7 22l-4-4 4-4M21 13v2a4 4 0 01-4 4H3"/></svg>
-      <span>Cores &amp; Returns</span>
+      <span>Parts &amp; Cores</span>
     </button>
     <div class="rail-group-label">Team</div>
     <button class="rail-item" data-view="staff">
@@ -687,12 +687,48 @@
       <section class="view" id="view-cores">
         <div class="page-head">
           <div>
-            <h1>Cores &amp; Returns</h1>
-            <p class="page-desc">Core deposits owed back from vendors on parts like calipers, alternators, and engines — tracked per part from still-on-the-shelf, to picked up, to credited, so nothing gets left uncollected.</p>
+            <h1>Parts &amp; Cores</h1>
+            <p class="page-desc">Everything in flight between the shop and its vendors: parts that are on order and haven't turned up, core deposits owed back, and parts going back for credit.</p>
           </div>
         </div>
 
         <div class="stats stats-cores" id="cores-returns-stats"></div>
+
+        <!-- On Order sits first because it's the one that holds a car up. The
+             board already counts these per car; what it can't say is which
+             part, or how long it's been coming, which is the bit that gets
+             somebody to pick up the phone. -->
+        <div class="subsection-head">
+          <div>
+            <h2>On Order</h2>
+            <p class="page-desc">Parts marked ordered that haven't been received yet — longest wait first. Click a row to open the vehicle and receive it.</p>
+          </div>
+        </div>
+
+        <div class="filters">
+          <button class="chip active" data-on-order-filter="">All</button>
+          <button class="chip" data-on-order-filter="overdue" title="Ordered a week or more ago and still not here">Waiting 7+ days</button>
+          <input id="on-order-search" class="filters-search" placeholder="Search parts on order…" title="Searches part, part #, RO, and vehicle" aria-label="Search parts on order" autocomplete="off">
+          <div class="filters-gap"></div>
+          <span class="filters-note" id="on-order-count" aria-live="polite">0 parts</span>
+          <span class="filters-note" id="on-order-total"></span>
+        </div>
+
+        <div class="panel">
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Part</th><th>Part #</th><th>RO / Vehicle</th><th class="num-col">Qty</th><th class="num-col">Value</th><th>Ordered</th><th>Waiting</th></tr></thead>
+              <tbody id="on-order-table"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="subsection-head">
+          <div>
+            <h2>Core Deposits</h2>
+            <p class="page-desc">Deposits the vendor adds on parts like calipers, alternators and engines — tracked per part from still-on-the-shelf, to picked up, to credited, so nothing gets left uncollected.</p>
+          </div>
+        </div>
 
         <!-- Same three-state vocabulary as Returned Parts below: a core is
              Pending (still here), Awaiting Credit (sent back, no paperwork

@@ -36,6 +36,9 @@ export const state = {
   suggestionSearch: "",
   showResolvedSuggestions: false,
   apInvoices: [],
+  partsOnOrder: [],
+  onOrderFilter: "",            // "" == everything on order; "overdue" == waiting a week or more
+  onOrderSearch: "",
   cores: [],
   coresFilter: "pending",
   coresSearch: "",

@@ -65,6 +65,11 @@ export const state = {
   reportStart: "",
   reportEnd: "",
   reportSort: { key: "cost", dir: "desc" },
+  // Which report shape reportSort was actually chosen for. Null means "nobody
+  // has picked one yet", so the shape's own default wins -- see
+  // generateReport. Without it, Cost and Stock # exist on more than one shape
+  // and a sort silently followed you from one report to another.
+  reportSortShape: null,
   report: null,                         // { rows, type, start, end } -- what's on screen, for print/CSV
   tasks: [],
   taskFilter: "",

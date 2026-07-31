@@ -153,10 +153,16 @@ def build_export_router(connect: Callable[[], sqlite3.Connection], now_fn: Calla
                 "Type",
                 "Status",
                 "Technicians",
-                "Needs",
-                "Spent",
+                # Same wording as the screen and the printed sheet, so a
+                # column named on one can be found on the others. The CSV
+                # keeps Type and Status as their own columns even though the
+                # report folds them into the group and the vehicle cell --
+                # this one is opened in a spreadsheet and filtered, where a
+                # column beats a heading.
+                "Still Needs",
+                "Spent So Far",
                 "Still To Spend",
-                "Days Idle",
+                "Days Sitting",
                 "Days On Lot",
             ],
             [

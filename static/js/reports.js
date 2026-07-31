@@ -75,11 +75,63 @@ const REPORT_ENDPOINT = {
    is left wondering why clicking them does nothing. */
 const IGNORES_DATE_RANGE = new Set(["lot"]);
 
+/* The three piles, and what to say about each one.
+
+   `blurb` is the short form the screen's group bar uses; `sentence` is the
+   full one the printed sheet gets. The sheet is read by the owner on his own,
+   as a PDF in his inbox, with nobody beside him to explain what a heading
+   means -- so every section on paper says in a plain sentence what being in
+   it actually means. `empty` is what to say when a pile has nothing in it:
+   a section that silently disappears reads as a section that got lost. */
 const LOT_GROUPS = [
-  { key: "ready", label: "Ready to sell", blurb: "work finished — can go back on the lot" },
-  { key: "working", label: "In the shop", blurb: "being worked on now" },
-  { key: "waiting", label: "Not started", blurb: "nothing done yet" },
+  {
+    key: "ready",
+    label: "Ready to sell",
+    blurb: "work finished — can go back on the lot",
+    sentence: "Work on these is finished. They can go back on the lot.",
+    empty: "No cars are finished right now.",
+  },
+  {
+    key: "working",
+    label: "In the shop",
+    blurb: "being worked on now",
+    sentence: "These are in the shop now. Still Needs says what each one is waiting on.",
+    empty: "Nothing is in the shop right now.",
+  },
+  {
+    key: "waiting",
+    label: "Not started",
+    blurb: "nothing done yet",
+    sentence: "Nothing has been done to these yet.",
+    empty: "Every car has been started.",
+  },
 ];
+
+/* What the table below is a count OF. "8 rows" is a database word; the lot
+   report is the one an owner reads on his own, and it is counting cars.
+   Shared by the screen's scope line and the printed sheet so they agree. */
+function reportCountText(count, shape) {
+  if (shape === "lot") return `${count} car${count === 1 ? "" : "s"} on the lot`;
+  return `${count} row${count === 1 ? "" : "s"}`;
+}
+
+/* How long a car has sat, in words. "41d" is a code you have to learn; the
+   owner reads this sheet a few times a month and shouldn't have to. */
+function sittingText(days) {
+  const n = Math.max(0, Math.round(Number(days) || 0));
+  if (n === 0) return "today";
+  return `${n} day${n === 1 ? "" : "s"}`;
+}
+
+/* Which car this row is, in one cell: the vehicle, then whether it's one of
+   Walt's lot cars or a promise made to a customer (and to whom). Type used to
+   be a column of its own, which cost a column's width to say one word. */
+function lotVehicleCell(row) {
+  const kind = row.segment === "recon"
+    ? "Recon"
+    : `We-owe${row.customer_name ? ` — ${esc(row.customer_name)}` : ""}`;
+  return `${esc(row.vehicle)}<span class="cell-sub">${kind}</span>`;
+}
 
 const REPORT_STAT_CARDS = {
   lot: (rows) => lotStatCards(rows),
@@ -102,8 +154,12 @@ export function loadReportPrefs() {
   if (typeof saved.range === "string") state.reportRange = saved.range;
   if (typeof saved.start === "string") state.reportStart = saved.start;
   if (typeof saved.end === "string") state.reportEnd = saved.end;
-  if (saved.sort && REPORT_SORTS[reportShape(state.reportType)][saved.sort.key]) {
+  // Only restore a sort that was chosen for the report we're reopening --
+  // sortShape is what says so. An older saved entry has no sortShape, so it
+  // is treated as nobody's choice and the report opens in its own order.
+  if (saved.sort && saved.sortShape === reportShape(state.reportType) && REPORT_SORTS[saved.sortShape][saved.sort.key]) {
     state.reportSort = { key: saved.sort.key, dir: saved.sort.dir === "asc" ? "asc" : "desc" };
+    state.reportSortShape = saved.sortShape;
   }
 }
 
@@ -111,7 +167,8 @@ export function saveReportPrefs() {
   try {
     localStorage.setItem(REPORT_PREFS_KEY, JSON.stringify({
       type: state.reportType, range: state.reportRange,
-      start: state.reportStart, end: state.reportEnd, sort: state.reportSort,
+      start: state.reportStart, end: state.reportEnd,
+      sort: state.reportSort, sortShape: state.reportSortShape,
     }));
   } catch { /* private mode / quota -- the screen still works, it just forgets */ }
 }
@@ -189,11 +246,11 @@ function reportCsvHref() {
 const REPORT_SORTS = {
   lot: {
     // Grouping is the point of this report, so sorting is within a group.
-    idle:    { label: "Days Idle",      type: "number", value: (r) => r.idle_days || 0 },
+    idle:    { label: "Sitting",        type: "number", value: (r) => r.idle_days || 0 },
     stock:   { label: "Stock #",        type: "text",   value: (r) => r.stock_number || "" },
     vehicle: { label: "Vehicle",        type: "text",   value: (r) => r.vehicle || "" },
-    needs:   { label: "Needs",          type: "text",   value: (r) => r.needs || "" },
-    cost:    { label: "Spent",          type: "number", value: (r) => r.actual_cost },
+    needs:   { label: "Still Needs",    type: "text",   value: (r) => r.needs || "" },
+    cost:    { label: "Spent So Far",   type: "number", value: (r) => r.actual_cost },
     left:    { label: "Still To Spend", type: "number", value: (r) => r.remaining_cost || 0 },
     age:     { label: "Days On Lot",    type: "number", value: (r) => r.age_days || 0 },
   },
@@ -230,6 +287,26 @@ const REPORT_SORTS = {
     cost:       { label: "Labor Cost",  type: "number", value: (r) => r.labor_cost },
   },
 };
+
+/* Where each report starts before anyone clicks a column.
+
+   The lot report opens on Stock #, A to Z, and the other three on their money
+   column, high to low -- because they are read for different reasons. A spend
+   report answers "where did it go", and the biggest number first is the
+   answer. The lot report is read with a particular car in mind ("what's
+   happening with the Elantra?"), and a list ordered by dollars puts that car
+   somewhere unpredictable, so finding it means reading every row. In stock
+   order it is always where you'd expect it. */
+const DEFAULT_SORT = {
+  lot: { key: "stock", dir: "asc" },
+  "vehicle-spend": { key: "cost", dir: "desc" },
+  "vehicle-profit": { key: "cost", dir: "desc" },
+  technicians: { key: "cost", dir: "desc" },
+};
+
+function defaultSortFor(shape) {
+  return { ...(DEFAULT_SORT[shape] || DEFAULT_SORT["vehicle-spend"]) };
+}
 
 function sortReportRows(rows, shape, { key, dir }) {
   const spec = REPORT_SORTS[shape][key];
@@ -499,9 +576,12 @@ function reportEmptyState(shape) {
 // lands, never widens.
 function reportHeaderRow(shape, hasDeposits) {
   if (shape === "lot") {
-    return ["stock", "vehicle"].map((k) => reportSortHeader("lot", k)).join("")
-      + `<th>Type</th><th>Status</th>`
-      + reportSortHeader("lot", "needs")
+    // No Type or Status column. The section heading a row sits under already
+    // IS its status, in the words Walt uses -- and a raw ticket status beside
+    // it contradicted the heading as often as it agreed ("Not started" next
+    // to a pill reading ESTIMATE, "In the shop" next to ACQUIRED). Type moved
+    // into the Vehicle cell, where it costs a line instead of a column.
+    return ["stock", "vehicle", "needs"].map((k) => reportSortHeader("lot", k)).join("")
       + ["cost", "left", "idle"].map((k) => reportSortHeader("lot", k, "num-col")).join("");
   }
   if (shape === "technicians") {
@@ -524,32 +604,39 @@ function renderLotTable(rows) {
     const clickable = refId != null;
     const stalled = isStalled(r);
     return `<tr${clickable ? ` class="clickable" data-seg="${esc(r.segment)}" data-ref-id="${refId}" tabindex="0" title="Open this vehicle"` : ""}>
-      <td class="num">${esc(r.stock_number || "—")}</td>
-      <td>${esc(r.vehicle)}${r.customer_name ? ` <span class="cell-sub">(${esc(r.customer_name)})</span>` : ""}</td>
-      <td>${r.segment === "recon" ? "Recon" : "We-Owe"}</td>
-      <td><span class="pill ${vehicleStatusPillClass(r)}">${esc(STATUS_LABEL[r.status] || r.status)}</span></td>
+      <td class="num lot-stock">${esc(r.stock_number || "—")}</td>
+      <td>${lotVehicleCell(r)}</td>
       <td class="lot-needs">${esc(r.needs || "—")}</td>
       <td class="num-col">${money(r.actual_cost)}</td>
       <td class="num-col">${r.remaining_cost ? money(r.remaining_cost) : "—"}</td>
-      <td class="num-col${stalled ? " money-bad" : ""}" title="${stalled ? "Nothing has happened on this car in over a week" : "Days since anything happened"}">${r.idle_days}</td>
+      <td class="num-col${stalled ? " money-bad" : ""}" title="${stalled ? "Nothing has happened on this car in over a week" : "Days since anything happened"}">${esc(sittingText(r.idle_days))}</td>
     </tr>`;
   };
   const sections = LOT_GROUPS.map((group) => {
     const inGroup = rows.filter((r) => r.lot_bucket === group.key);
-    if (!inGroup.length) return "";
     const spent = inGroup.reduce((s, r) => s + (r.actual_cost || 0), 0);
-    return `<tr class="lot-group-head"><td colspan="8">
+    const left = inGroup.reduce((s, r) => s + (r.remaining_cost || 0), 0);
+    // An empty pile says so rather than disappearing. A heading that isn't
+    // there is indistinguishable from a heading you scrolled past.
+    const note = inGroup.length
+      ? `${inGroup.length} car${inGroup.length === 1 ? "" : "s"} · ${esc(group.blurb)}`
+      : esc(group.empty);
+    const cash = inGroup.length
+      ? `<span class="lot-group-money">${money(spent)} spent${left ? ` · ${money(left)} still to spend` : ""}</span>`
+      : "";
+    return `<tr class="lot-group-head${inGroup.length ? "" : " is-empty"}"><td colspan="6">
         <span class="lot-group-name">${esc(group.label)}</span>
-        <span class="lot-group-note">${inGroup.length} car${inGroup.length === 1 ? "" : "s"} · ${esc(group.blurb)} · ${money(spent)} spent</span>
+        <span class="lot-group-note">${note}</span>
+        ${cash}
       </td></tr>${inGroup.map(line).join("")}`;
   }).join("");
   const totalSpent = rows.reduce((s, r) => s + (r.actual_cost || 0), 0);
   const totalLeft = rows.reduce((s, r) => s + (r.remaining_cost || 0), 0);
-  return `<div class="panel"><div class="table-wrap table-scroll"><table class="sticky-head"><thead><tr>
+  return `<div class="panel"><div class="table-wrap table-scroll"><table class="sticky-head lot-table"><thead><tr>
     ${reportHeaderRow("lot")}
     </tr></thead>
     <tbody>${sections}</tbody>
-    <tfoot><tr><td colspan="5">Whole lot (${rows.length} car${rows.length === 1 ? "" : "s"})</td>
+    <tfoot><tr><td colspan="3">Whole lot (${rows.length} car${rows.length === 1 ? "" : "s"})</td>
       <td class="num-col">${money(totalSpent)}</td><td class="num-col">${totalLeft ? money(totalLeft) : "—"}</td><td></td></tr></tfoot>
     </table></div></div>`;
 }
@@ -642,7 +729,13 @@ function renderReportTable(rows, shape) {
    and a printed one needs to say when it was taken. */
 function reportScopeLabel(type, start, end) {
   if (IGNORES_DATE_RANGE.has(type)) {
-    return `As it stands ${new Date().toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" })}`;
+    // Spelled out -- weekday and all. This is the one date on the sheet now,
+    // and it's read off a screen or a phone, not filed in a folder where a
+    // terse stamp would do.
+    return `As it stands ${new Date().toLocaleString("en-US", {
+      weekday: "long", month: "long", day: "numeric", year: "numeric",
+      hour: "numeric", minute: "2-digit",
+    })}`;
   }
   return reportDateRangeLabel(start, end);
 }
@@ -668,15 +761,17 @@ function renderPrintReport(rows, type, start, end) {
   const cards = (REPORT_STAT_CARDS[shape] || REPORT_STAT_CARDS["vehicle-spend"])(rows);
   const summary = `<div class="print-summary">${cards.map((c) => `
     <div><div class="ps-label">${esc(c.label)}</div><div class="ps-value">${esc(c.value)}</div><div class="ps-sub">${esc(c.sub)}</div></div>`).join("")}</div>`;
-  // The paper must say what the screen knew: row count and sort order, so a
-  // filed printout can still be told apart from one taken at another moment.
+  // The paper must say what the screen knew: how much is in the table and in
+  // what order, so somebody reading it alone knows where to look for a car
+  // and can tell one snapshot from another.
   const sortSpec = REPORT_SORTS[shape][state.reportSort.key] || REPORT_SORTS[shape].cost;
   const dirWord = sortSpec.type === "number"
     ? (state.reportSort.dir === "desc" ? "high to low" : "low to high")
     : (state.reportSort.dir === "asc" ? "A to Z" : "Z to A");
+  const countWord = reportCountText(rows.length, shape);
   const scope = `<div class="print-scope">
-    <span class="scope-count">${rows.length} row${rows.length === 1 ? "" : "s"}</span>
-    <span>· sorted by ${esc(sortSpec.label)}, ${dirWord}</span>
+    <span class="scope-count">${countWord}</span>
+    <span>· listed by ${esc(sortSpec.label)}, ${dirWord}</span>
   </div>`;
   let body;
   if (shape === "lot") {
@@ -685,26 +780,43 @@ function renderPrintReport(rows, type, start, end) {
     // screen -- there is no colour on the printer he uses.
     const sections = LOT_GROUPS.map((group) => {
       const inGroup = rows.filter((r) => r.lot_bucket === group.key);
-      if (!inGroup.length) return "";
       const spent = inGroup.reduce((s, r) => s + (r.actual_cost || 0), 0);
-      return `<div class="print-subhead">${esc(group.label)} — ${inGroup.length} car${inGroup.length === 1 ? "" : "s"}, ${money(spent)} spent</div>
+      const left = inGroup.reduce((s, r) => s + (r.remaining_cost || 0), 0);
+      const head = `<div class="print-subhead">${esc(group.label)} — ${inGroup.length} car${inGroup.length === 1 ? "" : "s"}</div>`;
+      // A pile with nothing in it is an answer too: "no cars are finished
+      // right now" is worth reading, and a section that quietly vanishes
+      // leaves you wondering whether the sheet is complete.
+      if (!inGroup.length) return `${head}<p class="print-group-note">${esc(group.empty)}</p>`;
+      return `${head}
+        <p class="print-group-note">${esc(group.sentence)}</p>
         <table class="print-table report">
-          <thead><tr><th>Stock #</th><th>Vehicle</th><th>Type</th><th>Needs</th><th class="num">Spent</th><th class="num">Left</th><th class="num">Idle</th></tr></thead>
+          ${/* num-col, not num: only num-col right-aligns and turns on
+               tabular figures in print. The money columns on this sheet have
+               always used `num`, which is the identifier style (mono, left) --
+               so $1,020.00 and $95.00 printed with their decimal points in
+               different places, down the one column an owner actually adds up
+               by eye. Stock # keeps `num`; that one really is an identifier. */ ""}
+          <thead><tr><th>Stock #</th><th>Vehicle</th><th>Still needs</th><th class="num-col">Spent so far</th><th class="num-col">Still to spend</th><th class="num-col">Sitting</th></tr></thead>
           <tbody>${inGroup.map((r) => `<tr>
             <td class="num">${esc(r.stock_number || "—")}</td>
-            <td>${esc(r.vehicle)}${r.customer_name ? ` (${esc(r.customer_name)})` : ""}</td>
-            <td>${r.segment === "recon" ? "Recon" : "We-Owe"}</td>
+            <td>${esc(r.vehicle)}<span class="print-dim"> · ${r.segment === "recon" ? "Recon" : `We-owe${r.customer_name ? ` — ${esc(r.customer_name)}` : ""}`}</span></td>
             <td>${esc(r.needs || "—")}</td>
-            <td class="num">${money(r.actual_cost)}</td>
-            <td class="num">${r.remaining_cost ? money(r.remaining_cost) : "—"}</td>
-            <td class="num">${r.idle_days}d</td>
+            <td class="num-col">${money(r.actual_cost)}</td>
+            <td class="num-col">${r.remaining_cost ? money(r.remaining_cost) : "—"}</td>
+            <td class="num-col">${esc(sittingText(r.idle_days))}</td>
           </tr>`).join("")}</tbody>
+          <tfoot><tr>
+            <td colspan="3">${esc(group.label)} — ${inGroup.length} car${inGroup.length === 1 ? "" : "s"}</td>
+            <td class="num-col">${money(spent)}</td>
+            <td class="num-col">${left ? money(left) : "—"}</td>
+            <td></td>
+          </tr></tfoot>
         </table>`;
     }).join("");
     const totalSpent = rows.reduce((s, r) => s + (r.actual_cost || 0), 0);
     const totalLeft = rows.reduce((s, r) => s + (r.remaining_cost || 0), 0);
-    body = `${sections}<div class="print-totals"><div class="tl-row"><span>Spent on the lot</span><span class="num">${money(totalSpent)}</span></div>
-      <div class="tl-row"><span>Quoted work still to do</span><span class="num">${money(totalLeft)}</span></div></div>`;
+    body = `${sections}<div class="print-totals"><div class="tl-row"><span>Spent on the whole lot</span><span class="num">${money(totalSpent)}</span></div>
+      <div class="tl-row grand"><span>Still to spend</span><span class="num">${money(totalLeft)}</span></div></div>`;
   } else if (shape === "technicians") {
     const working = rows.filter((r) => r.ro_count > 0).length;
     const totRos = rows.reduce((s, r) => s + r.ro_count, 0);
@@ -765,22 +877,26 @@ function renderPrintReport(rows, type, start, end) {
       <div class="print-meta">
         <div class="print-report-title">${esc(REPORT_TITLES[type] || type)}</div>
         <div>${esc(rangeLabel)}</div>
-        <div class="print-generated">Generated ${esc(generated)}</div>
+        ${/* A snapshot report's range label already IS the moment it was
+             taken, so a second "Generated" line beneath it stamped the same
+             instant twice. A dated report keeps it, because when it was run
+             and what period it covers are genuinely different facts. */ ""}
+        ${IGNORES_DATE_RANGE.has(type) ? "" : `<div class="print-generated">Generated ${esc(generated)}</div>`}
       </div>
     </header>
     ${scope}
     ${summary}
     ${body}
+    ${/* No signature block. These go out as a PDF by email -- nobody signs
+         one, and a pair of ruled blanks at the bottom of a screen-read
+         document just looks like the sheet is missing something. The printed
+         repair ticket keeps its sign-off; that one really is paper. */ ""}
     <div class="print-end">
-      <div class="print-end-line">End of report — ${esc(REPORT_TITLES[type] || type)} · ${esc(rangeLabel)} · ${rows.length} row${rows.length === 1 ? "" : "s"}</div>
-      <div class="print-sign">
-        <div class="sign-cell"><div class="sign-rule"></div><div class="sign-label">Reviewed by</div></div>
-        <div class="sign-cell"><div class="sign-rule"></div><div class="sign-label">Date</div></div>
-      </div>
+      <div class="print-end-line">End of report — ${esc(REPORT_TITLES[type] || type)} · ${esc(countWord)}</div>
     </div>
     <footer class="print-foot">
       <span>RECON · Discount Auto Repair</span>
-      <span>${esc(REPORT_TITLES[type] || type)} · ${esc(rangeLabel)} · Generated ${esc(generated)}</span>
+      <span>${esc(REPORT_TITLES[type] || type)} · ${esc(rangeLabel)}</span>
     </footer>
   `;
 }
@@ -828,7 +944,7 @@ function renderReport() {
   // The scope line states in words what the cards are counting -- report,
   // range, row count -- so the numbers can't be misread.
   $("#report-scope").textContent =
-    `${REPORT_TITLES[state.report.type]} · ${reportScopeLabel(state.report.type, state.report.start, state.report.end)} · ${rows.length} row${rows.length === 1 ? "" : "s"}`;
+    `${REPORT_TITLES[state.report.type]} · ${reportScopeLabel(state.report.type, state.report.start, state.report.end)} · ${reportCountText(rows.length, shape)}`;
   $("#report-print").disabled = !rows.length;
   // <a> has no native disabled attribute -- aria-disabled + the CSS rule
   // that kills pointer-events is what actually stops the click, matching
@@ -847,9 +963,22 @@ async function generateReport() {
   const seq = ++reportSeq;
   const type = state.reportType;
   const shape = reportShape(type);
-  // A sort key from the other shape (Cost exists on both, "hours" doesn't)
-  // would silently sort by nothing at all.
-  if (!REPORT_SORTS[shape][state.reportSort.key]) state.reportSort = { key: "cost", dir: "desc" };
+  /* Each shape gets its own reading order until somebody chooses otherwise.
+
+     Two things used to go wrong here, and both left the lot report ordered by
+     dollars -- the one order that makes a particular car hard to find:
+     a sort key from another shape ("hours" on the lot report) sorted by
+     nothing at all, and a key that happens to exist on both (Cost, Stock #)
+     came along for the ride from whatever was last on screen. Neither was
+     ever a choice anyone made about THIS report.
+
+     reportSortShape records which shape the current sort was chosen for, so a
+     click on a column header survives (same shape) while an inherited or
+     invalid one is replaced. */
+  if (!REPORT_SORTS[shape][state.reportSort.key] || state.reportSortShape !== shape) {
+    state.reportSort = defaultSortFor(shape);
+  }
+  state.reportSortShape = shape;
   const start = state.reportStart || undefined;
   const end = state.reportEnd || undefined;
   $("#report-csv").href = reportCsvHref();
@@ -892,6 +1021,9 @@ export function wireReportsView() {
     const btn = e.target.closest("[data-report-type]");
     if (!btn || btn.dataset.reportType === state.reportType) return;
     state.reportType = btn.dataset.reportType;
+    // Sort belongs to the shape, not to the session -- generateReport sorts
+    // that out (see reportSortShape). Switching between the three spend
+    // reports is one shape and keeps whatever column was clicked.
     syncReportControls();
     refreshReport();
   });

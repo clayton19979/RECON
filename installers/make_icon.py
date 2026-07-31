@@ -11,6 +11,7 @@ Outputs, all into static/:
 
 Regenerate with:  .venv/Scripts/python installers/make_icon.py
 """
+
 from __future__ import annotations
 
 import math
@@ -18,13 +19,13 @@ import pathlib
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT))               # so `app.mark` imports when run directly
+sys.path.insert(0, str(ROOT))  # so `app.mark` imports when run directly
 
-from app import mark                        # noqa: E402
+from app import mark
 
 STATIC = ROOT / "static"
 ICO_SIZES = [16, 24, 32, 48, 64, 128, 256]
-VB = 1024                                   # SVG viewBox units
+VB = 1024  # SVG viewBox units
 
 
 def rounded_polygon_path(pts, radius: float) -> str:
@@ -40,7 +41,7 @@ def rounded_polygon_path(pts, radius: float) -> str:
             ln = math.hypot(vx, vy) or 1.0
             d = min(radius, ln / 2)
             pair.append((cur[0] + vx / ln * d, cur[1] + vy / ln * d))
-        trims.append(tuple(pair))            # (incoming, outgoing)
+        trims.append(tuple(pair))  # (incoming, outgoing)
 
     parts = [f"M {trims[0][0][0]:.2f},{trims[0][0][1]:.2f}"]
     for i, (a, b) in enumerate(trims):
@@ -71,7 +72,7 @@ def build_svg() -> str:
     ex = x + w - legw * 1.02
     ch = bowl_h - 2 * bar
     cl, ct, cr = x + stem + bar, y + bar, x + w - bar
-    ccx = cr - ch / 2                        # centre x of the counter's arc
+    ccx = cr - ch / 2  # centre x of the counter's arc
 
     r_path = (
         # bowl + stem, clockwise
@@ -90,7 +91,7 @@ def build_svg() -> str:
     )
 
     def hx(c):
-        return "#%02x%02x%02x" % c[:3]
+        return "#{:02x}{:02x}{:02x}".format(*c[:3])
 
     return f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {VB} {VB}" width="{VB}" height="{VB}">
   <title>RECON</title>

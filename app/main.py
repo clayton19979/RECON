@@ -362,12 +362,22 @@ def create_app(db_path: Path = DEFAULT_DB, backups_dir: Path = DEFAULT_BACKUPS_D
         # and when the shop last wrote them a ticket. Correlated subqueries
         # rather than JOIN+GROUP BY so a customer with two vehicles and three
         # orders doesn't multiply into six rows to aggregate back down.
+        #
+        # We-owe promises are counted separately from repair orders, because
+        # the two are not the same debt and a promise routinely exists before
+        # any ticket does. Counting only tickets made someone the shop owes
+        # work to read as a stranger -- no orders, never visited -- on the one
+        # screen you open when they're on the phone asking about it. Archived
+        # promises are excluded: History is not something still owed.
         with connect() as db:
             rows = db.execute(
                 """SELECT c.*,
                        (SELECT count(*) FROM vehicles v WHERE v.customer_id=c.id) vehicle_count,
                        (SELECT count(*) FROM orders o WHERE o.customer_id=c.id AND o.voided=0) order_count,
                        (SELECT count(*) FROM orders o WHERE o.customer_id=c.id AND o.voided=0 AND o.status!='complete') open_orders,
+                       (SELECT count(*) FROM we_owe_items w WHERE w.customer_id=c.id AND w.archived_at='') we_owe_count,
+                       (SELECT count(*) FROM we_owe_items w
+                         WHERE w.customer_id=c.id AND w.archived_at='' AND w.status='open') we_owe_open,
                        (SELECT max(o.created_at) FROM orders o WHERE o.customer_id=c.id AND o.voided=0) last_visit_at
                    FROM customers c WHERE c.is_shop_owned=0 ORDER BY c.id DESC"""
             )
@@ -377,8 +387,16 @@ def create_app(db_path: Path = DEFAULT_DB, backups_dir: Path = DEFAULT_BACKUPS_D
     def get_customer(customer_id: int):
         """One customer with their vehicles, each vehicle with its repair
         orders (voided included, flagged -- history shouldn't silently lose
-        tickets). The shop-owned recon sentinel 404s here like it's absent
-        from the list: it isn't a customer."""
+        tickets) and its we-owe promises. The shop-owned recon sentinel 404s
+        here like it's absent from the list: it isn't a customer.
+
+        The promises are here for the same reason the orders are: this is the
+        screen an advisor opens with the customer on the phone, and "we were
+        promised a tie rod when we bought it" has to be answerable from it.
+        A promise with no ticket written yet is exactly the case that was
+        invisible before, and exactly the one most likely to be asked about.
+        Archived promises come through too, flagged, so History doesn't
+        silently drop a promise the way it never drops a ticket."""
         with connect() as db:
             row = db.execute("SELECT * FROM customers WHERE id=? AND is_shop_owned=0", (customer_id,)).fetchone()
             if not row:
@@ -397,8 +415,19 @@ def create_app(db_path: Path = DEFAULT_DB, backups_dir: Path = DEFAULT_BACKUPS_D
             by_vehicle: dict[int, list[dict]] = {}
             for o in orders:
                 by_vehicle.setdefault(o["vehicle_id"], []).append(dict(o))
+            promises = db.execute(
+                """SELECT w.id, w.vehicle_id, w.description, w.category, w.status, w.target_date,
+                          w.promised_at, w.archived_at, w.created_at,
+                          (SELECT count(*) FROM orders o WHERE o.we_owe_id=w.id AND o.voided=0) order_count
+                   FROM we_owe_items w WHERE w.customer_id=? ORDER BY w.id DESC""",
+                (customer_id,),
+            )
+            promises_by_vehicle: dict[int, list[dict]] = {}
+            for p in promises:
+                promises_by_vehicle.setdefault(p["vehicle_id"], []).append(dict(p))
             for v in vehicles:
                 v["orders"] = by_vehicle.get(v["id"], [])
+                v["we_owe"] = promises_by_vehicle.get(v["id"], [])
             detail["vehicles"] = vehicles
             return detail
 

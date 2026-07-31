@@ -288,6 +288,32 @@ def test_board_columns_constant_matches_the_header(js: str, html: str) -> None:
     )
 
 
+def _customers_thead(html: str) -> str:
+    section = html[html.index('id="view-customers"') :]
+    return section[section.index("<thead") : section.index("</thead>")]
+
+
+def test_customer_row_cells_match_the_header(js: str, html: str) -> None:
+    """Same contract the board rows are held to. This table grew a We-Owe
+    column between Repair Orders and Last Visit; one cell out of step and a
+    promise count prints under "Last Visit"."""
+    columns = len(re.findall(r"<th\b", _customers_thead(html)))
+    cells = len(re.findall(r"<td\b", _function_source(js, "customerRowHtml")))
+    assert columns == cells, f"the customers header has {columns} columns but customerRowHtml emits {cells} cells"
+
+
+def test_customer_columns_constant_matches_the_header(js: str, html: str) -> None:
+    """CUSTOMER_COLUMNS is the colspan the loading skeleton, the empty state
+    and the expansion row are all built from -- a header added without it
+    leaves the expanded row short and the table visibly ragged."""
+    declared = re.search(r"^const CUSTOMER_COLUMNS = (\d+);", js, re.MULTILINE)
+    assert declared, "CUSTOMER_COLUMNS is gone -- the skeleton and expansion have no shared width"
+    columns = len(re.findall(r"<th\b", _customers_thead(html)))
+    assert int(declared.group(1)) == columns, (
+        f"CUSTOMER_COLUMNS is {declared.group(1)} but the customers header has {columns} columns"
+    )
+
+
 def test_board_empty_state_spans_the_whole_table(js: str) -> None:
     assert re.search(r"emptyRow\(BOARD_COLUMNS, vehiclesEmptyState\(\)\)", js), (
         "the vehicles empty state no longer spans BOARD_COLUMNS -- a hardcoded "

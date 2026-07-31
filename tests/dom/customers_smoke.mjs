@@ -14,25 +14,33 @@ let customers = [
   { id: 1, name: "Marta Alvarez", phone: "(219) 555-0142", email: "marta@example.com",
     address_line1: "12 Oak St", address_line2: "", city: "Merrillville", state: "IN", postal_code: "46410",
     is_shop_owned: 0, created_at: "2025-03-10T12:00:00", vehicle_count: 2, order_count: 3, open_orders: 1,
-    last_visit_at: "2026-07-01T09:30:00" },
+    we_owe_count: 2, we_owe_open: 1, last_visit_at: "2026-07-01T09:30:00" },
   { id: 2, name: "Ben Cho", phone: "", email: "",
     address_line1: "", address_line2: "", city: "Gary", state: "IN", postal_code: "",
     is_shop_owned: 0, created_at: "2026-01-05T12:00:00", vehicle_count: 1, order_count: 1, open_orders: 0,
-    last_visit_at: "2026-02-14T15:00:00" },
+    we_owe_count: 0, we_owe_open: 0, last_visit_at: "2026-02-14T15:00:00" },
+  // Ada is the case the screen used to hide entirely: promised work, no
+  // ticket ever written, so every ticket-shaped column on her row is empty.
   { id: 3, name: "Ada Zimm", phone: "(313) 555-0100", email: "",
     address_line1: "", address_line2: "", city: "", state: "", postal_code: "",
-    is_shop_owned: 0, created_at: "2026-06-20T12:00:00", vehicle_count: 0, order_count: 0, open_orders: 0,
-    last_visit_at: null },
+    is_shop_owned: 0, created_at: "2026-06-20T12:00:00", vehicle_count: 1, order_count: 0, open_orders: 0,
+    we_owe_count: 1, we_owe_open: 1, last_visit_at: null },
 ];
 
-// Marta's detail: one vehicle with a jumpable we-owe RO plus a voided one,
-// a second vehicle with a retail RO (jumps to the vehicle's retail page;
-// only the voided chip stays inert).
+// Marta's detail: one vehicle with a jumpable we-owe RO plus a voided one and
+// two promises (one still open, one settled), a second vehicle with a retail
+// RO (jumps to the vehicle's retail page; only the voided chip stays inert).
 const DETAILS = {
   1: {
     ...customers[0],
     vehicles: [
       { id: 11, year: 2020, make: "Kia", model: "Soul", plate: "ABC123", plate_state: "IN", vin: "VIN0001",
+        we_owe: [
+          { id: 71, vehicle_id: 11, description: "Replace worn tie rod", category: "other", status: "open",
+            target_date: "2026-08-15", promised_at: "", archived_at: "", created_at: "2026-06-30T09:00:00", order_count: 1 },
+          { id: 70, vehicle_id: 11, description: "Second key", category: "other", status: "fulfilled",
+            target_date: "", promised_at: "", archived_at: "", created_at: "2026-02-01T09:00:00", order_count: 0 },
+        ],
         orders: [
           { id: 101, number: "RO-2607-0101", segment: "we_owe", status: "in_progress", voided: 0,
             created_at: "2026-07-01T09:30:00", recon_vehicle_id: null, we_owe_id: 71, concern: "Mirror" },
@@ -40,13 +48,24 @@ const DETAILS = {
             created_at: "2026-02-01T09:30:00", recon_vehicle_id: null, we_owe_id: 71, concern: "Old" },
         ] },
       { id: 12, year: 2015, make: "Jeep", model: "Patriot", plate: "", plate_state: "", vin: "",
+        we_owe: [],
         orders: [
           { id: 99, number: "RO-2601-0099", segment: "retail", status: "complete", voided: 0,
             created_at: "2026-01-10T09:30:00", recon_vehicle_id: null, we_owe_id: null, concern: "Brakes" },
         ] },
     ],
   },
-  3: { ...customers[2], vehicles: [] },
+  3: {
+    ...customers[2],
+    vehicles: [
+      { id: 31, year: 2019, make: "Toyota", model: "RAV4", plate: "", plate_state: "", vin: "VIN0031",
+        we_owe: [
+          { id: 90, vehicle_id: 31, description: "Fix the clunk", category: "other", status: "open",
+            target_date: "", promised_at: "", archived_at: "", created_at: "2026-06-21T09:00:00", order_count: 0 },
+        ],
+        orders: [] },
+    ],
+  },
 };
 
 const detailFetches = [];
@@ -70,8 +89,10 @@ const { w, doc, settle, ok, finish, rejections } = await boot({
       customers = customers.map((c) => (c.id === id ? { ...c, ...body } : c));
       return customers.find((c) => c.id === id);
     }
-    // The we-owe chip jump loads the vehicle detail page.
+    // The we-owe chip jump loads the vehicle detail page -- from a ticket's
+    // chip (71) or straight off a promise that has no ticket at all (90).
     if (url === "/api/we-owe/71") return { id: 71, description: "Mirror", customer_id: 1, vehicle_id: 11, status: "open", archived_at: "", edit_version: 1 };
+    if (url === "/api/we-owe/90") return { id: 90, description: "Fix the clunk", customer_id: 3, vehicle_id: 31, status: "open", archived_at: "", edit_version: 1 };
     // The retail chip / Write RO jump loads the vehicle's retail page. The
     // Patriot's payload carries the Soul as the customer's other vehicle so
     // the Other Vehicles card has something to render (and to click).
@@ -113,9 +134,12 @@ const input = (el, value) => {
 /* ---------- stats describe the book of business ---------- */
 const statValues = $$("#customers-stats .stat-value").map((el) => el.textContent.trim());
 ok(statValues[0] === "3", `Customers card should read 3, reads "${statValues[0]}"`);
-ok(statValues[1] === "3", `Vehicles on File should sum to 3, reads "${statValues[1]}"`);
+ok(statValues[1] === "4", `Vehicles on File should sum to 4, reads "${statValues[1]}"`);
 ok(statValues[2] === "1", `With Open ROs should count Marta only, reads "${statValues[2]}"`);
-ok(statValues[3] === "1", `Missing Contact should count Ben only, reads "${statValues[3]}"`);
+ok(statValues[3] === "2", `Owed a We-Owe should count Marta and Ada, reads "${statValues[3]}"`);
+ok(statValues[4] === "1", `Missing Contact should count Ben only, reads "${statValues[4]}"`);
+ok($('[data-customer-filter="owed"]').textContent.includes("2 promises still open"),
+   "the We-Owe card counts promises, not just the people who are owed them");
 
 /* ---------- alphabetical order, not insertion order ---------- */
 const names = $$("#customers-table tr[data-id] td:first-child strong").map((el) => el.textContent);
@@ -124,12 +148,26 @@ ok(names.join(" | ") === "Ada Zimm | Ben Cho | Marta Alvarez",
 ok(row(3).textContent.includes("never"), "a customer with no orders shows 'never' for last visit");
 ok(row(1).textContent.includes("1 open"), "Marta's RO cell should flag her open ticket");
 
+/* ---------- the We-Owe column: what the shop still owes, ticket or not ----
+   Ada has no repair order at all, which is exactly how the promise used to
+   go missing -- every other column on her row is empty. */
+const oweCell = (id) => row(id).querySelectorAll("td")[5];
+ok(oweCell(3).textContent.includes("1 owed"),
+   `Ada's We-Owe cell should say she is owed one, says "${oweCell(3).textContent.trim()}"`);
+ok(oweCell(2).textContent.includes("—"),
+   `a customer who was never promised anything shows a dash, shows "${oweCell(2).textContent.trim()}"`);
+ok(oweCell(1).textContent.includes("1 owed"), "Marta's one open promise counts, her settled one doesn't");
+
 /* ---------- the stat cards are filters ---------- */
 click(w, $('[data-customer-filter="open"]'));
 ok($$("#customers-table tr[data-id]").length === 1 && row(1), "With Open ROs filters to Marta");
 ok($("#customers-reset-view") && !$("#customers-reset-view").hidden, "Reset view appears while a filter is on");
 click(w, $('[data-customer-filter="open"]'));
 ok($$("#customers-table tr[data-id]").length === 3, "clicking the lit card again clears the filter");
+click(w, $('[data-customer-filter="owed"]'));
+ok($$("#customers-table tr[data-id]").length === 2 && row(1) && row(3),
+   "Owed a We-Owe filters to the two people the shop owes work");
+click(w, $('[data-customer-filter="owed"]'));
 click(w, $('[data-customer-filter="no_contact"]'));
 ok($$("#customers-table tr[data-id]").length === 1 && row(2), "Missing Contact filters to Ben");
 click(w, $("#customers-reset-view"));
@@ -163,6 +201,19 @@ ok(jumpable.length === 2, `the live we-owe and retail ROs should both be jumpabl
 ok(expand.textContent.includes("Voided"), "the voided RO stays visible, flagged");
 ok(expand.querySelectorAll(".cust-new-ro").length === 2, "every vehicle offers a Write RO button");
 
+/* ---------- promises show under the car they were made about ---------- */
+const oweChips = [...expand.querySelectorAll(".cust-owe-chip")];
+ok(oweChips.length === 2, `both of the Soul's promises should show as chips, got ${oweChips.length}`);
+ok(oweChips[0].textContent.includes("Replace worn tie rod") && oweChips[0].textContent.includes("Open"),
+   "the open promise says what was promised and that it is still open");
+ok(oweChips[0].textContent.includes("due Aug 15, 2026"), "a promise with a target date says when it is due");
+ok(!oweChips[0].textContent.includes("no ticket yet"),
+   "this promise already has a ticket, so it must not be nudged for one");
+ok(oweChips[1].textContent.includes("Second key") && oweChips[1].textContent.includes("Fulfilled"),
+   "a settled promise stays visible, marked settled");
+const patriot = [...expand.querySelectorAll(".cust-vehicle")].find((el) => el.textContent.includes("Patriot"));
+ok(patriot && !patriot.querySelector(".cust-owe-chip"), "the car nothing was promised on shows no promise chips");
+
 // Re-expanding uses the cache -- no second fetch.
 click(w, row(1));
 ok(!$('#customers-table tr[data-expand-for="1"]'), "clicking the open row collapses it");
@@ -176,6 +227,22 @@ await settle();
 ok($("#view-vehicle-detail").classList.contains("active"), "a live RO chip should land on the vehicle detail page");
 ok(w.state.detail.segment === "we_owe" && w.state.detail.id === 71,
    `the detail page should be on we-owe 71, got ${w.state.detail.segment}:${w.state.detail.id}`);
+
+/* ---------- a promise with no ticket is still reachable and actionable ----
+   This is the whole point: Ada has no repair order, so before the promise
+   chips existed there was nothing on this screen to click at all. */
+w.showView("customers");
+await settle();
+click(w, row(3));
+await settle();
+const adaChip = $('#customers-table tr[data-expand-for="3"] .cust-owe-chip');
+ok(adaChip, "a customer with a promise and no ticket still gets something to click");
+ok(adaChip.textContent.includes("no ticket yet"),
+   `an open promise nobody has written up says so, says "${adaChip.textContent.replace(/\s+/g, " ").trim()}"`);
+click(w, adaChip);
+await settle();
+ok(w.state.detail.segment === "we_owe" && w.state.detail.id === 90,
+   `the promise chip should open we-owe 90, got ${w.state.detail.segment}:${w.state.detail.id}`);
 
 /* ---------- a retail chip jumps to the vehicle's retail page ---------- */
 w.showView("customers");
@@ -236,11 +303,23 @@ w.showView("customers");
 await settle();
 click(w, row(1));
 await settle();
+// The Patriot is owed nothing, so the promise reminder must stay out of the way.
+click(w, $('.cust-new-ro[data-vehicle-id="12"]'));
+ok($("#retail-ro-owe-note").hidden, "no promise on this car means no reminder in the dialog");
+$("#retail-ro-dialog").close();
+
 click(w, $('.cust-new-ro[data-vehicle-id="11"]'));
 const roDialog = $("#retail-ro-dialog");
 ok(roDialog && roDialog.open, "Write RO opens the dialog");
 ok($("#retail-ro-customer").textContent === "Marta Alvarez", "the dialog names the customer");
 ok($("#retail-ro-vehicle").textContent.includes("Kia Soul"), "the dialog names the vehicle");
+// Writing promised work as retail bills it at the wrong price on the wrong
+// side and leaves the promise open forever. It stays allowed -- a customer
+// who is owed a tie rod can still pay for brakes -- but it gets said out loud.
+ok(!$("#retail-ro-owe-note").hidden && $("#retail-ro-owe-note").textContent.includes("Replace worn tie rod"),
+   "a car that is still owed something names the promise before a retail ticket is written");
+ok(!$("#retail-ro-owe-note").textContent.includes("Second key"),
+   "a promise already kept is not something to warn about");
 input($("#retail-ro-concern"), "Brakes grinding");
 $("#retail-ro-form").dispatchEvent(new w.Event("submit", { bubbles: true, cancelable: true }));
 await settle();

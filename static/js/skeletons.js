@@ -37,9 +37,9 @@ export function skeletonCards(count = 3) {
 // constant now. tests/test_static_assets.py holds it to the real <th> count.
 export const BOARD_COLUMNS = 11;
 
-// Name, Contact, Location, Vehicles, Repair Orders, Last Visit. Same
+// Name, Contact, Location, Vehicles, Repair Orders, We-Owe, Last Visit. Same
 // skeleton/empty-state colspan contract as BOARD_COLUMNS above.
-export const CUSTOMER_COLUMNS = 6;
+export const CUSTOMER_COLUMNS = 7;
 
 // Which containers to fill with a placeholder when a view is opened, and how
 // many columns each table has (so the skeleton lines up with its header).

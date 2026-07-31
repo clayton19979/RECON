@@ -28,6 +28,11 @@ export const state = {
   orders: [],
   currentUser: localStorage.getItem("dao-current-user") || "",
   detail: { segment: null, id: null, item: null, order: null },
+  // The A/P invoice list's window: apRange is the lit chip's name ("" once the
+  // dates are edited by hand), apFilter the dates it currently stands for. The
+  // name is what's authoritative -- see refreshApRange. "all" matches the chip
+  // index.html ships already lit, which is the empty range.
+  apRange: "all",
   apFilter: { start: "", end: "" },
   apSearch: "",
   apAudits: [],

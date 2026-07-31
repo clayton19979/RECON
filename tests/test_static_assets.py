@@ -437,11 +437,18 @@ def test_report_controls_refetch_rather_than_waiting_for_a_button(html: str, js:
 
     ranges = re.findall(r'data-report-range="(\w+)"', html)
     assert len(ranges) == len(set(ranges)) == 5, f"expected 5 distinct range chips, found {ranges}"
-    match_list = re.search(r"const match = \[([^\]]+)\]", js)
-    assert match_list is not None, "the report-range detection list is gone from app.js"
-    known = set(re.findall(r'"(\w+)"', match_list.group(1)))
+    # QUICK_RANGES is the one list: what a chip may be called, what a
+    # hand-typed pair is matched back to, and -- the part that matters -- which
+    # ranges get re-resolved against today instead of replayed from the day
+    # they were saved. A chip missing from it silently opts out of that.
+    quick = re.search(r"const QUICK_RANGES = \[([^\]]+)\]", js)
+    assert quick is not None, "QUICK_RANGES is gone from app.js"
+    known = set(re.findall(r'"(\w+)"', quick.group(1)))
     assert set(ranges) == known, (
         f"range chips {sorted(ranges)} don't match the ranges the app can detect {sorted(known)}"
+    )
+    assert "const match = QUICK_RANGES.find(" in js, (
+        "hand-typed dates are matched against their own list again; it will drift from the chips"
     )
 
 

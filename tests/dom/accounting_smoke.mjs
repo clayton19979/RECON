@@ -51,7 +51,7 @@ const patches = [];
 let processAnswer = () => ({ status: "posted", issues: [] });
 
 const { w, doc, fetchLog, settle, ok, finish, rejections } = await boot({
-  expose: ["state", "showView", "loadAccountingView", "renderApTable", "filterApInvoices"],
+  expose: ["state", "showView", "loadAccountingView", "renderApTable", "filterApInvoices", "computeQuickRange"],
   fetch: async (url, opts) => {
     if (url === "/api/vendors" && opts.method === "GET") return VENDORS;
     if (url === "/api/vendors" && opts.method === "POST") {
@@ -304,6 +304,35 @@ ok(vendorPatch && vendorPatch.body.account_number === "A-200",
    `the vendor PATCH carried account "${vendorPatch && vendorPatch.body.account_number}"`);
 ok($("#vendor-form-title").textContent === "Vendors", "the form is stuck in editing mode after an update");
 
+/* ---------- the range chips mean today, not the day they were clicked ----------
+   Nothing here is saved to localStorage, so the way this screen goes stale is
+   being left open: the shop works evenings, and past midnight a lit "Today"
+   is showing yesterday's invoices under today's heading. */
+$('#view-accounting [data-ap-range="today"]').click();
+await settle();
+const today = w.computeQuickRange("today");
+ok(w.state.apFilter.start === today.start, `clicking Today filtered from ${w.state.apFilter.start}`);
+ok(fetchLog.at(-1).url.includes(`start=${today.start}`), `the chip didn't reach the query: ${fetchLog.at(-1).url}`);
+
+// Roll the clock: put yesterday's answer back under a chip still reading Today.
+w.state.apFilter = { start: "2020-01-01", end: "2020-01-01" };
+await w.loadAccountingView();
+await settle();
+ok(w.state.apFilter.start === today.start,
+   `a lit Today chip kept covering ${w.state.apFilter.start} after the day rolled over`);
+ok($("#ap-filter-start").value === today.start, "the From field kept the stale date");
+ok(fetchLog.at(-1).url.includes(`start=${today.start}`), `the stale range still reached the query: ${fetchLog.at(-1).url}`);
+
+// A hand-typed date belongs to no chip, and must not be overwritten by one.
+$("#ap-filter-start").value = "2026-02-03";
+$("#ap-filter-start").dispatchEvent(new w.Event("change", { bubbles: true }));
+await settle();
+ok(!$("#view-accounting [data-ap-range].active"), "a range chip stayed lit after the dates were typed by hand");
+await w.loadAccountingView();
+await settle();
+ok(w.state.apFilter.start === "2026-02-03",
+   `reloading the screen overwrote the typed date with ${w.state.apFilter.start}`);
+
 ok(rejections.length === 0, `unhandled rejections during the run: ${rejections.map((e) => e && e.message).join(" | ")}`);
 
-finish("accounting: stats, PO/vendor selects, table states, search, line math + validation, post payload, held/duplicate feedback, void confirm, vendor edit");
+finish("accounting: stats, PO/vendor selects, table states, search, line math + validation, post payload, held/duplicate feedback, void confirm, vendor edit, range chips");

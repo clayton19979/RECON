@@ -16,6 +16,11 @@ PART_STATUSES = {"quoted", "ordered", "received"}
 
 class ItemStatusIn(BaseModel):
     status: Literal["quoted", "ordered"]
+    actor: str = "ui"
+
+
+class OrderPartsIn(BaseModel):
+    actor: str = "ui"
 
 
 class ReceivePartsIn(BaseModel):
@@ -102,7 +107,7 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
         )
 
     @router.patch("/orders/{order_id}/estimate/order-parts")
-    def order_parts(order_id: int):
+    def order_parts(order_id: int, item: OrderPartsIn = OrderPartsIn()):
         with connect() as db:
             assert_vehicle_editable(db, order_row(db, order_id))
             assert_estimate_editable(db, order_id)
@@ -111,6 +116,19 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
                 "UPDATE estimate_items SET status='ordered' WHERE estimate_id=? AND kind='part' AND status='quoted'",
                 (estimate["id"],),
             )
+            # Ordering the parts is the single most consequential thing that
+            # happens to a recon car -- it is what the car then sits waiting on
+            # -- and it used to leave no trace at all. No log entry, and
+            # (because record_activity is what moves orders.last_activity_at)
+            # no movement on the idle clock either: a car whose windshield was
+            # ordered this morning kept counting up toward Stalled, and the Lot
+            # Report kept telling Walt it had been untouched for a week.
+            #
+            # Only when a line actually flipped. Pressing the button on a
+            # ticket with nothing left to order is not work on the car, and a
+            # clock that any no-op resets is a clock nobody can trust.
+            if cur.rowcount:
+                record_activity(db, order_id, "parts_ordered", item.actor, {"count": cur.rowcount}, now_fn)
             return {"updated": cur.rowcount}
 
     @router.patch("/orders/{order_id}/estimate/items/{item_id}/status")
@@ -120,7 +138,7 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
             assert_estimate_editable(db, order_id)
             estimate = estimate_for_order(db, order_id)
             row = db.execute(
-                "SELECT id, kind FROM estimate_items WHERE id=? AND estimate_id=?", (item_id, estimate["id"])
+                "SELECT id, kind, status FROM estimate_items WHERE id=? AND estimate_id=?", (item_id, estimate["id"])
             ).fetchone()
             if not row:
                 raise HTTPException(404, "Estimate item not found on this repair order")
@@ -128,6 +146,19 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
             # which posts a real A/P record -- this endpoint no longer accepts
             # "received" for a part line so there's exactly one receiving path.
             db.execute("UPDATE estimate_items SET status=? WHERE id=?", (item.status, item_id))
+            # Same reasoning as order-parts above: ordering one line by hand is
+            # the same event as ordering them all, and has to move the same
+            # clock. Re-selecting the status a line already had is not activity.
+            ordered = item.status == "ordered"
+            if row["status"] != item.status:
+                record_activity(
+                    db,
+                    order_id,
+                    "parts_ordered" if ordered else "part_order_undone",
+                    item.actor,
+                    {"item_id": item_id, "count": 1},
+                    now_fn,
+                )
         return {"id": item_id, "status": item.status}
 
     def find_received_invoice(db: sqlite3.Connection, order_id: int, invoice_number: str) -> sqlite3.Row | None:

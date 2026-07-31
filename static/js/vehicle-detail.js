@@ -1330,7 +1330,7 @@ async function onEstimateStatusChange(sel) {
   const itemId = sel.closest(".part-row")?.dataset.id;
   if (!order || !itemId) return;
   try {
-    await patch(`/api/orders/${order.id}/estimate/items/${itemId}/status`, { status: sel.value });
+    await patch(`/api/orders/${order.id}/estimate/items/${itemId}/status`, { status: sel.value, actor: currentActor() });
     sel.dataset.prev = sel.value;
     toast("Status updated");
     await loadVehicleDetail();
@@ -1725,7 +1725,10 @@ const ACTIVITY_LABEL = {
   estimate_declined: "Estimate declined",
   estimate_item_moved_in: "Line moved onto this ticket",
   estimate_item_moved_out: "Line moved to another ticket",
+  parts_ordered: "Parts ordered",
+  part_order_undone: "Part put back to quoted",
   parts_received: "Parts received",
+  ap_invoice_posted: "Vendor invoice posted",
   part_returned: "Part returned",
   part_return_undone: "Part return undone",
   part_return_credited: "Return credited",
@@ -2110,7 +2113,7 @@ export function wireVehicleDetail() {
       confirmLabel: "Mark Ordered",
     }))) return;
     try {
-      const res = await patch(`/api/orders/${state.detail.order.id}/estimate/order-parts`);
+      const res = await patch(`/api/orders/${state.detail.order.id}/estimate/order-parts`, { actor: currentActor() });
       toast(res.updated ? `${res.updated} part line(s) marked ordered` : "No quoted parts to order");
       await loadVehicleDetail();
     } catch (err) {

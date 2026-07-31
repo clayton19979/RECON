@@ -690,6 +690,31 @@ def build_accounting_router(connect: Callable[[], sqlite3.Connection], now: Call
                 return {"status": "duplicate", "issues": duplicate_issues, "vendor_id": vendor_id, "order_id": order_id}
             ap_id = result["ap_invoice_id"]
             audit(db, invoice, "posted", [], order_id, vendor_id)
+            # A vendor bill landing on a ticket puts real money on the car and
+            # marks its parts received -- the biggest single thing that happens
+            # to a repair order short of closing it. It was invisible on the
+            # ticket: nothing in the activity log, and no movement on the idle
+            # clock (record_activity is what moves orders.last_activity_at), so
+            # a car whose parts arrived this morning still read as untouched.
+            # The invoice's own source is the actor: this path is fed by the
+            # invoice ingestion agent as often as by a person, and saying which
+            # is more use than logging a blank "ui".
+            record_activity(
+                db,
+                # order["id"], not order_id: the early return above means order
+                # is definitely a row by now, and reading it straight keeps
+                # that obvious instead of leaning on the nullable local.
+                order["id"],
+                "ap_invoice_posted",
+                invoice.source,
+                {
+                    "ap_invoice_id": ap_id,
+                    "invoice_number": invoice.invoice_number.strip(),
+                    "vendor_id": vendor_id,
+                    "total": invoice.total,
+                },
+                now,
+            )
             return {
                 "status": "posted",
                 "ap_invoice_id": ap_id,

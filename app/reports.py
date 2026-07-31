@@ -7,7 +7,7 @@ from typing import Literal
 from fastapi import APIRouter
 
 from .db import normalize_vin
-from .recon import is_stalled, unit_lifetime, vehicle_board_rows
+from .recon import is_stalled, unit_lifetimes, vehicle_board_rows
 
 
 def vehicle_profit_rows(
@@ -43,9 +43,10 @@ def vehicle_profit_rows(
         {"start": start, "end": end_bound, "vin": vin},
     ).fetchall()
 
+    lifetimes = unit_lifetimes(db, [row["id"] for row in rows])
     result = []
     for row in rows:
-        lifetime = unit_lifetime(db, row["id"])
+        lifetime = lifetimes[row["id"]]
         result.append(
             {
                 **lifetime,

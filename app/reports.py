@@ -117,7 +117,23 @@ def lot_needs_text(row: dict) -> str:
     sheet and the CSV cannot drift into three different phrasings of the same
     car -- Walt reads whichever one is in front of him and they have to agree.
     """
+    # Money the car has spent but hasn't been charged: parts sitting on a
+    # ticket that is already closed and were never marked received. The car
+    # itself needs nothing, but the figure beside it on this sheet is short by
+    # this much, and the sheet has to say so rather than let a car that took
+    # $380 of tires read as free. See cost_rollup for why only closed tickets
+    # count.
+    missing = row.get("unreceived_closed_cost") or 0
+    missing_parts = row.get("unreceived_closed_parts") or 0
+    missing_text = (
+        f"{missing_parts} part{'' if missing_parts == 1 else 's'} never marked received (${missing:,.2f} not in the cost)"
+        if missing
+        else ""
+    )
+
     if row["lot_bucket"] == LOT_READY:
+        if missing_text:
+            return f"Ready to go — but {missing_text}"
         return "Nothing — ready to go"
 
     bits = []
@@ -146,6 +162,12 @@ def lot_needs_text(row: dict) -> str:
     # about which cars have been forgotten.
     if is_stalled(row):
         bits.append(f"untouched {row['idle_days']} days")
+
+    # A car can have an earlier ticket closed out with parts nobody receipted
+    # and still be in the shop on a second one, so this belongs on every row,
+    # not only the finished ones.
+    if missing_text:
+        bits.append(missing_text)
 
     if not bits:
         return "work under way"

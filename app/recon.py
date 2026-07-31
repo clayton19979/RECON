@@ -252,7 +252,17 @@ def cost_rollup(db: sqlite3.Connection, column: str, ref_id: int, segment: str |
     common reason a car sits on the lot doing nothing, and until now it was
     only visible by opening the ticket -- see the board's Parts column.
     Returned parts are excluded: a line sent back to the vendor isn't
-    something the shop is still waiting on."""
+    something the shop is still waiting on.
+
+    unreceived_cost is the gap the two numbers above leave behind: quoted
+    parts money that has never been marked as landed, so it is in quoted_cost
+    and not in total_cost. On a ticket still being worked that gap is just
+    work not done yet. On a ticket already marked complete it is a
+    bookkeeping hole -- the work happened, the parts went on the car, and
+    nobody ever clicked Receive -- which is why the closed half is counted
+    separately. A finished car whose parts were never receipted reports as
+    having cost nothing, and that is the one number on this screen that
+    absolutely must not be quietly wrong."""
     rows = db.execute(
         f"""SELECT o.id, o.number, o.status, o.voided,
                coalesce(sum(CASE WHEN ei.kind='part' AND ei.part_returned=0 THEN ei.received_quantity*ei.unit_cost ELSE 0 END),0) parts_cost,
@@ -272,7 +282,15 @@ def cost_rollup(db: sqlite3.Connection, column: str, ref_id: int, segment: str |
                -- the same money back twice.
                coalesce(sum(CASE WHEN ei.kind='credit' THEN -ei.quantity*ei.unit_cost ELSE ei.quantity*ei.unit_cost END),0) quoted_cost,
                coalesce(sum(CASE WHEN ei.kind='part' AND ei.status='ordered' AND ei.part_returned=0 THEN 1 ELSE 0 END),0) parts_pending,
-               coalesce(sum(CASE WHEN ei.kind='part' AND ei.status='ordered' AND ei.part_returned=0 THEN ei.quantity*ei.unit_cost ELSE 0 END),0) parts_pending_value
+               coalesce(sum(CASE WHEN ei.kind='part' AND ei.status='ordered' AND ei.part_returned=0 THEN ei.quantity*ei.unit_cost ELSE 0 END),0) parts_pending_value,
+               -- Quoted parts money that hasn't landed as actual cost. Whatever
+               -- the line's status says, what counts here is the quantity: a
+               -- line marked 'received' for two of the four ordered is still
+               -- two parts' worth of money the car hasn't been charged.
+               coalesce(sum(CASE WHEN ei.kind='part' AND ei.part_returned=0
+                                 THEN max(ei.quantity - ei.received_quantity, 0)*ei.unit_cost ELSE 0 END),0) unreceived_cost,
+               coalesce(sum(CASE WHEN ei.kind='part' AND ei.part_returned=0 AND ei.received_quantity < ei.quantity
+                                 THEN 1 ELSE 0 END),0) unreceived_parts
            FROM orders o
            LEFT JOIN estimates e ON e.order_id=o.id
            LEFT JOIN estimate_items ei ON ei.estimate_id=e.id
@@ -292,6 +310,9 @@ def cost_rollup(db: sqlite3.Connection, column: str, ref_id: int, segment: str |
     # (traceability) but never count toward the vehicle's cost -- that work
     # was never actually done.
     countable = [o for o in orders if not o["voided"]]
+    # Tickets the shop considers done. Only these turn an unreceived part into
+    # a problem: on an open ticket the same line is simply work still ahead.
+    closed = [o for o in countable if o["status"] == "complete"]
     return {
         "orders": orders,
         "total_cost": round(sum(o["total_cost"] for o in countable), 2),
@@ -299,6 +320,9 @@ def cost_rollup(db: sqlite3.Connection, column: str, ref_id: int, segment: str |
         "labor_hours": round(sum(o["labor_hours"] for o in countable), 2),
         "parts_pending": int(sum(o["parts_pending"] for o in countable)),
         "parts_pending_value": round(sum(o["parts_pending_value"] for o in countable), 2),
+        "unreceived_cost": round(sum(o["unreceived_cost"] for o in countable), 2),
+        "unreceived_closed_cost": round(sum(o["unreceived_cost"] for o in closed), 2),
+        "unreceived_closed_parts": int(sum(o["unreceived_parts"] for o in closed)),
     }
 
 
@@ -554,6 +578,9 @@ def vehicle_board_rows(
                     "labor_hours": rollup["labor_hours"],
                     "parts_pending": rollup["parts_pending"],
                     "parts_pending_value": rollup["parts_pending_value"],
+                    "unreceived_cost": rollup["unreceived_cost"],
+                    "unreceived_closed_cost": rollup["unreceived_closed_cost"],
+                    "unreceived_closed_parts": rollup["unreceived_closed_parts"],
                     "technicians": technician_names(db, order_ids),
                     # The ticket a board-level action should attach itself to:
                     # the open one if there is one, else the most recent, else
@@ -623,6 +650,9 @@ def vehicle_board_rows(
                     "labor_hours": rollup["labor_hours"],
                     "parts_pending": rollup["parts_pending"],
                     "parts_pending_value": rollup["parts_pending_value"],
+                    "unreceived_cost": rollup["unreceived_cost"],
+                    "unreceived_closed_cost": rollup["unreceived_closed_cost"],
+                    "unreceived_closed_parts": rollup["unreceived_closed_parts"],
                     "customer_paid": customer_paid,
                     "net_cost": round(rollup["total_cost"] - customer_paid, 2),
                     "technicians": technician_names(db, order_ids),

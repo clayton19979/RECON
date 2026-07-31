@@ -40,6 +40,22 @@ def test_recon_patch_status_and_sale(client):
     assert body["profit"] == 4000
 
 
+def test_recon_patch_sale_without_purchase_price_leaves_profit_unknown(client):
+    """The new-vehicle dialog no longer collects a purchase price (Walt tracks
+    that himself), so a car sold with no purchase price on file must not
+    report its whole sale price as profit -- CLAUDE.md is explicit that a
+    missing purchase price has to keep profit missing too."""
+    vehicle = make_recon_vehicle(client, stock_number="R-2201", purchase_price=0)
+    res = client.patch(
+        f"/api/recon/vehicles/{vehicle['id']}",
+        json={"status": "sold", "sale_price": 8000, "sale_date": "2026-03-01"},
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert body["status"] == "sold"
+    assert body["profit"] is None
+
+
 def test_recon_patch_edits_core_vehicle_info(client):
     """Correcting a typo'd purchase price or VIN shouldn't require touching
     the database directly."""

@@ -1322,7 +1322,7 @@ async function onEstimateStatusChange(sel) {
   const itemId = sel.closest(".part-row")?.dataset.id;
   if (!order || !itemId) return;
   try {
-    await patch(`/api/orders/${order.id}/estimate/items/${itemId}/status`, { status: sel.value });
+    await patch(`/api/orders/${order.id}/estimate/items/${itemId}/status`, { status: sel.value, actor: currentActor() });
     sel.dataset.prev = sel.value;
     toast("Status updated");
     await loadVehicleDetail();
@@ -1346,7 +1346,7 @@ async function onEstimatePartReturn(btn) {
     ? ` Its ${money(line.core_charge)} core charge reverses with it, so the core drops off the cores board — there's no old unit to send back.`
     : "";
   // No paperwork at this step: the part goes back to the vendor first, and
-  // the credit invoice arrives later -- it's recorded on the Cores & Returns
+  // the credit invoice arrives later -- it's recorded on the Parts & Cores
   // page once it shows up.
   if (returned && !(await confirmAction({
     eyebrow: "VENDOR RETURN",
@@ -1356,7 +1356,7 @@ async function onEstimatePartReturn(btn) {
   }))) return;
   try {
     await patch(`/api/orders/${order.id}/estimate/items/${btn.dataset.id}/part-return`, { returned, actor: currentActor() });
-    toast(returned ? "Marked returned — it's waiting for pickup in Cores & Returns" : "Return undone");
+    toast(returned ? "Marked returned — it's waiting for pickup in Parts & Cores" : "Return undone");
     await loadVehicleDetail();
   } catch (err) {
     toast(err.message, true);
@@ -1717,6 +1717,8 @@ const ACTIVITY_LABEL = {
   estimate_declined: "Estimate declined",
   estimate_item_moved_in: "Line moved onto this ticket",
   estimate_item_moved_out: "Line moved to another ticket",
+  parts_ordered: "Parts marked ordered",
+  parts_order_undone: "Part put back to quoted",
   parts_received: "Parts received",
   part_returned: "Part returned",
   part_return_undone: "Part return undone",
@@ -2096,7 +2098,7 @@ export function wireVehicleDetail() {
       confirmLabel: "Mark Ordered",
     }))) return;
     try {
-      const res = await patch(`/api/orders/${state.detail.order.id}/estimate/order-parts`);
+      const res = await patch(`/api/orders/${state.detail.order.id}/estimate/order-parts`, { actor: currentActor() });
       toast(res.updated ? `${res.updated} part line(s) marked ordered` : "No quoted parts to order");
       await loadVehicleDetail();
     } catch (err) {

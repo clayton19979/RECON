@@ -225,8 +225,9 @@ const HELP_TOPICS = [
       "Every quoted part line on that ticket flips to ordered.",
       "This is bookkeeping only. Call, fax or order from the vendor exactly as you always have.",
       "The vehicle now counts on the board's 'Waiting on Parts' card until those parts are received.",
+      "It also records the date, which is what the On Order list counts the wait from — and it counts as work on the car, so the car stops looking untouched.",
     ],
-    related: ["receive-parts", "add-parts-and-labor", "vehicles-board"],
+    related: ["receive-parts", "add-parts-and-labor", "vehicles-board", "parts-on-order"],
   },
 
   {
@@ -501,14 +502,30 @@ const HELP_TOPICS = [
   },
 
   {
+    id: "parts-on-order",
+    title: "Seeing what you're waiting on",
+    view: "cores",
+    aliases: ["on order", "what am i waiting on", "where is that part", "part hasn't come", "backorder", "back order", "chase the vendor", "why is that car sitting", "parts on order", "late part"],
+    summary: "One list of every part that's been ordered and hasn't turned up, longest wait first.",
+    steps: [
+      "Open Parts & Cores. On Order is the first table.",
+      "Each row is one part somebody is waiting for, with which car it's for and how many days it's been coming.",
+      "'Waiting 7+ days' narrows it to the ones worth a phone call.",
+      "Click a row to open that vehicle and receive the part once it arrives.",
+      "A part ordered before this list existed shows its order date as 'not recorded' — nothing was written down at the time, so it isn't guessed.",
+    ],
+    related: ["order-parts", "receive-parts", "cores-explained"],
+  },
+
+  {
     id: "cores-explained",
-    title: "What the Cores screen is for",
+    title: "What Core Deposits is for",
     view: "cores",
     aliases: ["core", "cores", "core charge", "core deposit", "old part", "alternator", "caliper", "money back from the vendor", "core money"],
     summary: "Tracks core deposits the vendor owes back, so the shop actually collects them instead of eating the charge.",
     steps: [
       "A core charge is money the vendor adds to a part until you send the old one back.",
-      "Cores & Returns lists every one still outstanding, with the charge and which RO and vehicle it came from.",
+      "The Core Deposits table on Parts & Cores lists every one still outstanding, with the charge and which RO and vehicle it came from.",
       "Each core moves through three states: Pending, Awaiting Credit, then Credited.",
       "The chips at the top filter to whichever state you care about.",
     ],
@@ -535,7 +552,7 @@ const HELP_TOPICS = [
     title: "Sending a part back",
     view: "cores",
     aliases: ["return", "returns", "wrong part", "send it back", "didn't need it", "credit due", "returned parts", "restock"],
-    summary: "Returned Parts is the lower half of the Cores screen — parts going back for credit rather than core deposits.",
+    summary: "Returned Parts is the bottom table on Parts & Cores — parts going back for credit rather than core deposits.",
     steps: [
       "Find the part in the Returned Parts section.",
       "Mark it picked up when the driver collects it.",
@@ -760,7 +777,7 @@ const HELP_GROUPS = [
     title: "Vendors, invoices and cores",
     ids: [
       "post-vendor-invoice", "invoice-approval", "manage-vendors",
-      "cores-explained", "core-workflow", "returned-parts",
+      "parts-on-order", "cores-explained", "core-workflow", "returned-parts",
     ],
   },
   {

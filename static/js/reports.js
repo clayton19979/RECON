@@ -1,5 +1,5 @@
 import { $, $$, fmtHours, get } from "./core.js";
-import { esc, money } from "./shortcuts.js";
+import { esc, money, todayLocal } from "./shortcuts.js";
 import { emptyState } from "./empty-states.js";
 import { skeletonCards, skeletonRows } from "./skeletons.js";
 import { STATUS_LABEL, state } from "./state.js";
@@ -15,10 +15,10 @@ import { openVehicleDetail } from "./vehicle-detail.js";
 // same thing everywhere in the app.
 export function computeQuickRange(kind) {
   const now = new Date();
-  // Local date, not toISOString(): that converts to UTC first, so any click
+  // todayLocal, never toISOString(): that converts to UTC first, so any click
   // after ~7 PM in Merrillville computed *tomorrow's* date and "Today"
   // reported on a day that hadn't started.
-  const iso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  const iso = todayLocal;
   let start, end = iso(now);
   if (kind === "today") start = iso(now);
   else if (kind === "yesterday") { const d = new Date(now); d.setDate(d.getDate() - 1); start = iso(d); end = iso(d); }

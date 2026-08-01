@@ -14,7 +14,10 @@ const veh = (over) => ({
   segment: "recon", recon_id: null, we_owe_id: null, stock_number: "", vehicle: "",
   vin: "", customer_name: "", status: "in_progress", status_bucket: "in_progress",
   purchase_price: 0, actual_cost: 0, quoted_cost: 0, technicians: [], updated_at: "2026-07-01T09:00:00",
-  age_days: 1, parts_pending: 0, parts_pending_value: 0,
+  // Blank is the common case and the awkward one: most cars have no arrival
+  // date on file, and the cell has to say so rather than passing the write-up
+  // date off as one. Rows that do carry one set it explicitly below.
+  acquired_at: "", age_days: 1, parts_pending: 0, parts_pending_value: 0,
   idle_days: 0, last_activity_at: "2026-07-25T08:00:00", order_id: null, ...over,
 });
 
@@ -42,7 +45,7 @@ const veh = (over) => ({
    nearly as long. A column that quietly read age_days would still pass a
    same-order fixture, and fails this one. */
 let board = [
-  veh({ recon_id: 1, stock_number: "B204", vehicle: "2019 Ford F-150", vin: "1FTEW1E5XKF", status: "in_progress", technicians: ["Dana"], age_days: 22, quoted_cost: 900, actual_cost: 1450, parts_pending: 2, parts_pending_value: 340, idle_days: 0, last_activity_at: "2026-07-25T08:15:00" }),
+  veh({ recon_id: 1, stock_number: "B204", vehicle: "2019 Ford F-150", vin: "1FTEW1E5XKF", status: "in_progress", technicians: ["Dana"], acquired_at: "2026-06-09", age_days: 22, quoted_cost: 900, actual_cost: 1450, parts_pending: 2, parts_pending_value: 340, idle_days: 0, last_activity_at: "2026-07-25T08:15:00" }),
   veh({ recon_id: 2, stock_number: "A118", vehicle: "2021 Honda Civic", vin: "2HGFC2F69MH", status: "estimate", technicians: [], age_days: 3, quoted_cost: 600, actual_cost: 0, idle_days: 2, last_activity_at: "2026-07-23T11:00:00" }),
   veh({ segment: "we_owe", we_owe_id: 5, stock_number: "", vehicle: "2017 Toyota Camry", customer_name: "R. Alvarez", status: "pending_approval", status_bucket: "in_progress", technicians: ["Chris", "Dana"], age_days: 41, quoted_cost: 300, actual_cost: 310, parts_pending: 1, parts_pending_value: 85, idle_days: 4, last_activity_at: "2026-07-21T09:30:00" }),
   // The two stalled cars carry real ticket ids: they're what "Make Tasks"
@@ -340,13 +343,35 @@ await settle();
 ok(!w.state.vehiclePartsOnly && !partsChip.classList.contains("active"), "Reset view left the parts toggle on");
 ok(dataRows().length === 5, `after reset the whole board should be back, got ${dataRows().length}`);
 
+/* ---------- Age column ----------
+   Age is "how long has this car been here", counted from the day it arrived
+   on the lot -- which is not always the day somebody typed it in. The cell has
+   to say which date it came off, or a wrong arrival date is invisible and the
+   number is unarguable. A we-owe has no lot arrival: its clock starts at the
+   promise, and the tooltip has to say that rather than claiming a date it
+   doesn't have. */
+// The day count itself is the server's (age_days); the cell only renders it
+// and says what it was counted from, so the fixture sets the two separately.
+const rowByKey = (key) => dataRows().find((tr) => tr.dataset.key === key);
+const ageCell = (key) => rowByKey(key).querySelector("td.age-col .age-cell");
+
+ok(ageCell("recon:1").textContent.trim() === "22d", `Age reads "${ageCell("recon:1").textContent.trim()}", expected 22d`);
+ok(/On the lot since 2026-06-09/.test(ageCell("recon:1").title),
+   `the Age tooltip should name the arrival date, got "${ageCell("recon:1").title}"`);
+ok(/22 days/.test(ageCell("recon:1").title), `the Age tooltip reads "${ageCell("recon:1").title}"`);
+// No arrival date on file: say so rather than implying the write-up date is one.
+ok(/no arrival date on file/.test(ageCell("recon:2").title),
+   `a car with no arrival date reads "${ageCell("recon:2").title}"`);
+ok(/Written up 3 days ago/.test(ageCell("recon:2").title), `got "${ageCell("recon:2").title}"`);
+ok(/^Promised 41 days ago$/.test(ageCell("we_owe:5").title),
+   `a we-owe's Age tooltip should talk about the promise, got "${ageCell("we_owe:5").title}"`);
+
 /* ---------- Idle column ----------
    Idle is "days since anything happened on this car's ticket", which is a
    different number from Age and comes from a different place (the server's
    orders.last_activity_at, not the vehicle row). The fixture's idle values are
    deliberately in a different order from its ages, so a cell or comparator
    reading age_days by mistake shows up here rather than looking right. */
-const rowByKey = (key) => dataRows().find((tr) => tr.dataset.key === key);
 const idleCell = (key) => rowByKey(key).querySelector("td.idle-col .idle-cell");
 
 ok(th("idle"), "the board has no sortable Idle column");

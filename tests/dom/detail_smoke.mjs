@@ -47,6 +47,7 @@ const order = {
 let suggestCalls = [];
 let suggestMode = "results"; // "results" | "empty" | "error"
 const customerPatchBodies = []; // what the editor actually saved
+const reconPatchBodies = []; // ...and what the Edit Vehicle dialog saved
 
 // The Assigned card's two Save buttons each write their own half of one
 // record; these capture exactly what each one puts on the wire.
@@ -71,6 +72,10 @@ const { w, doc, fetchLog, settle, ok, finish, rejections } = await boot({
       ];
     }
     if (url.startsWith("/api/vehicles-board")) return [];
+    if (/^\/api\/recon\/vehicles\/7$/.test(url) && opts.method === "PATCH") {
+      reconPatchBodies.push(JSON.parse(opts.body));
+      return vehicle;
+    }
     if (/^\/api\/recon\/vehicles\/7$/.test(url)) return vehicle;
     // Plain /api/orders is what the Tasks screen builds its link dropdown
     // from, so it has to answer too -- not just the detail page's ?segment=

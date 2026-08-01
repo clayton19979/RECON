@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 
 from app.pages import render_index
+from tests.js_source import code_only
 
 STATIC = Path(__file__).resolve().parent.parent / "static"
 JS_DIR = STATIC / "js"
@@ -669,6 +670,39 @@ def test_idle_column_is_wired_end_to_end(js: str, html: str) -> None:
     assert "v.idle_days" in _function_source(js, "idleCellHtml"), "the Idle cell doesn't read idle_days"
     assert "idle_days" in _function_source(js, "vehicleRowSignature"), (
         "idle_days isn't in the row signature, so a row whose idle time changed won't re-render"
+    )
+
+
+def test_no_calendar_date_is_derived_from_toisostring(js: str) -> None:
+    """toISOString() converts to UTC before it formats, so from about 7 PM in
+    Merrillville onward it hands back *tomorrow*.
+
+    The shop works evenings. A car written up at eight o'clock was going on
+    file as arriving the next morning, and the Reports date chips had already
+    been fixed for the same reason -- the back end stores shop-local time on
+    purpose (see app/db.py::now and tests/test_shop_local_time.py) and the
+    front end has to agree with it. todayLocal() reads the wall clock instead,
+    and lives in one place so this can't be re-derived wrongly per screen.
+
+    Formatting a stamp the shop already holds is fine; deriving a calendar date
+    from *now* is not, which is what the .slice() giveaway catches."""
+    offenders = [line.strip() for line in code_only(js).splitlines() if "toISOString" in line and ".slice(" in line]
+    assert not offenders, "a date is being derived via UTC instead of todayLocal(): " + " | ".join(offenders)
+
+
+def test_the_age_column_says_what_it_is_counting_from(js: str, html: str) -> None:
+    """Age answers "how long has this car been here", counted from the day it
+    landed on the lot rather than the day somebody typed it in. A bare "34d"
+    is unarguable and a wrong arrival date is invisible, so the cell carries
+    the date it came off -- and acquired_at has to be in the row signature or
+    a corrected date won't repaint the row."""
+    header = re.search(r'<th[^>]*data-sort-key="age"[^>]*>', html)
+    assert header, "the board has no Age column header"
+    cell = _function_source(js, "ageCellHtml")
+    assert "acquired_at" in cell, "the Age cell doesn't mention where the count starts"
+    assert "ageCellHtml(v)" in _function_source(js, "vehicleRowHtml"), "the Age cell isn't rendered"
+    assert "acquired_at" in _function_source(js, "vehicleRowSignature"), (
+        "acquired_at isn't in the row signature, so correcting an arrival date won't repaint the row"
     )
 
 

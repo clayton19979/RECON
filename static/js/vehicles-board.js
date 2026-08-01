@@ -508,6 +508,27 @@ export function ageClass(days) {
   return "age-ok";
 }
 
+/* The Age cell, and what it is counting from.
+
+   On a recon car the count runs from the day the car arrived on the lot,
+   which is not always the day somebody typed it in -- a Friday auction run
+   written up on Monday is three days old the moment it appears. Saying which
+   date the number came off is what makes "34d" arguable instead of magic, and
+   it's how a wrong arrival date gets spotted and corrected (Edit Vehicle on
+   the car's own page). A we-owe has no arrival date: its clock starts when the
+   promise was made, and that's what the cell says. */
+function ageCellHtml(v) {
+  if (v.age_days == null) return `<span class="age-cell" title="No date on file">—</span>`;
+  const days = v.age_days;
+  const span = days === 0 ? "today" : `${days} day${days === 1 ? "" : "s"}`;
+  const title = v.acquired_at
+    ? `On the lot since ${v.acquired_at} — ${span}`
+    : v.segment === "we_owe"
+      ? `Promised ${span} ago`
+      : `Written up ${span} ago — no arrival date on file`;
+  return `<span class="age-cell" title="${esc(title)}">${days}d</span>`;
+}
+
 /* ---------- idle time ----------
 
    Age says how long the shop has had the car. Idle says when anyone last did
@@ -1032,7 +1053,7 @@ function vehicleRowHtml(v) {
       <td><span class="pill ${vehicleStatusPillClass(v)}">${esc(STATUS_LABEL[v.status] || v.status)}</span></td>
       <td>${v.technicians.length ? `<span class="tech"><span class="tech-dot"></span>${esc(v.technicians.join(", "))}</span>` : `<span class="muted-dash">—</span>`}</td>
       <td class="col-parts">${partsCellHtml(v)}</td>
-      <td class="num-col age-col ${ageClass(v.age_days)}">${v.age_days ?? "—"}${v.age_days == null ? "" : "d"}</td>
+      <td class="num-col age-col ${ageClass(v.age_days)}">${ageCellHtml(v)}</td>
       <td class="num-col idle-col">${idleCellHtml(v)}</td>
       <td class="promised-col">${promisedCellHtml(v)}</td>
       <td class="num-col quoted-col">${v.quoted_cost ? money(v.quoted_cost) : `<span class="muted-dash">—</span>`}</td>

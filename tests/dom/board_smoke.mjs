@@ -72,7 +72,7 @@ const { w, doc, fetchLog, settle, ok, finish, rejections } = await boot({
            "vehicleKey", "loadVehicleViewPrefs", "renderVehicleStatusOptions", "VEHICLE_SORTS",
            "VEHICLE_PREFS_KEY", "resetVehicleView", "boardStats", "isOverQuote", "BOARD_COLUMNS",
            "IDLE_BUCKETS", "idleBucket", "IDLE_SELECTIONS", "STALLED_AFTER_DAYS", "isStalled",
-           "bulkTaskTitle"],
+           "bulkTaskTitle", "isPromiseLate", "fmtDay"],
   fetch: async (url, opts) => {
     if (url.startsWith("/api/vehicles-board")) return url.includes("archived=true") ? archived : board;
     if (/^\/api\/(recon\/vehicles|we-owe)\/\d+$/.test(url)) return { id: 1, archived_at: "", stock_number: "B204", vehicle: "2019 Ford F-150" };

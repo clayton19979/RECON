@@ -94,13 +94,30 @@ const HELP_TOPICS = [
     aliases: ["main screen", "the list", "board", "home screen", "all cars", "columns", "what do the columns mean"],
     summary: "One row per vehicle in the shop, with the numbers that tell you which ones need attention today.",
     steps: [
-      "The five cards across the top count exactly the rows shown below them — filter the board and every number follows.",
-      "Waiting on Parts, Stalled and Over Quote are clickable: clicking one filters the board down to what it counts.",
+      "The six cards across the top count exactly the rows shown below them — filter the board and every number follows.",
+      "Waiting on Parts, Stalled, Over Quote and Past Promised are clickable: clicking one filters the board down to what it counts.",
       "The chips below switch between All, Recon, We-Owe and History (finished work).",
       "Click any column heading to sort by it.",
       "'Reset view' appears once you've filtered, and puts everything back.",
     ],
-    related: ["idle-and-age", "over-quote", "find-a-vehicle", "send-to-history"],
+    related: ["idle-and-age", "over-quote", "promised-dates", "find-a-vehicle", "send-to-history"],
+  },
+
+  {
+    id: "promised-dates",
+    title: "We-owe promises and their dates",
+    view: "vehicles",
+    aliases: ["promised", "promise date", "target date", "due date", "past due", "overdue", "when did we say",
+              "customer is waiting", "we owe by"],
+    summary: "The date a customer was promised their we-owe work, on the board so a promise can't quietly go past it.",
+    steps: [
+      "The date comes from the we-owe itself — it's the 'Target date' asked for when the promise is written down.",
+      "The Promised column shows it. It turns red with a 'late' tag once the date has gone by, and says 'today' on the day.",
+      "The Past Promised card counts the promises already past due — click it to see only those.",
+      "A promise marked fulfilled or waived stops counting: it's closed, so it can't be late.",
+      "Recon cars have no promise, so their Promised cell stays blank.",
+    ],
+    related: ["vehicles-board", "add-we-owe", "we-owe-close-out"],
   },
 
   {
@@ -749,7 +766,7 @@ const HELP_GROUPS = [
   },
   {
     title: "The Vehicles board",
-    ids: ["vehicles-board", "find-a-vehicle", "idle-and-age", "over-quote"],
+    ids: ["vehicles-board", "find-a-vehicle", "idle-and-age", "over-quote", "promised-dates"],
   },
   {
     title: "Starting work on a vehicle",

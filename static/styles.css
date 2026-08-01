@@ -323,7 +323,7 @@ button { font-family: inherit; }
    means "go look at something" earns the color, and a zero is quiet.
    The :nth-child rules above are position-based and would otherwise paint
    card 2 we-owe-purple whatever it happens to be counting. */
-.stats-board { grid-template-columns: repeat(5, 1fr); }
+.stats-board { grid-template-columns: repeat(6, 1fr); }
 .stats-board .stat:nth-child(n+2) { border-top-color: var(--line); }
 .stats-board .stat:nth-child(1) { border-top-color: var(--accent); }
 .stats-board .stat:has(.stat-value.warn) { border-top-color: var(--warn); }
@@ -560,6 +560,27 @@ table.sticky-head thead th {
   fill: none; stroke: currentColor; stroke-width: 1.8;
   stroke-linecap: round; stroke-linejoin: round;
 }
+
+/* ---------- promised date ----------
+   Blank on every recon row (they have no promise), so like the parts column
+   the only cells with anything in them are the ones worth reading. The date
+   itself stays plain text and the judgement rides in a small tag beside it:
+   the date is a fact, "3 days late" is the thing to act on, and separating
+   them means a promise that is merely due soon doesn't shout. A settled
+   promise fades out rather than keeping a colour it has earned its way out
+   of -- same rule the Idle column follows for finished cars. */
+.promised-col { width: 112px; white-space: nowrap; }
+.promise-cell { display: inline-flex; align-items: baseline; gap: 6px; color: var(--ink-soft); cursor: default; }
+.promise-settled { color: var(--ink-faint); }
+.promise-tag {
+  padding: 1px 6px; border-radius: 999px;
+  font-size: 11px; font-weight: 700; letter-spacing: .2px;
+  background: var(--line-soft); color: var(--ink-faint);
+}
+.promise-today { color: var(--ink); }
+.promise-today .promise-tag { background: var(--warn-tint); color: var(--warn); }
+.promise-late { color: var(--crit); font-weight: 600; }
+.promise-late .promise-tag { background: var(--crit-tint); color: var(--crit); }
 
 /* ---------- back link ---------- */
 .back-link {
@@ -1721,10 +1742,11 @@ input:focus-visible, select:focus-visible, textarea:focus-visible { outline: non
 .filters { flex-wrap: wrap; row-gap: 10px; }
 .topbar { flex-wrap: wrap; row-gap: 8px; }
 
-/* Five cards need a stop the four-card rows don't: at 1440 the board's row
-   squeezes its 26px numbers before Reports' does, so it drops to three
-   (2 + 1 reads worse than 3 + 2) a step earlier than everything else. */
-@media (max-width: 1440px) {
+/* Six cards need stops the four-card rows don't: the board's row squeezes its
+   26px numbers well before Reports' does, so it steps down earlier and lands
+   on counts that divide evenly (3 + 3, then 2 + 2 + 2) -- a lone card on a
+   second line reads as an afterthought rather than as part of the row. */
+@media (max-width: 1600px) {
   .stats-board { grid-template-columns: repeat(3, 1fr); }
 }
 @media (max-width: 1240px) {

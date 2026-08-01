@@ -174,6 +174,19 @@ def lot_needs_text(row: dict) -> str:
         return "Nothing — ready to go"
 
     bits = []
+    # First, because it outranks everything else on the row. A part on order or
+    # a quote half spent is the shop's own business; a we-owe promise whose
+    # date has gone by is a customer who was told a day and is still waiting.
+    # None here means the question doesn't apply -- a recon car, a promise with
+    # no date, or one already fulfilled or waived (see promise_days_late).
+    late = row.get("promise_days_late")
+    if late is not None and late >= 0:
+        bits.append(
+            "promised to the customer today"
+            if late == 0
+            else f"{late} day{'' if late == 1 else 's'} past the promised date"
+        )
+
     if row["status"] == "pending_approval":
         bits.append("waiting on approval")
     if not row.get("order_id"):

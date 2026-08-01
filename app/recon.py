@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Callable, Mapping
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException
@@ -666,6 +666,7 @@ def vehicle_board_rows(
                 2,
             )
             activity_at = last_activity(db, "we_owe_id", row["id"], row["created_at"])
+            status_bucket = we_owe_status_bucket(row["status"])
             result.append(
                 {
                     "segment": "we_owe",
@@ -677,7 +678,14 @@ def vehicle_board_rows(
                     "customer_name": row["customer_name"],
                     "description": row["description"],
                     "status": display_status,
-                    "status_bucket": we_owe_status_bucket(row["status"]),
+                    "status_bucket": status_bucket,
+                    # What the salesman told the customer they'd get their car
+                    # back by. It was captured at intake and then shown nowhere
+                    # anybody makes decisions -- the board, the summary cards
+                    # and the lot sheet all read these two fields now, so a
+                    # promise going past due is visible without opening the car.
+                    "target_date": row["target_date"],
+                    "promise_days_late": promise_days_late(row["target_date"], status_bucket),
                     # A we-owe car has a purchase price too -- it's just usually
                     # entered here, because the shop bought and recon'd it long
                     # before RECON ever saw it.

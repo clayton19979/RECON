@@ -131,6 +131,7 @@ export function wireVehiclesView() {
       const which = card.dataset.boardFilter;
       if (which === "parts") state.vehiclePartsOnly = !state.vehiclePartsOnly;
       else if (which === "over") state.vehicleOverOnly = !state.vehicleOverOnly;
+      else if (which === "late") state.vehicleLateOnly = !state.vehicleLateOnly;
       else if (which === "stalled") {
         // Any other bucket selected means the chart owns the idle filter;
         // taking it over is what the advisor asked for by clicking here.
@@ -248,6 +249,10 @@ export function wireVehiclesView() {
       }
       if (trigger.dataset.emptyAction === "clear-over") {
         state.vehicleOverOnly = false;
+        renderVehiclesTable();
+      }
+      if (trigger.dataset.emptyAction === "clear-late") {
+        state.vehicleLateOnly = false;
         renderVehiclesTable();
       }
       if (trigger.dataset.emptyAction === "clear-idle") {

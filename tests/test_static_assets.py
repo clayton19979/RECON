@@ -617,10 +617,42 @@ def test_board_view_preferences_round_trip_every_filter(js: str) -> None:
     visible way back."""
     save = _function_source(js, "saveVehicleViewPrefs")
     load = _function_source(js, "loadVehicleViewPrefs")
-    for key in ("filter", "status", "sort", "partsOnly"):
+    for key in ("filter", "status", "sort", "partsOnly", "lateOnly"):
         assert key in save, f"{key} isn't persisted with the board's view preferences"
     assert "partsOnly" in load, "the parts toggle is saved but never restored"
+    assert "lateOnly" in load, "the Past Promised filter is saved but never restored"
     assert "state.vehiclePartsOnly" in save, "Reset view won't appear for a board filtered to parts-only"
+    assert "state.vehicleLateOnly" in save, "Reset view won't appear for a board filtered to overdue promises"
+
+
+def test_promised_column_is_wired_end_to_end(js: str, html: str) -> None:
+    """Same contract the Idle column has. The promised date is the one part of
+    a we-owe with a deadline on it, and it reaches the screen through a header,
+    a comparator and a cell renderer that all have to agree."""
+    header = re.search(r'<th[^>]*data-sort-key="promised"[^>]*>', html)
+    assert header, "the board has no Promised column header"
+    assert "sortable" in header.group(0), "the Promised column isn't sortable"
+    assert "promisedCellHtml(v)" in _function_source(js, "vehicleRowHtml"), "the Promised cell isn't rendered"
+    assert "v.target_date" in _function_source(js, "promisedCellHtml"), "the Promised cell doesn't read target_date"
+    for field in ("target_date", "promise_days_late"):
+        assert field in _function_source(js, "vehicleRowSignature"), (
+            f"{field} isn't in the row signature, so a promise whose date moved won't re-render"
+        )
+
+
+# The columns whose stored value is a bare YYYY-MM-DD rather than a timestamp.
+# Each is written by an <input type="date">, so this is the whole set.
+_BARE_DATE_FIELDS = ("acquisition_date", "date_in", "promised_at", "target_date")
+
+
+def test_bare_dates_are_never_formatted_as_timestamps(js: str) -> None:
+    """A date-only string is UTC midnight by definition, so `new Date(...)` on
+    one lands the previous evening anywhere west of Greenwich -- and every one
+    of these ends up on the printed repair order. A ticket promised for the
+    30th that prints "Jul 29, 2026, 7:00 PM" is a fight at the counter, so
+    these fields go through fmtDay and never through fmtDate."""
+    bad = [field for field in _BARE_DATE_FIELDS if re.search(rf"fmtDate\(\s*[\w.?]*\b{field}\b", js)]
+    assert not bad, f"date-only fields formatted with fmtDate (use fmtDay): {bad}"
 
 
 def test_idle_column_is_wired_end_to_end(js: str, html: str) -> None:

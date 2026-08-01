@@ -1,7 +1,7 @@
 import { $, $$, api, fmtHours, get, patch, post, put } from "./core.js";
 import { toast } from "./notify.js";
 import { confirmAction } from "./confirm.js";
-import { currentActor, esc, fmtDate, money, relativeTime, withLoading } from "./shortcuts.js";
+import { currentActor, esc, fmtDate, fmtDay, money, relativeTime, withLoading } from "./shortcuts.js";
 import { emptyState } from "./empty-states.js";
 import { actualTotal, costDeltaBadge, isReturnedPart, quotedLineTotal, quotedTotal } from "./estimate-money.js";
 import { AUTH_METHOD_LABEL, ITEM_STATUS_LABEL, KIND_GROUP_LABEL, KIND_GROUP_ORDER, PAY_METHOD_LABEL, STATUS_LABEL, STATUS_OPTIONS, STATUS_PILL_CLASS, fieldLabels, state } from "./state.js";
@@ -1940,16 +1940,16 @@ function renderPrintTicket() {
         <div class="pi-label">Stock</div>
         ${kv("Stock #", esc(item.stock_number || ""))}
         ${kv("Source", esc(item.acquisition_source || ""))}
-        ${kv("Acquired", item.acquisition_date ? esc(fmtDate(item.acquisition_date)) : "")}
+        ${kv("Acquired", item.acquisition_date ? esc(fmtDay(item.acquisition_date)) : "")}
       </div>`}
       <div class="print-info-block">
         <div class="pi-label">Service</div>
         ${kv("Technician", esc(techName))}
         ${kv("Advisor", esc(advisorName))}
-        ${kv("Date in", a?.date_in ? esc(fmtDate(a.date_in)) : "")}
+        ${kv("Date in", a?.date_in ? esc(fmtDay(a.date_in)) : "")}
         ${kv("Odometer in", a?.odometer_in ? `${esc(String(a.odometer_in))} mi` : "")}
-        ${kv("Promised", a?.promised_at ? esc(fmtDate(a.promised_at)) : "")}
-        ${isWeOwe && item.target_date ? kv("Target date", esc(fmtDate(item.target_date))) : ""}
+        ${kv("Promised", a?.promised_at ? esc(fmtDay(a.promised_at)) : "")}
+        ${isWeOwe && item.target_date ? kv("Promised to customer", esc(fmtDay(item.target_date))) : ""}
       </div>
     </div>
     <div class="print-subhead">Parts &amp; Labor</div>

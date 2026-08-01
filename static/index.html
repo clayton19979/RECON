@@ -144,15 +144,15 @@
           </div>
         </div>
 
-        <!-- These five describe exactly the rows in the table below, not the
+        <!-- These six describe exactly the rows in the table below, not the
              whole lot: filter to Recon and every number here follows. The
              scope line spells out what's included so the count can't be
              misread as lot-wide.
 
-             Three of them are the "go look at something" cards -- they go
+             Four of them are the "go look at something" cards -- they go
              warn/crit when they're non-zero, and they're real <button>s
              because clicking one filters the board to what it counts. Those
-             three count with their own filter lifted (see boardStats), so
+             four count with their own filter lifted (see boardStats), so
              clicking a card never changes the number printed on it. Vehicles
              and Cost aren't filters and stay plain divs; a card you can't
              click shouldn't look like one you can. -->
@@ -182,6 +182,15 @@
             <div class="stat-label">Over Quote</div>
             <div class="stat-value" id="stat-over-quote">0</div>
             <div class="stat-sub" id="stat-over-quote-sub">none past estimate</div>
+          </button>
+          <!-- We-owe only: a promise a customer was given a date for, and the
+               date has gone by. Settled promises never count, so this number
+               comes down as the work gets done instead of climbing forever. -->
+          <button type="button" class="stat stat-action" data-board-filter="late" aria-pressed="false"
+                  title="We-owe promises whose date has already passed. Fulfilled and waived promises aren't counted.">
+            <div class="stat-label">Past Promised</div>
+            <div class="stat-value" id="stat-late-promises">0</div>
+            <div class="stat-sub" id="stat-late-promises-sub">no promise past due</div>
           </button>
         </div>
         <p class="stats-scope" id="vehicles-scope" role="status" aria-live="polite" aria-atomic="true">Every vehicle on the board.</p>
@@ -244,6 +253,8 @@
                   <th class="num-col age-col sortable" data-sort-key="age" aria-sort="none">Age <span class="sort-arrow"></span></th>
                   <th class="num-col idle-col sortable" data-sort-key="idle" aria-sort="none"
                       title="Time since anything last happened on this vehicle's repair order">Idle <span class="sort-arrow"></span></th>
+                  <th class="promised-col sortable" data-sort-key="promised" aria-sort="none"
+                      title="The date a we-owe was promised to the customer. Recon cars have no promise, so the cell is blank.">Promised <span class="sort-arrow"></span></th>
                   <th class="num-col quoted-col sortable" data-sort-key="quoted" aria-sort="none">Quoted <span class="sort-arrow"></span></th>
                   <th class="num-col sortable" data-sort-key="cost" aria-sort="none">Cost <span class="sort-arrow"></span></th>
                 </tr>

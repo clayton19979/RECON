@@ -166,6 +166,25 @@ function renderPoSelect() {
   }).join("");
   $("#ap-order").innerHTML = `<option value="">No ticket — general expense</option>` + options;
 }
+/* What the void actually did, in one line.
+
+   A bare "Invoice voided" hid the part of it that matters: a car's cost can
+   drop by several hundred dollars and parts can land back in the board's
+   Parts column, and the person who clicked the button should not have to go
+   and check whether that happened. */
+function voidResultMessage(result) {
+  const n = (result && result.unreceived_items) || 0;
+  const credits = (result && result.credits_cleared) || 0;
+  if (!n && !credits) return "Invoice voided";
+  const bits = [];
+  if (n) {
+    const value = result.unreceived_value ? ` (${money(result.unreceived_value)} off the vehicle)` : "";
+    bits.push(`${n} part${n === 1 ? "" : "s"} back on order${value}`);
+  }
+  if (credits) bits.push(`${credits} return${credits === 1 ? "" : "s"} waiting on a credit again`);
+  return `Invoice voided — ${bits.join(", ")}`;
+}
+
 function renderApTable(invoices) {
   const liveTotal = invoices.filter((a) => a.status !== "voided").reduce((s, a) => s + (a.total || 0), 0);
   $("#ap-count").textContent = `${invoices.length} invoice${invoices.length === 1 ? "" : "s"} · ${money(liveTotal)}`;
@@ -211,13 +230,18 @@ function renderApTable(invoices) {
       if (!(await confirmAction({
         eyebrow: "ACCOUNTS PAYABLE",
         title: `Void invoice ${btn.dataset.number}?`,
-        body: "It's kept for the audit trail, and a corrected invoice can be re-posted under the same number. Parts already marked received stay received -- fix those on the ticket itself.",
+        // Says what actually happens to the cars, because voiding is not
+        // only a bookkeeping act: any parts this bill received go back to
+        // Ordered and their cost comes off the vehicle. That is the whole
+        // reason voiding is the right move for a mis-posted invoice -- it
+        // is what lets the corrected one be posted afterwards.
+        body: "It's kept for the audit trail, and a corrected invoice can be re-posted under the same number. Any parts this invoice received go back to Ordered, and their cost comes off the vehicle.",
         confirmLabel: "Void Invoice",
         danger: true,
       }))) return;
       try {
-        await patch(`/api/ap/invoices/${btn.dataset.id}/void`, { actor: currentActor() });
-        toast("Invoice voided");
+        const result = await patch(`/api/ap/invoices/${btn.dataset.id}/void`, { actor: currentActor() });
+        toast(voidResultMessage(result));
         await loadApTable();
       } catch (err) {
         toast(err.message, true);

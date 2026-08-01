@@ -344,6 +344,9 @@ def cost_rollup(db: sqlite3.Connection, column: str, ref_id: int, segment: str |
     # (traceability) but never count toward the vehicle's cost -- that work
     # was never actually done.
     countable = [o for o in orders if not o["voided"]]
+    # Tickets the shop considers done. Only these turn an unreceived part into
+    # a problem: on an open ticket the same line is simply work still ahead.
+    closed = [o for o in countable if o["status"] == "complete"]
     return {
         "orders": orders,
         "total_cost": round(sum(o["total_cost"] for o in countable), 2),
@@ -352,6 +355,9 @@ def cost_rollup(db: sqlite3.Connection, column: str, ref_id: int, segment: str |
         "labor_hours": round(sum(o["labor_hours"] for o in countable), 2),
         "parts_pending": int(sum(o["parts_pending"] for o in countable)),
         "parts_pending_value": round(sum(o["parts_pending_value"] for o in countable), 2),
+        "unreceived_cost": round(sum(o["unreceived_cost"] for o in countable), 2),
+        "unreceived_closed_cost": round(sum(o["unreceived_cost"] for o in closed), 2),
+        "unreceived_closed_parts": int(sum(o["unreceived_parts"] for o in closed)),
     }
 
 
@@ -613,6 +619,9 @@ def vehicle_board_rows(
                     "labor_hours": rollup["labor_hours"],
                     "parts_pending": rollup["parts_pending"],
                     "parts_pending_value": rollup["parts_pending_value"],
+                    "unreceived_cost": rollup["unreceived_cost"],
+                    "unreceived_closed_cost": rollup["unreceived_closed_cost"],
+                    "unreceived_closed_parts": rollup["unreceived_closed_parts"],
                     "technicians": technician_names(db, order_ids),
                     # The ticket a board-level action should attach itself to:
                     # the open one if there is one, else the most recent, else
@@ -700,6 +709,9 @@ def vehicle_board_rows(
                     "labor_hours": rollup["labor_hours"],
                     "parts_pending": rollup["parts_pending"],
                     "parts_pending_value": rollup["parts_pending_value"],
+                    "unreceived_cost": rollup["unreceived_cost"],
+                    "unreceived_closed_cost": rollup["unreceived_closed_cost"],
+                    "unreceived_closed_parts": rollup["unreceived_closed_parts"],
                     "customer_paid": customer_paid,
                     "net_cost": round(rollup["total_cost"] - customer_paid, 2),
                     "technicians": technician_names(db, order_ids),

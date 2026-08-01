@@ -456,6 +456,21 @@ td.age-crit { color: var(--crit); font-weight: 700; }
 .idle-cell.age-crit { color: var(--crit); font-weight: 700; }
 .idle-cell { cursor: help; }
 td.over-quote { color: var(--crit); font-weight: 700; }
+/* Sits under the Cost figure on a car whose closed ticket still has parts
+   nobody marked received: the number above it is short by this much. Warn
+   rather than crit, and a second line rather than a recolour of the total,
+   because the total isn't wrong so much as incomplete -- and a car can be
+   over quote and missing receipts at the same time.
+
+   nowrap because the Cost column is sized for "$1,234.56" and this wrapped to
+   three lines inside it, which made a flagged row half again as tall as its
+   neighbours and the whole board jump as cars came and went. Letting the
+   column widen by the few pixels it needs is the cheaper of the two. */
+.cost-missing {
+  display: block; margin-top: 2px; white-space: nowrap;
+  font-size: 11px; font-weight: 700; color: var(--warn);
+  cursor: help;
+}
 .muted-dash { color: var(--ink-faint); }
 
 /* ---------- vehicles board ----------

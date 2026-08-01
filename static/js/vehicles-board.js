@@ -366,6 +366,10 @@ function boardStats(rows, idlePool = rows) {
     partsValue: rows.reduce((s, v) => s + (v.parts_pending_value || 0), 0),
     overCount: overs.length,
     overAmount: overs.reduce((s, v) => s + (v.actual_cost - v.quoted_cost), 0),
+    // Quoted parts money that has never been marked received, so it is in the
+    // Quoted total and missing from the Cost total. Without it the card
+    // subtracts one from the other and calls the difference a saving.
+    unreceived: rows.reduce((s, v) => s + (v.unreceived_cost || 0), 0),
     stalledCount: stalled.length,
     stalledWorst: stalled.reduce((worst, v) => Math.max(worst, v.idle_days || 0), 0),
   };
@@ -395,15 +399,27 @@ function renderStats(rows) {
   setValue("#stat-actual-total", money(s.cost));
   // The delta against quote is the number the manager opens the board for --
   // toned, not neutral, so over/under reads at a glance.
+  //
+  // "Under the quote" is only good news when the gap is money the shop didn't
+  // spend. Parts that were bought and never marked received sit in the quote
+  // and not in the cost, so they land in that gap and make unrecorded spending
+  // read as a saving -- in green, on the card the manager trusts most. When
+  // any of the gap is unreceived parts the card says that instead: it is the
+  // more urgent fact and it is the one that can be acted on.
   const costSub = $("#stat-quoted-sub");
   if (s.quoted) {
     const diff = s.cost - s.quoted;
-    costSub.textContent = Math.abs(diff) < 0.005
-      ? `of ${money(s.quoted)} quoted`
-      : diff > 0
-        ? `${money(diff)} over the ${money(s.quoted)} quoted`
-        : `${money(-diff)} under the ${money(s.quoted)} quoted`;
-    costSub.style.color = Math.abs(diff) < 0.005 ? "" : (diff > 0 ? "var(--crit)" : "var(--good)");
+    if (diff <= -0.005 && s.unreceived >= 0.005) {
+      costSub.textContent = `${money(s.unreceived)} of parts not marked received`;
+      costSub.style.color = "var(--warn)";
+    } else {
+      costSub.textContent = Math.abs(diff) < 0.005
+        ? `of ${money(s.quoted)} quoted`
+        : diff > 0
+          ? `${money(diff)} over the ${money(s.quoted)} quoted`
+          : `${money(-diff)} under the ${money(s.quoted)} quoted`;
+      costSub.style.color = Math.abs(diff) < 0.005 ? "" : (diff > 0 ? "var(--crit)" : "var(--good)");
+    }
   } else {
     costSub.textContent = "received parts + labor";
     costSub.style.color = "";
@@ -911,6 +927,26 @@ function costCellClass(v) {
   return isOverQuote(v) ? "over-quote" : "";
 }
 
+/* The Cost column shows what the car has actually been charged, which is
+   parts once they're marked received. A ticket that gets closed out with its
+   parts still sitting at "quoted" therefore leaves the car reading $0.00 --
+   for a car that's had four tires put on it. That happens constantly: the
+   parts get picked up at the counter and thrown on the car, and receiving
+   them in the app is a separate step nobody remembers on a busy morning.
+
+   So the cell carries the shortfall underneath the number rather than making
+   Walt notice that a finished car cost nothing. Only closed tickets count --
+   on an open one the same unreceived line is just work not done yet, which
+   the Parts column and the quote already say. */
+function costMissingHtml(v) {
+  const missing = v.unreceived_closed_cost || 0;
+  if (!missing) return "";
+  const n = v.unreceived_closed_parts || 0;
+  const label = `Ticket is closed but ${n} part${n === 1 ? " was" : "s were"} never marked received — `
+    + `${money(missing)} of this car's cost isn't counted. Open the ticket and receive them.`;
+  return `<span class="cost-missing" title="${esc(label)}">+${money(missing)} not received</span>`;
+}
+
 /* "Waiting on parts" is the single most common reason a car sits, and until
    now the only way to find out was to open the ticket and read the estimate.
    A count rather than a yes/no, because one back-ordered bumper and nine
@@ -1000,7 +1036,7 @@ function vehicleRowHtml(v) {
       <td class="num-col idle-col">${idleCellHtml(v)}</td>
       <td class="promised-col">${promisedCellHtml(v)}</td>
       <td class="num-col quoted-col">${v.quoted_cost ? money(v.quoted_cost) : `<span class="muted-dash">—</span>`}</td>
-      <td class="num-col ${over}"${over ? ` title="Over the estimate by ${money(v.actual_cost - v.quoted_cost)}"` : ""}>${money(v.actual_cost)}</td>`;
+      <td class="num-col ${over}"${over ? ` title="Over the estimate by ${money(v.actual_cost - v.quoted_cost)}"` : ""}>${money(v.actual_cost)}${costMissingHtml(v)}</td>`;
 }
 
 // A signature of everything vehicleRowHtml() reads. Two renders with the same
@@ -1012,6 +1048,7 @@ function vehicleRowSignature(v) {
     v.technicians.join("|"), v.age_days, v.idle_days, v.last_activity_at,
     v.target_date, v.promise_days_late,
     v.quoted_cost, v.actual_cost, v.parts_pending, v.parts_pending_value,
+    v.unreceived_closed_cost, v.unreceived_closed_parts,
     state.vehicleSelection.has(vehicleKey(v)) ? 1 : 0,
   ].join("");
 }

@@ -32,19 +32,32 @@ const spend = [
   veh({ recon_id: 3, stock_number: "C007", vehicle: "2015 Chevy Silverado", status: "complete", status_bucket: "finished", technicians: ["Bo"], quoted_cost: 0, actual_cost: 0 }),
 ];
 
-// 3 on the roster, 2 with work; 6 ROs, 3 completed; 25 hours, $1000 -> $40/hr.
+// 3 on the roster, 2 with work; 6 ROs, 3 completed; 25 hours; 3 still open,
+// the quietest of them sitting 9 days. No money: labor here is never charged
+// out, so the report carries no cost field at all.
 const techs = [
-  { technician: "Bo", ro_count: 4, completed_count: 2, labor_hours: 15, labor_cost: 600 },
-  { technician: "Chris", ro_count: 2, completed_count: 1, labor_hours: 10, labor_cost: 400 },
-  { technician: "Dana", ro_count: 0, completed_count: 0, labor_hours: 0, labor_cost: 0 },
+  { technician: "Bo", ro_count: 4, completed_count: 2, open_count: 2, worst_idle_days: 9, labor_hours: 15 },
+  { technician: "Chris", ro_count: 2, completed_count: 1, open_count: 1, worst_idle_days: 0, labor_hours: 10 },
+  { technician: "Dana", ro_count: 0, completed_count: 0, open_count: 0, worst_idle_days: 0, labor_hours: 0 },
 ];
 
 let failNextReport = false;
 
+// What the previous session left behind: This Month, saved back when it meant
+// something else entirely. The dates are the trap -- a named range that
+// replays them reopens covering January 2020 with the This Month chip lit.
+const STALE_PREFS = {
+  type: "vehicle-spend", range: "month", start: "2020-01-01", end: "2020-01-05",
+  sort: { key: "cost", dir: "desc" }, sortShape: "vehicle-spend",
+};
+
 const { w, doc, fetchLog, settle, ok, finish, rejections } = await boot({
   expose: ["state", "generateReport", "loadReportsView", "sortReportRows", "visibleReportRows",
-           "REPORT_SORTS", "REPORT_PREFS_KEY", "loadReportPrefs", "setReportRange",
+           "REPORT_SORTS", "REPORT_PREFS_KEY", "loadReportPrefs", "saveReportPrefs", "setReportRange",
            "computeQuickRange", "reportCsvHref", "syncReportControls"],
+  // Staged before the app boots, so the first fetch the screen ever makes is
+  // the one under test. REPORT_PREFS_KEY isn't on window yet at this point.
+  beforeBoot: (win) => win.localStorage.setItem("dao-report-view", JSON.stringify(STALE_PREFS)),
   fetch: async (url) => {
     if (url.startsWith("/api/reports/")) {
       if (failNextReport) return { __status: 500, body: { detail: "reporting is down" } };
@@ -80,6 +93,38 @@ ok(fetchLog.some((f) => f.url.startsWith("/api/reports/vehicle-spend")),
    `opening Reports didn't fetch a report; saw ${fetchLog.map((f) => f.url).join(", ")}`);
 ok(rows().length > 0, "Reports opened with no table");
 ok(doc.querySelector("#report-output .skeleton-row") === null, "loading skeleton is still on screen after the fetch resolved");
+
+/* ---------- a saved quick range means today, not the day it was saved ----------
+   The live symptom of getting this wrong: This Month lit over July 1-29 on
+   July 31, with two days of work missing from every number on the screen, the
+   printed sheet and the CSV. */
+const thisMonth = w.computeQuickRange("month");
+const opening = fetchLog.find((f) => f.url.startsWith("/api/reports/vehicle-spend"));
+ok(opening.url.includes(`start=${thisMonth.start}`) && opening.url.includes(`end=${thisMonth.end}`),
+   `the first fetch replayed the saved dates instead of resolving This Month against today: ${opening.url}`);
+ok(!opening.url.includes("2020-01"), `the range saved by the previous session reached the query: ${opening.url}`);
+ok(doc.querySelector("#report-start").value === thisMonth.start && doc.querySelector("#report-end").value === thisMonth.end,
+   `the From/To fields show ${doc.querySelector("#report-start").value} – ${doc.querySelector("#report-end").value}, not the month the numbers cover`);
+ok(doc.querySelector('[data-report-range="month"]').classList.contains("active"),
+   "This Month isn't lit, so the toolbar and the range in effect disagree the other way");
+
+// ...and nothing writes those dates back down, so there is nothing to go stale.
+w.saveReportPrefs();
+const storedMonth = JSON.parse(w.localStorage.getItem(w.REPORT_PREFS_KEY));
+ok(!storedMonth.start && !storedMonth.end,
+   `a named range was saved with dates attached (${storedMonth.start} – ${storedMonth.end}); it has to be stored by name alone`);
+
+// The other half of the same bug: the app is left open, the shop works
+// evenings, and past midnight "Today" still means yesterday. Any refresh has
+// to correct it -- simulated here by putting yesterday's answer back.
+w.state.reportStart = "2020-01-01";
+w.state.reportEnd = "2020-01-05";
+await w.loadReportsView();
+await settle();
+ok(fetchLog.at(-1).url.includes(`start=${thisMonth.start}`),
+   `reopening the screen kept a range that had gone stale on the clock: ${fetchLog.at(-1).url}`);
+ok(doc.querySelector("#report-start").value === thisMonth.start,
+   "the From field kept the stale date after the fetch moved on without it");
 
 /* ---------- summary cards ---------- */
 const s = stats();
@@ -160,16 +205,36 @@ const t = stats();
 ok(t[0].value === "2" && t[0].sub === "of 3 on staff", `technicians working reads ${t[0].value} / "${t[0].sub}"`);
 ok(t[1].value === "6" && t[1].sub === "3 completed · 50%", `repair orders card reads ${t[1].value} / "${t[1].sub}"`);
 ok(t[2].value === "25", `labor hours reads ${t[2].value}, expected 25`);
-ok(t[3].value === "$1,000.00" && t[3].sub === "$40.00 per hour", `labor cost card reads ${t[3].value} / "${t[3].sub}"`);
+// The fourth card used to be Labor Cost, which on recon and we-owe work is
+// always $0.00. What is actually actionable is who is still holding a car.
+ok(t[3].label === "Still Open" && t[3].value === "3" && t[3].sub === "worst sitting 9 days",
+   `fourth card reads "${t[3].label}" ${t[3].value} / "${t[3].sub}"`);
+ok(doc.querySelectorAll("#report-stats .stat")[3].querySelector(".stat-value").classList.contains("warn"),
+   "9 days of silence should be flagged on the card, the same week boundary the board uses");
+ok(!stats().some((s) => /cost|\$/i.test(s.label) || /\$/.test(s.value)),
+   `the technician report is showing money: ${JSON.stringify(stats())}`);
 ok(bars().length === 2, `expected 2 technician bars (Dana logged nothing), got ${bars().length}`);
 ok(doc.querySelector("#report-output tbody tr.row-muted"), "the technician with no work isn't muted");
 
 // "stock" doesn't exist on this shape; carrying it over would leave the
 // table sorted by nothing at all, with no header claiming to be sorted.
-ok(w.state.reportSort.key === "cost", `sort key after switching shape is ${w.state.reportSort.key}, expected the cost fallback`);
+// There is no money column here to fall back to, so the shape opens on hours.
+ok(w.state.reportSort.key === "hours", `sort key after switching shape is ${w.state.reportSort.key}, expected hours`);
 ok(doc.querySelector("#report-output th.sorted"), "no column is marked sorted after the shape changed");
-click(w, th("hours"));
-ok(cells(0)[col("hours")] === "15", `sorting by hours put ${cells(0)[col("hours")]} first`);
+ok(cells(0)[col("hours")] === "15", `opening sorted by hours put ${cells(0)[col("hours")]} first`);
+
+// A tech holding nothing gets a dash, not "today" -- an empty hand is not
+// the same as a car touched this morning.
+ok(cells(0)[col("idle")] === "9 days", `Bo's sitting cell reads "${cells(0)[col("idle")]}"`);
+const danaRow = [...doc.querySelectorAll("#report-output tbody tr")]
+  .map((r) => [...r.querySelectorAll("td")].map((c) => c.textContent.trim()))
+  .find((r) => r[0] === "Dana");
+ok(danaRow && danaRow[col("idle")] === "—", `the technician with nothing open reads "${danaRow && danaRow[col("idle")]}"`);
+
+// Sitting is coloured on the same week boundary the board's Idle column uses.
+const sittingCells = [...doc.querySelectorAll("#report-output tbody tr")].map((r) => r.querySelectorAll("td")[col("idle")]);
+ok(sittingCells.filter((c) => c.classList.contains("money-bad")).length === 1,
+   "only the technician past a week of silence should be flagged");
 
 /* ---------- range ---------- */
 click(w, doc.querySelector('[data-report-range="today"]'));
@@ -216,6 +281,22 @@ w.state.reportSort = { key: "cost", dir: "asc" };
 w.loadReportPrefs();
 ok(w.state.reportType === "vehicle-spend-recon" && w.state.reportRange === "month",
    `prefs didn't round-trip: ${w.state.reportType} / ${w.state.reportRange}`);
+
+// A hand-typed window is the one kind of range that does survive literally --
+// it names days somebody asked for, and it means the same thing next week.
+w.state.reportRange = "";
+w.state.reportStart = "2026-03-02";
+w.state.reportEnd = "2026-03-09";
+w.saveReportPrefs();
+w.state.reportStart = "";
+w.state.reportEnd = "";
+w.loadReportPrefs();
+ok(w.state.reportStart === "2026-03-02" && w.state.reportEnd === "2026-03-09",
+   `a hand-typed range came back as ${w.state.reportStart} – ${w.state.reportEnd}`);
+ok(w.state.reportRange === "", "a hand-typed range came back claiming to be one of the chips");
+// Put the screen back where the rest of the file expects it.
+w.setReportRange("month");
+w.syncReportControls();
 
 /* ---------- rows, but nothing to chart ----------
    Early in a month every car on the list can legitimately be at $0: parts

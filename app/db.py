@@ -171,6 +171,9 @@ CREATE TABLE IF NOT EXISTS estimate_items (
   received_quantity REAL NOT NULL DEFAULT 0,
   line_total REAL NOT NULL,
   status TEXT NOT NULL DEFAULT 'quoted',
+  -- When this line was marked ordered. Kept after it's received, so how long
+  -- a part took to turn up stays answerable; see the migration in _migrate.
+  ordered_at TEXT NOT NULL DEFAULT '',
   received_invoice_number TEXT NOT NULL DEFAULT '',
   -- Who the part actually came from. See the migration in _migrate for why
   -- the invoice number above is not enough on its own.
@@ -527,6 +530,17 @@ def _migrate(db: sqlite3.Connection) -> None:
         # sitting at the shop waiting to go back -- the difference between
         # "I still have this" and "it's gone, waiting on their credit".
         ("part_picked_up_at", "part_picked_up_at TEXT NOT NULL DEFAULT ''"),
+        # When a part line was marked ordered. Without it, a part ordered this
+        # morning and one ordered three weeks ago were indistinguishable
+        # everywhere in the app -- and a part nobody chases is the most common
+        # reason a car sits on the lot doing nothing.
+        #
+        # Deliberately NOT backfilled. Lines already sitting on 'ordered' when
+        # this shipped were never stamped, and there is nothing honest to
+        # stamp them with: the action logs no event and the ticket's own dates
+        # answer a different question. They report the date as unrecorded and
+        # say so on screen, rather than wearing a plausible invention.
+        ("ordered_at", "ordered_at TEXT NOT NULL DEFAULT ''"),
     ):
         if column not in estimate_item_columns:
             db.execute(f"ALTER TABLE estimate_items ADD COLUMN {ddl}")

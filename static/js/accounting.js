@@ -38,7 +38,23 @@ export async function loadAccountingView() {
   await loadApTable();
 }
 
+/* Same rule the Reports toolbar follows (see refreshQuickRange there): a chip
+   is a name, not the two dates it meant when it was clicked. This screen has
+   no saved prefs, so the only way it goes stale is being left open -- which is
+   exactly what happens here, and the shop works evenings, so "Today" sitting
+   lit over yesterday's invoices is a real morning. Returns nothing; it just
+   corrects state and the two date fields before the fetch reads them. */
+function refreshApRange() {
+  if (!state.apRange) return;
+  const { start, end } = computeQuickRange(state.apRange);
+  if (start === state.apFilter.start && end === state.apFilter.end) return;
+  state.apFilter = { start, end };
+  $("#ap-filter-start").value = start;
+  $("#ap-filter-end").value = end;
+}
+
 async function loadApTable() {
+  refreshApRange();
   const { start, end } = state.apFilter;
   const params = new URLSearchParams();
   if (start) params.set("start", start);
@@ -150,6 +166,25 @@ function renderPoSelect() {
   }).join("");
   $("#ap-order").innerHTML = `<option value="">No ticket — general expense</option>` + options;
 }
+/* What the void actually did, in one line.
+
+   A bare "Invoice voided" hid the part of it that matters: a car's cost can
+   drop by several hundred dollars and parts can land back in the board's
+   Parts column, and the person who clicked the button should not have to go
+   and check whether that happened. */
+function voidResultMessage(result) {
+  const n = (result && result.unreceived_items) || 0;
+  const credits = (result && result.credits_cleared) || 0;
+  if (!n && !credits) return "Invoice voided";
+  const bits = [];
+  if (n) {
+    const value = result.unreceived_value ? ` (${money(result.unreceived_value)} off the vehicle)` : "";
+    bits.push(`${n} part${n === 1 ? "" : "s"} back on order${value}`);
+  }
+  if (credits) bits.push(`${credits} return${credits === 1 ? "" : "s"} waiting on a credit again`);
+  return `Invoice voided — ${bits.join(", ")}`;
+}
+
 function renderApTable(invoices) {
   const liveTotal = invoices.filter((a) => a.status !== "voided").reduce((s, a) => s + (a.total || 0), 0);
   $("#ap-count").textContent = `${invoices.length} invoice${invoices.length === 1 ? "" : "s"} · ${money(liveTotal)}`;
@@ -195,13 +230,18 @@ function renderApTable(invoices) {
       if (!(await confirmAction({
         eyebrow: "ACCOUNTS PAYABLE",
         title: `Void invoice ${btn.dataset.number}?`,
-        body: "It's kept for the audit trail, and a corrected invoice can be re-posted under the same number. Parts already marked received stay received -- fix those on the ticket itself.",
+        // Says what actually happens to the cars, because voiding is not
+        // only a bookkeeping act: any parts this bill received go back to
+        // Ordered and their cost comes off the vehicle. That is the whole
+        // reason voiding is the right move for a mis-posted invoice -- it
+        // is what lets the corrected one be posted afterwards.
+        body: "It's kept for the audit trail, and a corrected invoice can be re-posted under the same number. Any parts this invoice received go back to Ordered, and their cost comes off the vehicle.",
         confirmLabel: "Void Invoice",
         danger: true,
       }))) return;
       try {
-        await patch(`/api/ap/invoices/${btn.dataset.id}/void`, { actor: currentActor() });
-        toast("Invoice voided");
+        const result = await patch(`/api/ap/invoices/${btn.dataset.id}/void`, { actor: currentActor() });
+        toast(voidResultMessage(result));
         await loadApTable();
       } catch (err) {
         toast(err.message, true);
@@ -327,6 +367,7 @@ export function wireAccountingView() {
   $$('#view-accounting [data-ap-range]').forEach((chip) => {
     chip.addEventListener("click", () => {
       const range = computeQuickRange(chip.dataset.apRange);
+      state.apRange = chip.dataset.apRange;
       state.apFilter = range;
       $("#ap-filter-start").value = range.start;
       $("#ap-filter-end").value = range.end;
@@ -335,7 +376,13 @@ export function wireAccountingView() {
       loadApTable();
     });
   });
-  const clearApChips = () => $$('#view-accounting [data-ap-range]').forEach((c) => c.classList.remove("active"));
+  // Hand-edited dates belong to nobody's chip, so the named range goes with
+  // the lit class -- otherwise the next load would quietly overwrite what was
+  // just typed with whatever the old chip means today.
+  const clearApChips = () => {
+    state.apRange = "";
+    $$('#view-accounting [data-ap-range]').forEach((c) => c.classList.remove("active"));
+  };
   $("#ap-filter-start").addEventListener("change", () => {
     clearApChips();
     state.apFilter.start = $("#ap-filter-start").value;

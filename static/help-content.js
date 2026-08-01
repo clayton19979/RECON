@@ -478,7 +478,7 @@ const HELP_TOPICS = [
     aliases: ["invoice", "bill", "vendor bill", "ap", "accounts payable", "enter an invoice", "worldpac", "napa", "parts bill"],
     summary: "Records what a vendor billed, against the repair order the parts were for.",
     steps: [
-      "Open Accounts Payable and use the 'Post Vendor Invoice' form.",
+      "Open Accounts Payable and click Post Invoice in the header — it jumps to the 'Post a Vendor Invoice' editor below the invoice history.",
       "Pick the vendor, type the invoice number, and choose the repair order it belongs to.",
       "Add a line per item with quantity and cost, then enter tax. Subtotal and total calculate themselves.",
       "Click Post Invoice.",
@@ -496,7 +496,7 @@ const HELP_TOPICS = [
     steps: [
       "There is no longer a dollar limit. An invoice of any size posts straight through.",
       "An invoice is held when the vendor name doesn't match one you've set up, when that invoice number was already posted, when the line items don't add up to the total, or when you'd be receiving more of a part than the ticket ordered.",
-      "Held invoices appear in the table below with their status, and in the Control Log on the right, with the reason spelled out.",
+      "Held invoices appear in the Control Log beside the editor, with the reason spelled out.",
       "Fix whatever it names — usually the vendor spelling or a typo in the total — and post it again.",
       "Over $500 you'll see a note suggesting you double-check the invoice. That's a nudge, not a hold; it posts either way.",
     ],
@@ -510,7 +510,7 @@ const HELP_TOPICS = [
     aliases: ["vendor", "supplier", "add a vendor", "parts store", "account number", "aliases", "spelled differently"],
     summary: "Vendors are set up once on the Accounts Payable screen, with aliases for the other ways their name gets written.",
     steps: [
-      "On Accounts Payable, use the Vendors card on the right.",
+      "On Accounts Payable, find the Vendors card beside the invoice editor and click ＋ Add.",
       "Enter the vendor's name and, optionally, their account number.",
       "Put other spellings in Aliases — 'World Pac, WPAC' — so invoices match no matter how the name was typed.",
       "Save. The vendor now appears in the invoice form's dropdown.",

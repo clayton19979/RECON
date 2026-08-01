@@ -594,7 +594,13 @@
         <div class="page-head">
           <div>
             <h1>Accounts Payable</h1>
-            <p class="page-desc">Post a vendor invoice to receive parts against a repair order — priced at cost, traceable back to the vehicle.</p>
+            <p class="page-desc">Every vendor invoice, priced at cost and traceable back to the vehicle. Receiving parts on a ticket posts one here automatically; the editor below is for typing one in yourself.</p>
+          </div>
+          <div class="page-head-actions">
+            <button type="button" class="btn btn-ghost" id="ap-jump-post" title="Jump to the invoice editor">
+              <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+              Post Invoice
+            </button>
           </div>
         </div>
 
@@ -602,10 +608,45 @@
              money: what the visible range spent, what's held for review. -->
         <div class="stats stats-ap" id="ap-stats"></div>
 
+        <!-- History leads the page: most visits are lookups (did that invoice
+             post? what did we spend at that vendor?), and posting parts on a
+             ticket writes rows here without anyone touching the editor. The
+             filter bar lives inside the panel so range, search and count read
+             as part of the table they control. -->
+        <div class="panel">
+          <div class="filters panel-filters">
+            <button class="chip" data-ap-range="today">Today</button>
+            <button class="chip" data-ap-range="yesterday">Yesterday</button>
+            <button class="chip" data-ap-range="week">This Week</button>
+            <button class="chip" data-ap-range="month">This Month</button>
+            <button class="chip" data-ap-range="ytd">YTD</button>
+            <button class="chip active" data-ap-range="all">All Time</button>
+            <input type="date" id="ap-filter-start" style="width:auto" aria-label="Filter from date">
+            <span style="color:var(--ink-faint);font-size:12.5px">to</span>
+            <input type="date" id="ap-filter-end" style="width:auto" aria-label="Filter to date">
+            <input id="ap-search" class="filters-search" placeholder="Search invoices…" title="Searches invoice #, vendor, PO, and vehicle" aria-label="Search invoices" autocomplete="off">
+            <div class="filters-gap"></div>
+            <span class="filters-note" id="ap-count" aria-live="polite">0 invoices</span>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Invoice</th><th>Posted</th><th>Vendor</th><th>RO / PO</th><th>Vehicle</th><th class="num-col">Total</th><th>Status</th><th><span class="sr-only">Actions</span></th></tr></thead>
+              <tbody id="ap-table"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="subsection-head" id="ap-post-section">
+          <div>
+            <h2>Post a Vendor Invoice</h2>
+            <p class="page-desc">Posting receives the parts against the chosen ticket — or leave the ticket off for a general expense like shop supplies or a bulk oil delivery.</p>
+          </div>
+        </div>
         <div class="grid-2">
           <div>
             <div class="card">
-              <div class="card-head"><p class="section-eyebrow" style="margin:0">Post Vendor Invoice</p></div>
+              <!-- No card-head: the subsection heading above already names
+                   this; a second title inside the card would just repeat it. -->
               <form id="ap-invoice-form" style="padding:14px 16px">
                 <div class="form-row">
                   <label>Vendor<select id="ap-vendor" required></select></label>
@@ -655,9 +696,21 @@
             </div>
           </div>
           <div>
+            <!-- Control Log first: a held-for-review post is something to
+                 act on; the vendor list is something already known. -->
             <div class="card">
-              <div class="card-head"><p class="section-eyebrow" style="margin:0" id="vendor-form-title">Vendors</p></div>
-              <form id="vendor-form" style="padding:14px 16px">
+              <div class="card-head"><p class="section-eyebrow" style="margin:0">Control Log</p></div>
+              <div id="audit-list" class="mini-list"></div>
+            </div>
+            <div class="card">
+              <div class="card-head">
+                <p class="section-eyebrow" style="margin:0" id="vendor-form-title">Vendors</p>
+                <button type="button" class="btn btn-ghost btn-sm" id="vendor-add-btn" title="Add a parts supplier">＋ Add</button>
+              </div>
+              <!-- Adding a vendor is a once-a-month event, so the form stays
+                   folded behind the ＋ Add button; clicking a chip to edit
+                   unfolds it the same way. -->
+              <form id="vendor-form" style="padding:14px 16px 0" hidden>
                 <label>Vendor name<input name="name" required placeholder="WorldPac"></label>
                 <label>Aliases<input name="aliases" placeholder="World Pac, WPAC"></label>
                 <label>Account #<input name="account_number" placeholder="Optional"></label>
@@ -668,34 +721,6 @@
               </form>
               <div id="vendor-list" class="vendor-chips"></div>
             </div>
-            <div class="card">
-              <div class="card-head"><p class="section-eyebrow" style="margin:0">Control Log</p></div>
-              <div id="audit-list" class="mini-list"></div>
-            </div>
-          </div>
-        </div>
-
-        <div class="filters" style="margin-top:16px">
-          <button class="chip" data-ap-range="today">Today</button>
-          <button class="chip" data-ap-range="yesterday">Yesterday</button>
-          <button class="chip" data-ap-range="week">This Week</button>
-          <button class="chip" data-ap-range="month">This Month</button>
-          <button class="chip" data-ap-range="ytd">YTD</button>
-          <button class="chip active" data-ap-range="all">All Time</button>
-          <input type="date" id="ap-filter-start" style="width:auto" aria-label="Filter from date">
-          <span style="color:var(--ink-faint);font-size:12.5px">to</span>
-          <input type="date" id="ap-filter-end" style="width:auto" aria-label="Filter to date">
-          <input id="ap-search" class="filters-search" placeholder="Search invoices…" title="Searches invoice #, vendor, PO, and vehicle" aria-label="Search invoices" autocomplete="off">
-          <div class="filters-gap"></div>
-          <span class="filters-note" id="ap-count" aria-live="polite">0 invoices</span>
-        </div>
-
-        <div class="panel">
-          <div class="table-wrap">
-            <table>
-              <thead><tr><th>Invoice</th><th>Posted</th><th>Vendor</th><th>RO / PO</th><th>Vehicle</th><th class="num-col">Total</th><th>Status</th><th><span class="sr-only">Actions</span></th></tr></thead>
-              <tbody id="ap-table"></tbody>
-            </table>
           </div>
         </div>
       </section>

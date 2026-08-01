@@ -140,6 +140,7 @@ function openVendorForEdit(vendorId) {
   // is the one lookup with no namespace to collide with, so vendorField uses
   // it for every field rather than betting on which names are safe.
   const form = $("#vendor-form");
+  form.hidden = false; // the form is folded away until an add or edit needs it
   const vendorField = (n) => form.elements.namedItem(n);
   vendorField("name").value = vendor.name;
   vendorField("aliases").value = vendor.aliases.join(", ");
@@ -152,6 +153,7 @@ function openVendorForEdit(vendorId) {
 function cancelVendorEdit() {
   editingVendorId = null;
   $("#vendor-form").reset();
+  $("#vendor-form").hidden = true;
   $("#vendor-form-title").textContent = "Vendors";
   $("#vendor-form-submit").textContent = "Save Vendor";
   $("#vendor-form-cancel").style.display = "none";
@@ -226,7 +228,7 @@ function renderApTable(invoices) {
     : {
         icon: "invoice",
         title: "No vendor invoices in this range",
-        hint: "Post one with the form above, or widen the date range. Receiving parts on a ticket also posts an invoice here automatically.",
+        hint: "Post one with the form below, or widen the date range. Receiving parts on a ticket also posts an invoice here automatically.",
       });
   // Rows and the per-vehicle lines inside a shared invoice's cell open the
   // same way; a shared invoice's row is never itself clickable, so the two
@@ -369,6 +371,23 @@ function clearApInvoiceForm() {
 }
 
 export function wireAccountingView() {
+  // History leads the page now, so the head carries a shortcut down to the
+  // editor for the mornings that start with a stack of invoices to type.
+  $("#ap-jump-post").addEventListener("click", () => {
+    const section = $("#ap-post-section");
+    if (section.scrollIntoView) section.scrollIntoView({ behavior: "smooth", block: "start" });
+    $("#ap-vendor").focus({ preventScroll: true });
+  });
+  // ＋ Add unfolds the vendor form fresh; pressing it again (or Cancel, or a
+  // successful save) folds it back to just the chips.
+  $("#vendor-add-btn").addEventListener("click", () => {
+    const form = $("#vendor-form");
+    const wasOpenForAdd = !form.hidden && editingVendorId === null;
+    cancelVendorEdit();
+    if (wasOpenForAdd) return;
+    form.hidden = false;
+    form.elements.namedItem("name").focus();
+  });
   $("#ap-add-line").addEventListener("click", addApLine);
   // Picking a ticket fills in the reference the vendor was actually given
   // (the stock number), unless something has already been typed there.

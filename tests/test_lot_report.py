@@ -126,7 +126,7 @@ def test_needs_calls_out_parts_on_order_and_money_still_to_spend(client):
     assert "1 part on order" in row["needs"], row["needs"]
     # Quoted but not yet received, so it is money the car still needs spent.
     assert row["remaining_cost"] == 300
-    assert "$300.00 of quoted work left" in row["needs"], row["needs"]
+    assert "$300.00 of work left" in row["needs"], row["needs"]
 
 
 def test_needs_says_so_when_no_ticket_has_been_written(client):
@@ -236,3 +236,67 @@ def test_csv_carries_the_same_groups_and_needs_as_the_screen(client):
     row = row_for(lot(client), "R-CSV")
     assert LOT_GROUP_LABEL[row["lot_bucket"]] in body, "the CSV is missing the row's group label"
     assert row["needs"] in body, "the CSV's Needs column disagrees with the report's"
+
+
+def board(client) -> list[dict]:
+    res = client.get("/api/vehicles-board")
+    assert res.status_code == 200, res.text
+    return res.json()
+
+
+def test_the_vehicles_board_is_grouped_by_the_same_three_piles(client):
+    """The Vehicles screen can be read as three columns, and those columns are
+    this report's groups.
+
+    Which means the grouping has to come off the same computation, not off a
+    second one written in the browser. A car under "In the shop" on screen and
+    under "Not started" on the sheet in Walt's hand is the failure worth
+    spending a test on: both are confidently wrong, and nobody can tell which.
+    """
+    ready = make_recon_vehicle(client, stock_number="B-READY", vin="1HGCM82633A000101", purchase_price=0)
+    working = make_recon_vehicle(client, stock_number="B-WORKING", vin="1HGCM82633A000102", purchase_price=0)
+    make_recon_vehicle(client, stock_number="B-WAITING", vin="1HGCM82633A000103", purchase_price=0)
+
+    done = make_recon_order(client, ready["id"])
+    client.patch(f"/api/orders/{done['id']}/status", json={"status": "complete", "actor": "tester"})
+    started = make_recon_order(client, working["id"])
+    client.patch(f"/api/orders/{started['id']}/status", json={"status": "in_progress", "actor": "tester"})
+
+    rows = board(client)
+    assert row_for(rows, "B-READY")["lot_bucket"] == "ready"
+    assert row_for(rows, "B-WORKING")["lot_bucket"] == "working"
+    assert row_for(rows, "B-WAITING")["lot_bucket"] == "waiting"
+
+    # ...and every car agrees with the report, car by car, not just in aggregate.
+    report = {r["stock_number"]: r for r in lot(client) if r["stock_number"]}
+    for row in rows:
+        if not row["stock_number"]:
+            continue
+        mirror = report[row["stock_number"]]
+        assert row["lot_bucket"] == mirror["lot_bucket"], row["stock_number"]
+        assert row["needs"] == mirror["needs"], row["stock_number"]
+        assert row["remaining_cost"] == mirror["remaining_cost"], row["stock_number"]
+
+
+def test_a_board_card_can_say_what_the_car_is_waiting_on(client):
+    """The columns put the report's "what does this still need" sentence on
+    each card, so the board carries it too rather than the browser inventing a
+    second phrasing of the same facts."""
+    recon = make_recon_vehicle(client, stock_number="B-NEEDS", purchase_price=0)
+    order = make_recon_order(client, recon["id"])
+    save_estimate(client, order["id"], [PART])
+    client.patch(f"/api/orders/{order['id']}/estimate/order-parts")
+
+    row = row_for(board(client), "B-NEEDS")
+    assert "1 part on order" in row["needs"], row["needs"]
+    assert row["lot_bucket"] == "working", "a car with parts on order is not 'not started'"
+
+
+def test_the_spend_report_carries_the_grouping_too(client):
+    """vehicle-spend is the same rows over a date window, so a card built from
+    either one describes the car the same way."""
+    make_recon_vehicle(client, stock_number="B-SPEND", purchase_price=0)
+    rows = client.get("/api/reports/vehicle-spend").json()
+    row = row_for(rows, "B-SPEND")
+    assert row["lot_bucket"] == "waiting"
+    assert "no ticket written yet" in row["needs"].lower(), row["needs"]

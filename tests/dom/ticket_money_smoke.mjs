@@ -79,18 +79,19 @@ await settle();
 const text = (sel) => (doc.querySelector(sel)?.textContent || "").trim();
 
 /* ---------- the two cards on the page have to agree ---------- */
-ok(text("#vd-quoted-cost") === "$665.00", `This Ticket quote reads ${text("#vd-quoted-cost")}, expected $665.00`);
+ok(text("#vd-ticket-total") === "$665.00", `This Ticket written-up reads ${text("#vd-ticket-total")}, expected $665.00`);
 ok(text("#vd-actual-cost") === "$545.00", `This Ticket actual reads ${text("#vd-actual-cost")}, expected $545.00`);
 
 const vehicleTotals = doc.querySelector("#vd-cost-summary").textContent;
-ok(vehicleTotals.includes("$665.00"), `Vehicle Total quote disagrees with the ticket: ${vehicleTotals}`);
+ok(vehicleTotals.includes("$665.00"), `Vehicle Total written-up disagrees with the ticket: ${vehicleTotals}`);
 ok(vehicleTotals.includes("$545.00"), `Vehicle Total actual disagrees with the ticket: ${vehicleTotals}`);
 
-/* ---------- the over/under badge reads off those same two ---------- */
-const delta = doc.querySelector("#vd-cost-delta");
-ok(delta && !delta.hidden, "the over/under-quote badge isn't showing on a ticket that has a quote");
-ok(text("#vd-cost-delta") === "$120.00 under quote",
-   `badge reads "${text("#vd-cost-delta")}", expected "$120.00 under quote" (665 - 545)`);
+/* ---------- and nothing subtracts one from the other ----------
+   The shop doesn't quote recon work, so "$120 under quote" was reporting a
+   result against an estimate nobody ever gave. The two figures stand alone. */
+ok(!doc.querySelector("#vd-cost-delta"), "the over/under-quote badge is back on the ticket card");
+ok(!/over quote|under quote|On quote/i.test(doc.querySelector("#vd-order-content").textContent),
+   "the ticket is comparing what was spent against what was written up");
 
 /* ---------- every line the totals were built from is on screen ----------
    This ticket is grouped into jobs, and the grouped layout used to render only
@@ -120,12 +121,12 @@ ok(!!qtyInput, "no quantity input on the windshield row");
 if (qtyInput) {
   qtyInput.value = "2";
   w.updateEstimateTotalsFromDom();
-  ok(text("#vd-quoted-cost") === "$845.00",
-     `typing a second windshield gave ${text("#vd-quoted-cost")}, expected $845.00 (665 + 180)`);
+  ok(text("#vd-ticket-total") === "$845.00",
+     `typing a second windshield gave ${text("#vd-ticket-total")}, expected $845.00 (665 + 180)`);
   qtyInput.value = "1";
   w.updateEstimateTotalsFromDom();
-  ok(text("#vd-quoted-cost") === "$665.00",
-     `putting the quantity back gave ${text("#vd-quoted-cost")}, expected $665.00`);
+  ok(text("#vd-ticket-total") === "$665.00",
+     `putting the quantity back gave ${text("#vd-ticket-total")}, expected $665.00`);
   ok(text("#vd-actual-cost") === "$545.00",
      `live actual reads ${text("#vd-actual-cost")}, expected $545.00`);
 }
@@ -134,8 +135,9 @@ if (qtyInput) {
 w.renderPrintTicket();
 const printed = doc.querySelector("#print-report");
 const printedText = printed.textContent;
-ok(printedText.includes("Total Quote") && printedText.includes("$665.00"),
-   "the printed ticket's Total Quote doesn't match the screen");
+ok(printedText.includes("Written Up") && printedText.includes("$665.00"),
+   "the printed ticket's Written Up total doesn't match the screen");
+ok(!/quote/i.test(printedText), "the printed ticket is back to talking about a quote");
 ok(printedText.includes("$545.00"), "the printed ticket's Actual Cost doesn't match the screen");
 
 const printedRows = [...printed.querySelectorAll("table.ticket tbody tr")];

@@ -7,7 +7,14 @@ from typing import Literal
 from fastapi import APIRouter
 
 from .db import normalize_vin
-from .recon import idle_days, is_stalled, unit_lifetime, vehicle_board_rows
+from .recon import (
+    LOT_READY,
+    LOT_WAITING,
+    LOT_WORKING,
+    idle_days,
+    unit_lifetimes,
+    vehicle_board_rows,
+)
 
 
 def vehicle_profit_rows(
@@ -110,10 +117,20 @@ def technician_productivity_rows(db: sqlite3.Connection, start: str | None, end:
         # happened, so crediting a technician with the order -- or with the
         # hours flagged on it before it was voided -- is crediting them with
         # nothing.
+        # A ticket counts for a tech if they're its default assignee OR they
+        # own any job on it -- the "only owns the brake job" case. DISTINCT
+        # because a tech can be both at once, and the columns carry the two
+        # timestamps the idle figure below is measured from.
         orders = db.execute(
-            """SELECT o.id, o.status FROM orders o JOIN order_workflow w ON w.order_id=o.id
-               WHERE w.technician_id=:tech_id AND o.voided=0
-                 AND (:start IS NULL OR o.created_at>=:start) AND (:end IS NULL OR o.created_at<=:end)""",
+            """SELECT DISTINCT o.id, o.status, o.created_at, o.last_activity_at
+                 FROM orders o
+                 LEFT JOIN order_workflow w ON w.order_id=o.id
+                 LEFT JOIN estimates e ON e.order_id=o.id
+                 LEFT JOIN estimate_jobs ej ON ej.estimate_id=e.id
+                WHERE o.voided=0
+                  AND (w.technician_id=:tech_id OR ej.technician_id=:tech_id)
+                  AND (:start IS NULL OR o.created_at>=:start)
+                  AND (:end IS NULL OR o.created_at<=:end)""",
             {"tech_id": tech["id"], "start": start, "end": end_bound},
         ).fetchall()
         # Labor is attributed to whichever technician actually owns it: a
@@ -153,159 +170,13 @@ def technician_productivity_rows(db: sqlite3.Connection, start: str | None, end:
 
 # The three groups the lot report sorts cars into, in the order Walt reads
 # them: what can go out, what is being worked, what has not been touched yet.
-LOT_READY = "ready"
-LOT_WORKING = "working"
-LOT_WAITING = "waiting"
-
+# Which pile a car is in is decided in recon.py, next to the board rows it is
+# stamped onto; only the wording is a report concern.
 LOT_GROUP_LABEL = {
     LOT_READY: "Ready to sell",
     LOT_WORKING: "In the shop",
     LOT_WAITING: "Not started",
 }
-
-
-def open_jobs_text(row: dict) -> str:
-    """The repairs this car is still owed, by name.
-
-    This is the part of "what does it still need" that money cannot answer.
-    Every other clause on the row is a number -- dollars left, parts on order
-    -- and none of them tells Walt whether what's outstanding is a windshield
-    or an oil change. The job titles are what somebody actually typed about
-    this car, so they're repeated verbatim rather than summarised.
-
-    A car whose jobs are all ticked but whose ticket is still open is worth
-    saying out loud too: the work is finished and only the paperwork is
-    holding the car on the lot, which is a one-click fix rather than a job
-    for a technician.
-    """
-    open_titles = [t.strip() for t in (row.get("jobs_open") or []) if t and t.strip()]
-    total = row.get("jobs_total") or 0
-    if not total:
-        return ""
-    if not open_titles:
-        return f"all {total} job{'' if total == 1 else 's'} ticked off — close the ticket"
-    named = ", ".join(open_titles[:NEEDS_JOB_LIMIT])
-    hidden = len(open_titles) - NEEDS_JOB_LIMIT
-    if hidden > 0:
-        named += f" +{hidden} more"
-    done = total - len(open_titles)
-    return f"{named} ({done} of {total} done)" if done else named
-
-
-def lot_needs_text(row: dict) -> str:
-    """One plain sentence answering "what does this car still need?".
-
-    Built on the server rather than in the browser so the screen, the printed
-    sheet and the CSV cannot drift into three different phrasings of the same
-    car -- Walt reads whichever one is in front of him and they have to agree.
-    """
-    # Money the car has spent but hasn't been charged: parts sitting on a
-    # ticket that is already closed and were never marked received. The car
-    # itself needs nothing, but the figure beside it on this sheet is short by
-    # this much, and the sheet has to say so rather than let a car that took
-    # $380 of tires read as free. See cost_rollup for why only closed tickets
-    # count.
-    missing = row.get("unreceived_closed_cost") or 0
-    missing_parts = row.get("unreceived_closed_parts") or 0
-    missing_text = (
-        f"{missing_parts} part{'' if missing_parts == 1 else 's'} never marked received (${missing:,.2f} not in the cost)"
-        if missing
-        else ""
-    )
-
-    if row["lot_bucket"] == LOT_READY:
-        if missing_text:
-            return f"Ready to go — but {missing_text}"
-        return "Nothing — ready to go"
-
-    bits = []
-    # First, because it outranks everything else on the row. A part on order or
-    # a quote half spent is the shop's own business; a we-owe promise whose
-    # date has gone by is a customer who was told a day and is still waiting.
-    # None here means the question doesn't apply -- a recon car, a promise with
-    # no date, or one already fulfilled or waived (see promise_days_late).
-    late = row.get("promise_days_late")
-    if late is not None and late >= 0:
-        bits.append(
-            "promised to the customer today"
-            if late == 0
-            else f"{late} day{'' if late == 1 else 's'} past the promised date"
-        )
-
-    if row["status"] == "pending_approval":
-        bits.append("waiting on approval")
-    if not row.get("order_id"):
-        # "No ticket written yet" is true of the live tickets and reads as an
-        # oversight to whoever remembers writing one. Naming the void instead
-        # is the difference between a row that looks forgotten and a row with
-        # an obvious next step -- and a voided ticket is exactly the case
-        # where a car quietly stops being anyone's job.
-        bits.append("ticket was voided — needs a new one" if row.get("voided_order_count") else "no ticket written yet")
-    elif row["status"] == "estimate" and row["lot_bucket"] == LOT_WAITING:
-        # Only true while nothing has actually been spent or ordered -- see
-        # lot_bucket. Saying it about a car with parts in it reads as a
-        # contradiction of the money on the same row.
-        bits.append("quoted, work not started")
-
-    # The work itself goes ahead of the money: it is the answer to the
-    # question, and the dollars are the follow-up.
-    jobs = open_jobs_text(row)
-    if jobs:
-        bits.append(jobs)
-
-    pending = row.get("parts_pending") or 0
-    if pending:
-        value = row.get("parts_pending_value") or 0
-        amount = f" (${value:,.2f})" if value else ""
-        bits.append(f"{pending} part{'' if pending == 1 else 's'} on order{amount}")
-
-    if row["remaining_cost"]:
-        bits.append(f"${row['remaining_cost']:,.2f} of quoted work left")
-
-    # Only worth saying once a car has actually gone quiet; every car is idle
-    # for a day or two between visits and flagging that is just noise. Same
-    # is_stalled the board's card uses, so the two screens can't disagree
-    # about which cars have been forgotten.
-    if is_stalled(row):
-        bits.append(f"untouched {row['idle_days']} days")
-
-    # A car can have an earlier ticket closed out with parts nobody receipted
-    # and still be in the shop on a second one, so this belongs on every row,
-    # not only the finished ones.
-    if missing_text:
-        bits.append(missing_text)
-
-    if not bits:
-        return "work under way"
-    # Only the first character is touched. str.capitalize() would lowercase
-    # everything after it, and the job titles in here are somebody's own words
-    # -- "Front Brakes / AC" is not ours to rewrite as "front brakes / ac".
-    sentence = " · ".join(bits)
-    return sentence[:1].upper() + sentence[1:]
-
-
-def lot_bucket(row: dict) -> str:
-    """Which of Walt's three piles this car is in.
-
-    Driven by the repair ticket, same as the board -- the recon record has a
-    status field of its own but nobody maintains it, and a report that reads
-    the field nobody updates is a report that quietly lies.
-
-    Money already spent or parts already on order also count as started, no
-    matter what the ticket still says. A ticket sits on "Estimate" until
-    somebody thinks to move it, so grouping on status alone put cars with
-    hundreds of dollars of parts in them under a heading that read "Not
-    started" -- and the group's own subtotal then contradicted its title on
-    the same line. What has actually happened to the car wins over what the
-    ticket was last set to.
-    """
-    if row["status_bucket"] == "finished":
-        return LOT_READY
-    if row["status"] in ("in_progress", "pending_approval"):
-        return LOT_WORKING
-    if (row.get("actual_cost") or 0) > 0 or (row.get("parts_pending") or 0) > 0:
-        return LOT_WORKING
-    return LOT_WAITING
 
 
 def lot_rows(db: sqlite3.Connection) -> list[dict]:
@@ -318,30 +189,12 @@ def lot_rows(db: sqlite3.Connection) -> list[dict]:
     questions ("what's ready, what's being worked on, what does it still
     need") are about the lot today, not about a date range.
 
-    Built on the same vehicle_board_rows the job board uses, so the costs and
-    the statuses here can never disagree with the board's.
+    Built on the same vehicle_board_rows the job board uses, so the costs, the
+    statuses and the grouping here can never disagree with the board's -- the
+    rows arrive already stamped with their pile, what's left to spend on them
+    and what each one is waiting on. All this adds is Walt's reading order.
     """
     rows = vehicle_board_rows(db)
-    for row in rows:
-        row["lot_bucket"] = lot_bucket(row)
-        # Quoted but not yet spent: what finishing this car should still cost.
-        #
-        # This is the quoted value of the parts that have not landed yet
-        # (cost_rollup's open_cost), not quoted minus spent. Those were the
-        # same number only while receiving a part overwrote its quote with the
-        # invoice price; now that the quote survives the bill, a part that came
-        # in cheaper than estimated would have left the difference sitting in
-        # this column as work still to do on a job that is already finished.
-        #
-        # Zero on a finished car, whatever is still open on its ticket.
-        # Nothing is going to be spent on it: a car that came in under its
-        # estimate was putting the difference in the "still to spend" column
-        # and into the lot's total, on the same row whose Needs cell read
-        # "Nothing -- ready to go". Two answers to one question, one line
-        # apart. The shortfall against the quote is still visible where it
-        # belongs, in the board's Cost-against-quote column.
-        row["remaining_cost"] = 0.0 if row["lot_bucket"] == LOT_READY else max(row["open_cost"], 0)
-        row["needs"] = lot_needs_text(row)
     order = {LOT_READY: 0, LOT_WORKING: 1, LOT_WAITING: 2}
     # Within a group, the longest-idle car first: the one most likely to have
     # been forgotten is the one Walt most needs to be asked about.

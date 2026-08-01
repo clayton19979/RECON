@@ -129,6 +129,18 @@ function renderCustomersStats() {
     </button>`;
 }
 
+// A we-owe's target date is a bare calendar date ("2026-08-15"), not a moment.
+// new Date() reads those as UTC midnight, and Indiana is hours behind UTC, so
+// running one through fmtDay prints the day before -- a promise due Saturday
+// shown as due Friday. Split the string instead of parsing it.
+function fmtCalendarDay(value) {
+  const parts = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value || ""));
+  if (!parts) return fmtDay(value);
+  const [, year, month, day] = parts;
+  return new Date(Number(year), Number(month) - 1, Number(day))
+    .toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+}
+
 function customerRowHtml(c, open) {
   const phone = fmtPhone(c.phone);
   const email = String(c.email || "").trim();

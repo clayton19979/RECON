@@ -70,7 +70,7 @@ for (const [label, jobs] of [["flat", []], ["jobs", [{ id: 7, title: "Front brak
   ok(collected.length === 3, `${label}: collectEstimateItems returned ${collected.length}, expected 3`);
   ok(collected[0].description === "Front pads" && collected[0].quantity === 2 && collected[0].unit_cost === 41.5,
      `${label}: collectEstimateItems lost field values: ${JSON.stringify(collected[0])}`);
-  ok(w.document.querySelector("#vd-quoted-cost").textContent !== "$0.00", `${label}: quoted total not computed`);
+  ok(w.document.querySelector("#vd-ticket-total").textContent !== "$0.00", `${label}: ticket total not computed`);
 }
 
 /* ------------------------------------------------------------------
@@ -112,9 +112,9 @@ for (const [label, jobs] of [["flat", []], ["jobs", [{ id: 7, title: "Front brak
   ok(!qRows[1].querySelector(".ei-quote-note"),
      "a line that came in at exactly its quoted price printed the same number twice");
 
-  ok(doc0("#vd-quoted-cost") === "$130.00", `ticket quote total is ${doc0("#vd-quoted-cost")}, expected $130.00`);
+  ok(doc0("#vd-ticket-total") === "$130.00", `written-up total is ${doc0("#vd-ticket-total")}, expected $130.00`);
   ok(doc0("#vd-actual-cost") === "$205.00", `ticket actual total is ${doc0("#vd-actual-cost")}, expected $205.00`);
-  ok(doc0("#vd-cost-delta") === "$75.00 over quote", `ticket delta is "${doc0("#vd-cost-delta")}", expected $75.00 over quote`);
+  ok(!w.document.querySelector("#vd-cost-delta"), "the over/under-quote badge is back on the ticket card");
 
   // Correcting a mis-keyed invoice price moves what the car cost, never the
   // quote -- the same rule the server applies when it saves the grid.
@@ -123,8 +123,8 @@ for (const [label, jobs] of [["flat", []], ["jobs", [{ id: 7, title: "Front brak
   costBox.value = "185";
   costBox.dispatchEvent(new w.Event("input", { bubbles: true }));
   ok(doc0("#vd-actual-cost") === "$215.00", `live actual did not follow the corrected price: ${doc0("#vd-actual-cost")}`);
-  ok(doc0("#vd-quoted-cost") === "$130.00",
-     `retyping the price of a received part rewrote the quote to ${doc0("#vd-quoted-cost")}`);
+  ok(doc0("#vd-ticket-total") === "$130.00",
+     `retyping the price of a received part rewrote the written-up total to ${doc0("#vd-ticket-total")}`);
 
   // A line still being quoted works the other way round: the cost box IS the
   // quote until the part lands, so typing in it has to move both.
@@ -133,8 +133,8 @@ for (const [label, jobs] of [["flat", []], ["jobs", [{ id: 7, title: "Front brak
   beltBox.focus();
   beltBox.value = "50";
   beltBox.dispatchEvent(new w.Event("input", { bubbles: true }));
-  ok(doc0("#vd-quoted-cost") === "$150.00",
-     `repricing a part nobody has received left a stale quote: ${doc0("#vd-quoted-cost")}`);
+  ok(doc0("#vd-ticket-total") === "$150.00",
+     `repricing a part nobody has received left a stale written-up total: ${doc0("#vd-ticket-total")}`);
 }
 
 // addEstimateRow's transient row matches the rendered ones
@@ -212,7 +212,7 @@ ok(grid.querySelectorAll(".part-row:not(.head)")[0] === rowsA[0],
 ok(descA.value === "Front pads (mid-edit)", "a same-shape save clobbered the focused field's value");
 ok(rowsA[1].querySelector(".ei-cost").value === "120",
    "a same-shape save did not push the server's value into an unfocused field");
-ok(doc.querySelector("#vd-quoted-cost").textContent !== "$0.00", "totals not recomputed after an in-place sync");
+ok(doc.querySelector("#vd-ticket-total").textContent !== "$0.00", "totals not recomputed after an in-place sync");
 ok(doc.querySelector("#vd-estimate-save-state").textContent.length > 0, "the autosave indicator never said anything");
 
 // --- shape changed: full redraw, but focus lands back where it was ---
@@ -260,12 +260,11 @@ const laborQty = rowsD[0].querySelector(".ei-qty");
 laborQty.focus();
 laborQty.value = "3";
 laborQty.dispatchEvent(new w.Event("input", { bubbles: true }));
-ok(doc.querySelector("#vd-quoted-cost").textContent === "$480.00",
-   `live quoted total wrong after typing: ${doc.querySelector("#vd-quoted-cost").textContent}, expected $480.00`);
+ok(doc.querySelector("#vd-ticket-total").textContent === "$480.00",
+   `live ticket total wrong after typing: ${doc.querySelector("#vd-ticket-total").textContent}, expected $480.00`);
 ok(doc.querySelector("#vd-actual-cost").textContent === "$480.00",
    `live actual total wrong after typing: ${doc.querySelector("#vd-actual-cost").textContent}`);
-ok(doc.querySelector("#vd-cost-delta").textContent === "On quote",
-   "live delta not recomputed on keystroke");
+ok(!doc.querySelector("#vd-cost-delta"), "the over/under-quote badge is back on the ticket");
 ok(estimatePosts() === postsBefore, "a single keystroke fired an immediate save instead of debouncing");
 
 // --- after a pause in typing, the debounced save lands on its own ---

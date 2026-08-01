@@ -3,7 +3,7 @@
 A ticket's status is one flag for the whole car, so before this the app could
 say a car was "in progress" and nothing more. Walt's third question -- what
 does each remaining car still need -- could only be answered in money ("$420
-of quoted work left"), which does not tell him whether what's outstanding is
+of work left"), which does not tell him whether what's outstanding is
 a windshield or an oil change, and a ticket with four repairs read exactly the
 same whether three were finished or none were.
 

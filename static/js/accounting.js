@@ -146,7 +146,7 @@ function openVendorForEdit(vendorId) {
   vendorField("account_number").value = vendor.account_number || "";
   $("#vendor-form-title").textContent = `Editing ${vendor.name}`;
   $("#vendor-form-submit").textContent = "Update Vendor";
-  $("#vendor-form-cancel").style.display = "";
+  $("#vendor-form-cancel").hidden = false;
   vendorField("name").focus();
 }
 function cancelVendorEdit() {
@@ -154,7 +154,7 @@ function cancelVendorEdit() {
   $("#vendor-form").reset();
   $("#vendor-form-title").textContent = "Vendors";
   $("#vendor-form-submit").textContent = "Save Vendor";
-  $("#vendor-form-cancel").style.display = "none";
+  $("#vendor-form-cancel").hidden = true;
 }
 /* The ticket picker is now optional and posts an order id outright, instead
    of a PO string the server had to reverse-match to a repair order. Choosing
@@ -188,6 +188,29 @@ function voidResultMessage(result) {
   }
   if (credits) bits.push(`${credits} return${credits === 1 ? "" : "s"} waiting on a credit again`);
   return `Invoice voided — ${bits.join(", ")}`;
+}
+
+// One vendor invoice routinely covers parts for several cars. The cell lists
+// every car on it with its share of the bill, because "which car did this
+// $515 go to" is the whole reason anyone opens this screen with a vendor
+// statement in hand -- and a shared invoice used to answer "No ticket".
+function apVehicleCell(invoice) {
+  const covers = invoice.coverage || [];
+  if (!covers.length) return `<td class="muted">No ticket</td>`;
+  if (covers.length === 1) return `<td>${esc(covers[0].vehicle_label)}</td>`;
+  return `<td class="ap-coverage">${covers.map((c) => {
+    const open = coverageOpenable(c);
+    return `<span class="ap-cover-line${open ? " clickable" : ""}"${open ? ` data-segment="${esc(c.segment)}" data-ref-id="${coverageRefId(c)}" role="button" tabindex="0" title="Open ${esc(c.vehicle_label)}"` : ""}>
+      <span class="ap-cover-name">${esc(c.vehicle_label)}</span><span class="ap-cover-amount num">${money(c.amount)}</span></span>`;
+  }).join("")}</td>`;
+}
+
+// Which vehicle page a covered ticket opens. Retail tickets have one too.
+function coverageRefId(cover) {
+  return cover.segment === "retail" ? cover.vehicle_id : (cover.recon_vehicle_id ?? cover.we_owe_id);
+}
+function coverageOpenable(cover) {
+  return coverageRefId(cover) != null && ["recon", "we_owe", "retail"].includes(cover.segment);
 }
 
 function renderApTable(invoices) {
@@ -227,6 +250,9 @@ function renderApTable(invoices) {
         icon: "invoice",
         title: "No vendor invoices in this range",
         hint: "Post one with the form above, or widen the date range. Receiving parts on a ticket also posts an invoice here automatically.",
+        // The range is the most likely reason this is empty, so the way out
+        // of it is the button rather than something to go hunting for.
+        actions: `<button type="button" class="btn btn-ghost btn-sm" data-empty-action="ap-show-all">Show all time</button>`,
       });
   // Rows and the per-vehicle lines inside a shared invoice's cell open the
   // same way; a shared invoice's row is never itself clickable, so the two
@@ -418,10 +444,23 @@ export function wireAccountingView() {
     renderApTable(filterApInvoices(state.apInvoices));
   });
   $("#ap-table").addEventListener("click", (e) => {
-    if (!e.target.closest('[data-empty-action="ap-clear-search"]')) return;
-    state.apSearch = "";
-    $("#ap-search").value = "";
-    renderApTable(filterApInvoices(state.apInvoices));
+    const trigger = e.target.closest("[data-empty-action]");
+    if (!trigger) return;
+    if (trigger.dataset.emptyAction === "ap-clear-search") {
+      state.apSearch = "";
+      $("#ap-search").value = "";
+      renderApTable(filterApInvoices(state.apInvoices));
+    } else if (trigger.dataset.emptyAction === "ap-show-all") {
+      // Same state the "All Time" chip writes, so the two can't disagree
+      // about which range is on.
+      const range = computeQuickRange("all");
+      state.apFilter = range;
+      $("#ap-filter-start").value = range.start;
+      $("#ap-filter-end").value = range.end;
+      $$('#view-accounting [data-ap-range]').forEach((c) =>
+        c.classList.toggle("active", c.dataset.apRange === "all"));
+      loadApTable();
+    }
   });
   $("#vendor-form").addEventListener("submit", async (e) => {
     e.preventDefault();

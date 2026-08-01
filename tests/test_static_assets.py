@@ -569,14 +569,20 @@ def test_credit_lines_are_never_dropped_from_a_grouped_ticket(js: str) -> None:
     assert 'credit: "Credits"' in js, "KIND_GROUP_LABEL has no heading for credit lines"
 
 
-def test_over_quote_rule_has_exactly_one_definition(js: str) -> None:
-    """The Over Quote card counts the cars whose Cost cell is red. Two copies
-    of the 10%-past-estimate rule is two chances for the count and the
-    coloring to disagree, which makes both of them useless."""
-    assert len(re.findall(r"quoted_cost \* 1\.1", js)) == 1, (
-        "the over-quote threshold appears more than once -- isOverQuote should be the only definition"
+def test_nothing_compares_spend_against_what_was_written_up(js: str, css: str, html: str) -> None:
+    """The shop does not quote recon work -- it buys what the car needs -- so
+    there is no estimate for a car to come in over or under. This used to be a
+    board column, a summary card, a filter, a red Cost cell, a badge on the
+    ticket and a marker on the report chart. All of it is gone, and a number
+    the shop never agreed to must not come back."""
+    assert "quoted_cost *" not in js and "isOverQuote" not in js, (
+        "an over-quote rule is back in the front end"
     )
-    assert 'isOverQuote(v) ? "over-quote"' in js, "costCellClass no longer defers to isOverQuote"
+    for gone in ("over-quote", "cost-delta", "bar-marker", "veh-card-quoted", "quoted-col"):
+        assert gone not in css, f"the {gone} styling is back in styles.css"
+        assert gone not in html, f"the {gone} markup is back in index.html"
+    for gone in ("costDeltaBadge", "over quote", "under quote", "past estimate"):
+        assert gone not in js, f'"{gone}" is back in the front end'
 
 
 def test_parts_filter_toggle_is_not_a_segment_chip(js: str, html: str) -> None:
@@ -871,9 +877,9 @@ def test_stalled_span_is_matched_by_range_not_bucket_identity(js: str) -> None:
 
 def test_actionable_board_cards_are_buttons_wired_to_a_filter(html: str, js: str) -> None:
     """A number you can read but not act on sends you hunting down the table
-    for the rows behind it. These three are controls, and being real <button>s
-    is what makes them keyboard-operable and announced as pressed."""
-    for which in ("parts", "stalled", "over"):
+    for the rows behind it. Both of these are controls, and being real
+    <button>s is what makes them keyboard-operable and announced as pressed."""
+    for which in ("parts", "stalled"):
         assert re.search(rf'<button[^>]*class="stat stat-action"[^>]*data-board-filter="{which}"', html), (
             f'the "{which}" summary card isn\'t a button wired to a board filter'
         )
@@ -892,9 +898,9 @@ def test_the_stalled_card_counts_with_the_idle_filter_lifted(js: str) -> None:
     counts over the pool with the idle filter lifted instead, which is the
     rule the chart's own bars already follow.
 
-    Waiting on Parts and Over Quote deliberately need no equivalent: their
-    filters keep exactly the rows they count, so the number is the same
-    either way and lifting it would be code no test could observe."""
+    Waiting on Parts deliberately needs no equivalent: its filter keeps
+    exactly the rows it counts, so the number is the same either way and
+    lifting it would be code no test could observe."""
     stats = _function_source(js, "renderStats")
     assert "visibleVehicles({ ignoreIdle: true })" in stats, (
         "the Stalled card counts over the idle-filtered rows, so picking a bucket relabels it"
@@ -905,12 +911,12 @@ def test_the_stalled_card_counts_with_the_idle_filter_lifted(js: str) -> None:
 def test_board_card_filters_round_trip_with_the_other_preferences(js: str) -> None:
     save = _function_source(js, "saveVehicleViewPrefs")
     load = _function_source(js, "loadVehicleViewPrefs")
-    assert "overOnly" in save and "overOnly" in load, "the over-quote filter isn't a saved view preference"
+    assert "partsOnly" in save and "partsOnly" in load, "the parts filter isn't a saved view preference"
     assert "IDLE_SELECTIONS[saved.idleBucket]" in load, (
         "restoring preferences validates against the buckets only, so a saved 'stalled' is dropped"
     )
-    assert "state.vehicleOverOnly" in _function_source(js, "resetVehicleView"), (
-        "Reset view leaves the over-quote filter on"
+    assert "state.vehiclePartsOnly" in _function_source(js, "resetVehicleView"), (
+        "Reset view leaves the parts filter on"
     )
 
 

@@ -348,6 +348,10 @@ CREATE TABLE IF NOT EXISTS ap_invoice_items (
   quantity REAL NOT NULL,
   unit_cost REAL NOT NULL,
   line_total REAL NOT NULL,
+  -- What the vendor is billing for on this line: 'part', 'core_charge',
+  -- 'credit', 'freight', 'shop_supplies', 'labor'. The Accounting screen has
+  -- always offered that choice and it used to be thrown away on the way in.
+  kind TEXT NOT NULL DEFAULT 'part',
   -- The part line this billed line paid for, when it came from receiving on
   -- a ticket. Null for invoices typed in whole on the Accounting screen.
   estimate_item_id INTEGER REFERENCES estimate_items(id)
@@ -449,6 +453,13 @@ def _migrate(db: sqlite3.Connection) -> None:
     ap_item_columns = {row[1] for row in db.execute("PRAGMA table_info(ap_invoice_items)")}
     if "estimate_item_id" not in ap_item_columns:
         db.execute("ALTER TABLE ap_invoice_items ADD COLUMN estimate_item_id INTEGER REFERENCES estimate_items(id)")
+    # What the vendor billed for on this line. Needed to tell a core deposit
+    # apart from the part it came with: the deposit is real money out that
+    # comes back only when the old unit does, and reversing it later means
+    # being able to find it. Everything already posted was a part or a
+    # straight credit, and 'part' is the harmless default for both.
+    if "kind" not in ap_item_columns:
+        db.execute("ALTER TABLE ap_invoice_items ADD COLUMN kind TEXT NOT NULL DEFAULT 'part'")
 
     # The Gmail email-report and PartsTech integrations were removed --
     # neither ever had a working real integration behind it (PartsTech was

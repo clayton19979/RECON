@@ -68,7 +68,7 @@ function renderCoresReturnsStats() {
   const cores = state.cores.filter((c) => !c.voided);
   const returns = state.returns.filter((r) => !r.voided);
   const outstanding =
-    cores.filter((c) => coreStatus(c) !== "credited").reduce((s, c) => s + c.core_charge, 0) +
+    cores.filter((c) => coreStatus(c) !== "credited").reduce((s, c) => s + c.core_total, 0) +
     returns.filter((r) => returnStatus(r) !== "credited").reduce((s, r) => s + Math.abs(r.credit_total), 0);
   const awaitingCores = cores.filter((c) => coreStatus(c) === "awaiting");
   const awaitingReturns = returns.filter((r) => returnStatus(r) === "awaiting");
@@ -267,7 +267,7 @@ function renderCoresTable() {
   // Voided tickets aren't money owed back -- keep them out of the headline
   // figure. A deposit stays outstanding until the credit is recorded, not
   // merely until the core leaves the shop.
-  const outstanding = state.cores.filter((c) => coreStatus(c) !== "credited" && !c.voided).reduce((s, c) => s + c.core_charge, 0);
+  const outstanding = state.cores.filter((c) => coreStatus(c) !== "credited" && !c.voided).reduce((s, c) => s + c.core_total, 0);
   $("#cores-total").textContent = state.cores.length
     ? (outstanding > 0 ? `${money(outstanding)} outstanding` : "all deposits recovered")
     : "";
@@ -299,7 +299,7 @@ function renderCoresTable() {
       <td>${c.part_number ? esc(c.part_number) : '<span class="muted-dash">—</span>'}</td>
       <td>${esc(c.ro_number)} · ${esc(c.vehicle_label)}</td>
       <td>${esc(c.vendor_name || "—")}</td>
-      <td class="num-col">${money(c.core_charge)}</td>
+      <td class="num-col">${money(c.core_total)}${c.quantity > 1 ? `<div class="veh-sub num">${c.quantity} × ${money(c.core_charge)}</div>` : ""}</td>
       <td><span class="pill ${CORE_PILL[status]}">${CORE_LABEL[status]}</span></td>
       <td class="actions-col"><div class="row-actions">${actions}</div></td>
     </tr>
@@ -355,7 +355,7 @@ function renderCoresTable() {
       const answer = await promptInvoiceNumber({
         eyebrow: "CORE CREDIT",
         title: "Record the vendor's credit",
-        body: item ? `${item.description}${item.part_number ? ` (${item.part_number})` : ""} — ${money(item.core_charge)} deposit coming back.` : "",
+        body: item ? `${item.description}${item.part_number ? ` (${item.part_number})` : ""} — ${money(item.core_total)} deposit coming back, and off this car's cost.` : "",
         label: "Credit / invoice #",
         confirmLabel: "Record Credit",
       });

@@ -865,6 +865,13 @@ function updateReceiveButtonState() {
 // vehicle's own total can't tell three different stories about one ticket.
 // Split out of renderEstimate because an in-place sync has to recompute
 // these without touching the rows.
+//
+// A core deposit the vendor hasn't credited back yet is in both figures, on
+// the same terms cost_rollup uses server-side: it is money the shop paid for
+// this car and won't see again until the old unit goes back. Counting it in
+// the quote as well as the actual is what stops a deposit from reading as
+// "over quote" the day the part lands.
+const coreOwing = (i) => i.kind === "part" && !i.part_returned && !i.core_return_invoice_number ? (i.core_charge || 0) : 0;
 function renderEstimateTotals(order) {
   const items = order.estimate ? order.estimate.items : [];
   applyTicketTotals(quotedTotal(items), actualTotal(items));
@@ -1841,8 +1848,14 @@ function renderPrintTicket() {
       else if ((i.received_quantity ?? 0) > 0 && i.received_quantity < i.quantity) status = `Received ${i.received_quantity}/${i.quantity}`;
       else status = ITEM_STATUS_LABEL[i.status] || "Quoted";
     }
+    // The deposit is in this row's own total when it's still owed back, so
+    // say which it is -- a printed line that reads "Core charge $45" but adds
+    // $45 into some rows and not others is unauditable on paper.
+    // Say where the deposit stands, since it is in the totals below only
+    // while it's still owed back.
     const coreSub = i.kind === "part" && (i.core_charge || 0) > 0
-      ? `<div class="pt-desc-sub">Core charge ${money(i.core_charge)}</div>` : "";
+      ? `<div class="pt-desc-sub">Core charge ${money(i.core_charge)}${coreOwing(i) ? " — owed back" : i.core_return_invoice_number ? " — credited back" : " — reversed with the return"}</div>`
+      : "";
     return `<tr><td>${esc(i.description)}${coreSub}</td><td>${i.part_number ? esc(i.part_number) : ""}</td>
       <td class="num-col">${i.quantity}</td><td class="num-col">${money(returned ? 0 : i.unit_cost)}</td>
       <td class="num-col">${money(quotedLineTotal(i))}</td><td>${status}</td></tr>`;

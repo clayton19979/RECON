@@ -34,10 +34,17 @@ export function isReturnedPart(item) {
   return item.kind === "part" && !!item.part_returned;
 }
 
+/** The price a line was written down at. Receiving overwrites unit_cost with
+ * the vendor invoice's number; quoted_unit_cost is the one that survives the
+ * bill. Lines from before that column existed carry null and fall back. */
+export function writtenUnitCost(item) {
+  return item.quoted_unit_cost ?? item.unit_cost ?? 0;
+}
+
 /** What one line contributes to the ticket's quote. Negative for a credit. */
 export function quotedLineTotal(item) {
   if (isReturnedPart(item)) return 0;
-  const total = (Number(item.quantity) || 0) * (Number(item.unit_cost) || 0);
+  const total = (Number(item.quantity) || 0) * (Number(writtenUnitCost(item)) || 0);
   return item.kind === "credit" ? -total : total;
 }
 

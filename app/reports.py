@@ -7,7 +7,7 @@ from typing import Literal
 from fastapi import APIRouter
 
 from .db import normalize_vin
-from .recon import idle_days, is_stalled, unit_lifetime, vehicle_board_rows
+from .recon import NEEDS_JOB_LIMIT, idle_days, is_stalled, unit_lifetimes, vehicle_board_rows
 
 
 def vehicle_profit_rows(
@@ -110,10 +110,20 @@ def technician_productivity_rows(db: sqlite3.Connection, start: str | None, end:
         # happened, so crediting a technician with the order -- or with the
         # hours flagged on it before it was voided -- is crediting them with
         # nothing.
+        # A ticket counts for a tech if they're its default assignee OR they
+        # own any job on it -- the "only owns the brake job" case. DISTINCT
+        # because a tech can be both at once, and the columns carry the two
+        # timestamps the idle figure below is measured from.
         orders = db.execute(
-            """SELECT o.id, o.status FROM orders o JOIN order_workflow w ON w.order_id=o.id
-               WHERE w.technician_id=:tech_id AND o.voided=0
-                 AND (:start IS NULL OR o.created_at>=:start) AND (:end IS NULL OR o.created_at<=:end)""",
+            """SELECT DISTINCT o.id, o.status, o.created_at, o.last_activity_at
+                 FROM orders o
+                 LEFT JOIN order_workflow w ON w.order_id=o.id
+                 LEFT JOIN estimates e ON e.order_id=o.id
+                 LEFT JOIN estimate_jobs ej ON ej.estimate_id=e.id
+                WHERE o.voided=0
+                  AND (w.technician_id=:tech_id OR ej.technician_id=:tech_id)
+                  AND (:start IS NULL OR o.created_at>=:start)
+                  AND (:end IS NULL OR o.created_at<=:end)""",
             {"tech_id": tech["id"], "start": start, "end": end_bound},
         ).fetchall()
         # Labor is attributed to whichever technician actually owns it: a

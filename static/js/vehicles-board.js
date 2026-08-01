@@ -1066,7 +1066,7 @@ function vehicleRowHtml(v) {
 function vehicleRowSignature(v) {
   return [
     v.stock_number, v.vehicle, v.vin, v.customer_name, v.segment, v.status, v.status_bucket,
-    v.technicians.join("|"), v.age_days, v.idle_days, v.last_activity_at,
+    v.technicians.join("|"), v.age_days, v.acquired_at, v.idle_days, v.last_activity_at,
     v.target_date, v.promise_days_late,
     v.quoted_cost, v.actual_cost, v.parts_pending, v.parts_pending_value,
     v.unreceived_closed_cost, v.unreceived_closed_parts,

@@ -127,7 +127,7 @@ def test_putting_a_line_back_to_quoted_is_logged_as_its_own_thing(client, db_pat
         f"/api/orders/{order['id']}/estimate/items/{item_id}/status",
         json={"status": "quoted", "actor": "Antonio"},
     )
-    assert actions(client, order["id"])[-1] == "part_order_undone"
+    assert actions(client, order["id"])[-1] == "parts_order_undone"
     assert board_row(client, recon["id"])["idle_days"] == 0
 
 

@@ -252,14 +252,27 @@ await settle();
 ok(!doc.querySelector("#view-reports .chip.active"), "a quick-range chip stayed lit after the dates were edited by hand");
 ok(fetchLog.at(-1).url.includes("start=2020-01-01"), `hand-typed date didn't reach the query: ${fetchLog.at(-1).url}`);
 
-// ...but typing the exact dates a chip stands for should light it again.
-const month = w.computeQuickRange("month");
+/* ...but typing the exact dates a chip stands for should light it again.
+
+   Which chip to test with has to be decided on the day: two chips can
+   describe the identical range and then only the first one can ever light.
+   On the 1st of a month "Today" and "This Month" are the same two dates; on
+   the 1st of January so is "This Year", and "This Week" collides with
+   "Today" every Sunday. That's a real tie, not a bug -- the range in effect
+   is the same either way -- so this picks a chip that is unambiguous today
+   rather than asserting one that only holds for part of the year. */
+const RANGE_KINDS = ["today", "week", "month", "year", "all"];
+const rangeKey = (k) => { const r = w.computeQuickRange(k); return `${r.start}..${r.end}`; };
+const unambiguous = (k) => RANGE_KINDS.filter((o) => rangeKey(o) === rangeKey(k)).length === 1;
+const rangeKind = ["month", "year", "week"].find(unambiguous);
+ok(!!rangeKind, "no quick range is unambiguous today, so no chip could ever light");
+const month = w.computeQuickRange(rangeKind);
 doc.querySelector("#report-start").value = month.start;
 doc.querySelector("#report-end").value = month.end;
 doc.querySelector("#report-end").dispatchEvent(new w.Event("change", { bubbles: true }));
 await settle();
-ok(doc.querySelector('[data-report-range="month"]').classList.contains("active"),
-   "typing this month's dates by hand didn't light the This Month chip");
+ok(doc.querySelector(`[data-report-range="${rangeKind}"]`).classList.contains("active"),
+   `typing the ${rangeKind} range by hand didn't light its chip`);
 
 /* ---------- CSV link ---------- */
 const href = doc.querySelector("#report-csv").getAttribute("href");
@@ -274,12 +287,12 @@ ok(reconHref.startsWith("/api/export/report/vehicle-spend.csv") && reconHref.inc
 /* ---------- prefs survive a reload ---------- */
 const saved = JSON.parse(w.localStorage.getItem(w.REPORT_PREFS_KEY));
 ok(saved.type === "vehicle-spend-recon", `saved report type is ${saved.type}`);
-ok(saved.range === "month", `saved range is ${saved.range}`);
+ok(saved.range === rangeKind, `saved range is ${saved.range}, expected ${rangeKind}`);
 w.state.reportType = "technicians";
 w.state.reportRange = "all";
 w.state.reportSort = { key: "cost", dir: "asc" };
 w.loadReportPrefs();
-ok(w.state.reportType === "vehicle-spend-recon" && w.state.reportRange === "month",
+ok(w.state.reportType === "vehicle-spend-recon" && w.state.reportRange === rangeKind,
    `prefs didn't round-trip: ${w.state.reportType} / ${w.state.reportRange}`);
 
 // A hand-typed window is the one kind of range that does survive literally --

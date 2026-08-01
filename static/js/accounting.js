@@ -190,6 +190,29 @@ function voidResultMessage(result) {
   return `Invoice voided — ${bits.join(", ")}`;
 }
 
+// One vendor invoice routinely covers parts for several cars. The cell lists
+// every car on it with its share of the bill, because "which car did this
+// $515 go to" is the whole reason anyone opens this screen with a vendor
+// statement in hand -- and a shared invoice used to answer "No ticket".
+function apVehicleCell(invoice) {
+  const covers = invoice.coverage || [];
+  if (!covers.length) return `<td class="muted">No ticket</td>`;
+  if (covers.length === 1) return `<td>${esc(covers[0].vehicle_label)}</td>`;
+  return `<td class="ap-coverage">${covers.map((c) => {
+    const open = coverageOpenable(c);
+    return `<span class="ap-cover-line${open ? " clickable" : ""}"${open ? ` data-segment="${esc(c.segment)}" data-ref-id="${coverageRefId(c)}" role="button" tabindex="0" title="Open ${esc(c.vehicle_label)}"` : ""}>
+      <span class="ap-cover-name">${esc(c.vehicle_label)}</span><span class="ap-cover-amount num">${money(c.amount)}</span></span>`;
+  }).join("")}</td>`;
+}
+
+// Which vehicle page a covered ticket opens. Retail tickets have one too.
+function coverageRefId(cover) {
+  return cover.segment === "retail" ? cover.vehicle_id : (cover.recon_vehicle_id ?? cover.we_owe_id);
+}
+function coverageOpenable(cover) {
+  return coverageRefId(cover) != null && ["recon", "we_owe", "retail"].includes(cover.segment);
+}
+
 function renderApTable(invoices) {
   const liveTotal = invoices.filter((a) => a.status !== "voided").reduce((s, a) => s + (a.total || 0), 0);
   $("#ap-count").textContent = `${invoices.length} invoice${invoices.length === 1 ? "" : "s"} · ${money(liveTotal)}`;

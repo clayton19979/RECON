@@ -749,7 +749,7 @@ function renderEstimate(order) {
     const isPart = item.kind === "part";
     const L = fieldLabels(item.kind);
     return `
-    <div class="part-row" draggable="true" data-index="${i}" data-id="${item.id || ""}" data-source="${item.source || "manual"}" data-received-quantity="${item.received_quantity ?? 0}" data-part-returned="${isReturnedPart(item) ? "1" : "0"}">
+    <div class="part-row" draggable="true" data-index="${i}" data-id="${item.id || ""}" data-source="${item.source || "manual"}" data-received-quantity="${item.received_quantity ?? 0}" data-quoted-unit-cost="${item.quoted_unit_cost ?? ""}" data-part-returned="${isReturnedPart(item) ? "1" : "0"}">
       ${cell("handle", "", `<span class="row-drag-handle" title="Drag to reorder">⋮⋮</span>`)}
       ${cell("check", "", receivable ? `<input type="checkbox" class="ei-receive-check" data-id="${item.id}" title="Select to receive against a vendor invoice">` : "")}
       ${cell("kind", "Kind", `<select class="ei-kind">
@@ -869,6 +869,7 @@ function renderEstimate(order) {
       // at a glance which lines are parts vs labor for this job -- not just
       // which job a line belongs to.
       const kindGroups = kindGroupsOf(bucketItems);
+      const jobDone = !isGeneral && !!bucket.completed_at;
       return `
         <div class="job-group${jobDone ? " job-done" : ""}" data-job-id="${bucket.id ?? ""}">
           <div class="job-group-head">
@@ -987,6 +988,15 @@ function rowAsEstimateItem(row) {
     // below is what actually drops it, so either reading gives the same
     // answer and neither depends on the other.
     unit_cost: num(".ei-cost"),
+    // Until a line has been received the Cost box IS the written price, so
+    // typing in it moves both figures. Once the part has landed, that box
+    // holds what the vendor billed and the written price is frozen on the
+    // row -- the same rule the server applies when it saves. Blank means the
+    // line predates the column, and falls back to the cost box either way.
+    quoted_unit_cost: (parseFloat(row.dataset.receivedQuantity || "0") || 0) > 0
+        && row.dataset.quotedUnitCost !== "" && row.dataset.quotedUnitCost != null
+      ? parseFloat(row.dataset.quotedUnitCost)
+      : null,
     received_quantity: parseFloat(row.dataset.receivedQuantity || "0") || 0,
     part_returned: row.dataset.partReturned === "1",
   };

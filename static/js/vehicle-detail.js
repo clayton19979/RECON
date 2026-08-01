@@ -1537,32 +1537,77 @@ function collectEstimateItems() {
 // elsewhere on the page (that was the bug: adding a part, then clicking any
 // other Save/Advance/Order-Parts button, reloaded the page and discarded it).
 //
-// Fast successive edits (tabbing through several fields) fire several of
-// these calls in flight at once; an earlier, slower response landing after
-// a newer one would overwrite fresher data with stale data. estimateSaveToken
-// tags each call so only the most recently *started* one is allowed to render.
-let estimateSaveToken = 0;
-async function persistEstimate() {
+/* One save is in flight at a time, and that is not just tidiness -- it is what
+   keeps the estimate's optimistic lock honest.
+
+   Every save carries the edit_version it was written against, and the server
+   bumps that version as part of the UPDATE (see save_estimate in app/main.py).
+   The version only moves in this browser when a response comes back. So two
+   saves started before the first one answers necessarily quote the *same*
+   expected_version, the server takes the first and rejects the second with
+   "Someone else changed this estimate" -- from the one person typing. The
+   advisor then gets a scare about a colleague who wasn't there, and the 409
+   handler reloads the ticket out from under whatever they were mid-way through
+   typing.
+   That pairing is completely ordinary: a keystroke save fires 800ms after the
+   last character (the debounce in wireEstimateGrid), and tabbing to the next
+   field an instant later fires the change save on top of it. On the shop LAN,
+   where a round trip to the shop PC is not free, the overlap window is wide
+   open.
+   So: while a save is posting, further calls collapse into one follow-up run
+   that starts when the response lands -- by which time order.estimate holds the
+   version the server just wrote, and the DOM is re-read so the follow-up
+   carries the newest typing rather than a snapshot taken before it. Callers
+   still get a promise that settles once their edit has actually been flushed
+   (addEstimateRow waits on it to focus the new line). */
+let estimateSaveInFlight = null;
+let estimateSaveQueued = null;
+function persistEstimate() {
+  if (estimateSaveInFlight) {
+    if (!estimateSaveQueued) {
+      let settle;
+      const promise = new Promise((resolve) => { settle = resolve; });
+      estimateSaveQueued = { promise, settle };
+    }
+    return estimateSaveQueued.promise;
+  }
+  estimateSaveInFlight = sendEstimate().then((saved) => {
+    estimateSaveInFlight = null;
+    const queued = estimateSaveQueued;
+    estimateSaveQueued = null;
+    if (!queued) return;
+    // A failed save has already dealt with itself -- a real conflict reloaded
+    // the ticket from the server, anything else left "Not saved" showing for
+    // the next edit to clear. Re-firing on top of that would either re-post
+    // what the reload just replaced or fail the identical way twice.
+    if (saved) return void persistEstimate().then(queued.settle);
+    queued.settle();
+  });
+  return estimateSaveInFlight;
+}
+
+/** One round trip. Resolves true when the estimate was saved, false when it
+    wasn't -- persistEstimate uses that to decide whether a coalesced follow-up
+    save is still worth sending. */
+async function sendEstimate() {
   const order = state.detail.order;
-  if (!order) return;
+  if (!order) return false;
   const items = collectEstimateItems();
-  const token = ++estimateSaveToken;
   const expectedVersion = order.estimate ? order.estimate.edit_version : null;
   setEstimateSaveState("saving");
   try {
     const estimate = await post(`/api/orders/${order.id}/estimate`, { labor_rate: 0, tax_rate: 0, actor: currentActor(), items, expected_version: expectedVersion });
-    if (token !== estimateSaveToken) return; // a newer edit has already been sent; drop this stale response
     order.estimate = estimate;
     applyEstimateResponse(order);
     setEstimateSaveState("saved");
+    return true;
   } catch (err) {
-    if (token === estimateSaveToken) setEstimateSaveState("failed");
-    if (String(err.message).includes("Someone else changed")) {
-      toast(err.message, true);
-      await loadVehicleDetail(); // pull the latest version instead of leaving stale data on screen
-      return;
-    }
+    setEstimateSaveState("failed");
     toast(err.message, true);
+    // A conflict now means what it says: somebody else really did change this
+    // ticket, so the only safe move is to show what they wrote.
+    if (String(err.message).includes("Someone else changed")) await loadVehicleDetail();
+    return false;
   }
 }
 

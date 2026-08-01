@@ -34,15 +34,15 @@ const veh = (over) => ({
    Every summary number this fixture produces is checkable by hand, which is
    the only way an assertion about a card is worth anything:
 
-     whole board  5 vehicles (3 recon / 2 we-owe), $2,940 of $3,000 quoted,
-                  2 waiting on parts worth $425, 1 over quote by $550
-     recon only   3 vehicles, $2,630 of $2,700, 1 waiting ($340), 1 over ($550)
-     we-owe only  2 vehicles, $310 of $300,     1 waiting ($85),  0 over
+     whole board  5 vehicles (3 recon / 2 we-owe), $2,940 spent,
+                  2 waiting on parts worth $425
+     recon only   3 vehicles, $2,630 spent, 1 waiting ($340)
+     we-owe only  2 vehicles, $310 spent,   1 waiting ($85)
 
-   The Camry is the over-quote slack case on purpose: $310 against a $300
-   quote is past the estimate but inside the 10% band, so a card that counted
-   "actual > quoted" rather than the band would report 2 instead of 1 and
-   disagree with the one red cell in the table.
+   quoted_cost is still on the fixture rows because the API still sends it --
+   it feeds remaining_cost, which is what a car still has coming. Nothing on
+   the board compares it against actual_cost: the shop doesn't quote recon
+   work, so there is no estimate for a car to come in over.
 
    Idle is set so each of the five buckets holds exactly one car -- which makes
    every bar in the activity chart a 1, so a chart that miscounted or that fed
@@ -80,7 +80,7 @@ const bulkCreateBodies = [];
 const { w, doc, fetchLog, settle, ok, finish, rejections } = await boot({
   expose: ["state", "renderVehiclesTable", "loadVehiclesView", "visibleVehicles", "sortVehicleRows",
            "vehicleKey", "loadVehicleViewPrefs", "renderVehicleStatusOptions", "VEHICLE_SORTS",
-           "VEHICLE_PREFS_KEY", "resetVehicleView", "boardStats", "isOverQuote", "BOARD_COLUMNS",
+           "VEHICLE_PREFS_KEY", "resetVehicleView", "boardStats", "BOARD_COLUMNS",
            "IDLE_BUCKETS", "idleBucket", "IDLE_SELECTIONS", "STALLED_AFTER_DAYS", "isStalled",
            "bulkTaskTitle", "isPromiseLate", "fmtDay",
            "LOT_COLUMNS", "displayedVehicles", "setVehicleLayout"],
@@ -137,8 +137,7 @@ const card = (id) => doc.querySelector(`#${id}`).textContent.trim();
 const cards = () => ({
   count: card("stat-veh-count"), split: card("stat-veh-split"),
   parts: card("stat-parts-waiting"), partsSub: card("stat-parts-waiting-sub"),
-  cost: card("stat-actual-total"), costSub: card("stat-quoted-sub"),
-  over: card("stat-over-quote"), overSub: card("stat-over-quote-sub"),
+  cost: card("stat-actual-total"), costSub: card("stat-cost-sub"),
   scope: card("vehicles-scope"),
 });
 
@@ -146,25 +145,21 @@ let c = cards();
 ok(c.count === "5", `Vehicles card reads "${c.count}", expected 5`);
 ok(c.split === "3 recon · 2 we-owe", `Vehicles sub reads "${c.split}"`);
 ok(c.cost === "$2,940.00", `Cost card reads "${c.cost}", expected $2,940.00`);
-// The sub is a toned delta, not a flat restatement -- $60 under here.
-ok(c.costSub === "$60.00 under the $3,000.00 quoted", `Cost sub reads "${c.costSub}"`);
+// The sub says what the number is made of. Deliberately not a comparison
+// against anything: there is no estimate to be over or under.
+ok(c.costSub === "received parts + labor", `Cost sub reads "${c.costSub}"`);
 ok(c.parts === "2", `Waiting on Parts reads "${c.parts}", expected 2 vehicles`);
 ok(c.partsSub === "$425.00 on order", `parts sub reads "${c.partsSub}", expected $425.00`);
-ok(c.over === "1", `Over Quote reads "${c.over}", expected 1 (the Camry is inside the 10% band)`);
-ok(c.overSub === "$550.00 past estimate", `over-quote sub reads "${c.overSub}"`);
 ok(c.scope === "Every vehicle on the board.", `scope line reads "${c.scope}" on an unfiltered board`);
 
-// The card and the red cells are two renderings of one rule; if they can
-// disagree, neither is trustworthy.
-ok(Number(c.over) === dataRows().filter((tr) => tr.querySelector("td.over-quote")).length,
-   "the Over Quote card and the red Cost cells disagree about how many cars are past estimate");
-ok(w.boardStats(w.state.vehicles).overCount === w.state.vehicles.filter(w.isOverQuote).length,
-   "boardStats and isOverQuote disagree");
+// Nothing anywhere on the board reports a car as past an estimate.
+ok(!doc.querySelector("td.over-quote, .veh-card-quoted, #stat-over-quote"),
+   "an over-quote reading is back on the board");
+ok(w.boardStats(w.state.vehicles).overCount === undefined, "boardStats still computes an over-quote count");
 
 // Tone: the two "go look at something" cards carry color, the neutral ones
 // must not (a permanently-orange card stops meaning anything).
 ok(doc.querySelector("#stat-parts-waiting").classList.contains("warn"), "a non-zero parts count isn't flagged");
-ok(doc.querySelector("#stat-over-quote").classList.contains("crit"), "a non-zero over-quote count isn't flagged");
 ok(!doc.querySelector("#stat-veh-count").classList.contains("warn"), "the plain Vehicles count is flagged");
 
 /* ---------- parts column ---------- */
@@ -226,12 +221,6 @@ board = board.map((v) => (v.recon_id === 1 ? { ...v, actual_cost: 1450 } : v));
 w.state.vehicles = board;
 w.renderVehiclesTable();
 
-/* ---------- over-quote highlight ---------- */
-const overRow = dataRows().find((tr) => tr.dataset.key === "recon:1");
-ok(overRow.querySelector("td.over-quote"), "a car $550 past its estimate isn't flagged");
-const underRow = dataRows().find((tr) => tr.dataset.key === "recon:3");
-ok(!underRow.querySelector("td.over-quote"), "a car under its estimate is flagged as over");
-
 /* ---------- segment + status filtering ---------- */
 const chip = (f) => doc.querySelector(`#view-vehicles .filters .chip[data-filter="${f}"]`);
 chip("we_owe").click();
@@ -247,20 +236,17 @@ c = cards();
 ok(c.count === "2", `filtered to We-Owe the Vehicles card should read 2, got "${c.count}"`);
 ok(c.split === "0 recon · 2 we-owe", `Vehicles sub reads "${c.split}" with the board filtered to We-Owe`);
 ok(c.cost === "$310.00", `Cost card reads "${c.cost}" for the We-Owe rows, expected $310.00 (not the lot's $2,940.00)`);
-ok(c.costSub === "$10.00 over the $300.00 quoted", `Cost sub reads "${c.costSub}"`);
+ok(c.costSub === "received parts + labor", `Cost sub reads "${c.costSub}"`);
 ok(c.parts === "1" && c.partsSub === "$85.00 on order",
    `parts card reads "${c.parts}" / "${c.partsSub}" for We-Owe, expected 1 / $85.00 on order`);
-ok(c.over === "0" && c.overSub === "none past estimate",
-   `over-quote reads "${c.over}" for We-Owe, where nothing is past estimate`);
-ok(!doc.querySelector("#stat-over-quote").classList.contains("crit"), "a zero over-quote count is still flagged");
 ok(c.scope === "Showing vehicles: we-owe.", `scope line reads "${c.scope}"`);
 
 chip("recon").click();
 c = cards();
-ok(c.count === "3" && c.cost === "$2,630.00" && c.costSub === "$70.00 under the $2,700.00 quoted",
-   `Recon cards read ${c.count} / ${c.cost} / ${c.costSub}, expected 3 / $2,630.00 / $70.00 under the $2,700.00 quoted`);
-ok(c.over === "1" && c.parts === "1" && c.partsSub === "$340.00 on order",
-   `Recon cards read over=${c.over} parts=${c.parts} (${c.partsSub})`);
+ok(c.count === "3" && c.cost === "$2,630.00",
+   `Recon cards read ${c.count} / ${c.cost}, expected 3 / $2,630.00`);
+ok(c.parts === "1" && c.partsSub === "$340.00 on order",
+   `Recon cards read parts=${c.parts} (${c.partsSub})`);
 
 chip("we_owe").click();
 
@@ -550,7 +536,6 @@ ok(!w.state.vehicleIdleBucket && dataRows().length === 5, "Reset view left a buc
    This fixture has two stalled cars -- the Silverado at 9 days and the
    Outback at 21 -- so the card should read 2 and name 21 as the worst. */
 const stalledCard = () => doc.querySelector('[data-board-filter="stalled"]');
-const overCard = () => doc.querySelector('[data-board-filter="over"]');
 const partsCard = () => doc.querySelector('[data-board-filter="parts"]');
 
 ok(stalledCard() && stalledCard().tagName === "BUTTON",
@@ -707,35 +692,31 @@ w.state.vehicleIdleBucket = "";
 w.state.vehicles = board;
 w.renderVehiclesTable();
 
-/* ---------- Over Quote and Waiting on Parts as filters ----------
+/* ---------- Waiting on Parts as a filter ----------
    Same rule as Stalled: the number you're reading is the thing you click. */
-overCard().click();
-ok(w.state.vehicleOverOnly && dataRows().length === 1 && dataRows()[0].dataset.key === "recon:1",
-   `Over Quote should leave the F-150, got ${dataRows().map((tr) => tr.dataset.key).join(",")}`);
-ok(card("stat-over-quote") === "1", "the Over Quote card moved when it was clicked");
-ok(cards().scope === "Showing vehicles: over quote.", `scope line reads "${cards().scope}"`);
-ok(!doc.querySelector("#vehicles-reset-view").hidden, "Reset view stayed hidden with an over-quote filter on");
-ok(JSON.parse(w.localStorage.getItem("dao-vehicle-view")).overOnly === true, "the over-quote filter wasn't persisted");
+partsCard().click();
+ok(w.state.vehiclePartsOnly && dataRows().length === 2,
+   `Waiting on Parts should leave 2 rows, got ${dataRows().map((tr) => tr.dataset.key).join(",")}`);
+ok(card("stat-parts-waiting") === "2", "the Waiting on Parts card moved when it was clicked");
+ok(cards().scope === "Showing vehicles: waiting on parts.", `scope line reads "${cards().scope}"`);
+ok(!doc.querySelector("#vehicles-reset-view").hidden, "Reset view stayed hidden with a parts filter on");
+ok(JSON.parse(w.localStorage.getItem("dao-vehicle-view")).partsOnly === true, "the parts filter wasn't persisted");
 
-/* Each card lifts only its *own* filter, which has a consequence worth
-   pinning: with Over Quote on, Stalled counts over-quote cars, and in this
-   fixture that's zero -- so the Stalled card goes disabled rather than
-   offering a click into a guaranteed-empty table. That's the rule working,
-   not a bug, and it's why the two can't be composed from the cards here. */
-ok(card("stat-stalled") === "0" && stalledCard().disabled,
-   "with Over Quote on, Stalled should count over-quote cars only (zero here) and go inert");
-
-// composes with the segment chips, and brings its own empty state
-chip("we_owe").click();
-ok(dataRows().length === 0, "we-owe + over quote should be empty in this fixture");
-const overEmpty = body.querySelector("tr");
-ok(overEmpty.textContent.includes("Nothing is over quote"),
-   `over-quote empty state reads "${overEmpty.textContent.trim().slice(0, 60)}"`);
-ok(Number(overEmpty.querySelector("td").getAttribute("colspan")) === w.BOARD_COLUMNS,
-   "the over-quote empty row doesn't span the table");
-overEmpty.querySelector('[data-empty-action="clear-over"]').click();
-ok(!w.state.vehicleOverOnly && dataRows().length === 2, "the empty state's button didn't clear the over-quote filter");
-chip("").click();
+// composes with a status filter, and brings its own empty state. The status
+// is set directly rather than through the History chip: that chip refetches,
+// and this is asserting on what renders synchronously.
+w.state.vehicleStatus = "estimate";   // the Civic, which has nothing on order
+w.renderVehiclesTable();
+ok(dataRows().length === 0, "estimate + waiting on parts should be empty in this fixture");
+const partsEmpty2 = body.querySelector("tr");
+ok(partsEmpty2.textContent.includes("Nothing is waiting on parts"),
+   `parts empty state reads "${partsEmpty2.textContent.trim().slice(0, 60)}"`);
+ok(Number(partsEmpty2.querySelector("td").getAttribute("colspan")) === w.BOARD_COLUMNS,
+   "the parts empty row doesn't span the table");
+partsEmpty2.querySelector('[data-empty-action="clear-parts"]').click();
+ok(!w.state.vehiclePartsOnly, "the empty state's button didn't clear the parts filter");
+w.state.vehicleStatus = "";
+w.renderVehiclesTable();
 
 // the parts card and the toolbar chip are one filter with two controls, so
 // they must never disagree about whether it's on
@@ -1058,10 +1039,8 @@ ok(cardFor("recon:3").querySelector(".idle-cell").textContent.trim() === "Idle 9
    `the Silverado's idle chip reads "${cardFor("recon:3").querySelector(".idle-cell").textContent.trim()}"`);
 ok(cardFor("recon:1").querySelector(".idle-cell").textContent.trim() === "Active today",
    "a car worked on today reads as idle on its card");
-ok(cardFor("recon:1").querySelector(".veh-card-cost").classList.contains("over-quote"),
-   "a card $550 past its estimate isn't flagged");
-ok(!cardFor("recon:3").querySelector(".veh-card-cost").classList.contains("over-quote"),
-   "a card under its estimate is flagged as over");
+ok(!cardFor("recon:1").querySelector(".veh-card-quoted"),
+   "a card is back to printing what the car was 'quoted'");
 ok(/R\. Alvarez/.test(cardFor("we_owe:5").textContent), "a we-owe card doesn't name the customer");
 ok(/1FTEW1E5XKF/.test(cardFor("recon:1").querySelector(".veh-card-sub span").title || ""),
    "a recon card doesn't carry the full VIN for hover");

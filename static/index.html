@@ -144,18 +144,18 @@
           </div>
         </div>
 
-        <!-- These six describe exactly the rows in the table below, not the
+        <!-- These five describe exactly the rows in the table below, not the
              whole lot: filter to Recon and every number here follows. The
              scope line spells out what's included so the count can't be
              misread as lot-wide.
 
-             Four of them are the "go look at something" cards -- they go
-             warn/crit when they're non-zero, and they're real <button>s
-             because clicking one filters the board to what it counts. Those
-             four count with their own filter lifted (see boardStats), so
-             clicking a card never changes the number printed on it. Vehicles
-             and Cost aren't filters and stay plain divs; a card you can't
-             click shouldn't look like one you can. -->
+             Waiting on Parts, Stalled and Past Promised are the "go look at
+             something" cards -- they go warn/crit when they're non-zero, and
+             they're real <button>s because clicking one filters the board to
+             what it counts. All three count with their own filter lifted (see
+             boardStats), so clicking a card never changes the number printed
+             on it. Vehicles and Cost aren't filters and stay plain divs; a
+             card you can't click shouldn't look like one you can. -->
         <div class="stats stats-board" id="vehicles-stats">
           <div class="stat">
             <div class="stat-label">Vehicles</div>
@@ -176,13 +176,8 @@
           <div class="stat">
             <div class="stat-label">Cost</div>
             <div class="stat-value num" id="stat-actual-total">$0</div>
-            <div class="stat-sub" id="stat-quoted-sub">received parts + labor</div>
+            <div class="stat-sub" id="stat-cost-sub">received parts + labor</div>
           </div>
-          <button type="button" class="stat stat-action" data-board-filter="over" aria-pressed="false">
-            <div class="stat-label">Over Quote</div>
-            <div class="stat-value" id="stat-over-quote">0</div>
-            <div class="stat-sub" id="stat-over-quote-sub">none past estimate</div>
-          </button>
           <!-- We-owe only: a promise a customer was given a date for, and the
                date has gone by. Settled promises never count, so this number
                comes down as the work gets done instead of climbing forever. -->
@@ -279,7 +274,6 @@
                       title="Time since anything last happened on this vehicle's repair order">Idle <span class="sort-arrow"></span></th>
                   <th class="promised-col sortable" data-sort-key="promised" aria-sort="none"
                       title="The date a we-owe was promised to the customer. Recon cars have no promise, so the cell is blank.">Promised <span class="sort-arrow"></span></th>
-                  <th class="num-col quoted-col sortable" data-sort-key="quoted" aria-sort="none">Quoted <span class="sort-arrow"></span></th>
                   <th class="num-col sortable" data-sort-key="cost" aria-sort="none">Cost <span class="sort-arrow"></span></th>
                 </tr>
               </thead>
@@ -294,7 +288,7 @@
 
       <!-- VEHICLE DETAIL -->
       <section class="view" id="view-vehicle-detail">
-        <button type="button" class="back-link" id="back-to-vehicles" style="background:none;border:none;font:inherit;padding:0">
+        <button type="button" class="back-link" id="back-to-vehicles">
           <svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg>
           <span id="back-to-vehicles-label">Back to Vehicles</span>
         </button>
@@ -350,8 +344,8 @@
         <div class="detail-shell">
           <div class="detail-main">
             <div id="vd-no-order" class="card" style="display:none">
-              <div class="card-head"><p class="section-eyebrow" style="margin:0">No repair order yet</p></div>
-              <div style="padding:16px">
+              <div class="card-head"><p class="section-eyebrow">No repair order yet</p></div>
+              <div class="card-body">
                 <p class="page-desc" style="margin-bottom:12px">Start one when work actually begins on this vehicle.</p>
                 <label>What's being done<textarea id="vd-new-ro-concern" placeholder="e.g. Front end recon prep, or: replace missing passenger mirror"></textarea></label>
                 <button class="btn btn-primary" id="vd-start-ro" style="margin-top:10px">Start Repair Order</button>
@@ -366,7 +360,7 @@
                     <h3 class="section-title">Concern</h3>
                   </div>
                 </div>
-                <div style="padding:14px 16px">
+                <div class="card-body">
                   <label>Concern / What's being done<textarea id="vd-concern" placeholder="e.g. Front end recon prep, or: replace missing passenger mirror"></textarea></label>
                   <button class="btn btn-ghost btn-sm" id="vd-concern-save" style="margin-top:8px">Save</button>
                 </div>
@@ -392,16 +386,18 @@
                 </div>
                 <div id="vd-estimate-items"></div>
               </div>
+              <!-- Two figures, no comparison between them. Recon work isn't
+                   quoted up front -- the shop buys what the car needs -- so
+                   there is no estimate to be over or under. What's useful is
+                   what has actually been spent, and how much of what's written
+                   on the ticket hasn't landed yet. -->
               <div class="card">
                 <div class="card-head">
-                  <p class="section-eyebrow" style="margin:0">This Ticket</p>
-                  <!-- The number a recon manager actually opens the page for:
-                       are we over the quote, and by how much. -->
-                  <span class="cost-delta" id="vd-cost-delta" hidden></span>
+                  <p class="section-eyebrow">This Ticket</p>
                 </div>
                 <div class="cost-summary">
-                  <div class="cost-line"><span>Quoted on this ticket</span><span id="vd-quoted-cost">$0.00</span></div>
-                  <div class="cost-line total"><span>Actual cost so far</span><span id="vd-actual-cost">$0.00</span></div>
+                  <div class="cost-line"><span>Written up (all lines)</span><span id="vd-ticket-total">$0.00</span></div>
+                  <div class="cost-line total"><span>Spent so far (received)</span><span id="vd-actual-cost">$0.00</span></div>
                 </div>
               </div>
 
@@ -423,7 +419,7 @@
                  with the vehicle's own record directly under them. -->
             <div class="card" id="vd-customer-info-card" style="display:none">
               <div class="card-head">
-                <p class="section-eyebrow" style="margin:0">Customer Info</p>
+                <p class="section-eyebrow">Customer Info</p>
                 <button class="btn btn-ghost btn-sm" id="vd-edit-customer">Edit Customer</button>
               </div>
               <div class="kv-list" id="vd-customer-info-summary"></div>
@@ -434,7 +430,7 @@
                  truck they also drove in with) without leaving the page. -->
             <div class="card" id="vd-other-vehicles-card" style="display:none">
               <div class="card-head">
-                <p class="section-eyebrow" style="margin:0">Customer's Other Vehicles</p>
+                <p class="section-eyebrow">Customer's Other Vehicles</p>
                 <button class="btn btn-ghost btn-sm" id="vd-add-other-vehicle" title="Put another of this customer's vehicles on file">+ Add Vehicle</button>
               </div>
               <div id="vd-other-vehicles" class="mini-list"></div>
@@ -442,7 +438,7 @@
 
             <div class="card" id="vd-vehicle-info-card">
               <div class="card-head">
-                <p class="section-eyebrow" style="margin:0">Vehicle Info</p>
+                <p class="section-eyebrow">Vehicle Info</p>
                 <button class="btn btn-ghost btn-sm" id="vd-edit-vehicle">Edit Vehicle</button>
               </div>
               <div class="kv-list" id="vd-vehicle-info-summary"></div>
@@ -452,66 +448,66 @@
                  different number from the ticket card in the main column,
                  so the label has to say so. -->
             <div class="card" id="vd-cost-card">
-              <div class="card-head"><p class="section-eyebrow" style="margin:0">Vehicle Total — All Tickets</p></div>
+              <div class="card-head"><p class="section-eyebrow">Vehicle Total — All Tickets</p></div>
               <div class="cost-summary" id="vd-cost-summary"></div>
             </div>
 
             <div class="card" id="vd-timing-card">
-              <div class="card-head"><p class="section-eyebrow" style="margin:0">Timing</p></div>
-              <div style="padding:14px 16px">
+              <div class="card-head"><p class="section-eyebrow">Timing</p></div>
+              <div class="card-body">
                 <label>Date in<input id="vd-date-in" type="date"></label>
                 <label>Odometer in<input id="vd-odometer" type="number" min="0"></label>
                 <label>Promised<input id="vd-promised" type="datetime-local"></label>
               </div>
-              <div style="padding:0 16px 14px"><button class="btn btn-ghost btn-sm" id="vd-save-timing">Save</button></div>
+              <div class="card-body-bottom"><button class="btn btn-ghost btn-sm" id="vd-save-timing">Save</button></div>
             </div>
 
             <div class="card" id="vd-order-history-card" style="display:none">
-              <div class="card-head"><p class="section-eyebrow" style="margin:0">Order History</p></div>
+              <div class="card-head"><p class="section-eyebrow">Order History</p></div>
               <div id="vd-order-history" class="mini-list"></div>
             </div>
 
             <div class="card" id="vd-we-owe-status-card" style="display:none">
               <div class="card-head">
-                <p class="section-eyebrow" style="margin:0">We-Owe</p>
+                <p class="section-eyebrow">We-Owe</p>
               </div>
-              <div style="padding:14px 16px">
+              <div class="card-body">
                 <label>Description<input id="vd-we-owe-description"></label>
               </div>
-              <div class="form-row" style="padding:0 16px 14px">
+              <div class="form-row card-body-bottom">
                 <label>Category<input id="vd-we-owe-category"></label>
                 <label>Target date<input id="vd-we-owe-target" type="date"></label>
               </div>
-              <div class="form-row" style="padding:0 16px 14px">
+              <div class="form-row card-body-bottom">
                 <label>Status<select id="vd-we-owe-status">
                   <option value="open">Open</option>
                   <option value="fulfilled">Fulfilled</option>
                   <option value="waived">Waived</option>
                 </select></label>
               </div>
-              <div style="padding:0 16px 14px"><button class="btn btn-ghost btn-sm" id="vd-we-owe-save">Save</button></div>
+              <div class="card-body-bottom"><button class="btn btn-ghost btn-sm" id="vd-we-owe-save">Save</button></div>
             </div>
 
             <div class="card" id="vd-deposits-card" style="display:none">
               <div class="card-head">
-                <p class="section-eyebrow" style="margin:0">Customer Deposits</p>
+                <p class="section-eyebrow">Customer Deposits</p>
                 <button class="btn btn-primary btn-sm" id="vd-take-payment">Take Payment</button>
               </div>
               <div class="cost-summary" id="vd-deposits-summary"></div>
             </div>
 
             <div class="card">
-              <div class="card-head"><p class="section-eyebrow" style="margin:0">Notes</p></div>
-                <div style="padding:14px 16px" class="form-row">
+              <div class="card-head"><p class="section-eyebrow">Notes</p></div>
+                <div class="card-body form-row">
                   <label>Visibility<select id="vd-note-visibility"><option value="internal">Internal</option><option value="customer">Customer</option></select></label>
                   <label>Note<input id="vd-note-text" placeholder="Add a note…"></label>
                 </div>
-                <div style="padding:0 16px 14px"><button class="btn btn-ghost btn-sm" id="vd-add-note">Add Note</button></div>
+                <div class="card-body-bottom"><button class="btn btn-ghost btn-sm" id="vd-add-note">Add Note</button></div>
                 <div id="vd-note-list" class="mini-list"></div>
             </div>
 
             <div class="card">
-              <div class="card-head"><p class="section-eyebrow" style="margin:0">Activity</p></div>
+              <div class="card-head"><p class="section-eyebrow">Activity</p></div>
               <div id="vd-activity-list" class="mini-list"></div>
             </div>
             </div>
@@ -629,8 +625,8 @@
         <div class="grid-2">
           <div>
             <div class="card">
-              <div class="card-head"><p class="section-eyebrow" style="margin:0">Post Vendor Invoice</p></div>
-              <form id="ap-invoice-form" style="padding:14px 16px">
+              <div class="card-head"><p class="section-eyebrow">Post Vendor Invoice</p></div>
+              <form id="ap-invoice-form" class="card-body">
                 <div class="form-row">
                   <label>Vendor<select id="ap-vendor" required></select></label>
                   <label>Invoice #<input id="ap-invoice-number" required placeholder="INV-1234"></label>
@@ -671,8 +667,8 @@
                   <span class="ap-over-threshold" id="ap-over-threshold" hidden>Over $500 — worth double-checking the invoice before you post it.</span>
                 </div>
                 <div class="form-row" style="margin-top:12px">
-                  <button class="btn btn-primary" type="submit" style="align-self:flex-start">Post Invoice</button>
-                  <button type="button" class="btn btn-ghost btn-sm" id="ap-clear-invoice" style="align-self:center" title="Discard this invoice and start over">Clear</button>
+                  <button class="btn btn-primary form-row-btn" type="submit">Post Invoice</button>
+                  <button type="button" class="btn btn-ghost btn-sm form-row-btn-mid" id="ap-clear-invoice" title="Discard this invoice and start over">Clear</button>
                 </div>
                 <div id="ap-invoice-note" class="ap-alert" hidden></div>
               </form>
@@ -681,19 +677,19 @@
           <div>
             <div class="card">
               <div class="card-head"><p class="section-eyebrow" style="margin:0" id="vendor-form-title">Vendors</p></div>
-              <form id="vendor-form" style="padding:14px 16px">
+              <form id="vendor-form" class="card-body">
                 <label>Vendor name<input name="name" required placeholder="WorldPac"></label>
                 <label>Aliases<input name="aliases" placeholder="World Pac, WPAC"></label>
                 <label>Account #<input name="account_number" placeholder="Optional"></label>
                 <div class="form-row" style="margin-top:2px">
-                  <button type="submit" class="btn btn-primary" style="align-self:flex-start" id="vendor-form-submit">Save Vendor</button>
-                  <button type="button" class="btn btn-ghost btn-sm" id="vendor-form-cancel" style="display:none;align-self:flex-start">Cancel</button>
+                  <button type="submit" class="btn btn-primary form-row-btn" id="vendor-form-submit">Save Vendor</button>
+                  <button type="button" class="btn btn-ghost btn-sm form-row-btn" id="vendor-form-cancel" hidden>Cancel</button>
                 </div>
               </form>
               <div id="vendor-list" class="vendor-chips"></div>
             </div>
             <div class="card">
-              <div class="card-head"><p class="section-eyebrow" style="margin:0">Control Log</p></div>
+              <div class="card-head"><p class="section-eyebrow">Control Log</p></div>
               <div id="audit-list" class="mini-list"></div>
             </div>
           </div>
@@ -855,8 +851,8 @@
         <div class="stats stats-staff" id="staff-stats"></div>
 
         <div class="card">
-          <div class="card-head"><p class="section-eyebrow" style="margin:0">Add Staff</p></div>
-          <form id="staff-form" class="form-row" style="padding:14px 16px">
+          <div class="card-head"><p class="section-eyebrow">Add Staff</p></div>
+          <form id="staff-form" class="form-row card-body">
             <label>Name<input name="name" required placeholder="Jordan Smith"></label>
             <label>Role<select name="role">
               <option value="technician">Technician</option>
@@ -864,7 +860,7 @@
               <option value="manager">Manager</option>
             </select>
             <span class="hint" style="margin:4px 0 0">Managers can also be assigned as advisors on repair orders.</span></label>
-            <button class="btn btn-primary" style="align-self:flex-end;margin-bottom:12px">Add</button>
+            <button class="btn btn-primary form-row-btn-end">Add</button>
           </form>
         </div>
         <div class="filters">
@@ -977,8 +973,8 @@
 
         <div id="tasks-list" class="task-list"></div>
 
-        <button type="button" class="btn btn-ghost btn-sm" id="tasks-toggle-completed" style="margin-top:14px">Show completed (0)</button>
-        <div id="tasks-completed-list" class="task-list" style="display:none;margin-top:10px"></div>
+        <button type="button" class="btn btn-ghost btn-sm list-tail-toggle" id="tasks-toggle-completed">Show completed (0)</button>
+        <div id="tasks-completed-list" class="task-list list-tail" hidden></div>
       </section>
 
       <!-- IDEAS (suggestions API underneath) -->
@@ -1007,9 +1003,9 @@
 
         <div id="suggestions-list" class="suggestion-list"></div>
 
-        <button type="button" class="btn btn-ghost btn-sm" id="suggestions-toggle-resolved" style="margin-top:14px"
+        <button type="button" class="btn btn-ghost btn-sm list-tail-toggle" id="suggestions-toggle-resolved"
                 aria-expanded="false" aria-controls="suggestions-resolved-list">Show done (0)</button>
-        <div id="suggestions-resolved-list" class="suggestion-list" style="display:none;margin-top:10px"></div>
+        <div id="suggestions-resolved-list" class="suggestion-list list-tail" hidden></div>
       </section>
 
       <!-- BACKUP / RESTORE -->
@@ -1044,7 +1040,7 @@
             <p class="page-desc">Point at a .db backup file from anywhere — a USB stick, a synced folder, wherever it was stashed. The current database is saved aside first, so this can be undone.</p>
           </div>
         </div>
-        <div class="panel" style="padding:16px 20px">
+        <div class="panel panel-padded">
           <input type="file" id="backup-restore-file" accept=".db" class="sr-only" aria-label="Backup file">
           <div class="dropzone" id="backup-dropzone" role="button" tabindex="0" aria-label="Choose or drop a backup file">
             <strong>Drop a .db backup here</strong> or click to choose a file
@@ -1058,7 +1054,7 @@
             <p class="page-desc">Spreadsheets for the bookkeeper — separate from backups, which are the full database.</p>
           </div>
         </div>
-        <div class="panel" style="padding:14px 20px">
+        <div class="panel panel-padded-tight">
           <a class="btn btn-ghost btn-sm" href="/api/export/vehicles.csv" download
              title="Every vehicle on the board — stock #/customer, VIN, status, age, what's in it, and the vendor invoices behind it — as a spreadsheet">Export Vehicles CSV</a>
         </div>

@@ -3,7 +3,7 @@ import { toast } from "./notify.js";
 import { confirmAction } from "./confirm.js";
 import { currentActor, esc, fmtDate, fmtDay, money, relativeTime, withLoading } from "./shortcuts.js";
 import { emptyState } from "./empty-states.js";
-import { actualTotal, costDeltaBadge, isReturnedPart, quotedLineTotal, quotedTotal } from "./estimate-money.js";
+import { actualTotal, isReturnedPart, lineTotal, ticketTotal } from "./estimate-money.js";
 import { AUTH_METHOD_LABEL, ITEM_STATUS_LABEL, KIND_GROUP_LABEL, KIND_GROUP_ORDER, PAY_METHOD_LABEL, STATUS_LABEL, STATUS_OPTIONS, STATUS_PILL_CLASS, fieldLabels, state } from "./state.js";
 import { showView } from "./error-boundary.js";
 import { isStalled } from "./vehicles-board.js";
@@ -295,11 +295,13 @@ function renderDetailHead() {
 
 // Vehicle-wide (every RO ever opened on this vehicle, not just the active
 // one) -- quoted_cost/total_cost already come from the same cost_rollup
-// the Vehicles-list stats use, just never surfaced here before.
+// the Vehicles-list stats use, just never surfaced here before. The server's
+// field is still named quoted_cost; it means "everything written up", and
+// nothing here compares it against what was spent -- see estimate-money.js.
 function renderCostSummary() {
   const { item } = state.detail;
   const box = $("#vd-cost-summary");
-  let lines = `<div class="cost-line"><span>Total Quote</span><span class="num">${money(item.quoted_cost)}</span></div>`;
+  let lines = `<div class="cost-line"><span>Written Up</span><span class="num">${money(item.quoted_cost)}</span></div>`;
   lines += `<div class="cost-line total"><span>Actual Cost</span><span class="num">${money(item.total_cost)}</span></div>`;
   // Hours stand on their own line rather than hiding inside cost. On recon and
   // we-owe the labor rate is 0, so every hour a tech flags contributes nothing
@@ -863,7 +865,7 @@ function renderEstimate(order) {
     box.innerHTML = progress + buckets.map((bucket) => {
       const bucketItems = items.filter((i) => (i.job_id ?? null) === bucket.id);
       const isGeneral = bucket.id === null;
-      const jobSubtotal = quotedTotal(bucketItems);
+      const jobSubtotal = ticketTotal(bucketItems);
       // Parts and labor render as their own mini-sections within the job
       // (Tekmetric-style) rather than one interleaved list, so it's obvious
       // at a glance which lines are parts vs labor for this job -- not just
@@ -946,22 +948,15 @@ function updateReceiveButtonState() {
 const coreOwing = (i) => i.kind === "part" && !i.part_returned && !i.core_return_invoice_number ? (i.core_charge || 0) : 0;
 function renderEstimateTotals(order) {
   const items = order.estimate ? order.estimate.items : [];
-  applyTicketTotals(quotedTotal(items), actualTotal(items));
+  applyTicketTotals(ticketTotal(items), actualTotal(items));
 }
 
-// One writer for the three elements the ticket's cost card is made of, shared
-// by the post-save render and the live-typing recompute below. Two copies of
-// this is how the badge ended up saying "under quote" while the figures above
-// it said the opposite.
-function applyTicketTotals(quoted, actual) {
-  $("#vd-quoted-cost").textContent = money(quoted);
+// One writer for both elements the ticket's cost card is made of, shared by
+// the post-save render and the live-typing recompute below, so the two figures
+// can never be written from different readings of the grid.
+function applyTicketTotals(written, actual) {
+  $("#vd-ticket-total").textContent = money(written);
   $("#vd-actual-cost").textContent = money(actual);
-  const delta = $("#vd-cost-delta");
-  if (!delta) return;
-  const badge = costDeltaBadge(quoted, actual);
-  delta.hidden = badge.hidden;
-  delta.className = badge.className;
-  delta.textContent = badge.text;
 }
 
 // Debounce handle for keystroke-driven autosave (wired in wireEstimateGrid).
@@ -1009,12 +1004,12 @@ function updateEstimateTotalsFromDom() {
   const box = $("#vd-estimate-items");
   if (!box) return;
   const rows = $$(".part-row:not(.head)", box).map(rowAsEstimateItem);
-  applyTicketTotals(quotedTotal(rows), actualTotal(rows));
+  applyTicketTotals(ticketTotal(rows), actualTotal(rows));
   // Job subtotals live in each group's header; keep them moving too.
   for (const group of $$(".job-group", box)) {
     const label = group.querySelector(".job-group-subtotal");
     if (!label) continue;
-    label.textContent = money(quotedTotal($$(".part-row:not(.head)", group).map(rowAsEstimateItem)));
+    label.textContent = money(ticketTotal($$(".part-row:not(.head)", group).map(rowAsEstimateItem)));
   }
 }
 
@@ -1119,7 +1114,7 @@ function syncEstimateInPlace(order) {
     const sub = $(".job-group-subtotal", groupEl);
     if (!sub) return;
     const jobId = groupEl.dataset.jobId === "" ? null : Number(groupEl.dataset.jobId);
-    sub.textContent = money(quotedTotal(items.filter((i) => (i.job_id ?? null) === jobId)));
+    sub.textContent = money(ticketTotal(items.filter((i) => (i.job_id ?? null) === jobId)));
   });
   renderEstimateTotals(order);
   updateReceiveButtonState();
@@ -1978,7 +1973,7 @@ function renderPrintTicket() {
   // Same rules as the on-screen card (estimate-money.js). Paper that
   // disagreed with the screen it was printed from was the worst version of
   // this bug: the screen can be refreshed, the sheet in someone's hand can't.
-  const printQuoted = quotedTotal(items);
+  const printWritten = ticketTotal(items);
   const printActual = actualTotal(items);
   const a = order.assignment;
   const techName = (a && a.technician_name) || "Unassigned";
@@ -2016,7 +2011,7 @@ function renderPrintTicket() {
       : "";
     return `<tr><td>${esc(i.description)}${coreSub}</td><td>${i.part_number ? esc(i.part_number) : ""}</td>
       <td class="num-col">${i.quantity}</td><td class="num-col">${money(returned ? 0 : i.unit_cost)}</td>
-      <td class="num-col">${money(quotedLineTotal(i))}</td><td>${status}</td></tr>`;
+      <td class="num-col">${money(lineTotal(i))}</td><td>${status}</td></tr>`;
   };
 
   // Parts/Labor/Fees sub-headers replace the old Kind column -- the same
@@ -2040,14 +2035,14 @@ function renderPrintTicket() {
       const bucketItems = items.filter((i) => (i.job_id ?? null) === bucket.id);
       if (!bucketItems.length) return "";
       const jobTech = bucket.id === null ? "" : (bucket.technician_name || "Use ticket default");
-      const jobSubtotal = quotedTotal(bucketItems);
+      const jobSubtotal = ticketTotal(bucketItems);
       return `<tbody class="print-job"><tr class="print-job-head"><td colspan="4">${esc(bucket.title)}${jobTech ? ` — ${esc(jobTech)}` : ""}</td><td class="num-col">${money(jobSubtotal)}</td><td></td></tr>${kindGroupRows(bucketItems)}</tbody>`;
     }).join("") || `<tbody><tr><td colspan="6">No parts or labor lines.</td></tr></tbody>`;
   }
 
   // Invoice-style totals. With deposits (we-owe), the balance is the grand
   // row; without them Actual Cost is the bottom line itself.
-  const totalsRows = [`<div class="tl-row"><span>Total Quote</span><span class="num">${money(printQuoted)}</span></div>`];
+  const totalsRows = [`<div class="tl-row"><span>Written Up</span><span class="num">${money(printWritten)}</span></div>`];
   if (paid > 0) {
     totalsRows.push(`<div class="tl-row"><span>Actual Cost</span><span class="num">${money(printActual)}</span></div>`);
     // The API returns payments newest-first; paper reads oldest-first.

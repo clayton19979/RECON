@@ -70,7 +70,7 @@ for (const [label, jobs] of [["flat", []], ["jobs", [{ id: 7, title: "Front brak
   ok(collected.length === 3, `${label}: collectEstimateItems returned ${collected.length}, expected 3`);
   ok(collected[0].description === "Front pads" && collected[0].quantity === 2 && collected[0].unit_cost === 41.5,
      `${label}: collectEstimateItems lost field values: ${JSON.stringify(collected[0])}`);
-  ok(w.document.querySelector("#vd-quoted-cost").textContent !== "$0.00", `${label}: quoted total not computed`);
+  ok(w.document.querySelector("#vd-ticket-total").textContent !== "$0.00", `${label}: ticket total not computed`);
 }
 
 /* ------------------------------------------------------------------
@@ -212,7 +212,7 @@ ok(grid.querySelectorAll(".part-row:not(.head)")[0] === rowsA[0],
 ok(descA.value === "Front pads (mid-edit)", "a same-shape save clobbered the focused field's value");
 ok(rowsA[1].querySelector(".ei-cost").value === "120",
    "a same-shape save did not push the server's value into an unfocused field");
-ok(doc.querySelector("#vd-quoted-cost").textContent !== "$0.00", "totals not recomputed after an in-place sync");
+ok(doc.querySelector("#vd-ticket-total").textContent !== "$0.00", "totals not recomputed after an in-place sync");
 ok(doc.querySelector("#vd-estimate-save-state").textContent.length > 0, "the autosave indicator never said anything");
 
 // --- shape changed: full redraw, but focus lands back where it was ---
@@ -260,12 +260,11 @@ const laborQty = rowsD[0].querySelector(".ei-qty");
 laborQty.focus();
 laborQty.value = "3";
 laborQty.dispatchEvent(new w.Event("input", { bubbles: true }));
-ok(doc.querySelector("#vd-quoted-cost").textContent === "$480.00",
-   `live quoted total wrong after typing: ${doc.querySelector("#vd-quoted-cost").textContent}, expected $480.00`);
+ok(doc.querySelector("#vd-ticket-total").textContent === "$480.00",
+   `live ticket total wrong after typing: ${doc.querySelector("#vd-ticket-total").textContent}, expected $480.00`);
 ok(doc.querySelector("#vd-actual-cost").textContent === "$480.00",
    `live actual total wrong after typing: ${doc.querySelector("#vd-actual-cost").textContent}`);
-ok(doc.querySelector("#vd-cost-delta").textContent === "On quote",
-   "live delta not recomputed on keystroke");
+ok(!doc.querySelector("#vd-cost-delta"), "the over/under-quote badge is back on the ticket");
 ok(estimatePosts() === postsBefore, "a single keystroke fired an immediate save instead of debouncing");
 
 // --- after a pause in typing, the debounced save lands on its own ---

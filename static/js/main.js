@@ -19,6 +19,7 @@ import "./skeletons.js";
 import "./state.js";
 import "./nav.js";
 import "./error-boundary.js";
+import "./estimate-money.js";
 import "./vehicles-board.js";
 import "./list-keyboard.js";
 import "./vehicle-detail.js";

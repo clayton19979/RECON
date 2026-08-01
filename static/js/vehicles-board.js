@@ -31,6 +31,12 @@ export async function loadVehiclesView() {
     renderViewFailure("vehicles", err);
     return;
   }
+  // Whatever we knew about the other half is now potentially a lie -- this
+  // load is also how the board catches up after archiving or reopening cars,
+  // which is exactly the operation that moves them between the two halves.
+  // Dropped rather than refetched: nothing needs it until someone searches.
+  state.searchElsewhere = null;
+  state.searchElsewhereScope = "";
   state.vehicleSelection.clear();
   // renderStats is driven from inside renderVehiclesTable now -- the cards
   // describe the visible rows, so they have to be recomputed on every filter,
@@ -39,6 +45,10 @@ export async function loadVehiclesView() {
   // about to drop for not existing in this segment.
   renderVehicleStatusOptions();
   renderVehiclesTable();
+  // A search survives leaving the screen and coming back, and coming back
+  // reloads the board -- so without this the offer to look in History quietly
+  // disappeared on the return trip, on a query that still had no matches here.
+  if (state.search) loadSearchElsewhere();
 }
 
 /* ---------- board view preferences ----------
@@ -65,10 +75,18 @@ export function loadVehicleViewPrefs() {
     state.vehicleIdleBucket = saved.idleBucket;
   }
   if (typeof saved.chartOpen === "boolean") state.vehicleChartOpen = saved.chartOpen;
-  const chips = $$("#view-vehicles .filters .chip[data-filter]");
-  chips.forEach((c) => c.classList.toggle("active", (c.dataset.filter || "") === state.filter));
+  syncSegmentChips();
   $("#vehicles-status-filter").value = state.vehicleStatus;
   syncPartsFilterChip();
+}
+
+// One writer for which of the four segment chips is lit. state.filter is set
+// from saved prefs, by clicking a chip, by Reset view and by the search reach
+// line's jump into History and back; the chip row has to follow all five, and
+// four hand-written copies of the same toggle is how it drifts.
+export function syncSegmentChips() {
+  $$("#view-vehicles .filters .chip[data-filter]").forEach((c) =>
+    c.classList.toggle("active", (c.dataset.filter || "") === state.filter));
 }
 
 // The toggle's pressed state lives in two places the DOM cares about --
@@ -136,9 +154,154 @@ export function resetVehicleView() {
   $("#global-search").value = "";
   syncSearchChrome();
   $("#vehicles-status-filter").value = "";
-  $$("#view-vehicles .filters .chip[data-filter]").forEach((c) => c.classList.toggle("active", !c.dataset.filter));
+  syncSegmentChips();
   syncPartsFilterChip();
   loadVehiclesView();
+}
+
+/* ---------- where the search actually found it ----------
+
+   The search box is how anyone looks a car up -- typing in it from any screen
+   jumps here -- but it only ever filtered the rows this view had already
+   loaded. Two everyday questions came back "No vehicles match that search"
+   about a car that is in the app:
+
+   - The car is filed to History. Search a stock number from a job finished
+     last month and the board said nothing matched it.
+   - The board is narrowed. Segment, status, waiting-on-parts, over-quote and
+     the idle bucket all persist between sessions, so a view left on "Recon"
+     weeks ago silently hides every we-owe car from every search after it.
+
+   Both told the advisor the car doesn't exist, and the hint underneath listed
+   the four fields it searches, which reads as "I looked everywhere." So the
+   answer is now the whole question: the table still shows what this view
+   holds, and a line above it says how many matches are somewhere else and
+   takes you there. Nothing is hidden without saying so. */
+
+// One definition of what counts as a match, used for the rows on screen and
+// for the ones that aren't -- two copies would eventually disagree about
+// whether a car is findable, which is the bug this whole section is about.
+export function matchesVehicleSearch(v, query) {
+  const q = query.toLowerCase();
+  return (v.stock_number || "").toLowerCase().includes(q)
+    || (v.vin || "").toLowerCase().includes(q)
+    || (v.customer_name || "").toLowerCase().includes(q)
+    || (v.vehicle || "").toLowerCase().includes(q);
+}
+
+/* The other half of the board, fetched once and kept until the board reloads.
+
+   Deliberately not fetched at startup: on a lot with years of finished cars
+   in it, History is the bigger of the two lists and most sessions never
+   search at all. The first keystroke pays for it, in the background -- the
+   table renders immediately off what's already loaded, and the reach line
+   appears when this lands. */
+export async function loadSearchElsewhere() {
+  const scope = state.filter === "history" ? "live" : "history";
+  if (state.searchElsewhereScope === scope) return;
+  state.searchElsewhereScope = scope;
+  state.searchElsewhere = null;
+  let rows;
+  try {
+    rows = await get(scope === "history" ? "/api/vehicles-board?archived=true" : "/api/vehicles-board");
+  } catch {
+    // Say nothing rather than something wrong: with no answer the reach line
+    // makes no claim about the other half at all, and clearing the scope lets
+    // the next keystroke try again.
+    state.searchElsewhereScope = "";
+    return;
+  }
+  state.searchElsewhere = rows;
+  if (state.search) renderVehiclesTable();
+}
+
+/* What the current search found, split by where it found it: on screen,
+   hidden by this view's own filters, or in the half of the board that isn't
+   loaded. `elsewhereKnown` is false until loadSearchElsewhere has answered,
+   and while it's false nothing claims the other half is empty. */
+export function searchReach() {
+  if (!state.search) return null;
+  const q = state.search;
+  const shown = visibleVehicles().length;
+  const inView = state.vehicles.filter((v) => matchesVehicleSearch(v, q)).length;
+  const scope = state.filter === "history" ? "live" : "history";
+  const known = state.searchElsewhereScope === scope && Array.isArray(state.searchElsewhere);
+  return {
+    shown,
+    hidden: Math.max(inView - shown, 0),
+    elsewhere: known ? state.searchElsewhere.filter((v) => matchesVehicleSearch(v, q)).length : 0,
+    elsewhereKnown: known,
+    scope,
+  };
+}
+
+/* Both buttons below drop the narrowing filters, on purpose. They exist to
+   put a specific car on screen, and landing on a second empty list because
+   the status filter still applies over there would be the same broken promise
+   in a new place. The segment chips and the scope line above the table show
+   what changed, and Reset view is right there. */
+function widenToShowMatches() {
+  state.vehicleStatus = "";
+  state.vehiclePartsOnly = false;
+  state.vehicleOverOnly = false;
+  state.vehicleIdleBucket = "";
+  state.vehicleCursor = null;
+  syncPartsFilterChip();
+}
+
+export function showAllSearchMatches() {
+  widenToShowMatches();
+  // Live and archived are two different lists from the server, so this can't
+  // cross that line -- History has its own button.
+  if (state.filter !== "history") state.filter = "";
+  syncSegmentChips();
+  renderVehicleStatusOptions();
+  renderVehiclesTable();
+}
+
+export function openSearchElsewhere() {
+  widenToShowMatches();
+  state.filter = state.filter === "history" ? "" : "history";
+  syncSegmentChips();
+  loadVehiclesView();
+}
+
+// The reach line and the empty state offer the same two moves, so they go
+// through one handler rather than each wiring its own copy.
+export function runSearchReachAction(name) {
+  if (name === "widen-search") showAllSearchMatches();
+  else if (name === "search-elsewhere") openSearchElsewhere();
+  else return false;
+  return true;
+}
+
+const matchCount = (n) => `${n} more match${n === 1 ? "" : "es"}`;
+const elsewhereLabel = (scope) => (scope === "history" ? "in History" : "on the active board");
+const elsewhereButton = (scope) => (scope === "history" ? "Open History" : "Back to the board");
+
+// Only drawn when the table has rows: with none, the empty state says the
+// same thing in the space the rows would have been, and two copies of one
+// offer a few pixels apart is worse than either.
+function renderSearchReach(visibleCount) {
+  const line = $("#vehicles-search-reach");
+  if (!line) return;
+  const reach = searchReach();
+  if (!reach || !visibleCount || (!reach.hidden && !reach.elsewhere)) {
+    line.hidden = true;
+    line.innerHTML = "";
+    return;
+  }
+  const bits = [];
+  if (reach.hidden) {
+    bits.push(`<span>${matchCount(reach.hidden)} hidden by the filters on this view</span>
+      <button type="button" class="btn btn-ghost btn-sm" data-search-reach="widen-search">Show all matches</button>`);
+  }
+  if (reach.elsewhere) {
+    bits.push(`<span>${matchCount(reach.elsewhere)} ${elsewhereLabel(reach.scope)}</span>
+      <button type="button" class="btn btn-ghost btn-sm" data-search-reach="search-elsewhere">${elsewhereButton(reach.scope)}</button>`);
+  }
+  line.innerHTML = bits.join(`<span class="search-reach-sep" aria-hidden="true">·</span>`);
+  line.hidden = false;
 }
 
 // Statuses differ by segment (recon carries the ticket's status, we-owe can
@@ -532,11 +695,40 @@ export function vehicleStatusPillClass(v) {
 // than one generic "No vehicles match."
 function vehiclesEmptyState() {
   if (state.search) {
+    const reach = searchReach();
+    const clear = `<button type="button" class="btn btn-ghost btn-sm" data-empty-action="clear-search">Clear search</button>`;
+    // The car is in the app, just not in front of you. Saying which of the two
+    // reasons it is matters: one is undone by clearing a filter, the other by
+    // going to History, and "no vehicles match" pointed at neither.
+    if (reach.hidden || reach.elsewhere) {
+      const where = [];
+      if (reach.hidden) {
+        where.push(`${reach.hidden} ${reach.hidden === 1 ? "match is" : "matches are"} hidden by the filters on this view`);
+      }
+      if (reach.elsewhere) {
+        where.push(`${reach.elsewhere} ${reach.elsewhere === 1 ? "match is" : "matches are"} ${elsewhereLabel(reach.scope)}`);
+      }
+      return {
+        icon: "search",
+        title: `Nothing matching "${state.search}" is in this view`,
+        hint: `${where.join(", and ")}.`,
+        actions: (reach.hidden
+          ? `<button type="button" class="btn btn-ghost btn-sm" data-search-reach="widen-search">Show all matches</button>`
+          : "")
+          + (reach.elsewhere
+            ? `<button type="button" class="btn btn-ghost btn-sm" data-search-reach="search-elsewhere">${elsewhereButton(reach.scope)}</button>`
+            : "")
+          + clear,
+      };
+    }
     return {
       icon: "search",
       title: "No vehicles match that search",
-      hint: `Nothing matched "${state.search}". Searches cover stock number, VIN, customer name, and the vehicle description.`,
-      actions: `<button type="button" class="btn btn-ghost btn-sm" data-empty-action="clear-search">Clear search</button>`,
+      // "and not in History" only once History has actually been looked in --
+      // before that it's a claim nothing has checked.
+      hint: `Nothing matched "${state.search}"${reach.elsewhereKnown ? `, ${elsewhereLabel(state.filter === "history" ? "history" : "live")} or ${elsewhereLabel(reach.scope)}` : ""}.`
+        + " Searches cover stock number, VIN, customer name, and the vehicle description.",
+      actions: clear,
     };
   }
   // Checked before the segment cases: with the toggle on, "no recon
@@ -684,15 +876,7 @@ export function visibleVehicles({ ignoreIdle = false } = {}) {
   if (state.vehicleLateOnly) rows = rows.filter(isPromiseLate);
   const idleSel = ignoreIdle ? null : idleSelection(state.vehicleIdleBucket);
   if (idleSel) rows = rows.filter((v) => matchesIdleSelection(v, idleSel));
-  if (state.search) {
-    const q = state.search.toLowerCase();
-    rows = rows.filter((v) =>
-      (v.stock_number || "").toLowerCase().includes(q) ||
-      (v.vin || "").toLowerCase().includes(q) ||
-      (v.customer_name || "").toLowerCase().includes(q) ||
-      v.vehicle.toLowerCase().includes(q)
-    );
-  }
+  if (state.search) rows = rows.filter((v) => matchesVehicleSearch(v, state.search));
   return sortVehicleRows(rows, state.vehicleSort);
 }
 
@@ -853,6 +1037,7 @@ export function renderVehiclesTable() {
   renderStats(rows);
   renderIdleChart(rows);
   renderVehicleSortHeaders();
+  renderSearchReach(rows.length);
   saveVehicleViewPrefs();
 
   if (!rows.length) {

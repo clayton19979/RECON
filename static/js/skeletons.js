@@ -42,6 +42,11 @@ export const BOARD_COLUMNS = 12;
 // skeleton/empty-state colspan contract as BOARD_COLUMNS above.
 export const CUSTOMER_COLUMNS = 6;
 
+// Part, Part #, RO / Vehicle, Qty, Value, Ordered, Waiting. Same contract
+// again: the loading skeleton, the empty state and the error state all have
+// to span the On Order table's real width.
+export const ON_ORDER_COLUMNS = 7;
+
 // Which containers to fill with a placeholder when a view is opened, and how
 // many columns each table has (so the skeleton lines up with its header).
 export const VIEW_PLACEHOLDERS = {
@@ -52,7 +57,7 @@ export const VIEW_PLACEHOLDERS = {
   // failed load should say so once rather than three times down the page.
   reports:     [["#report-output", 0]],
   accounting:  [["#ap-table", 8]],
-  cores:       [["#cores-table", 8], ["#returns-table", 8]],
+  cores:       [["#on-order-table", ON_ORDER_COLUMNS], ["#cores-table", 8], ["#returns-table", 8]],
   staff:       [["#staff-table", 5]],
   backup:      [["#backup-table", 4]],
   tasks:       [["#tasks-list", 0]],

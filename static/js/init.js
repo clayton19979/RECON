@@ -3,7 +3,7 @@ import { wireUpdateBar } from "./updates-banner.js";
 import { toast, wireMessageLog } from "./notify.js";
 import { wireConfirmDialog } from "./confirm.js";
 import { wireInvoicePromptDialog, wireShortcutsDialog } from "./shortcuts.js";
-import { initCurrentUser, state } from "./state.js";
+import { initCurrentUser } from "./state.js";
 import { initTheme, showView, wireGlobalErrorReporting, wireViewRetry } from "./error-boundary.js";
 import { loadVehicleViewPrefs } from "./vehicles-board.js";
 import { wireVehiclesView } from "./list-keyboard.js";
@@ -12,7 +12,7 @@ import { wireMoveSegmentDialog } from "./move-ticket.js";
 import { wireReconDialog } from "./dialog-new-recon.js";
 import { wireWeOweDialog } from "./dialog-new-weowe.js";
 import { wireReceiveDialog } from "./dialog-receive-parts.js";
-import { loadReportPrefs, setReportRange, wireReportsView } from "./reports.js";
+import { loadReportPrefs, wireReportsView } from "./reports.js";
 import { wireAccountingView } from "./accounting.js";
 import { wireCoresView, wirePartsOnOrderView, wirePostReturnDialog, wireReturnsView } from "./cores.js";
 import { wireAddVehicleDialog, wireCustomerEditor, wireCustomersView, wireRetailRoDialog } from "./customers.js";
@@ -73,8 +73,9 @@ export function startApp() {
     // Same reasoning for Reports: the saved range has to be in state before
     // loadReportsView() builds its query string, or the first render is of
     // the default month and the saved one only appears on the second.
+    // loadReportPrefs resolves a named range against today itself, so there is
+    // nothing to fix up here.
     loadReportPrefs();
-    if (!state.reportStart && !state.reportEnd && state.reportRange) setReportRange(state.reportRange);
 
     // Replay a one-shot flash stashed before a deliberate reload (a database
     // restore) -- the toast fired before location.reload() died with the page,

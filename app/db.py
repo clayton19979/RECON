@@ -168,6 +168,21 @@ CREATE TABLE IF NOT EXISTS estimate_items (
   quantity REAL NOT NULL,
   unit_price REAL NOT NULL,
   unit_cost REAL NOT NULL DEFAULT 0,
+  /* What this line was written down at, before any vendor invoice touched it.
+   *
+   * unit_cost is what the shop actually pays, and receiving a part overwrites
+   * it with the price the invoice really said -- which is right, and which
+   * also destroyed the only record of what we thought it would cost. Every
+   * "cost against quote" figure in the app was then comparing a number to
+   * itself: a part quoted at 100 and billed at 175 reported quoted 175,
+   * actual 175, and the board's Over Quote card could never say anything but
+   * zero. The quote lives here so it survives the bill.
+   *
+   * NULL means "no separate quote recorded" -- rows written before this
+   * column existed -- and every reader falls back to unit_cost for those,
+   * which is exactly the answer they gave before.
+   */
+  quoted_unit_cost REAL,
   received_quantity REAL NOT NULL DEFAULT 0,
   line_total REAL NOT NULL,
   status TEXT NOT NULL DEFAULT 'quoted',

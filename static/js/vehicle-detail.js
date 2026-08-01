@@ -658,6 +658,28 @@ function receivedSourceHtml(item) {
   }</span>`;
 }
 
+/* What the line was written down at, before any vendor invoice touched it.
+   unit_cost is overwritten with the price the invoice actually said when a
+   part is received, so it is the wrong figure to quote against -- comparing
+   it to itself is why the ticket could only ever say "On quote". Lines from
+   before the quote was kept separately have no quoted_unit_cost and fall
+   back to unit_cost, which is the answer they have always given. */
+function quotedUnitCost(item) {
+  return item.quoted_unit_cost ?? item.unit_cost ?? 0;
+}
+
+// Only worth saying when the bill and the estimate actually disagree; on an
+// ordinary line this would just be the same number printed twice.
+function quoteDiffersFromCost(item) {
+  return item.quoted_unit_cost != null && Math.abs(item.quoted_unit_cost - (item.unit_cost ?? 0)) >= 0.005;
+}
+
+// A returned line reads $0 and is out of every total, so there is nothing for
+// a quote to disagree with.
+function showQuoteNote(item) {
+  return quoteDiffersFromCost(item) && !item.part_returned;
+}
+
 function receivedFromTitle(item) {
   const vendor = item.received_vendor_name;
   const invoice = item.received_invoice_number;
@@ -702,8 +724,11 @@ function renderEstimate(order) {
   // data-label is what the narrow-screen layout prints above each field
   // (.pr-cell::before). An empty cell must not carry one, or a labor line
   // shows a "Part #"/"Core" caption with no field under it.
-  const cell = (cls, label, inner) =>
-    `<div class="pr-cell pr-${cls}${inner ? "" : " pr-spacer"}"${label && inner ? ` data-label="${label}"` : ""}>${inner}</div>`;
+  // `extra` is for a cell that needs a modifier of its own -- currently only
+  // the cost cell, which stacks a second line under the price on a part the
+  // vendor billed at something other than its estimate.
+  const cell = (cls, label, inner, extra = "") =>
+    `<div class="pr-cell pr-${cls}${extra ? ` ${extra}` : ""}${inner ? "" : " pr-spacer"}"${label && inner ? ` data-label="${label}"` : ""}>${inner}</div>`;
 
   const rowHtml = (item, i) => {
     const remaining = (item.quantity ?? 0) - (item.received_quantity ?? 0);
@@ -731,9 +756,17 @@ function renderEstimate(order) {
       ${cell("desc", "Description", `<input class="ei-desc" value="${esc(item.description || "")}" placeholder="Description">`)}
       ${cell("part", L.part, `<input class="ei-part" value="${esc(item.part_number || "")}" placeholder="Part #"${isPart ? "" : " hidden"}>`)}
       ${cell("qty", L.qty, `<input class="ei-qty" type="number" min="0.01" step="0.01" value="${item.quantity ?? 1}"${item.kind === "labor" ? ` title="Hours"` : ""}>`)}
-      ${cell("cost", L.cost, item.part_returned
+      ${/* A line billed at something other than what it was quoted at says so
+            right here, next to the price that changed. The receive dialog
+            already showed this while the invoice was being keyed in; without
+            it on the row, the difference disappeared the moment the dialog
+            closed and nobody could see afterwards which part had moved. */""}
+      ${cell("cost", L.cost, (item.part_returned
         ? `<input class="ei-cost" type="number" value="0" disabled title="Returned to the vendor -- no longer counted" data-real-cost="${item.unit_cost ?? 0}">`
-        : `<input class="ei-cost" type="number" min="0" step="0.01" value="${item.unit_cost ?? 0}"${item.kind === "labor" ? ` title="Hourly rate"` : ""}>`)}
+        : `<input class="ei-cost" type="number" min="0" step="0.01" value="${item.unit_cost ?? 0}"${item.kind === "labor" ? ` title="Hourly rate"` : ""}>`)
+        + (showQuoteNote(item)
+          ? `<span class="ei-quote-note ${item.unit_cost > item.quoted_unit_cost ? "over" : "under"}" title="This line was quoted at ${money(item.quoted_unit_cost)} each">Quoted ${money(item.quoted_unit_cost)}</span>`
+          : ""), showQuoteNote(item) ? "has-quote-note" : "")}
       ${cell("core", L.core, item.kind === "part"
         ? `<label class="core-toggle" title="Tick only if this part carries a core deposit the vendor owes back">
              <input type="checkbox" class="ei-core-on" ${(item.core_charge ?? 0) > 0 ? "checked" : ""} aria-label="This part has a core charge">

@@ -714,6 +714,19 @@ textarea { min-height: 70px; resize: vertical; font-family: inherit; }
 .part-row.head .pr-qty, .part-row.head .pr-cost, .part-row.head .pr-core { justify-content: flex-end; }
 .pr-job > select { color: var(--ink-soft); }
 .pr-cost > input:disabled { text-decoration: line-through; }
+/* "Quoted $100.00" under a line the vendor billed at something else. Only
+   rendered when the two actually differ, so it never appears on a line where
+   it would just repeat the box above it.
+   The cell turns into a column for it. Left as a plain row, the note is a
+   second flex item and steals half the width from the price box beside it --
+   which in the wide layout squeezed the Cost field to about 48px. */
+.pr-cost.has-quote-note { flex-direction: column; align-items: stretch; justify-content: center; }
+.ei-quote-note {
+  display: block; margin-top: 2px; text-align: right; font-size: 10px; font-weight: 600;
+  font-family: "IBM Plex Mono", "Cascadia Mono", Consolas, monospace;
+}
+.ei-quote-note.over { color: var(--crit); }
+.ei-quote-note.under { color: var(--good); }
 
 .row-move-btn {
   background: none; border: none; color: var(--ink-faint); cursor: pointer; font-size: 14px; padding: 2px 4px;

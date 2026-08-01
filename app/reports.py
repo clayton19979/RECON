@@ -264,19 +264,22 @@ def lot_rows(db: sqlite3.Connection) -> list[dict]:
     for row in rows:
         row["lot_bucket"] = lot_bucket(row)
         # Quoted but not yet spent: what finishing this car should still cost.
-        # Floored at zero -- going over the estimate is real, but it is money
-        # already counted in what we spent, not money still to come.
         #
-        # Zero on a finished car, whatever the quote said. Nothing is open on
-        # it, so nobody is going to spend that money: a car that came in under
-        # its estimate was putting the difference in the "still to spend"
-        # column and into the lot's total, on the same row whose Needs cell
-        # read "Nothing -- ready to go". Two answers to one question, one line
+        # This is the quoted value of the parts that have not landed yet
+        # (cost_rollup's open_cost), not quoted minus spent. Those were the
+        # same number only while receiving a part overwrote its quote with the
+        # invoice price; now that the quote survives the bill, a part that came
+        # in cheaper than estimated would have left the difference sitting in
+        # this column as work still to do on a job that is already finished.
+        #
+        # Zero on a finished car, whatever is still open on its ticket.
+        # Nothing is going to be spent on it: a car that came in under its
+        # estimate was putting the difference in the "still to spend" column
+        # and into the lot's total, on the same row whose Needs cell read
+        # "Nothing -- ready to go". Two answers to one question, one line
         # apart. The shortfall against the quote is still visible where it
         # belongs, in the board's Cost-against-quote column.
-        row["remaining_cost"] = (
-            0.0 if row["lot_bucket"] == LOT_READY else max(round(row["quoted_cost"] - row["actual_cost"], 2), 0)
-        )
+        row["remaining_cost"] = 0.0 if row["lot_bucket"] == LOT_READY else max(row["open_cost"], 0)
         row["needs"] = lot_needs_text(row)
     order = {LOT_READY: 0, LOT_WORKING: 1, LOT_WAITING: 2}
     # Within a group, the longest-idle car first: the one most likely to have

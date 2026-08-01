@@ -311,8 +311,6 @@ def add_lot_status(row: dict) -> dict:
     return row
 
 
-
-
 def order_status_bucket(orders: list[dict]) -> str:
     """Finished or still in progress, judged by the repair tickets themselves.
 

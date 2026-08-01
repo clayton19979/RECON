@@ -575,9 +575,7 @@ def test_nothing_compares_spend_against_what_was_written_up(js: str, css: str, h
     board column, a summary card, a filter, a red Cost cell, a badge on the
     ticket and a marker on the report chart. All of it is gone, and a number
     the shop never agreed to must not come back."""
-    assert "quoted_cost *" not in js and "isOverQuote" not in js, (
-        "an over-quote rule is back in the front end"
-    )
+    assert "quoted_cost *" not in js and "isOverQuote" not in js, "an over-quote rule is back in the front end"
     for gone in ("over-quote", "cost-delta", "bar-marker", "veh-card-quoted", "quoted-col"):
         assert gone not in css, f"the {gone} styling is back in styles.css"
         assert gone not in html, f"the {gone} markup is back in index.html"
@@ -915,9 +913,7 @@ def test_board_card_filters_round_trip_with_the_other_preferences(js: str) -> No
     assert "IDLE_SELECTIONS[saved.idleBucket]" in load, (
         "restoring preferences validates against the buckets only, so a saved 'stalled' is dropped"
     )
-    assert "state.vehiclePartsOnly" in _function_source(js, "resetVehicleView"), (
-        "Reset view leaves the parts filter on"
-    )
+    assert "state.vehiclePartsOnly" in _function_source(js, "resetVehicleView"), "Reset view leaves the parts filter on"
 
 
 def test_activity_labels_cover_every_action_the_server_logs(js: str) -> None:

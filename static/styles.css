@@ -393,6 +393,10 @@ button { font-family: inherit; }
 .filters-gap { flex: 1; }
 .filters-note { font-size: 12px; color: var(--ink-faint); }
 .filters-search { width: 220px; padding: 6px 10px; font-size: 12.5px; }
+/* A filter bar mounted inside a panel as its header row -- the range, search
+   and count read as part of the table they control, not a strip floating
+   between sections. */
+.panel-filters { margin-bottom: 0; padding: 10px 14px; border-bottom: 1px solid var(--line); flex-wrap: wrap; row-gap: 8px; }
 
 /* "Your search also matched cars this view can't show." Quieter than the bulk
    bar beneath it -- it's information, not a mode you're in -- but it has to be
@@ -1082,7 +1086,9 @@ textarea { min-height: 70px; resize: vertical; font-family: inherit; }
 .mini-item .mi-concern { color: var(--ink-soft); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ---------- vendor chips ---------- */
-.vendor-chips { padding: 0 16px 16px; display: flex; flex-wrap: wrap; gap: 8px; }
+/* Top padding because the chips now sit directly under the card head when
+   the add/edit form above them is folded away. */
+.vendor-chips { padding: 14px 16px 16px; display: flex; flex-wrap: wrap; gap: 8px; }
 .vendor-chip { background: var(--paper-raise); border: 1px solid var(--line); border-radius: 999px; padding: 5px 12px; font-size: 12px; font-weight: 600; }
 .vendor-chip.clickable { cursor: pointer; transition: border-color .12s; }
 .vendor-chip.clickable:hover { border-color: var(--accent); }

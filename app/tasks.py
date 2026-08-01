@@ -15,6 +15,36 @@ def _clean_names(names: list[str]) -> list[str]:
     return list(dict.fromkeys(n.strip() for n in names if n.strip()))
 
 
+# Recon first: it's the bulk of the work and the cars Walt asks about. We-owe
+# next -- a promise the shop still owes somebody. Retail last, because it lives
+# in Tekmetric and only turns up here occasionally.
+SEGMENT_ORDER = {"recon": 0, "we_owe": 1, "retail": 2}
+SEGMENT_LABEL = {"recon": "Recon", "we_owe": "We-Owe", "retail": "Retail"}
+
+
+def _order_label(row: sqlite3.Row) -> str:
+    """How one repair order reads in a vehicle picker.
+
+    Leads with whatever the advisor actually says out loud -- a stock number
+    for a lot car, the customer's name for anything belonging to a person --
+    and follows it with the car, because two of Walt's cars are frequently the
+    same year and model and the stock number alone doesn't picture them.
+
+    The segment prefix matters more than it looks: a we-owe and a retail
+    ticket for the same customer were two identical lines in this list, and
+    they are completely different kinds of work with completely different
+    money rules behind them.
+    """
+    car = " ".join(str(part) for part in (row["year"], row["make"], row["model"]) if part).strip()
+    if row["segment"] == "recon":
+        head = row["stock_number"] or row["number"]
+    elif row["segment"] == "we_owe":
+        head = f"We-Owe: {row['we_owe_customer_name'] or row['number']}"
+    else:
+        head = f"Retail: {row['order_customer_name'] or row['number']}"
+    return f"{head} — {car}" if car else head
+
+
 class TaskIn(BaseModel):
     title: str = Field(min_length=1, max_length=300)
     notes: str = ""
@@ -100,10 +130,11 @@ def build_tasks_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
     # A task's linked order shows a "jump to vehicle" chip -- resolved here
     # rather than making the frontend cross-reference /api/orders itself.
     task_query = """
-        SELECT t.*, o.number order_number, o.segment order_segment,
+        SELECT t.*, o.number order_number, o.segment order_segment, o.voided order_voided,
                o.recon_vehicle_id order_recon_vehicle_id, o.we_owe_id order_we_owe_id,
                o.vehicle_id order_vehicle_id,
-               rv.stock_number, wc.name we_owe_customer_name, oc.name order_customer_name
+               rv.stock_number, rv.archived_at recon_archived_at, wi.archived_at we_owe_archived_at,
+               wc.name we_owe_customer_name, oc.name order_customer_name
         FROM tasks t
         LEFT JOIN orders o ON o.id=t.order_id
         LEFT JOIN recon_vehicles rv ON rv.id=o.recon_vehicle_id
@@ -125,6 +156,19 @@ def build_tasks_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
             value["order_label"] = f"Retail: {value['order_customer_name']}"
         else:
             value["order_label"] = value["order_number"]
+        # Whether the car behind the link is still something anyone is working
+        # on. A follow-up outlives the ticket it hangs off -- the car gets sold
+        # and archived, or the ticket gets voided -- and the row went on showing
+        # a plain chip either way, so an open task about a car that left the lot
+        # three weeks ago looked exactly like one about a car in the bay. The
+        # link is deliberately kept (it's still the car you meant); the row just
+        # says so now. The picker below never offers these in the first place.
+        value["order_state"] = ""
+        if value["order_id"] is not None:
+            if value["order_voided"]:
+                value["order_state"] = "voided"
+            elif value["recon_archived_at"] or value["we_owe_archived_at"]:
+                value["order_state"] = "archived"
         return value
 
     def assert_valid_order(db: sqlite3.Connection, order_id: int | None) -> None:
@@ -143,6 +187,66 @@ def build_tasks_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
                     + " ORDER BY t.done, t.urgent DESC, coalesce(nullif(t.due_date,''), '9999-99-99'), t.id DESC"
                 )
             ]
+
+    # Declared before /tasks/{task_id} for the same reason the bulk routes are:
+    # a literal path segment has to be matched before a parameterised one.
+    @router.get("/tasks/linkable-orders")
+    def linkable_orders():
+        """The cars a follow-up can sensibly be pinned to, ready to render.
+
+        The screen used to build this dropdown out of the whole of
+        /api/orders, which is every ticket the shop has ever written. Two
+        problems with that, both of which get worse every week the shop is
+        open. It offered voided tickets and cars long since sold and archived
+        to History -- pick one and the task points at something nobody will
+        ever look at again -- and it kept growing, so finding this morning's
+        car meant scrolling past a year of finished ones.
+
+        The label is built here rather than in the browser because the same
+        car has to read the same way in the quick-add box, in the per-row
+        picker, and on the chip the row ends up showing. Three copies of the
+        formatting is how those three drifted apart in the first place.
+        """
+        with connect() as db:
+            rows = db.execute(
+                """SELECT o.id, o.number, o.segment, rv.stock_number,
+                          v.year, v.make, v.model,
+                          wc.name we_owe_customer_name, oc.name order_customer_name
+                     FROM orders o
+                     LEFT JOIN recon_vehicles rv ON rv.id=o.recon_vehicle_id
+                     LEFT JOIN we_owe_items wi ON wi.id=o.we_owe_id
+                     LEFT JOIN customers wc ON wc.id=wi.customer_id
+                     LEFT JOIN customers oc ON oc.id=o.customer_id
+                     LEFT JOIN vehicles v ON v.id=o.vehicle_id
+                    WHERE o.voided=0
+                      AND coalesce(rv.archived_at,'')=''
+                      AND coalesce(wi.archived_at,'')=''
+                    ORDER BY o.id DESC"""
+            ).fetchall()
+            result = [
+                {
+                    "id": row["id"],
+                    "segment": row["segment"],
+                    # The heading this row sits under. Sent rather than mapped
+                    # in the browser so the three kinds of work are named in
+                    # one place.
+                    "group": SEGMENT_LABEL.get(row["segment"], "Other"),
+                    "label": _order_label(row),
+                }
+                for row in rows
+            ]
+            # Two live tickets on one car render as two identical lines, and
+            # picking the wrong one is invisible afterwards. Only the ones that
+            # actually collide get the RO number -- tacking it onto every row
+            # would bury the stock number the label exists to show.
+            seen: dict[str, int] = {}
+            for entry in result:
+                seen[entry["label"]] = seen.get(entry["label"], 0) + 1
+            for entry, row in zip(result, rows, strict=True):
+                if seen[entry["label"]] > 1:
+                    entry["label"] = f"{entry['label']} · {row['number']}"
+            result.sort(key=lambda e: SEGMENT_ORDER.get(e["segment"], 99))
+            return result
 
     @router.post("/tasks", status_code=201)
     def create_task(item: TaskIn):

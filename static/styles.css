@@ -945,6 +945,21 @@ textarea { min-height: 70px; resize: vertical; font-family: inherit; }
 .vendor-chip.clickable { cursor: pointer; transition: border-color .12s; }
 .vendor-chip.clickable:hover { border-color: var(--accent); }
 
+/* ---------- A/P: one invoice, several cars ----------
+   A vendor invoice that covers more than one vehicle lists each of them with
+   its share of the bill, so the cell reconciles against the paper invoice
+   without opening anything. The name/amount pair is laid out as a two-column
+   grid rather than a flex row so the money lines up down the cell. */
+td.ap-coverage { padding-top: 6px; padding-bottom: 6px; }
+.ap-cover-line {
+  display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: baseline;
+  padding: 2px 0; border-radius: 4px;
+}
+.ap-cover-line + .ap-cover-line { border-top: 1px dashed var(--line); }
+.ap-cover-amount { color: var(--ink-soft); font-size: 12px; font-variant-numeric: tabular-nums; }
+.ap-cover-line.clickable { cursor: pointer; }
+.ap-cover-line.clickable:hover .ap-cover-name { color: var(--accent); text-decoration: underline; }
+
 /* ---------- tasks ---------- */
 .task-quick-add {
   display: flex; gap: 10px; align-items: center; flex-wrap: wrap;

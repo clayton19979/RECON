@@ -105,7 +105,12 @@ function filterApInvoices(invoices) {
     a.invoice_number.toLowerCase().includes(query) ||
     a.vendor_name.toLowerCase().includes(query) ||
     (a.po_number || "").toLowerCase().includes(query) ||
-    a.vehicle_label.toLowerCase().includes(query)
+    a.vehicle_label.toLowerCase().includes(query) ||
+    // Every car on the invoice, not just the one the summary label names --
+    // searching the second car on a shared invoice has to find it.
+    (a.coverage || []).some((c) =>
+      (c.vehicle_label || "").toLowerCase().includes(query) ||
+      (c.ro_number || "").toLowerCase().includes(query))
   );
 }
 function renderVendorSelect() {
@@ -189,16 +194,24 @@ function renderApTable(invoices) {
   const liveTotal = invoices.filter((a) => a.status !== "voided").reduce((s, a) => s + (a.total || 0), 0);
   $("#ap-count").textContent = `${invoices.length} invoice${invoices.length === 1 ? "" : "s"} · ${money(liveTotal)}`;
   // Every segment's rows can jump to a vehicle page now that retail has one.
+  // An invoice covering more than one car doesn't get a row-level jump: there
+  // is no single "this vehicle" to open, so each car in the cell carries its
+  // own link instead of the row silently picking one of them.
   $("#ap-table").innerHTML = invoices.length ? invoices.map((a) => {
-    const refId = a.segment === "retail" ? a.vehicle_id : (a.recon_vehicle_id ?? a.we_owe_id);
-    const clickable = refId != null && (a.segment === "recon" || a.segment === "we_owe" || a.segment === "retail");
+    const covers = a.coverage || [];
+    const only = covers.length === 1 ? covers[0] : null;
+    const clickable = only != null && coverageOpenable(only);
+    const refId = only ? coverageRefId(only) : null;
     const voided = a.status === "voided";
+    const rowTitle = covers.length > 1
+      ? `Covers ${covers.length} vehicles — click one to open it`
+      : (clickable ? "Open this vehicle" : "No vehicle page for this ticket");
     return `
-    <tr class="${clickable ? "clickable" : ""} ${voided ? "voided-row" : ""}" ${clickable ? `data-segment="${a.segment}" data-ref-id="${refId}" role="button" tabindex="0" title="Open this vehicle"` : `title="No vehicle page for this ticket"`}>
+    <tr class="${clickable ? "clickable" : ""} ${voided ? "voided-row" : ""}" ${clickable ? `data-segment="${esc(only.segment)}" data-ref-id="${refId}" role="button" tabindex="0" ` : ""}title="${esc(rowTitle)}">
       <td>${esc(a.invoice_number)}</td>
       <td>${esc(fmtDate(a.posted_at))}</td>
       <td>${esc(a.vendor_name)}</td><td>${esc(a.po_number)}</td>
-      <td>${esc(a.vehicle_label)}</td><td class="num-col">${money(a.total)}</td>
+      ${apVehicleCell(a)}<td class="num-col">${money(a.total)}</td>
       <td><span class="pill ${voided ? "pill-void" : "pill-done"}">${voided ? "Voided" : "Posted"}</span></td>
       <td class="actions-col">${voided ? "" : `<button type="button" class="btn btn-ghost btn-xs btn-danger-ghost ap-void" data-id="${a.id}" data-number="${esc(a.invoice_number)}">Void</button>`}</td>
     </tr>
@@ -215,12 +228,19 @@ function renderApTable(invoices) {
         title: "No vendor invoices in this range",
         hint: "Post one with the form above, or widen the date range. Receiving parts on a ticket also posts an invoice here automatically.",
       });
+  // Rows and the per-vehicle lines inside a shared invoice's cell open the
+  // same way; a shared invoice's row is never itself clickable, so the two
+  // can't both fire on one click.
   $$(".clickable", $("#ap-table")).forEach((row) => {
-    row.addEventListener("click", () => openVehicleDetail(row.dataset.segment, Number(row.dataset.refId)));
+    row.addEventListener("click", (e) => {
+      e.stopPropagation();
+      openVehicleDetail(row.dataset.segment, Number(row.dataset.refId));
+    });
     // role="button" without keyboard activation is a lie to a screen reader.
     row.addEventListener("keydown", (e) => {
       if (e.key !== "Enter" && e.key !== " ") return;
       e.preventDefault();
+      e.stopPropagation();
       openVehicleDetail(row.dataset.segment, Number(row.dataset.refId));
     });
   });

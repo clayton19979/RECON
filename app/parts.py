@@ -190,11 +190,33 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
                 )
         return {"id": item_id, "status": item.status}
 
-    def find_received_invoice(db: sqlite3.Connection, order_id: int, invoice_number: str) -> sqlite3.Row | None:
+    def find_received_invoice(
+        db: sqlite3.Connection, order_id: int, invoice_number: str, vendor_id: int | None = None
+    ) -> sqlite3.Row | None:
         """A part's received_invoice_number is just the string it was posted
         under -- this is the one place that's resolved back to the actual
         ap_invoices row, needed both to show the reassign-invoice warning and
-        to do the reassignment itself."""
+        to do the reassignment itself.
+
+        Resolved by vendor + invoice number, which is what actually identifies
+        a vendor invoice (and is the pair the unique constraint is on). It used
+        to be resolved by the invoice's own order_id, and that quietly stopped
+        working in the single most ordinary case there is: one invoice covering
+        parts for two cars. receive_onto_invoice nulls order_id the moment an
+        invoice spans tickets -- deliberately, because it no longer belongs to
+        one -- and every lookup keyed on it then came back empty. The part was
+        still received, the money was still right, but nothing could say who
+        supplied it any more.
+
+        The old order-scoped match stays as the fallback for lines too old to
+        have a received_vendor_id, which is exactly what those rows had before.
+        """
+        if vendor_id is not None:
+            return db.execute(
+                "SELECT * FROM ap_invoices WHERE vendor_id=? AND invoice_number=? AND status!='voided'"
+                " ORDER BY id DESC LIMIT 1",
+                (vendor_id, invoice_number),
+            ).fetchone()
         return db.execute(
             "SELECT * FROM ap_invoices WHERE order_id=? AND invoice_number=? AND status!='voided' ORDER BY id DESC LIMIT 1",
             (order_id, invoice_number),
@@ -203,9 +225,15 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
     @router.get("/orders/{order_id}/estimate/items/{item_id}/received-invoice")
     def get_received_invoice(order_id: int, item_id: int):
         """Feeds the Move dialog's reassign-invoice checkbox: which invoice
-        (if any) this line was received under, who else it still covers on
-        this same ticket, so the advisor can see the blast radius before
-        deciding to drag the whole invoice along with this one line."""
+        (if any) this line was received under, and what else it covers, so the
+        advisor can see the blast radius before deciding to drag the whole
+        invoice along with this one line.
+
+        The blast radius counts every part line on the invoice, on whatever
+        ticket -- not just the ones on this one. Reassigning moves the invoice
+        entire, so an invoice shared with another car is precisely the case
+        worth warning about, and counting only this ticket's lines said "0
+        others" about exactly that."""
         with connect() as db:
             estimate = estimate_for_order(db, order_id)
             row = db.execute(
@@ -215,13 +243,18 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
                 raise HTTPException(404, "Estimate item not found on this repair order")
             if not row["received_invoice_number"]:
                 return None
-            invoice = find_received_invoice(db, order_id, row["received_invoice_number"])
+            invoice = find_received_invoice(db, order_id, row["received_invoice_number"], row["received_vendor_id"])
             if not invoice:
                 return None
-            other_items = db.execute(
-                "SELECT count(*) FROM estimate_items WHERE estimate_id=? AND received_invoice_number=? AND id!=?",
-                (estimate["id"], row["received_invoice_number"], item_id),
-            ).fetchone()[0]
+            other_items, other_orders = invoice_line_reach(db, invoice["id"], item_id, order_id)
+            if not other_items:
+                # Lines received before per-line invoice links existed have no
+                # ap_invoice_items row to count, so fall back to the string
+                # match that was the only answer available then.
+                other_items = db.execute(
+                    "SELECT count(*) FROM estimate_items WHERE estimate_id=? AND received_invoice_number=? AND id!=?",
+                    (estimate["id"], row["received_invoice_number"], item_id),
+                ).fetchone()[0]
             vendor = db.execute("SELECT name FROM vendors WHERE id=?", (invoice["vendor_id"],)).fetchone()
             return {
                 "invoice_id": invoice["id"],
@@ -229,6 +262,7 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
                 "vendor_name": vendor["name"] if vendor else "",
                 "posted_at": invoice["posted_at"],
                 "other_item_count": other_items,
+                "other_order_count": other_orders,
             }
 
     @router.patch("/orders/{order_id}/estimate/items/{item_id}/move")
@@ -274,7 +308,7 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
 
             reassigned_invoice_id = None
             if item.reassign_invoice and row["received_invoice_number"]:
-                invoice = find_received_invoice(db, order_id, row["received_invoice_number"])
+                invoice = find_received_invoice(db, order_id, row["received_invoice_number"], row["received_vendor_id"])
                 if invoice:
                     db.execute(
                         "UPDATE ap_invoices SET order_id=?,po_number=? WHERE id=?",
@@ -623,20 +657,27 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
     def list_returns():
         """Feeds the Parts & Cores page's Returned Parts table -- every
         part line marked returned (set_part_return), regardless of order,
-        with the original receiving vendor resolved (via
-        received_invoice_number) so the Post Credit dialog can default to
-        it, and whether a credit has already been posted for it."""
+        with the original receiving vendor so the Post Credit dialog can
+        default to it, and whether a credit has already been posted for it.
+
+        The vendor comes off the part line's own received_vendor_id. It used to
+        be looked up by finding an invoice with a matching number on the same
+        ticket, which came back empty for any part received on an invoice that
+        also covered another car -- so the screen that exists to say where to
+        take a part back named no vendor at all on exactly those lines."""
         with connect() as db:
             rows = db.execute(
                 """SELECT ei.id, ei.description, ei.part_number, ei.received_quantity, ei.unit_cost,
                        ei.part_returned_at, ei.received_invoice_number, ei.return_invoice_number,
                        ei.part_return_reference, ei.part_picked_up_at,
+                       ei.received_vendor_id vendor_id, coalesce(rvn.name,'') vendor_name,
                        o.id order_id, o.number ro_number, o.voided, o.segment,
                        o.recon_vehicle_id, o.we_owe_id, o.vehicle_id,
                        rv.stock_number, wc.name we_owe_customer_name, oc.name order_customer_name
                    FROM estimate_items ei
                    JOIN estimates e ON e.id=ei.estimate_id
                    JOIN orders o ON o.id=e.order_id
+                   LEFT JOIN vendors rvn ON rvn.id=ei.received_vendor_id
                    LEFT JOIN recon_vehicles rv ON rv.id=o.recon_vehicle_id
                    LEFT JOIN we_owe_items wi ON wi.id=o.we_owe_id
                    LEFT JOIN customers wc ON wc.id=wi.customer_id
@@ -746,12 +787,14 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
                        round(ei.quantity*ei.core_charge, 2) core_total,
                        ei.core_returned, ei.core_returned_at, ei.core_return_invoice_number,
                        ei.received_invoice_number,
+                       ei.received_vendor_id vendor_id, coalesce(rvn.name,'') vendor_name,
                        o.id order_id, o.number ro_number, o.voided, o.segment,
                        o.recon_vehicle_id, o.we_owe_id, o.vehicle_id,
                        rv.stock_number, wc.name we_owe_customer_name, oc.name order_customer_name
                    FROM estimate_items ei
                    JOIN estimates e ON e.id=ei.estimate_id
                    JOIN orders o ON o.id=e.order_id
+                   LEFT JOIN vendors rvn ON rvn.id=ei.received_vendor_id
                    LEFT JOIN recon_vehicles rv ON rv.id=o.recon_vehicle_id
                    LEFT JOIN we_owe_items wi ON wi.id=o.we_owe_id
                    LEFT JOIN customers wc ON wc.id=wi.customer_id

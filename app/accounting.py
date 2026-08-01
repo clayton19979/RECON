@@ -154,6 +154,93 @@ def _insert_invoice_items(
     )
 
 
+def ticket_vehicle_label(row: Any) -> str:
+    """How a repair order's car is named on the money screens.
+
+    One definition, because three screens print it (A/P, Returns, Cores) and a
+    car that reads "R-1002" on one and "Retail" on another is a car nobody can
+    reconcile against a vendor statement.
+    """
+    if row["stock_number"]:
+        return row["stock_number"]
+    if row["we_owe_customer_name"]:
+        return f"We-Owe: {row['we_owe_customer_name']}"
+    if row["order_customer_name"]:
+        return f"Retail: {row['order_customer_name']}"
+    return "Retail"
+
+
+# Everything needed to name and link the car behind a repair order. Shared by
+# the coverage query below and the A/P list itself so the two cannot drift.
+_TICKET_COLUMNS = """o.id order_id, o.number ro_number, o.segment,
+                     o.recon_vehicle_id, o.we_owe_id, o.vehicle_id,
+                     rv.stock_number, wc.name we_owe_customer_name, oc.name order_customer_name"""
+
+_TICKET_JOINS = """LEFT JOIN recon_vehicles rv ON rv.id=o.recon_vehicle_id
+                   LEFT JOIN we_owe_items wi ON wi.id=o.we_owe_id
+                   LEFT JOIN customers wc ON wc.id=wi.customer_id
+                   LEFT JOIN customers oc ON oc.id=o.customer_id"""
+
+
+def invoice_coverage(db: sqlite3.Connection) -> dict[int, list[dict]]:
+    """Which cars each vendor invoice actually paid for, and how much of it
+    went to each, worked out from the billed lines rather than from the
+    invoice's own order_id.
+
+    A vendor invoice routinely covers parts for more than one car -- that is
+    the normal way a parts counter works, not an edge case -- and when it does,
+    `ap_invoices.order_id` goes null on purpose because the invoice no longer
+    belongs to any single ticket. The A/P screen read that null and printed
+    "No ticket", the same words it uses for a genuine shop-supplies bill. So
+    the biggest invoices, the ones covering three cars at once, were the ones
+    that named no car at all -- and reconciling a vendor statement meant
+    opening tickets one by one to find where the money went.
+
+    The per-line links (`ap_invoice_items.estimate_item_id`) have carried the
+    real answer since they were added. This is what reads it back out.
+    """
+    rows = db.execute(
+        f"""SELECT ai.ap_invoice_id, {_TICKET_COLUMNS},
+                   round(sum(ai.line_total), 2) amount
+              FROM ap_invoice_items ai
+              JOIN estimate_items ei ON ei.id=ai.estimate_item_id
+              JOIN estimates e ON e.id=ei.estimate_id
+              JOIN orders o ON o.id=e.order_id
+              {_TICKET_JOINS}
+             GROUP BY ai.ap_invoice_id, o.id
+             ORDER BY ai.ap_invoice_id, amount DESC, o.id"""
+    ).fetchall()
+    coverage: dict[int, list[dict]] = {}
+    for row in rows:
+        entry = dict(row)
+        entry.pop("ap_invoice_id")
+        entry["vehicle_label"] = ticket_vehicle_label(row)
+        coverage.setdefault(row["ap_invoice_id"], []).append(entry)
+    return coverage
+
+
+def invoice_line_reach(
+    db: sqlite3.Connection, ap_invoice_id: int, excluding_item_id: int, excluding_order_id: int
+) -> tuple[int, int]:
+    """(other part lines, *other* repair orders) this invoice still covers --
+    what moving the whole invoice would drag along with it.
+
+    The ticket being looked at is excluded from the vehicle count. Counting it
+    made a plain two-part invoice on one car claim to reach "1 other vehicle",
+    which is the kind of warning people learn to ignore.
+    """
+    row = db.execute(
+        """SELECT count(DISTINCT ei.id),
+                  count(DISTINCT CASE WHEN e.order_id != :order_id THEN e.order_id END)
+             FROM ap_invoice_items ai
+             JOIN estimate_items ei ON ei.id=ai.estimate_item_id
+             JOIN estimates e ON e.id=ei.estimate_id
+            WHERE ai.ap_invoice_id=:invoice_id AND ei.id!=:item_id""",
+        {"invoice_id": ap_invoice_id, "item_id": excluding_item_id, "order_id": excluding_order_id},
+    ).fetchone()
+    return int(row[0]), int(row[1])
+
+
 def receive_onto_invoice(
     db: sqlite3.Connection,
     now_fn: Callable[[], str],
@@ -387,38 +474,55 @@ def build_accounting_router(connect: Callable[[], sqlite3.Connection], now: Call
         end_bound = f"{end}T23:59:59" if end else None
         with connect() as db:
             rows = db.execute(
-                """SELECT a.*, v.name vendor_name, o.number ro_number, o.segment,
-                       o.recon_vehicle_id, o.we_owe_id, o.vehicle_id,
-                       rv.stock_number, wc.name we_owe_customer_name, oc.name order_customer_name
+                f"""SELECT a.*, v.name vendor_name, {_TICKET_COLUMNS}
                    FROM ap_invoices a
                    JOIN vendors v ON v.id=a.vendor_id
                    -- LEFT: an invoice with no repair order behind it (shop
                    -- supplies, a bulk delivery) must still appear in the A/P
                    -- list. An inner join silently hid them entirely.
                    LEFT JOIN orders o ON o.id=a.order_id
-                   LEFT JOIN recon_vehicles rv ON rv.id=o.recon_vehicle_id
-                   LEFT JOIN we_owe_items wi ON wi.id=o.we_owe_id
-                   LEFT JOIN customers wc ON wc.id=wi.customer_id
-                   LEFT JOIN customers oc ON oc.id=o.customer_id
+                   {_TICKET_JOINS}
                    WHERE (:start IS NULL OR a.posted_at>=:start) AND (:end IS NULL OR a.posted_at<=:end)
                    ORDER BY a.id DESC""",
                 {"start": start, "end": end_bound},
-            )
+            ).fetchall()
+            coverage = invoice_coverage(db)
             result = []
             for row in rows:
                 value = dict(row)
-                if value["stock_number"]:
-                    value["vehicle_label"] = value["stock_number"]
-                elif value["we_owe_customer_name"]:
-                    value["vehicle_label"] = f"We-Owe: {value['we_owe_customer_name']}"
-                elif value["order_customer_name"]:
-                    value["vehicle_label"] = f"Retail: {value['order_customer_name']}"
-                elif value["order_id"] is None:
+                covers = coverage.get(value["id"], [])
+                if not covers and value["order_id"] is not None:
+                    # Typed in on this screen against a ticket: no per-line
+                    # links to read, so the invoice's own order is the answer.
+                    covers = [
+                        {
+                            "order_id": value["order_id"],
+                            "ro_number": value["ro_number"],
+                            "segment": value["segment"],
+                            "recon_vehicle_id": value["recon_vehicle_id"],
+                            "we_owe_id": value["we_owe_id"],
+                            "vehicle_id": value["vehicle_id"],
+                            "stock_number": value["stock_number"],
+                            "we_owe_customer_name": value["we_owe_customer_name"],
+                            "order_customer_name": value["order_customer_name"],
+                            "vehicle_label": ticket_vehicle_label(row),
+                            "amount": value["subtotal"],
+                        }
+                    ]
+                value["coverage"] = covers
+                if not covers:
                     # No ticket by design, not a broken link -- say so plainly
                     # rather than mislabelling it as a retail job.
                     value["vehicle_label"] = "No ticket"
                 else:
-                    value["vehicle_label"] = "Retail"
+                    # A one-line summary for search and for anywhere too narrow
+                    # to list every car. The invoice's own ro_number/segment are
+                    # deliberately left alone: they are null once it spans
+                    # tickets, because it no longer belongs to one, and the
+                    # coverage list is where the per-car truth lives.
+                    value["vehicle_label"] = covers[0]["vehicle_label"]
+                    if len(covers) > 1:
+                        value["vehicle_label"] += f" +{len(covers) - 1} more"
                 result.append(value)
             return result
 

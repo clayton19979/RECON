@@ -51,7 +51,7 @@ const lot = [
   car({
     lot_bucket: "working", recon_id: 4, stock_number: "R-0044", vehicle: "2020 Kia Soul",
     actual_cost: 100, quoted_cost: 340, remaining_cost: 240, idle_days: 2, parts_pending: 1,
-    parts_pending_value: 240, needs: "1 part on order ($240.00) · $240.00 of quoted work left",
+    parts_pending_value: 240, needs: "1 part on order ($240.00) · $240.00 of work left",
   }),
 ];
 

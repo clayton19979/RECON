@@ -71,33 +71,6 @@ def test_technician_report_reports_no_money(client):
         assert not [key for key in row if "cost" in key or "price" in key or "rate" in key], row
 
 
-def test_technician_productivity_ignores_voided_tickets(client):
-    """Voiding a ticket means the work never happened -- every other screen in
-    the app already reads it that way. It used to credit the assigned tech
-    with the hours *and* with a completed repair order, because voiding
-    stores the ticket as complete."""
-    technician = client.post("/api/staff", json={"name": "Voided Vic", "role": "technician"}).json()
-    vehicle = make_recon_vehicle(client, stock_number="R-1105")
-    order = make_recon_order(client, vehicle["id"])
-    client.put(f"/api/orders/{order['id']}/assignment", json={"technician_id": technician["id"]})
-    save_estimate(
-        client,
-        order["id"],
-        [{"kind": "labor", "description": "Diag", "quantity": 3, "unit_price": 0, "unit_cost": 0}],
-    )
-
-    before = next(r for r in client.get("/api/reports/technicians").json() if r["technician"] == "Voided Vic")
-    assert before["ro_count"] == 1 and before["labor_hours"] == 3
-
-    assert client.post(f"/api/orders/{order['id']}/void", json={"actor": "Clay"}).status_code == 200
-
-    after = next(r for r in client.get("/api/reports/technicians").json() if r["technician"] == "Voided Vic")
-    assert after["ro_count"] == 0
-    assert after["completed_count"] == 0
-    assert after["labor_hours"] == 0
-    assert after["open_count"] == 0
-
-
 def test_technician_ro_count_includes_tickets_they_only_own_a_job_on(client):
     """A specialist pulled in for one job owns that job's hours -- so the
     ticket has to count as theirs too. Counting hours one way and repair
@@ -192,7 +165,8 @@ def test_technician_productivity_ignores_voided_tickets(client):
     assert after["ro_count"] == 0
     assert after["completed_count"] == 0, "voiding sets the ticket to complete -- it is not a completed job"
     assert after["labor_hours"] == 0
-    assert after["labor_cost"] == 0
+    # No labor_cost assertion: the report deliberately carries no money at all
+    # (see test_technician_report_reports_no_money above).
 
 
 def test_technician_productivity_uses_job_technician_over_ticket_default(client):

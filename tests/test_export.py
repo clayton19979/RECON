@@ -82,8 +82,8 @@ def test_export_vehicle_spend_report_csv(client):
         order["id"],
         [
             {"kind": "labor", "description": "Diag", "quantity": 2, "unit_price": 60, "unit_cost": 45},
-            # Quoted but never received, so Quoted and Cost have to differ -- a
-            # file that reported one number for both would look right otherwise.
+            # Written up but never received, so Written Up and Cost have to
+            # differ -- a file reporting one number for both would look right.
             {"kind": "part", "description": "Rotor", "quantity": 1, "unit_price": 90, "unit_cost": 60},
         ],
     )
@@ -102,7 +102,7 @@ def test_export_vehicle_spend_report_csv(client):
         "Type",
         "Status",
         "Technicians",
-        "Quoted",
+        "Written Up",
         "Cost",
         "Customer Paid",
         "Net to Shop",
@@ -111,7 +111,7 @@ def test_export_vehicle_spend_report_csv(client):
     assert len(body) == 2
     recon_row = next(r for r in body if r[0] == "R-8001")
     assert recon_row[3] == "Recon"
-    assert recon_row[6] == "150.00"  # 2 x $45 labor + the $60 rotor, quoted in full
+    assert recon_row[6] == "150.00"  # 2 x $45 labor + the $60 rotor, every line in full
     assert recon_row[7] == "90.00"  # only the labor has actually landed
 
     # The segment filter has to reach the file, or "Recon only" on screen

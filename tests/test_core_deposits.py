@@ -147,11 +147,13 @@ def test_sending_the_new_part_back_takes_its_deposit_with_it(client):
 
     client.patch(f"/api/orders/{order['id']}/estimate/items/{item_id}/part-return", json={"actor": "tester"})
     assert board_row(client, "R-3004")["actual_cost"] == 0.0
-    # The part line is still quoted (a returned part stays on the quote, as it
-    # always has -- somebody still intends to fit an alternator). The deposit
-    # is not: it stopped existing rather than being sent back, which is the
-    # same reason the Cores board drops it off entirely.
-    assert board_row(client, "R-3004")["quoted_cost"] == 180.0
+    # The returned part drops out of the written-up total, and its deposit
+    # goes with it. The grid, the printed ticket and estimate-money.js all
+    # render a returned line as $0.00, so the server has to agree or the
+    # ticket card and the Vehicle Total card show two different numbers for
+    # the same ticket. The deposit stopped existing rather than being sent
+    # back, which is the same reason the Cores board drops it off entirely.
+    assert board_row(client, "R-3004")["quoted_cost"] == 0.0
     assert client.get("/api/cores").json() == []
 
 

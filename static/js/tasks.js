@@ -551,11 +551,11 @@ export function renderTasksList() {
   const DONE_LIMIT = 25;
   const doneShown = (state.showAllCompleted || query) ? done : done.slice(0, DONE_LIMIT);
   $("#tasks-toggle-completed").textContent = `${state.showCompletedTasks ? "Hide" : "Show"} completed (${done.length})`;
-  $("#tasks-completed-list").style.display = state.showCompletedTasks ? "" : "none";
+  $("#tasks-completed-list").hidden = !state.showCompletedTasks;
   $("#tasks-completed-list").innerHTML = state.showCompletedTasks && !done.length
     ? emptyState({ icon: "check", title: "Nothing completed yet", compact: true })
     : doneShown.map(taskRowHtml).join("") + (done.length > doneShown.length
-        ? `<button type="button" class="btn btn-ghost btn-sm" id="tasks-show-all-completed" style="align-self:flex-start">Show all ${done.length}</button>`
+        ? `<button type="button" class="btn btn-ghost btn-sm list-tail-btn" id="tasks-show-all-completed">Show all ${done.length}</button>`
         : "");
   $("#tasks-show-all-completed")?.addEventListener("click", () => {
     state.showAllCompleted = true;

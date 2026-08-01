@@ -137,15 +137,20 @@ def test_two_parts_for_one_car_on_one_invoice_is_not_another_vehicle(client):
 
 def test_accounts_payable_says_which_cars_a_shared_invoice_paid_for(client):
     """What Clayton has in his hand is the vendor's statement. The screen has
-    to answer "where did this $275 go" without opening tickets one at a time."""
+    to answer "where did this $300 go" without opening tickets one at a time."""
     shared_invoice(client)
 
     invoice = next(a for a in client.get("/api/ap/invoices").json() if a["invoice_number"] == "NAPA-4400")
-    assert invoice["total"] == 275, invoice["total"]
+    # 180 windshield + 95 alternator + $25 core deposit: the vendor's bill
+    # carries the deposit (see test_core_deposits), so A/P has to say 300 or
+    # it never matches the paper in Clayton's hand.
+    assert invoice["total"] == 300, invoice["total"]
     assert invoice["vehicle_label"] != "No ticket", "a bill covering two cars reads as belonging to none"
 
     coverage = {c["vehicle_label"]: c["amount"] for c in invoice["coverage"]}
-    assert coverage == {"R-SH1": 180.0, "R-SH2": 95.0}, coverage
+    # The alternator's car carries its core deposit too -- the coverage rows
+    # have to sum to the bill's own 300, or the answer doesn't add up.
+    assert coverage == {"R-SH1": 180.0, "R-SH2": 120.0}, coverage
     # Largest share first: the car someone scanning the row is looking for.
     assert invoice["coverage"][0]["vehicle_label"] == "R-SH1"
     assert invoice["vehicle_label"] == "R-SH1 +1 more", invoice["vehicle_label"]

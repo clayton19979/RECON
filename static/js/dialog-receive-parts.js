@@ -9,15 +9,15 @@ import { loadVehicleDetail } from "./vehicle-detail.js";
 
    Receiving does two things at once: it moves the line to "received" (so it
    starts counting toward what the car cost) and it posts a vendor invoice
-   into A/P. Both used to be written at the *quoted* price, with no way to
-   say otherwise -- so when the invoice came in at a different number, which
-   on used and junkyard parts is the normal case, the only repair was to edit
-   the estimate line afterwards. That fixes the car's cost and leaves the A/P
-   invoice showing what the shop guessed the part would be, which is a bill
+   into A/P. Both used to be written at the price on the ticket line, with no
+   way to say otherwise -- so when the invoice came in at a different number,
+   which on used and junkyard parts is the normal case, the only repair was to
+   edit the estimate line afterwards. That fixes the car's cost and leaves the
+   A/P invoice showing what the shop guessed the part would be, which is a bill
    that doesn't match the vendor's.
 
    So the price is entered here, against the invoice, and both records are
-   written from the same figure. Each box starts at the quoted price, so a
+   written from the same figure. Each box starts at the price on the line, so a
    part that came in as expected is still just Vendor, Invoice #, Post.
    ================================================================== */
 
@@ -64,9 +64,9 @@ export async function openReceiveDialog() {
     const core = row.querySelector(".ei-core-on")?.checked
       ? parseFloat(row.querySelector(".ei-core")?.value || "0") || 0
       : 0;
-    // `quoted` is what the ticket says and never changes while the dialog is
-    // open; it's what the entered price is compared against and what decides
-    // whether this line needs an override sent at all.
+    // `quoted` is the price written on the ticket line; it never changes while
+    // the dialog is open, and it is what the entered price is checked against
+    // and what decides whether this line needs an override sent at all.
     return { id: Number(cb.dataset.id), desc, remaining, quoted: cost, core };
   });
   state.receiveLines = lines;
@@ -91,18 +91,21 @@ export async function openReceiveDialog() {
 }
 
 /* Repaints every number the dialog shows from what's currently in the boxes:
-   each line's total, the "was quoted" note on the lines that moved, and the
-   invoice subtotal/total. One writer for all of them, so the note beside a
-   line and the total at the bottom can't disagree about the same edit. */
+   each line's total, the "was written up at" note on the lines that moved, and
+   the invoice subtotal/total. One writer for all of them, so the note beside a
+   line and the total at the bottom can't disagree about the same edit.
+
+   The per-line note is a data-entry check, not a margin: it catches a typed
+   price that doesn't match what the line said, at the moment there's still an
+   invoice in hand to check it against. It is deliberately not totalled up into
+   an over/under figure -- the shop doesn't quote recon work, so there is no
+   estimate for a ticket to come in over. */
 function updateReceiveTotalSummary() {
   const lines = state.receiveLines || [];
   const tax = parseFloat($("#receive-tax")?.value || "0");
   let subtotal = 0;
-  let quotedTotal = 0;
   let coreTotal = 0;
-  let changed = 0;
   for (const line of lines) {
-    quotedTotal += line.remaining * line.quoted;
     coreTotal += line.remaining * (line.core || 0);
     const row = $(`.receive-line[data-id="${line.id}"]`, $("#receive-lines"));
     if (!row) continue;
@@ -125,28 +128,19 @@ function updateReceiveTotalSummary() {
       note.hidden = true;
       note.textContent = "";
     } else {
-      changed += 1;
       note.hidden = false;
       note.className = `rl-note ${diff > 0 ? "over" : "under"}`;
-      note.textContent = `Quoted ${money(line.quoted)} — ${money(Math.abs(diff))} ${diff > 0 ? "more" : "less"} each`;
+      note.textContent = `Written up at ${money(line.quoted)} — ${money(Math.abs(diff))} ${diff > 0 ? "more" : "less"} each`;
     }
   }
 
-  const diff = subtotal - quotedTotal;
-  // Only worth a line of its own once something actually moved: on the
-  // ordinary receive (everything came in at the quoted price) this row would
-  // just be the subtotal written twice.
-  const quotedLine = changed
-    ? `<div class="cost-line"><span>Quoted for these lines</span><span class="num">${money(quotedTotal)}</span></div>
-       <div class="cost-line"><span>${diff > 0 ? "Over" : "Under"} the quote</span><span class="num ${diff > 0 ? "over" : "under"}">${money(Math.abs(diff))}</span></div>`
-    : "";
   // Deposits are posted as their own lines on the vendor invoice, so they are
   // shown as their own line here: the Total is what the bill will say.
   const coreLine = coreTotal
     ? `<div class="cost-line"><span>Parts</span><span class="num">${money(subtotal)}</span></div>
        <div class="cost-line"><span>Core deposits</span><span class="num">${money(coreTotal)}</span></div>`
     : "";
-  $("#receive-total-summary").innerHTML = quotedLine + coreLine + `
+  $("#receive-total-summary").innerHTML = coreLine + `
     <div class="cost-line"><span>Subtotal</span><span class="num">${money(subtotal + coreTotal)}</span></div>
     <div class="cost-line total"><span>Total</span><span class="num">${money(subtotal + coreTotal + tax)}</span></div>
   `;

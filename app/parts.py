@@ -7,7 +7,7 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from .accounting import InvoiceItemIn, create_ap_invoice_record, receive_onto_invoice
+from .accounting import InvoiceItemIn, create_ap_invoice_record, invoice_line_reach, receive_onto_invoice
 from .recon import age_days, assert_vehicle_editable
 from .workflow import assert_estimate_editable, get_or_create_estimate, record_activity
 
@@ -691,18 +691,10 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
             for row in rows:
                 value = dict(row)
                 value["vehicle_label"] = label_vehicle(value)
-                vendor_id = None
-                vendor_name = ""
-                if value["received_invoice_number"]:
-                    invoice = find_received_invoice(db, value["order_id"], value["received_invoice_number"])
-                    if invoice:
-                        vendor = db.execute(
-                            "SELECT id,name FROM vendors WHERE id=?", (invoice["vendor_id"],)
-                        ).fetchone()
-                        if vendor:
-                            vendor_id, vendor_name = vendor["id"], vendor["name"]
-                value["vendor_id"] = vendor_id
-                value["vendor_name"] = vendor_name
+                # vendor_id/vendor_name come straight off the line
+                # (received_vendor_id): resolving them through the invoice
+                # number again is exactly the shared-invoice bug this list
+                # was fixed for -- see the docstring above.
                 value["credit_total"] = -round(value["received_quantity"] * value["unit_cost"], 2)
                 result.append(value)
             return result
@@ -807,20 +799,9 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
             for row in rows:
                 value = dict(row)
                 value["vehicle_label"] = label_vehicle(value)
-                # Same vendor resolution as /returns: the core deposit belongs
-                # to whichever vendor invoice received the part it came with.
-                vendor_id = None
-                vendor_name = ""
-                if value["received_invoice_number"]:
-                    invoice = find_received_invoice(db, value["order_id"], value["received_invoice_number"])
-                    if invoice:
-                        vendor = db.execute(
-                            "SELECT id,name FROM vendors WHERE id=?", (invoice["vendor_id"],)
-                        ).fetchone()
-                        if vendor:
-                            vendor_id, vendor_name = vendor["id"], vendor["name"]
-                value["vendor_id"] = vendor_id
-                value["vendor_name"] = vendor_name
+                # Same rule as /returns: vendor_id/vendor_name come straight
+                # off the line (received_vendor_id) -- resolving through the
+                # invoice number again is the shared-invoice bug.
                 result.append(value)
             return result
 

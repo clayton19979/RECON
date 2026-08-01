@@ -142,7 +142,7 @@ function renderSuggestionsList() {
   const toggle = $("#suggestions-toggle-resolved");
   toggle.textContent = `${showResolved ? "Hide" : "Show"} done (${resolved.length})`;
   toggle.setAttribute("aria-expanded", showResolved ? "true" : "false");
-  $("#suggestions-resolved-list").style.display = showResolved ? "" : "none";
+  $("#suggestions-resolved-list").hidden = !showResolved;
   $("#suggestions-resolved-list").innerHTML = resolved.length
     ? resolved.map(suggestionCardHtml).join("")
     : (showResolved ? emptyState({ icon: "check", title: "Nothing resolved yet", hint: "Ideas you mark done collect here.", compact: true }) : "");

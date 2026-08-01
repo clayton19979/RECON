@@ -1,15 +1,17 @@
-"""What we said it would cost, kept apart from what it actually cost.
+"""What a line was written up at, kept apart from what the vendor billed.
 
 Receiving a part writes the price the vendor's invoice really said onto the
 line -- that part is right, and it is the whole reason the shop's cost figures
 can be trusted. What it also used to do was overwrite the only record of what
-the line was quoted at, so every "cost against quote" figure in the app ended
-up comparing a number to itself. A part written down at $100 and billed at
-$175 reported quoted $175, actual $175, on quote; the board's Over Quote card
-could not say anything but zero, and the Lot Report's "still to spend" column
-was only ever right by accident.
+the line was written down at, so the Lot Report's "still to spend" column was
+only ever right by accident: a part written down at $100 and billed at $175
+left "what's still coming" priced at whatever the last bill happened to say.
 
-The quote now lives in its own column and survives the bill.
+The written price now lives in its own column (quoted_unit_cost -- the field
+name is historical) and survives the bill. This is NOT an estimate to be over
+or under: the shop doesn't quote recon work, and nothing anywhere compares
+these two prices to report a margin. What's tested here is that the two
+numbers stay honestly separate -- what's landed, and what's still to come.
 """
 
 from __future__ import annotations
@@ -117,7 +119,7 @@ def test_still_to_spend_is_the_unreceived_parts_not_quote_minus_spent(client):
 
     lot = [r for r in client.get("/api/reports/lot").json() if r["stock_number"] == "R-Q4"]
     assert lot[0]["remaining_cost"] == 100.0
-    assert "$100.00 of quoted work left" in lot[0]["needs"]
+    assert "$100.00 of work left" in lot[0]["needs"]
 
 
 def test_a_finished_car_that_came_in_cheap_still_needs_nothing(client):

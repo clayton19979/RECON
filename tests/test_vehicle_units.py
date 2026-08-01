@@ -10,7 +10,7 @@ bill on the other.
 
 from __future__ import annotations
 
-from tests.helpers import make_recon_order, make_recon_vehicle, save_estimate
+from tests.helpers import make_recon_order, make_recon_vehicle, make_retail_order, save_estimate
 
 VIN = "1HGCM82633A004352"
 
@@ -195,6 +195,73 @@ def test_profit_report_is_one_row_per_car_not_per_ticket(client):
     on_vin = [r for r in rows if r["vin"] == VIN]
     assert len(on_vin) == 1
     assert on_vin[0]["recon_count"] == 1 and on_vin[0]["we_owe_count"] == 1
+
+
+def test_profit_report_lists_only_the_lots_own_cars(client):
+    """A retail customer's car is not the lot's car.
+
+    Writing a retail ticket gives that car a unit like any other, and the
+    report was listing every unit -- so each retail job left a permanent
+    all-zero row behind. The shop writes retail tickets daily, so within weeks
+    they outnumber the handful of rows the report is read for.
+    """
+    make_recon_vehicle(client, stock_number="R-1", vin=VIN, purchase_price=5000)
+    make_retail_order(client)
+
+    rows = client.get("/api/reports/vehicle-profit").json()
+    assert [r["stock_number"] for r in rows] == ["R-1"], (
+        f"expected only the lot's car, got {[(r['stock_number'], r['vehicle']) for r in rows]}"
+    )
+
+
+def test_profit_report_still_counts_we_owe_cars(client):
+    """A we-owe car isn't the lot's stock, but the shop spends real money on
+    it and that spend belongs in the report."""
+    we_owe_vin = "5NPE24AF1FH000111"
+    _we_owe_on_vin(client, we_owe_vin)
+    make_retail_order(client)
+
+    rows = client.get("/api/reports/vehicle-profit").json()
+    assert [r["vin"] for r in rows] == [we_owe_vin]
+    assert rows[0]["we_owe_count"] == 1 and rows[0]["recon_count"] == 0
+
+
+def test_profit_report_vin_lookup_still_finds_a_retail_only_car(client):
+    """We-owe intake asks this endpoint "do we already know this VIN?" before
+    the promise is written -- at which point the car has no we-owe record and
+    may only ever have been here as a retail customer's. Answering "never seen
+    it" is how a second, conflicting record for the same car gets typed."""
+    retail_vin = "1FTEW1EG5GKE12345"
+    customer = client.post("/api/customers", json={"name": "Devon Marsh"}).json()
+    vehicle = client.post(
+        "/api/vehicles",
+        json={"customer_id": customer["id"], "year": 2016, "make": "Ford", "model": "F-150", "vin": retail_vin},
+    ).json()
+    client.post(
+        "/api/orders",
+        json={
+            "concern": "Brakes",
+            "segment": "retail",
+            "customer_id": customer["id"],
+            "vehicle_id": vehicle["id"],
+        },
+    )
+
+    assert client.get("/api/reports/vehicle-profit").json() == [], "retail cars don't belong in the listing"
+    matched = client.get(f"/api/reports/vehicle-profit?vin={retail_vin.lower()}").json()
+    assert [r["vin"] for r in matched] == [retail_vin], "a VIN lookup has to find a car we've seen before"
+
+
+def test_profit_report_csv_leaves_out_retail_cars(client):
+    """Screen and spreadsheet read the same rows, so the bookkeeper's copy
+    can't carry padding the screen doesn't show."""
+    make_recon_vehicle(client, stock_number="R-1", vin=VIN, purchase_price=5000)
+    make_retail_order(client)
+
+    res = client.get("/api/export/report/vehicle-profit.csv")
+    assert res.status_code == 200, res.text
+    assert len(res.text.strip().splitlines()) == 2, res.text  # header + the one lot car
+    assert "Focus" not in res.text
 
 
 def test_profit_report_can_be_pulled_by_vin(client):

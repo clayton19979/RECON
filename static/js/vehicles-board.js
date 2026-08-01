@@ -1,5 +1,5 @@
 import { $, $$, get } from "./core.js";
-import { esc, money } from "./shortcuts.js";
+import { esc, fmtDay, money } from "./shortcuts.js";
 import { emptyRow } from "./empty-states.js";
 import { BOARD_COLUMNS, showPlaceholders } from "./skeletons.js";
 import { STATUS_LABEL, STATUS_PILL_CLASS, state } from "./state.js";
@@ -31,6 +31,12 @@ export async function loadVehiclesView() {
     renderViewFailure("vehicles", err);
     return;
   }
+  // Whatever we knew about the other half is now potentially a lie -- this
+  // load is also how the board catches up after archiving or reopening cars,
+  // which is exactly the operation that moves them between the two halves.
+  // Dropped rather than refetched: nothing needs it until someone searches.
+  state.searchElsewhere = null;
+  state.searchElsewhereScope = "";
   state.vehicleSelection.clear();
   // renderStats is driven from inside renderVehiclesTable now -- the cards
   // describe the visible rows, so they have to be recomputed on every filter,
@@ -39,6 +45,10 @@ export async function loadVehiclesView() {
   // about to drop for not existing in this segment.
   renderVehicleStatusOptions();
   renderVehiclesTable();
+  // A search survives leaving the screen and coming back, and coming back
+  // reloads the board -- so without this the offer to look in History quietly
+  // disappeared on the return trip, on a query that still had no matches here.
+  if (state.search) loadSearchElsewhere();
 }
 
 /* ---------- board view preferences ----------
@@ -60,14 +70,23 @@ export function loadVehicleViewPrefs() {
   }
   if (typeof saved.partsOnly === "boolean") state.vehiclePartsOnly = saved.partsOnly;
   if (typeof saved.overOnly === "boolean") state.vehicleOverOnly = saved.overOnly;
+  if (typeof saved.lateOnly === "boolean") state.vehicleLateOnly = saved.lateOnly;
   if (typeof saved.idleBucket === "string" && (saved.idleBucket === "" || IDLE_SELECTIONS[saved.idleBucket])) {
     state.vehicleIdleBucket = saved.idleBucket;
   }
   if (typeof saved.chartOpen === "boolean") state.vehicleChartOpen = saved.chartOpen;
-  const chips = $$("#view-vehicles .filters .chip[data-filter]");
-  chips.forEach((c) => c.classList.toggle("active", (c.dataset.filter || "") === state.filter));
+  syncSegmentChips();
   $("#vehicles-status-filter").value = state.vehicleStatus;
   syncPartsFilterChip();
+}
+
+// One writer for which of the four segment chips is lit. state.filter is set
+// from saved prefs, by clicking a chip, by Reset view and by the search reach
+// line's jump into History and back; the chip row has to follow all five, and
+// four hand-written copies of the same toggle is how it drifts.
+export function syncSegmentChips() {
+  $$("#view-vehicles .filters .chip[data-filter]").forEach((c) =>
+    c.classList.toggle("active", (c.dataset.filter || "") === state.filter));
 }
 
 // The toggle's pressed state lives in two places the DOM cares about --
@@ -110,6 +129,7 @@ function saveVehicleViewPrefs() {
     localStorage.setItem(VEHICLE_PREFS_KEY, JSON.stringify({
       filter: state.filter, status: state.vehicleStatus, sort: state.vehicleSort,
       partsOnly: state.vehiclePartsOnly, overOnly: state.vehicleOverOnly,
+      lateOnly: state.vehicleLateOnly,
       idleBucket: state.vehicleIdleBucket,
       chartOpen: state.vehicleChartOpen,
     }));
@@ -118,7 +138,7 @@ function saveVehicleViewPrefs() {
   // doesn't hide any rows, so offering to reset the view over it would be
   // noise. Every other pref here changes which cars you can see.
   const dirty = !!(state.filter || state.vehicleStatus || state.vehicleSort.key || state.search
-    || state.vehiclePartsOnly || state.vehicleOverOnly || state.vehicleIdleBucket);
+    || state.vehiclePartsOnly || state.vehicleOverOnly || state.vehicleLateOnly || state.vehicleIdleBucket);
   $("#vehicles-reset-view").hidden = !dirty;
 }
 
@@ -127,15 +147,161 @@ export function resetVehicleView() {
   state.vehicleStatus = "";
   state.vehiclePartsOnly = false;
   state.vehicleOverOnly = false;
+  state.vehicleLateOnly = false;
   state.vehicleIdleBucket = "";
   state.vehicleSort = { key: "", dir: "desc" };
   state.search = "";
   $("#global-search").value = "";
   syncSearchChrome();
   $("#vehicles-status-filter").value = "";
-  $$("#view-vehicles .filters .chip[data-filter]").forEach((c) => c.classList.toggle("active", !c.dataset.filter));
+  syncSegmentChips();
   syncPartsFilterChip();
   loadVehiclesView();
+}
+
+/* ---------- where the search actually found it ----------
+
+   The search box is how anyone looks a car up -- typing in it from any screen
+   jumps here -- but it only ever filtered the rows this view had already
+   loaded. Two everyday questions came back "No vehicles match that search"
+   about a car that is in the app:
+
+   - The car is filed to History. Search a stock number from a job finished
+     last month and the board said nothing matched it.
+   - The board is narrowed. Segment, status, waiting-on-parts, over-quote and
+     the idle bucket all persist between sessions, so a view left on "Recon"
+     weeks ago silently hides every we-owe car from every search after it.
+
+   Both told the advisor the car doesn't exist, and the hint underneath listed
+   the four fields it searches, which reads as "I looked everywhere." So the
+   answer is now the whole question: the table still shows what this view
+   holds, and a line above it says how many matches are somewhere else and
+   takes you there. Nothing is hidden without saying so. */
+
+// One definition of what counts as a match, used for the rows on screen and
+// for the ones that aren't -- two copies would eventually disagree about
+// whether a car is findable, which is the bug this whole section is about.
+export function matchesVehicleSearch(v, query) {
+  const q = query.toLowerCase();
+  return (v.stock_number || "").toLowerCase().includes(q)
+    || (v.vin || "").toLowerCase().includes(q)
+    || (v.customer_name || "").toLowerCase().includes(q)
+    || (v.vehicle || "").toLowerCase().includes(q);
+}
+
+/* The other half of the board, fetched once and kept until the board reloads.
+
+   Deliberately not fetched at startup: on a lot with years of finished cars
+   in it, History is the bigger of the two lists and most sessions never
+   search at all. The first keystroke pays for it, in the background -- the
+   table renders immediately off what's already loaded, and the reach line
+   appears when this lands. */
+export async function loadSearchElsewhere() {
+  const scope = state.filter === "history" ? "live" : "history";
+  if (state.searchElsewhereScope === scope) return;
+  state.searchElsewhereScope = scope;
+  state.searchElsewhere = null;
+  let rows;
+  try {
+    rows = await get(scope === "history" ? "/api/vehicles-board?archived=true" : "/api/vehicles-board");
+  } catch {
+    // Say nothing rather than something wrong: with no answer the reach line
+    // makes no claim about the other half at all, and clearing the scope lets
+    // the next keystroke try again.
+    state.searchElsewhereScope = "";
+    return;
+  }
+  state.searchElsewhere = rows;
+  if (state.search) renderVehiclesTable();
+}
+
+/* What the current search found, split by where it found it: on screen,
+   hidden by this view's own filters, or in the half of the board that isn't
+   loaded. `elsewhereKnown` is false until loadSearchElsewhere has answered,
+   and while it's false nothing claims the other half is empty. */
+export function searchReach() {
+  if (!state.search) return null;
+  const q = state.search;
+  const shown = visibleVehicles().length;
+  const inView = state.vehicles.filter((v) => matchesVehicleSearch(v, q)).length;
+  const scope = state.filter === "history" ? "live" : "history";
+  const known = state.searchElsewhereScope === scope && Array.isArray(state.searchElsewhere);
+  return {
+    shown,
+    hidden: Math.max(inView - shown, 0),
+    elsewhere: known ? state.searchElsewhere.filter((v) => matchesVehicleSearch(v, q)).length : 0,
+    elsewhereKnown: known,
+    scope,
+  };
+}
+
+/* Both buttons below drop the narrowing filters, on purpose. They exist to
+   put a specific car on screen, and landing on a second empty list because
+   the status filter still applies over there would be the same broken promise
+   in a new place. The segment chips and the scope line above the table show
+   what changed, and Reset view is right there. */
+function widenToShowMatches() {
+  state.vehicleStatus = "";
+  state.vehiclePartsOnly = false;
+  state.vehicleOverOnly = false;
+  state.vehicleIdleBucket = "";
+  state.vehicleCursor = null;
+  syncPartsFilterChip();
+}
+
+export function showAllSearchMatches() {
+  widenToShowMatches();
+  // Live and archived are two different lists from the server, so this can't
+  // cross that line -- History has its own button.
+  if (state.filter !== "history") state.filter = "";
+  syncSegmentChips();
+  renderVehicleStatusOptions();
+  renderVehiclesTable();
+}
+
+export function openSearchElsewhere() {
+  widenToShowMatches();
+  state.filter = state.filter === "history" ? "" : "history";
+  syncSegmentChips();
+  loadVehiclesView();
+}
+
+// The reach line and the empty state offer the same two moves, so they go
+// through one handler rather than each wiring its own copy.
+export function runSearchReachAction(name) {
+  if (name === "widen-search") showAllSearchMatches();
+  else if (name === "search-elsewhere") openSearchElsewhere();
+  else return false;
+  return true;
+}
+
+const matchCount = (n) => `${n} more match${n === 1 ? "" : "es"}`;
+const elsewhereLabel = (scope) => (scope === "history" ? "in History" : "on the active board");
+const elsewhereButton = (scope) => (scope === "history" ? "Open History" : "Back to the board");
+
+// Only drawn when the table has rows: with none, the empty state says the
+// same thing in the space the rows would have been, and two copies of one
+// offer a few pixels apart is worse than either.
+function renderSearchReach(visibleCount) {
+  const line = $("#vehicles-search-reach");
+  if (!line) return;
+  const reach = searchReach();
+  if (!reach || !visibleCount || (!reach.hidden && !reach.elsewhere)) {
+    line.hidden = true;
+    line.innerHTML = "";
+    return;
+  }
+  const bits = [];
+  if (reach.hidden) {
+    bits.push(`<span>${matchCount(reach.hidden)} hidden by the filters on this view</span>
+      <button type="button" class="btn btn-ghost btn-sm" data-search-reach="widen-search">Show all matches</button>`);
+  }
+  if (reach.elsewhere) {
+    bits.push(`<span>${matchCount(reach.elsewhere)} ${elsewhereLabel(reach.scope)}</span>
+      <button type="button" class="btn btn-ghost btn-sm" data-search-reach="search-elsewhere">${elsewhereButton(reach.scope)}</button>`);
+  }
+  line.innerHTML = bits.join(`<span class="search-reach-sep" aria-hidden="true">·</span>`);
+  line.hidden = false;
 }
 
 // Statuses differ by segment (recon carries the ticket's status, we-owe can
@@ -187,7 +353,10 @@ export function renderVehicleStatusOptions() {
 function boardStats(rows, idlePool = rows) {
   const overs = rows.filter(isOverQuote);
   const stalled = idlePool.filter(isStalled);
+  const late = rows.filter(isPromiseLate);
   return {
+    lateCount: late.length,
+    lateWorst: late.reduce((worst, v) => Math.max(worst, v.promise_days_late || 0), 0),
     count: rows.length,
     recon: rows.filter((v) => v.segment === "recon").length,
     weOwe: rows.filter((v) => v.segment === "we_owe").length,
@@ -197,6 +366,10 @@ function boardStats(rows, idlePool = rows) {
     partsValue: rows.reduce((s, v) => s + (v.parts_pending_value || 0), 0),
     overCount: overs.length,
     overAmount: overs.reduce((s, v) => s + (v.actual_cost - v.quoted_cost), 0),
+    // Quoted parts money that has never been marked received, so it is in the
+    // Quoted total and missing from the Cost total. Without it the card
+    // subtracts one from the other and calls the difference a saving.
+    unreceived: rows.reduce((s, v) => s + (v.unreceived_cost || 0), 0),
     stalledCount: stalled.length,
     stalledWorst: stalled.reduce((worst, v) => Math.max(worst, v.idle_days || 0), 0),
   };
@@ -226,15 +399,27 @@ function renderStats(rows) {
   setValue("#stat-actual-total", money(s.cost));
   // The delta against quote is the number the manager opens the board for --
   // toned, not neutral, so over/under reads at a glance.
+  //
+  // "Under the quote" is only good news when the gap is money the shop didn't
+  // spend. Parts that were bought and never marked received sit in the quote
+  // and not in the cost, so they land in that gap and make unrecorded spending
+  // read as a saving -- in green, on the card the manager trusts most. When
+  // any of the gap is unreceived parts the card says that instead: it is the
+  // more urgent fact and it is the one that can be acted on.
   const costSub = $("#stat-quoted-sub");
   if (s.quoted) {
     const diff = s.cost - s.quoted;
-    costSub.textContent = Math.abs(diff) < 0.005
-      ? `of ${money(s.quoted)} quoted`
-      : diff > 0
-        ? `${money(diff)} over the ${money(s.quoted)} quoted`
-        : `${money(-diff)} under the ${money(s.quoted)} quoted`;
-    costSub.style.color = Math.abs(diff) < 0.005 ? "" : (diff > 0 ? "var(--crit)" : "var(--good)");
+    if (diff <= -0.005 && s.unreceived >= 0.005) {
+      costSub.textContent = `${money(s.unreceived)} of parts not marked received`;
+      costSub.style.color = "var(--warn)";
+    } else {
+      costSub.textContent = Math.abs(diff) < 0.005
+        ? `of ${money(s.quoted)} quoted`
+        : diff > 0
+          ? `${money(diff)} over the ${money(s.quoted)} quoted`
+          : `${money(-diff)} under the ${money(s.quoted)} quoted`;
+      costSub.style.color = Math.abs(diff) < 0.005 ? "" : (diff > 0 ? "var(--crit)" : "var(--good)");
+    }
   } else {
     costSub.textContent = "received parts + labor";
     costSub.style.color = "";
@@ -244,6 +429,13 @@ function renderStats(rows) {
   $("#stat-over-quote-sub").textContent = s.overCount
     ? `${money(s.overAmount)} past estimate`
     : "none past estimate";
+
+  // Same shape as Stalled, and for the same reason: the count says how many
+  // people to ring, the worst one says whether it can wait until tomorrow.
+  setValue("#stat-late-promises", s.lateCount, s.lateCount ? "crit" : null);
+  $("#stat-late-promises-sub").textContent = s.lateCount
+    ? `worst ${s.lateWorst} day${s.lateWorst === 1 ? "" : "s"} over`
+    : "no promise past due";
 
   // Naming the worst car's idle time rather than repeating the count: "3" and
   // "3 vehicles" side by side is a wasted line, and how long the worst one has
@@ -280,6 +472,8 @@ function syncBoardStatCards(s) {
           "Show only vehicles past their estimate");
   setCard('[data-board-filter="stalled"]', state.vehicleIdleBucket === "stalled", s.stalledCount,
           `Show only vehicles untouched for ${STALLED_AFTER_DAYS}+ days`);
+  setCard('[data-board-filter="late"]', state.vehicleLateOnly, s.lateCount,
+          "Show only we-owe promises past the date the customer was given");
   syncPartsFilterChip();
 }
 
@@ -297,6 +491,7 @@ function boardScopeLabel() {
   if (state.vehicleStatus) parts.push(STATUS_LABEL[state.vehicleStatus] || state.vehicleStatus);
   if (state.vehiclePartsOnly) parts.push("waiting on parts");
   if (state.vehicleOverOnly) parts.push("over quote");
+  if (state.vehicleLateOnly) parts.push("past the promised date");
   const b = idleSelection(state.vehicleIdleBucket);
   if (b) parts.push(b.key === "today" ? "active today" : b.span ? `stalled ${b.short}` : `idle ${b.short}`);
   if (state.search) parts.push(`matching “${state.search}”`);
@@ -516,11 +711,40 @@ export function vehicleStatusPillClass(v) {
 // than one generic "No vehicles match."
 function vehiclesEmptyState() {
   if (state.search) {
+    const reach = searchReach();
+    const clear = `<button type="button" class="btn btn-ghost btn-sm" data-empty-action="clear-search">Clear search</button>`;
+    // The car is in the app, just not in front of you. Saying which of the two
+    // reasons it is matters: one is undone by clearing a filter, the other by
+    // going to History, and "no vehicles match" pointed at neither.
+    if (reach.hidden || reach.elsewhere) {
+      const where = [];
+      if (reach.hidden) {
+        where.push(`${reach.hidden} ${reach.hidden === 1 ? "match is" : "matches are"} hidden by the filters on this view`);
+      }
+      if (reach.elsewhere) {
+        where.push(`${reach.elsewhere} ${reach.elsewhere === 1 ? "match is" : "matches are"} ${elsewhereLabel(reach.scope)}`);
+      }
+      return {
+        icon: "search",
+        title: `Nothing matching "${state.search}" is in this view`,
+        hint: `${where.join(", and ")}.`,
+        actions: (reach.hidden
+          ? `<button type="button" class="btn btn-ghost btn-sm" data-search-reach="widen-search">Show all matches</button>`
+          : "")
+          + (reach.elsewhere
+            ? `<button type="button" class="btn btn-ghost btn-sm" data-search-reach="search-elsewhere">${elsewhereButton(reach.scope)}</button>`
+            : "")
+          + clear,
+      };
+    }
     return {
       icon: "search",
       title: "No vehicles match that search",
-      hint: `Nothing matched "${state.search}". Searches cover stock number, VIN, customer name, and the vehicle description.`,
-      actions: `<button type="button" class="btn btn-ghost btn-sm" data-empty-action="clear-search">Clear search</button>`,
+      // "and not in History" only once History has actually been looked in --
+      // before that it's a claim nothing has checked.
+      hint: `Nothing matched "${state.search}"${reach.elsewhereKnown ? `, ${elsewhereLabel(state.filter === "history" ? "history" : "live")} or ${elsewhereLabel(reach.scope)}` : ""}.`
+        + " Searches cover stock number, VIN, customer name, and the vehicle description.",
+      actions: clear,
     };
   }
   // Checked before the segment cases: with the toggle on, "no recon
@@ -545,6 +769,17 @@ function vehiclesEmptyState() {
       title: "Nothing is over quote",
       hint: "Every vehicle in this view has come in at or under the estimate it was quoted at.",
       actions: `<button type="button" class="btn btn-ghost btn-sm" data-empty-action="clear-over">Show all vehicles</button>`,
+    };
+  }
+  // And again: an empty "past promised" filter is the good answer, not an
+  // empty lot. It also has to be said as a fact about promises rather than
+  // about vehicles -- recon cars have no promise to be late on.
+  if (state.vehicleLateOnly) {
+    return {
+      icon: "check",
+      title: "No promise is past due",
+      hint: "Every we-owe in this view is either still inside the date the customer was given, or already fulfilled or waived.",
+      actions: `<button type="button" class="btn btn-ghost btn-sm" data-empty-action="clear-late">Show all vehicles</button>`,
     };
   }
   const idleSel = idleSelection(state.vehicleIdleBucket);
@@ -602,7 +837,13 @@ function vehiclesEmptyState() {
    the order they'd have been in anyway. Text columns compare
    case-insensitively and always sort blanks last regardless of direction: a
    we-owe with no stock number is missing data, not "the first car", and
-   burying it at the bottom either way is what every list app does. */
+   burying it at the bottom either way is what every list app does.
+
+   NO_PROMISE is where a row with no live promised date sorts: far below any
+   real "days late" a shop could produce, and finite because -Infinity minus
+   -Infinity is NaN and would scramble the whole comparison. */
+const NO_PROMISE = -1e9;
+
 const VEHICLE_SORTS = {
   stock: { label: "Stock #", type: "text", value: (v) => v.stock_number || "" },
   vehicle: { label: "Vehicle", type: "text", value: (v) => v.vehicle || "" },
@@ -612,6 +853,13 @@ const VEHICLE_SORTS = {
   parts: { label: "Parts", type: "number", value: (v) => v.parts_pending || 0 },
   age: { label: "Age", type: "number", value: (v) => v.age_days },
   idle: { label: "Idle", type: "number", value: (v) => v.idle_days || 0 },
+  // Sorted by how late the promise is, not by the date on it: descending puts
+  // the promise you have already broken at the top, which is the reason to
+  // click this header at all. Everything with no live promise -- every recon
+  // car, a we-owe with no date, one already fulfilled or waived -- shares the
+  // NO_PROMISE sentinel, so they group together at the far end and keep the
+  // server's order among themselves.
+  promised: { label: "Promised", type: "number", value: (v) => (v.promise_days_late == null ? NO_PROMISE : v.promise_days_late) },
   quoted: { label: "Quoted", type: "number", value: (v) => v.quoted_cost },
   cost: { label: "Cost", type: "number", value: (v) => v.actual_cost },
 };
@@ -641,17 +889,10 @@ export function visibleVehicles({ ignoreIdle = false } = {}) {
   if (state.vehicleStatus) rows = rows.filter((v) => v.status === state.vehicleStatus);
   if (state.vehiclePartsOnly) rows = rows.filter((v) => (v.parts_pending || 0) > 0);
   if (state.vehicleOverOnly) rows = rows.filter(isOverQuote);
+  if (state.vehicleLateOnly) rows = rows.filter(isPromiseLate);
   const idleSel = ignoreIdle ? null : idleSelection(state.vehicleIdleBucket);
   if (idleSel) rows = rows.filter((v) => matchesIdleSelection(v, idleSel));
-  if (state.search) {
-    const q = state.search.toLowerCase();
-    rows = rows.filter((v) =>
-      (v.stock_number || "").toLowerCase().includes(q) ||
-      (v.vin || "").toLowerCase().includes(q) ||
-      (v.customer_name || "").toLowerCase().includes(q) ||
-      v.vehicle.toLowerCase().includes(q)
-    );
-  }
+  if (state.search) rows = rows.filter((v) => matchesVehicleSearch(v, state.search));
   return sortVehicleRows(rows, state.vehicleSort);
 }
 
@@ -686,6 +927,26 @@ function costCellClass(v) {
   return isOverQuote(v) ? "over-quote" : "";
 }
 
+/* The Cost column shows what the car has actually been charged, which is
+   parts once they're marked received. A ticket that gets closed out with its
+   parts still sitting at "quoted" therefore leaves the car reading $0.00 --
+   for a car that's had four tires put on it. That happens constantly: the
+   parts get picked up at the counter and thrown on the car, and receiving
+   them in the app is a separate step nobody remembers on a busy morning.
+
+   So the cell carries the shortfall underneath the number rather than making
+   Walt notice that a finished car cost nothing. Only closed tickets count --
+   on an open one the same unreceived line is just work not done yet, which
+   the Parts column and the quote already say. */
+function costMissingHtml(v) {
+  const missing = v.unreceived_closed_cost || 0;
+  if (!missing) return "";
+  const n = v.unreceived_closed_parts || 0;
+  const label = `Ticket is closed but ${n} part${n === 1 ? " was" : "s were"} never marked received — `
+    + `${money(missing)} of this car's cost isn't counted. Open the ticket and receive them.`;
+  return `<span class="cost-missing" title="${esc(label)}">+${money(missing)} not received</span>`;
+}
+
 /* "Waiting on parts" is the single most common reason a car sits, and until
    now the only way to find out was to open the ticket and read the estimate.
    A count rather than a yes/no, because one back-ordered bumper and nine
@@ -703,6 +964,52 @@ function partsCellHtml(v) {
   return `<span class="parts-badge" title="${esc(label)}">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7h13v10H3zM16 10h3.5l1.5 3v4h-5z"/><circle cx="7" cy="18" r="1.6"/><circle cx="18" cy="18" r="1.6"/></svg>
       ${n}</span>`;
+}
+
+/* ---------- promised dates ----------
+
+   A we-owe is a promise a salesman made to close a car deal, and the date the
+   customer was given is the one thing about it that has a deadline. It was
+   asked for at intake, stored, and then shown on no screen anybody makes a
+   decision on -- so the only way to find out a promise had gone past its date
+   was to remember the car and open it.
+
+   The server does the arithmetic (see recon.promise_days_late) so the board,
+   the Past Promised card and the lot sheet cannot each reach a different
+   answer about the same promise on the same morning. */
+export function isPromiseLate(v) {
+  const late = v && v.promise_days_late;
+  return typeof late === "number" && late > 0;
+}
+
+/* "Jul 30" on a promise due this year, "Jul 30, 2025" on one that isn't.
+   The board is the widest table in the app and already scrolls sideways on a
+   1280px window; a year every row shares is 40px of that spent saying
+   nothing. It comes back the moment it's carrying information -- and the
+   tooltip always spells the whole date out. */
+function promisedLabel(value) {
+  const full = fmtDay(value);
+  const suffix = `, ${new Date().getFullYear()}`;
+  return full.endsWith(suffix) ? full.slice(0, -suffix.length) : full;
+}
+
+/* Blank for anything with no promised date, which is every recon car -- a
+   column of dashes down the recon half would draw the eye to the rows with
+   nothing to say. A settled promise keeps its date but drops the countdown
+   and the colour: it was met (or waived), and painting it red forever is how
+   the Stalled card used to lie.
+
+   Days are abbreviated the way Age and Idle already abbreviate theirs ("3d"),
+   so the three day-counting columns read as one family. */
+function promisedCellHtml(v) {
+  if (!v.target_date) return "";
+  const full = esc(fmtDay(v.target_date));
+  const label = esc(promisedLabel(v.target_date));
+  const late = v.promise_days_late;
+  if (late == null) return `<span class="promise-cell promise-settled" title="Promised for ${full} — this promise is closed">${label}</span>`;
+  if (late > 0) return `<span class="promise-cell promise-late" title="Promised for ${full} — ${late} day${late === 1 ? "" : "s"} past due">${label} <span class="promise-tag">${late}d late</span></span>`;
+  if (late === 0) return `<span class="promise-cell promise-today" title="Promised for ${full} — due today">${label} <span class="promise-tag">today</span></span>`;
+  return `<span class="promise-cell" title="Promised for ${full} — ${-late} day${late === -1 ? "" : "s"} to go">${label}</span>`;
 }
 
 function vehicleRowHtml(v) {
@@ -727,8 +1034,9 @@ function vehicleRowHtml(v) {
       <td class="col-parts">${partsCellHtml(v)}</td>
       <td class="num-col age-col ${ageClass(v.age_days)}">${v.age_days ?? "—"}${v.age_days == null ? "" : "d"}</td>
       <td class="num-col idle-col">${idleCellHtml(v)}</td>
+      <td class="promised-col">${promisedCellHtml(v)}</td>
       <td class="num-col quoted-col">${v.quoted_cost ? money(v.quoted_cost) : `<span class="muted-dash">—</span>`}</td>
-      <td class="num-col ${over}"${over ? ` title="Over the estimate by ${money(v.actual_cost - v.quoted_cost)}"` : ""}>${money(v.actual_cost)}</td>`;
+      <td class="num-col ${over}"${over ? ` title="Over the estimate by ${money(v.actual_cost - v.quoted_cost)}"` : ""}>${money(v.actual_cost)}${costMissingHtml(v)}</td>`;
 }
 
 // A signature of everything vehicleRowHtml() reads. Two renders with the same
@@ -738,7 +1046,9 @@ function vehicleRowSignature(v) {
   return [
     v.stock_number, v.vehicle, v.vin, v.customer_name, v.segment, v.status, v.status_bucket,
     v.technicians.join("|"), v.age_days, v.idle_days, v.last_activity_at,
+    v.target_date, v.promise_days_late,
     v.quoted_cost, v.actual_cost, v.parts_pending, v.parts_pending_value,
+    v.unreceived_closed_cost, v.unreceived_closed_parts,
     state.vehicleSelection.has(vehicleKey(v)) ? 1 : 0,
   ].join("");
 }
@@ -764,6 +1074,7 @@ export function renderVehiclesTable() {
   renderStats(rows);
   renderIdleChart(rows);
   renderVehicleSortHeaders();
+  renderSearchReach(rows.length);
   saveVehicleViewPrefs();
 
   if (!rows.length) {

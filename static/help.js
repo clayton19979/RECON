@@ -17,7 +17,7 @@
 
   const VIEW_LABELS = {
     vehicles: "Vehicles", customers: "Customers", reports: "Reports",
-    accounting: "Accounts Payable", cores: "Cores & Returns", staff: "Staff",
+    accounting: "Accounts Payable", cores: "Parts & Cores", staff: "Staff",
     tasks: "Tasks", suggestions: "Ideas", backup: "Backup & Restore",
   };
 

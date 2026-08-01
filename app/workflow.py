@@ -455,7 +455,7 @@ def build_workflow_router(connect: Callable[[], sqlite3.Connection], now_fn: Cal
             )
             for line in item.items:
                 db.execute(
-                    "INSERT INTO estimate_items(estimate_id,kind,description,part_number,quantity,unit_price,unit_cost,received_quantity,line_total,source,review_required) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                    "INSERT INTO estimate_items(estimate_id,kind,description,part_number,quantity,unit_price,unit_cost,quoted_unit_cost,received_quantity,line_total,source,review_required) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
                     (
                         estimate["id"],
                         line.kind,
@@ -463,6 +463,9 @@ def build_workflow_router(connect: Callable[[], sqlite3.Connection], now_fn: Cal
                         line.part_number.strip().upper(),
                         line.quantity,
                         line.unit_price,
+                        line.unit_cost,
+                        # A technician's proposed line is a quote like any
+                        # other -- what it lands at is the invoice's business.
                         line.unit_cost,
                         0,
                         round(line.quantity * line.unit_price, 2),

@@ -17,10 +17,18 @@ export const state = {
   vehicleStatus: "",                      // "" == any status
   vehiclePartsOnly: false,                // "Waiting on parts" toggle
   vehicleOverOnly: false,                 // "Over Quote" card toggle
+  vehicleLateOnly: false,                 // "Past Promised" card toggle -- we-owe promises past their date
   vehicleIdleBucket: "",                  // "" == any; else an IDLE_SELECTIONS key (a chart bar, or "stalled" from the card)
   vehicleChartOpen: true,                 // the idle-bucket chart above the table
   vehicleCursor: null,                    // key of the keyboard-focused row
   vehicleAnchor: null,                    // key of the last row clicked, for Shift+click ranges
+  // The half of the board that isn't loaded -- History while you're on the
+  // live list, the live list while you're in History. Only ever read to
+  // answer "the car you searched for is over there"; null until a search
+  // asks for it, and the scope records which half it holds so a stale copy
+  // can't be mistaken for the other one. See loadSearchElsewhere.
+  searchElsewhere: null,
+  searchElsewhereScope: "",               // "" | "history" | "live"
   staff: [],            // active staff only -- what every assignment picker reads
   allStaff: [],         // includes inactive; only the Staff page reads this
   staffTasks: [],       // open-task counts for the Staff page's workload column
@@ -28,6 +36,11 @@ export const state = {
   orders: [],
   currentUser: localStorage.getItem("dao-current-user") || "",
   detail: { segment: null, id: null, item: null, order: null },
+  // The A/P invoice list's window: apRange is the lit chip's name ("" once the
+  // dates are edited by hand), apFilter the dates it currently stands for. The
+  // name is what's authoritative -- see refreshApRange. "all" matches the chip
+  // index.html ships already lit, which is the empty range.
+  apRange: "all",
   apFilter: { start: "", end: "" },
   apSearch: "",
   apAudits: [],
@@ -36,6 +49,9 @@ export const state = {
   suggestionSearch: "",
   showResolvedSuggestions: false,
   apInvoices: [],
+  partsOnOrder: [],
+  onOrderFilter: "",            // "" == everything on order; "overdue" == waiting a week or more
+  onOrderSearch: "",
   cores: [],
   coresFilter: "pending",
   coresSearch: "",
@@ -121,8 +137,12 @@ export const STATUS_PILL_CLASS = {
   estimate: "pill-status-estimate", pending_approval: "pill-status-pending",
   in_progress: "pill-status-progress", complete: "pill-status-complete",
 };
+// The three groups a person builds a ticket out of, in the order they read.
+// "credit" is deliberately not one of them -- nobody adds a credit by hand, it
+// arrives on a vendor invoice -- but it is a kind that turns up on real
+// tickets, so it needs a heading wherever lines are grouped by kind.
 export const KIND_GROUP_ORDER = ["part", "labor", "fee"];
-export const KIND_GROUP_LABEL = { part: "Parts", labor: "Labor", fee: "Fees" };
+export const KIND_GROUP_LABEL = { part: "Parts", labor: "Labor", fee: "Fees", credit: "Credits" };
 
 /* The same three database columns mean different things per line kind, and an
    RO is read by people who know what a labor line looks like. estimate_items

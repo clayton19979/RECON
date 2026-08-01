@@ -136,8 +136,8 @@ def _insert_invoice_items(
     links = list(estimate_item_ids or [None] * len(items))
     assert len(links) == len(items), "every billed line needs a link slot, even an empty one"
     db.executemany(
-        "INSERT INTO ap_invoice_items(ap_invoice_id,part_number,description,quantity,unit_cost,line_total,estimate_item_id)"
-        " VALUES(?,?,?,?,?,?,?)",
+        "INSERT INTO ap_invoice_items(ap_invoice_id,part_number,description,quantity,unit_cost,line_total,kind,estimate_item_id)"
+        " VALUES(?,?,?,?,?,?,?,?)",
         [
             (
                 ap_invoice_id,
@@ -146,6 +146,7 @@ def _insert_invoice_items(
                 item.quantity,
                 item.unit_cost,
                 round(item.quantity * item.unit_cost, 2),
+                item.kind,
             )
             + (link,)
             for item, link in zip(items, links, strict=True)
@@ -224,6 +225,107 @@ def receive_onto_invoice(
         ),
     )
     return {"status": "extended", "ap_invoice_id": existing["id"]}
+
+
+def unreceive_invoice_lines(db: sqlite3.Connection, invoice: sqlite3.Row) -> dict:
+    """Put the parts a voided invoice received back on order.
+
+    Voiding says "this bill is not real". The bill is how a part's cost got
+    onto a car, so leaving the receipt behind left the car carrying money the
+    shop had just said it does not owe -- the A/P total dropped and the
+    vehicle's spend did not, and the two screens disagreed with nothing on
+    either of them to explain why.
+
+    It also left no way forward. Receiving takes the whole outstanding
+    quantity, so a line already marked received refuses a second receipt: the
+    advisor who voided a mistyped invoice could not then post the corrected
+    one, and the only escape was to delete the line and retype it. Undoing the
+    receipt is what makes the corrected invoice postable.
+
+    Lines come back as `ordered`, not `quoted`: something is still outstanding
+    on that part -- a corrected invoice, usually -- and `ordered` is the state
+    that says so and keeps it in the board's Parts column until it is settled.
+
+    `unit_cost` is deliberately left where the invoice put it. What the vendor
+    actually billed is a better number than the guess it replaced, and the
+    original quote was overwritten at receiving time rather than kept.
+    """
+    # Which estimate line each billed line paid for. Recorded per line since
+    # ap_invoice_items grew estimate_item_id; invoices posted before that (and
+    # by the agent endpoint, which posts the bill whole) have no links, so
+    # those fall back to the invoice number the receipt itself recorded.
+    quantities: dict[int, float] = {}
+    for row in db.execute(
+        "SELECT estimate_item_id, quantity FROM ap_invoice_items WHERE ap_invoice_id=? AND estimate_item_id IS NOT NULL",
+        (invoice["id"],),
+    ):
+        quantities[row["estimate_item_id"]] = quantities.get(row["estimate_item_id"], 0.0) + float(row["quantity"])
+    if not quantities and invoice["order_id"] is not None:
+        for row in db.execute(
+            """SELECT ei.id, ei.received_quantity FROM estimate_items ei
+               JOIN estimates e ON e.id=ei.estimate_id
+               WHERE e.order_id=? AND ei.received_invoice_number=? AND ei.received_quantity>0""",
+            (invoice["order_id"], invoice["invoice_number"]),
+        ):
+            quantities[row["id"]] = float(row["received_quantity"])
+
+    unreceived = 0
+    value = 0.0
+    order_ids: set[int] = set()
+    for item_id, quantity in quantities.items():
+        row = db.execute(
+            """SELECT ei.*, e.order_id FROM estimate_items ei JOIN estimates e ON e.id=ei.estimate_id
+               WHERE ei.id=?""",
+            (item_id,),
+        ).fetchone()
+        if not row or float(row["received_quantity"]) <= 0:
+            continue
+        # A receipt that has since been superseded by a different invoice is
+        # not this invoice's to undo. Receiving always takes the whole
+        # outstanding quantity, so a line carries one invoice at a time and
+        # this is a straight identity check rather than an apportionment.
+        if row["received_invoice_number"] and normalize(row["received_invoice_number"]) != normalize(
+            invoice["invoice_number"]
+        ):
+            continue
+        remaining = round(max(0.0, float(row["received_quantity"]) - quantity), 4)
+        value += round((float(row["received_quantity"]) - remaining) * float(row["unit_cost"]), 2)
+        if remaining <= 0.0001:
+            db.execute(
+                "UPDATE estimate_items SET received_quantity=0,status='ordered',received_invoice_number='',"
+                "received_vendor_id=NULL WHERE id=?",
+                (item_id,),
+            )
+        else:
+            db.execute(
+                "UPDATE estimate_items SET received_quantity=?,received_invoice_number='',received_vendor_id=NULL"
+                " WHERE id=?",
+                (remaining, item_id),
+            )
+        unreceived += 1
+        order_ids.add(row["order_id"])
+
+    # A voided credit is not a credit. Clearing the number the return was
+    # credited under puts the part back in Cores & Returns as still owed a
+    # credit, which is where post-return-credit can reach it again.
+    credits_cleared = 0
+    if invoice["source"] == "part_return" and invoice["order_id"] is not None:
+        cur = db.execute(
+            """UPDATE estimate_items SET return_invoice_number=''
+               WHERE return_invoice_number=?
+                 AND estimate_id IN (SELECT id FROM estimates WHERE order_id=?)""",
+            (invoice["invoice_number"], invoice["order_id"]),
+        )
+        credits_cleared = cur.rowcount
+        if credits_cleared:
+            order_ids.add(invoice["order_id"])
+
+    return {
+        "unreceived_items": unreceived,
+        "unreceived_value": round(value, 2),
+        "credits_cleared": credits_cleared,
+        "order_ids": sorted(order_ids),
+    }
 
 
 def build_accounting_router(connect: Callable[[], sqlite3.Connection], now: Callable[[], str]) -> APIRouter:
@@ -324,11 +426,13 @@ def build_accounting_router(connect: Callable[[], sqlite3.Connection], now: Call
     def void_ap_invoice(invoice_id: int, item: VoidIn):
         """Voids a mistakenly-posted vendor invoice (wrong vendor, wrong PO
         match, duplicate entry) -- the row is kept for audit trail, just
-        excluded from being picked as a duplicate match going forward. This
-        does NOT reverse the "received" status it may have set on estimate
-        lines; ap_invoice_items has no link back to which specific estimate
-        line it came from, so that side has to be corrected on the ticket
-        itself if needed."""
+        excluded from being picked as a duplicate match going forward.
+
+        Voiding also undoes what the invoice did to the tickets behind it: the
+        parts it received go back on order and their cost comes off the
+        vehicle (see unreceive_invoice_lines). An invoice that covers parts
+        for several cars undoes all of them, because the whole bill is what
+        was declared unreal."""
         with connect() as db:
             invoice = db.execute("SELECT * FROM ap_invoices WHERE id=?", (invoice_id,)).fetchone()
             if not invoice:
@@ -344,19 +448,38 @@ def build_accounting_router(connect: Callable[[], sqlite3.Connection], now: Call
                 "UPDATE ap_invoices SET status='voided', normalized_invoice_number=? WHERE id=?",
                 (freed_number, invoice_id),
             )
+            reversal = unreceive_invoice_lines(db, invoice)
             # The activity log is per-ticket, so an invoice that belongs to no
             # ticket has nowhere to log to. The void is still recorded on the
             # invoice row itself, which is where anyone would look for it.
-            if invoice["order_id"] is not None:
+            # Every ticket the reversal actually touched gets the entry, not
+            # just the invoice's own order: a bill covering three cars carries
+            # no single order_id, and the two cars whose parts went back on
+            # order are exactly the ones whose history has to say why.
+            order_ids = list(reversal["order_ids"])
+            if invoice["order_id"] is not None and invoice["order_id"] not in order_ids:
+                order_ids.append(invoice["order_id"])
+            for order_id in order_ids:
                 record_activity(
                     db,
-                    invoice["order_id"],
+                    order_id,
                     "ap_invoice_voided",
                     item.actor,
-                    {"invoice_id": invoice_id, "invoice_number": invoice["invoice_number"]},
+                    {
+                        "invoice_id": invoice_id,
+                        "invoice_number": invoice["invoice_number"],
+                        "parts_put_back_on_order": reversal["unreceived_items"],
+                    },
                     now,
                 )
-            return dict(db.execute("SELECT * FROM ap_invoices WHERE id=?", (invoice_id,)).fetchone())
+            return dict(db.execute("SELECT * FROM ap_invoices WHERE id=?", (invoice_id,)).fetchone()) | {
+                # Response metadata, not invoice columns -- the UI says what
+                # the void actually changed instead of a bare "Invoice voided"
+                # that hides a car's cost dropping by four hundred dollars.
+                "unreceived_items": reversal["unreceived_items"],
+                "unreceived_value": reversal["unreceived_value"],
+                "credits_cleared": reversal["credits_cleared"],
+            }
 
     @router.get("/accounting/audits")
     def list_audits():
@@ -579,6 +702,14 @@ def build_accounting_router(connect: Callable[[], sqlite3.Connection], now: Call
                 estimate_id = cur.lastrowid
                 estimate = db.execute("SELECT * FROM estimates WHERE id=?", (estimate_id,)).fetchone()
             estimate_id = estimate["id"]
+            # None of the inserts below set quoted_unit_cost, on purpose. A
+            # line that arrives on a vendor invoice and was never on the
+            # ticket was never quoted, so it has no estimate to be measured
+            # against; leaving the column NULL makes every reader price it at
+            # what it cost, which is the only figure that exists for it. The
+            # UPDATE branch further down (a billed line matching a part
+            # already on the ticket) likewise leaves the quote alone -- that
+            # is the whole point of keeping it in its own column.
             for (_kind, part_key), item in merged_items.items():
                 if item.kind == "labor":
                     # At-cost shop: no markup, unit_price is just unit_cost.

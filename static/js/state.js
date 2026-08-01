@@ -21,6 +21,13 @@ export const state = {
   vehicleChartOpen: true,                 // the idle-bucket chart above the table
   vehicleCursor: null,                    // key of the keyboard-focused row
   vehicleAnchor: null,                    // key of the last row clicked, for Shift+click ranges
+  // The half of the board that isn't loaded -- History while you're on the
+  // live list, the live list while you're in History. Only ever read to
+  // answer "the car you searched for is over there"; null until a search
+  // asks for it, and the scope records which half it holds so a stale copy
+  // can't be mistaken for the other one. See loadSearchElsewhere.
+  searchElsewhere: null,
+  searchElsewhereScope: "",               // "" | "history" | "live"
   staff: [],            // active staff only -- what every assignment picker reads
   allStaff: [],         // includes inactive; only the Staff page reads this
   staffTasks: [],       // open-task counts for the Staff page's workload column

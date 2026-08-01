@@ -212,6 +212,11 @@
              a 60-car lot the table itself is what people came for. -->
         <div id="vehicles-chart" class="board-chart"></div>
 
+        <!-- Where else the search found the car: hidden by this view's own
+             filters, or filed to History. Sits directly above the rows it's
+             talking about, and only exists while a search is running. -->
+        <div class="search-reach" id="vehicles-search-reach" role="status" aria-live="polite" hidden></div>
+
         <div class="bulk-bar" id="vehicles-bulk-bar" hidden>
           <span id="vehicles-bulk-count"></span>
           <span class="bulk-hint">Esc clears · Shift+click for a range</span>

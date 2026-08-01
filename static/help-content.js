@@ -114,7 +114,7 @@ const HELP_TOPICS = [
       "Type any part of a stock number, VIN, or the customer's name.",
       "The board filters as you type and switches to the Vehicles screen if you were somewhere else.",
       "Press Esc or click the × to clear it.",
-      "Finished vehicles are hidden by default — click the History chip to search those too.",
+      "If the car is filed to History, or a filter you left on is hiding it, the board says so and offers a button that takes you straight to it — a search never comes back empty about a car RECON has.",
     ],
     related: ["vehicles-board", "find-a-customer", "send-to-history"],
   },

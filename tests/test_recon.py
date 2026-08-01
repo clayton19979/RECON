@@ -31,6 +31,141 @@ def test_duplicate_stock_number_rejected(client):
     assert res.status_code == 409
 
 
+# --- One car, one record ----------------------------------------------------
+#
+# Intake is the last point where the app can still tell that two records are
+# the same physical car. Past it, the lot count is one too high and "what did
+# we spend on this car" has two partial answers that neither row knows about.
+
+
+def test_stock_number_reused_with_different_punctuation_is_rejected(client):
+    """R-1042 and R1042 are one car with one stock number.
+
+    The exact-match check this replaces let the second one straight through,
+    which is the easiest duplicate to create by accident: the dash is on the
+    lot's sheet and not on the windshield.
+    """
+    make_recon_vehicle(client, stock_number="R-2001")
+    for typed in ("R2001", "r 2001", "r-2001"):
+        res = client.post(
+            "/api/recon/vehicles",
+            json={"stock_number": typed, "year": 2020, "make": "Toyota", "model": "Camry"},
+        )
+        assert res.status_code == 409, f"{typed} was accepted alongside R-2001"
+
+
+def test_refusal_names_the_car_holding_the_stock_number(client):
+    make_recon_vehicle(client, stock_number="R-2001", make="Kia", model="Sorento", year=2018)
+    res = client.post(
+        "/api/recon/vehicles",
+        json={"stock_number": "R-2001", "year": 2020, "make": "Toyota", "model": "Camry"},
+    )
+    detail = res.json()["detail"]
+    assert "R-2001" in detail and "2018 Kia Sorento" in detail
+    assert "already on the board" in detail
+
+
+def test_archived_stock_number_says_to_reopen_rather_than_re_add(client):
+    """A car in History is invisible on the board, so "already in use" sent
+    the advisor looking down a list it was never going to be on."""
+    vehicle = make_recon_vehicle(client, stock_number="R-2001")
+    assert client.post(f"/api/recon/vehicles/{vehicle['id']}/archive", json={}).status_code == 200
+    res = client.post(
+        "/api/recon/vehicles",
+        json={"stock_number": "R-2001", "year": 2020, "make": "Toyota", "model": "Camry"},
+    )
+    assert res.status_code == 409
+    detail = res.json()["detail"]
+    assert "History" in detail and "Reopen" in detail
+
+
+def test_same_vin_under_a_new_stock_number_is_rejected(client):
+    """The duplicate the stock-number check can never catch: the same car
+    written down again with a stock number that really is new."""
+    make_recon_vehicle(client, stock_number="R-2001", vin="1HGCM82633A004352")
+    res = client.post(
+        "/api/recon/vehicles",
+        json={
+            "stock_number": "R-2002",
+            "year": 2019,
+            "make": "Honda",
+            "model": "Civic",
+            "vin": "1hgcm82633a-004352",  # same car, typed off the title
+        },
+    )
+    assert res.status_code == 409
+    assert "R-2001" in res.json()["detail"]
+
+
+def test_vin_of_an_archived_car_is_allowed_back_in(client):
+    """Walt buys cars back. A second recon episode on one VIN is a real thing
+    the app adds up on purpose (unit_lifetime), not a duplicate."""
+    first = make_recon_vehicle(client, stock_number="R-2001", vin="1HGCM82633A004352")
+    assert client.post(f"/api/recon/vehicles/{first['id']}/archive", json={}).status_code == 200
+    res = client.post(
+        "/api/recon/vehicles",
+        json={
+            "stock_number": "R-2002",
+            "year": 2019,
+            "make": "Honda",
+            "model": "Civic",
+            "vin": "1HGCM82633A004352",
+        },
+    )
+    assert res.status_code == 201, res.text
+    # Both episodes still land on the one physical car.
+    assert res.json()["lifetime"]["recon_count"] == 2
+
+
+def test_blank_vins_never_collide(client):
+    """A car entered in a hurry with no VIN must not block the next one."""
+    make_recon_vehicle(client, stock_number="R-2001", vin="")
+    res = client.post(
+        "/api/recon/vehicles",
+        json={"stock_number": "R-2002", "year": 2020, "make": "Toyota", "model": "Camry", "vin": ""},
+    )
+    assert res.status_code == 201, res.text
+
+
+def test_lookup_answers_before_the_form_is_filled_in(client):
+    make_recon_vehicle(client, stock_number="R-2001", vin="1HGCM82633A004352", make="Kia", model="Sorento")
+
+    clear = client.get("/api/recon/vehicles/lookup", params={"stock_number": "R-9999", "vin": ""}).json()
+    assert clear == {"stock_number": None, "vin": None}
+
+    by_stock = client.get("/api/recon/vehicles/lookup", params={"stock_number": "r2001"}).json()
+    assert by_stock["stock_number"]["stock_number"] == "R-2001"
+    assert by_stock["stock_number"]["vehicle"] == "2019 Kia Sorento"
+    assert by_stock["stock_number"]["archived"] is False
+    assert by_stock["vin"] is None
+
+    by_vin = client.get("/api/recon/vehicles/lookup", params={"vin": "1hgcm82633a004352"}).json()
+    assert by_vin["vin"]["stock_number"] == "R-2001"
+    assert by_vin["stock_number"] is None
+
+
+def test_lookup_prefers_the_car_still_on_the_lot(client):
+    """One VIN, two episodes: the live one is the useful answer."""
+    first = make_recon_vehicle(client, stock_number="R-2001", vin="1HGCM82633A004352")
+    assert client.post(f"/api/recon/vehicles/{first['id']}/archive", json={}).status_code == 200
+    assert (
+        client.post(
+            "/api/recon/vehicles",
+            json={
+                "stock_number": "R-2002",
+                "year": 2019,
+                "make": "Honda",
+                "model": "Civic",
+                "vin": "1HGCM82633A004352",
+            },
+        ).status_code
+        == 201
+    )
+    match = client.get("/api/recon/vehicles/lookup", params={"vin": "1HGCM82633A004352"}).json()["vin"]
+    assert match["stock_number"] == "R-2002"
+    assert match["archived"] is False
+
+
 def test_recon_patch_status_and_sale(client):
     vehicle = make_recon_vehicle(client)
     res = client.patch(

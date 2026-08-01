@@ -43,10 +43,21 @@ const techs = [
 
 let failNextReport = false;
 
+// What the previous session left behind: This Month, saved back when it meant
+// something else entirely. The dates are the trap -- a named range that
+// replays them reopens covering January 2020 with the This Month chip lit.
+const STALE_PREFS = {
+  type: "vehicle-spend", range: "month", start: "2020-01-01", end: "2020-01-05",
+  sort: { key: "cost", dir: "desc" }, sortShape: "vehicle-spend",
+};
+
 const { w, doc, fetchLog, settle, ok, finish, rejections } = await boot({
   expose: ["state", "generateReport", "loadReportsView", "sortReportRows", "visibleReportRows",
-           "REPORT_SORTS", "REPORT_PREFS_KEY", "loadReportPrefs", "setReportRange",
+           "REPORT_SORTS", "REPORT_PREFS_KEY", "loadReportPrefs", "saveReportPrefs", "setReportRange",
            "computeQuickRange", "reportCsvHref", "syncReportControls"],
+  // Staged before the app boots, so the first fetch the screen ever makes is
+  // the one under test. REPORT_PREFS_KEY isn't on window yet at this point.
+  beforeBoot: (win) => win.localStorage.setItem("dao-report-view", JSON.stringify(STALE_PREFS)),
   fetch: async (url) => {
     if (url.startsWith("/api/reports/")) {
       if (failNextReport) return { __status: 500, body: { detail: "reporting is down" } };
@@ -82,6 +93,38 @@ ok(fetchLog.some((f) => f.url.startsWith("/api/reports/vehicle-spend")),
    `opening Reports didn't fetch a report; saw ${fetchLog.map((f) => f.url).join(", ")}`);
 ok(rows().length > 0, "Reports opened with no table");
 ok(doc.querySelector("#report-output .skeleton-row") === null, "loading skeleton is still on screen after the fetch resolved");
+
+/* ---------- a saved quick range means today, not the day it was saved ----------
+   The live symptom of getting this wrong: This Month lit over July 1-29 on
+   July 31, with two days of work missing from every number on the screen, the
+   printed sheet and the CSV. */
+const thisMonth = w.computeQuickRange("month");
+const opening = fetchLog.find((f) => f.url.startsWith("/api/reports/vehicle-spend"));
+ok(opening.url.includes(`start=${thisMonth.start}`) && opening.url.includes(`end=${thisMonth.end}`),
+   `the first fetch replayed the saved dates instead of resolving This Month against today: ${opening.url}`);
+ok(!opening.url.includes("2020-01"), `the range saved by the previous session reached the query: ${opening.url}`);
+ok(doc.querySelector("#report-start").value === thisMonth.start && doc.querySelector("#report-end").value === thisMonth.end,
+   `the From/To fields show ${doc.querySelector("#report-start").value} – ${doc.querySelector("#report-end").value}, not the month the numbers cover`);
+ok(doc.querySelector('[data-report-range="month"]').classList.contains("active"),
+   "This Month isn't lit, so the toolbar and the range in effect disagree the other way");
+
+// ...and nothing writes those dates back down, so there is nothing to go stale.
+w.saveReportPrefs();
+const storedMonth = JSON.parse(w.localStorage.getItem(w.REPORT_PREFS_KEY));
+ok(!storedMonth.start && !storedMonth.end,
+   `a named range was saved with dates attached (${storedMonth.start} – ${storedMonth.end}); it has to be stored by name alone`);
+
+// The other half of the same bug: the app is left open, the shop works
+// evenings, and past midnight "Today" still means yesterday. Any refresh has
+// to correct it -- simulated here by putting yesterday's answer back.
+w.state.reportStart = "2020-01-01";
+w.state.reportEnd = "2020-01-05";
+await w.loadReportsView();
+await settle();
+ok(fetchLog.at(-1).url.includes(`start=${thisMonth.start}`),
+   `reopening the screen kept a range that had gone stale on the clock: ${fetchLog.at(-1).url}`);
+ok(doc.querySelector("#report-start").value === thisMonth.start,
+   "the From field kept the stale date after the fetch moved on without it");
 
 /* ---------- summary cards ---------- */
 const s = stats();
@@ -238,6 +281,22 @@ w.state.reportSort = { key: "cost", dir: "asc" };
 w.loadReportPrefs();
 ok(w.state.reportType === "vehicle-spend-recon" && w.state.reportRange === "month",
    `prefs didn't round-trip: ${w.state.reportType} / ${w.state.reportRange}`);
+
+// A hand-typed window is the one kind of range that does survive literally --
+// it names days somebody asked for, and it means the same thing next week.
+w.state.reportRange = "";
+w.state.reportStart = "2026-03-02";
+w.state.reportEnd = "2026-03-09";
+w.saveReportPrefs();
+w.state.reportStart = "";
+w.state.reportEnd = "";
+w.loadReportPrefs();
+ok(w.state.reportStart === "2026-03-02" && w.state.reportEnd === "2026-03-09",
+   `a hand-typed range came back as ${w.state.reportStart} – ${w.state.reportEnd}`);
+ok(w.state.reportRange === "", "a hand-typed range came back claiming to be one of the chips");
+// Put the screen back where the rest of the file expects it.
+w.setReportRange("month");
+w.syncReportControls();
 
 /* ---------- rows, but nothing to chart ----------
    Early in a month every car on the list can legitimately be at $0: parts

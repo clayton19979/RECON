@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import io
+from datetime import date
 
 from tests.helpers import (
     make_recon_order,
@@ -121,6 +122,64 @@ def test_export_vehicle_spend_report_csv(client):
     # ...and so does the date range.
     _, future = _rows(client.get("/api/export/report/vehicle-spend.csv", params={"start": "2099-01-01"}))
     assert future == []
+
+
+def _filename(res):
+    disposition = res.headers["content-disposition"]
+    return disposition.split('filename="', 1)[1].rstrip('"')
+
+
+def test_a_ranged_report_csv_is_named_for_the_window_it_covers(client):
+    """Downloaded reports get saved and emailed on, and the range is the one
+    thing about a CSV that isn't inside the file. Stamping every one with the
+    day it was made put This Month and This Year in the same folder under names
+    that differed by nothing."""
+    make_recon_vehicle(client, stock_number="R-8100")
+
+    both = _filename(
+        client.get("/api/export/report/vehicle-spend.csv", params={"start": "2026-07-01", "end": "2026-07-31"})
+    )
+    assert both == "discount-auto-ops-vehicle-spend-2026-07-01-to-2026-07-31.csv"
+
+    # A half-open window still says which half it's open on.
+    assert "-from-2026-07-01.csv" in _filename(
+        client.get("/api/export/report/vehicle-spend.csv", params={"start": "2026-07-01"})
+    )
+    assert "-through-2026-07-31.csv" in _filename(
+        client.get("/api/export/report/vehicle-spend.csv", params={"end": "2026-07-31"})
+    )
+
+    # The segment stays in the name too -- Recon and We-Owe over the same
+    # window are two different files and have to be told apart.
+    recon = _filename(
+        client.get(
+            "/api/export/report/vehicle-spend.csv",
+            params={"segment": "recon", "start": "2026-07-01", "end": "2026-07-31"},
+        )
+    )
+    assert recon == "discount-auto-ops-vehicle-spend-recon-2026-07-01-to-2026-07-31.csv"
+
+    # No range at all is all-time, and says so rather than borrowing the
+    # day's date and reading like a one-day report.
+    assert "-all-time-" in _filename(client.get("/api/export/report/vehicle-spend.csv"))
+
+    # Same rule on the other two ranged reports.
+    assert "2026-07-01-to-2026-07-31" in _filename(
+        client.get("/api/export/report/technicians.csv", params={"start": "2026-07-01", "end": "2026-07-31"})
+    )
+    assert "2026-07-01-to-2026-07-31" in _filename(
+        client.get("/api/export/report/vehicle-profit.csv", params={"start": "2026-07-01", "end": "2026-07-31"})
+    )
+
+
+def test_the_lot_csv_is_still_stamped_with_the_day_it_was_taken(client):
+    """The lot report is a snapshot, not a window: the day it was run IS what
+    it covers, so it must not pick up an all-time label."""
+    make_recon_vehicle(client, stock_number="R-8101")
+    name = _filename(client.get("/api/export/report/lot.csv"))
+    assert name.startswith("discount-auto-ops-lot-status-")
+    assert "all-time" not in name
+    assert name == f"discount-auto-ops-lot-status-{date.today():%Y-%m-%d}.csv"
 
 
 def test_export_technician_report_csv(client):

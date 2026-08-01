@@ -83,16 +83,16 @@ def technician_productivity_rows(db: sqlite3.Connection, start: str | None, end:
     technicians = db.execute("SELECT * FROM staff WHERE role='technician' ORDER BY name").fetchall()
     result = []
     for tech in technicians:
+        # Voided tickets are left out of both halves of this, the same way
+        # cost_rollup leaves them out of the money and the board leaves them
+        # out of the car's status: a ticket taken back is work that never
+        # happened, so crediting a technician with the order -- or with the
+        # hours flagged on it before it was voided -- is crediting them with
+        # nothing.
         orders = db.execute(
-            """SELECT DISTINCT o.id, o.status, o.created_at, o.last_activity_at
-                 FROM orders o
-                 LEFT JOIN order_workflow w ON w.order_id=o.id
-                 LEFT JOIN estimates e ON e.order_id=o.id
-                 LEFT JOIN estimate_jobs ej ON ej.estimate_id=e.id
-                WHERE o.voided=0
-                  AND (w.technician_id=:tech_id OR ej.technician_id=:tech_id)
-                  AND (:start IS NULL OR o.created_at>=:start)
-                  AND (:end IS NULL OR o.created_at<=:end)""",
+            """SELECT o.id, o.status FROM orders o JOIN order_workflow w ON w.order_id=o.id
+               WHERE w.technician_id=:tech_id AND o.voided=0
+                 AND (:start IS NULL OR o.created_at>=:start) AND (:end IS NULL OR o.created_at<=:end)""",
             {"tech_id": tech["id"], "start": start, "end": end_bound},
         ).fetchall()
         # Labor is attributed to whichever technician actually owns it: a
@@ -107,7 +107,7 @@ def technician_productivity_rows(db: sqlite3.Connection, start: str | None, end:
                JOIN orders o ON o.id=e.order_id
                LEFT JOIN estimate_jobs ej ON ej.id=ei.job_id
                LEFT JOIN order_workflow w ON w.order_id=o.id
-               WHERE ei.kind='labor' AND o.voided=0 AND coalesce(ej.technician_id, w.technician_id)=:tech_id
+               WHERE ei.kind='labor' AND coalesce(ej.technician_id, w.technician_id)=:tech_id AND o.voided=0
                  AND (:start IS NULL OR o.created_at>=:start) AND (:end IS NULL OR o.created_at<=:end)""",
             {"tech_id": tech["id"], "start": start, "end": end_bound},
         ).fetchone()
@@ -157,7 +157,12 @@ def lot_needs_text(row: dict) -> str:
     if row["status"] == "pending_approval":
         bits.append("waiting on approval")
     if not row.get("order_id"):
-        bits.append("no ticket written yet")
+        # "No ticket written yet" is true of the live tickets and reads as an
+        # oversight to whoever remembers writing one. Naming the void instead
+        # is the difference between a row that looks forgotten and a row with
+        # an obvious next step -- and a voided ticket is exactly the case
+        # where a car quietly stops being anyone's job.
+        bits.append("ticket was voided — needs a new one" if row.get("voided_order_count") else "no ticket written yet")
     elif row["status"] == "estimate" and row["lot_bucket"] == LOT_WAITING:
         # Only true while nothing has actually been spent or ordered -- see
         # lot_bucket. Saying it about a car with parts in it reads as a

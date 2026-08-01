@@ -456,11 +456,18 @@ def test_report_controls_refetch_rather_than_waiting_for_a_button(html: str, js:
 
     ranges = re.findall(r'data-report-range="(\w+)"', html)
     assert len(ranges) == len(set(ranges)) == 5, f"expected 5 distinct range chips, found {ranges}"
-    match_list = re.search(r"const match = \[([^\]]+)\]", js)
-    assert match_list is not None, "the report-range detection list is gone from app.js"
-    known = set(re.findall(r'"(\w+)"', match_list.group(1)))
+    # QUICK_RANGES is the one list: what a chip may be called, what a
+    # hand-typed pair is matched back to, and -- the part that matters -- which
+    # ranges get re-resolved against today instead of replayed from the day
+    # they were saved. A chip missing from it silently opts out of that.
+    quick = re.search(r"const QUICK_RANGES = \[([^\]]+)\]", js)
+    assert quick is not None, "QUICK_RANGES is gone from app.js"
+    known = set(re.findall(r'"(\w+)"', quick.group(1)))
     assert set(ranges) == known, (
         f"range chips {sorted(ranges)} don't match the ranges the app can detect {sorted(known)}"
+    )
+    assert "const match = QUICK_RANGES.find(" in js, (
+        "hand-typed dates are matched against their own list again; it will drift from the chips"
     )
 
 
@@ -492,6 +499,49 @@ def test_board_card_elements_all_exist(declared_ids: set[str], js: str) -> None:
     assert not missing, f"renderStats writes into ids index.html doesn't declare: {sorted(missing)}"
 
 
+def test_ticket_money_has_exactly_one_definition() -> None:
+    """A ticket's quote and actual cost are shown in four places -- the cost
+    card, the totals that follow each keystroke, the job subtotals and the
+    printed ticket -- and each one used to do the arithmetic itself. That is
+    how a vendor credit came to ADD to the ticket card while subtracting from
+    the board and the Lot Report an inch away, and how paper went out of the
+    printer disagreeing with the screen it was printed from.
+
+    estimate-money.js is the only place the rule lives now. Anything summing
+    quantity times unit_cost by hand somewhere else is a fifth copy waiting to
+    drift, so it fails here rather than in front of an advisor.
+    """
+    money_js = (JS_DIR / "estimate-money.js").read_text(encoding="utf-8")
+    assert 'kind === "credit"' in money_js, "estimate-money.js no longer applies the credit sign"
+
+    # Scoped to the vehicle screen: the A/P entry form sums its own lines too,
+    # but those are a vendor's invoice being typed in, every kind of them
+    # positive, and none of this applies to them.
+    detail_js = (JS_DIR / "vehicle-detail.js").read_text(encoding="utf-8")
+    hand_rolled = [
+        line.strip()
+        for line in detail_js.split("\n")
+        if re.search(r"(?:received_)?quantity\s*\*\s*\w*\.?unit_cost", line)
+    ]
+    assert not hand_rolled, (
+        "the vehicle screen sums ticket money itself instead of asking estimate-money.js:\n" + "\n".join(hand_rolled)
+    )
+
+
+def test_credit_lines_are_never_dropped_from_a_grouped_ticket(js: str) -> None:
+    """Vendor-invoice ingest writes kind="credit" lines nobody picked by hand.
+    The grid's job layout grouped by a fixed Parts/Labor/Fees list, so those
+    lines had no row on screen at all -- the total moved and nothing explained
+    why. Both the grid and the printed ticket group through kindGroupsOf now,
+    which is exhaustive over the kinds actually on the ticket."""
+    assert js.count("function kindGroupsOf(") == 1, "kindGroupsOf is no longer the single grouping helper"
+    grouping = re.findall(r"kindGroupsOf\(", js)
+    assert len(grouping) >= 3, (
+        f"only {len(grouping)} references to kindGroupsOf -- has a caller gone back to its own list?"
+    )
+    assert 'credit: "Credits"' in js, "KIND_GROUP_LABEL has no heading for credit lines"
+
+
 def test_over_quote_rule_has_exactly_one_definition(js: str) -> None:
     """The Over Quote card counts the cars whose Cost cell is red. Two copies
     of the 10%-past-estimate rule is two chances for the count and the
@@ -516,9 +566,48 @@ def test_parts_filter_toggle_is_not_a_segment_chip(js: str, html: str) -> None:
     )
     unscoped = re.findall(r'\$\$\("#view-vehicles \.filters \.chip"\)', js)
     assert not unscoped, "a segment-chip selector isn't scoped to [data-filter] and will sweep up the parts toggle"
-    assert len(re.findall(r'\$\$\("#view-vehicles \.filters \.chip\[data-filter\]"\)', js)) >= 3, (
-        "the segment chips are no longer selected by [data-filter] in all three places"
+    scoped = re.findall(r'\$\$\("#view-vehicles \.filters \.chip\[data-filter\]"\)', js)
+    assert scoped, "nothing selects the segment chips any more -- has the toolbar moved?"
+    # This used to require three copies, one per place that lit a chip. They
+    # are one function now (syncSegmentChips), which is what a fourth caller
+    # -- the search reach line's jump into History -- made worth doing: the
+    # count is not the property worth holding, having a single writer is.
+    assert "function syncSegmentChips" in js, (
+        "the segment chips have no single writer -- state.filter and the lit chip will drift apart"
     )
+    assert 'classList.add("active")' not in _function_source(js, "wireVehiclesView"), (
+        "the board's chip handler lights its own chip again instead of going through syncSegmentChips"
+    )
+
+
+def test_vehicle_search_rule_has_exactly_one_definition(js: str) -> None:
+    """Three call sites ask "does this car match what was typed?": the rows on
+    screen, the rows this view's filters are hiding, and the rows in the half
+    of the board that isn't loaded. A second copy of the rule is how the board
+    ends up telling someone a car isn't findable while the same query finds it
+    one line further down."""
+    assert js.count('(v.customer_name || "").toLowerCase().includes(q)') == 1, (
+        "the search-match rule has more than one definition -- matchesVehicleSearch should be the only one"
+    )
+    assert "matchesVehicleSearch(v, state.search)" in _function_source(js, "visibleVehicles"), (
+        "the board's own rows no longer go through the shared search rule"
+    )
+    assert "matchesVehicleSearch" in _function_source(js, "searchReach"), (
+        "the reach count no longer goes through the shared search rule"
+    )
+
+
+def test_search_reach_offers_only_actions_the_board_handles(js: str, html: str) -> None:
+    """Show all matches and Open History are rendered in two places -- the
+    line above the table and the empty state inside it -- and handled in a
+    third. A button naming an action nothing handles doesn't fail, it just
+    quietly does nothing, on the screen whose whole job is to stop a car being
+    lost."""
+    assert 'id="vehicles-search-reach"' in html, "the board has nowhere to say a match is somewhere else"
+    offered = set(re.findall(r'data-search-reach="([\w-]+)"', js))
+    assert offered, "nothing offers to reach past the current view any more"
+    handled = set(re.findall(r'name === "([\w-]+)"', _function_source(js, "runSearchReachAction")))
+    assert offered == handled, f"offered {sorted(offered)} but runSearchReachAction handles {sorted(handled)}"
 
 
 def test_board_view_preferences_round_trip_every_filter(js: str) -> None:

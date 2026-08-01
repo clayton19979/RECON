@@ -15,12 +15,40 @@ from .reports import LOT_GROUP_LABEL, lot_rows, technician_productivity_rows, ve
 from .workflow import STATUS_LABEL
 
 
-def _csv_response(header: list[str], rows: list[list], slug: str) -> Response:
+def _covered(start: str | None, end: str | None) -> str:
+    """The window a ranged report's file covers, for its filename.
+
+    A CSV gets saved, emailed on, and opened weeks later, and the range it
+    covers is the one thing about it that isn't in the file. Every download
+    used to be stamped with the day it was made, so "This Month" and "This
+    Year" landed in the same folder as two files whose names differed by
+    nothing at all -- and neither said which was which.
+
+    Falls back to the day it was made when there is no range, which is both
+    the honest label for all-time and the only thing that keeps two of them
+    apart.
+    """
+    today = f"{date.today():%Y-%m-%d}"
+    if start and end:
+        return f"{start}-to-{end}"
+    if start:
+        return f"from-{start}"
+    if end:
+        return f"through-{end}"
+    return f"all-time-{today}"
+
+
+def _csv_response(
+    header: list[str], rows: list[list], slug: str, covering: tuple[str | None, str | None] | None = None
+) -> Response:
     buffer = io.StringIO()
     writer = csv.writer(buffer)
     writer.writerow(header)
     writer.writerows(rows)
-    filename = f"discount-auto-ops-{slug}-{date.today():%Y-%m-%d}.csv"
+    # Snapshot reports (the lot) pass no window and stay stamped with the day
+    # they were taken -- that IS what they cover.
+    stamp = _covered(*covering) if covering else f"{date.today():%Y-%m-%d}"
+    filename = f"discount-auto-ops-{slug}-{stamp}.csv"
     return Response(
         content=buffer.getvalue(),
         media_type="text/csv",
@@ -137,6 +165,7 @@ def build_export_router(connect: Callable[[], sqlite3.Connection], now_fn: Calla
                 for row in rows
             ],
             f"vehicle-spend-{segment}" if segment else "vehicle-spend",
+            (start, end),
         )
 
     @router.get("/export/report/lot.csv")
@@ -226,6 +255,7 @@ def build_export_router(connect: Callable[[], sqlite3.Connection], now_fn: Calla
                 for row in rows
             ],
             "vehicle-profit",
+            (start, end),
         )
 
     @router.get("/export/report/technicians.csv")
@@ -246,6 +276,7 @@ def build_export_router(connect: Callable[[], sqlite3.Connection], now_fn: Calla
                 for row in rows
             ],
             "technicians",
+            (start, end),
         )
 
     return router

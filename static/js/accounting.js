@@ -38,7 +38,23 @@ export async function loadAccountingView() {
   await loadApTable();
 }
 
+/* Same rule the Reports toolbar follows (see refreshQuickRange there): a chip
+   is a name, not the two dates it meant when it was clicked. This screen has
+   no saved prefs, so the only way it goes stale is being left open -- which is
+   exactly what happens here, and the shop works evenings, so "Today" sitting
+   lit over yesterday's invoices is a real morning. Returns nothing; it just
+   corrects state and the two date fields before the fetch reads them. */
+function refreshApRange() {
+  if (!state.apRange) return;
+  const { start, end } = computeQuickRange(state.apRange);
+  if (start === state.apFilter.start && end === state.apFilter.end) return;
+  state.apFilter = { start, end };
+  $("#ap-filter-start").value = start;
+  $("#ap-filter-end").value = end;
+}
+
 async function loadApTable() {
+  refreshApRange();
   const { start, end } = state.apFilter;
   const params = new URLSearchParams();
   if (start) params.set("start", start);
@@ -327,6 +343,7 @@ export function wireAccountingView() {
   $$('#view-accounting [data-ap-range]').forEach((chip) => {
     chip.addEventListener("click", () => {
       const range = computeQuickRange(chip.dataset.apRange);
+      state.apRange = chip.dataset.apRange;
       state.apFilter = range;
       $("#ap-filter-start").value = range.start;
       $("#ap-filter-end").value = range.end;
@@ -335,7 +352,13 @@ export function wireAccountingView() {
       loadApTable();
     });
   });
-  const clearApChips = () => $$('#view-accounting [data-ap-range]').forEach((c) => c.classList.remove("active"));
+  // Hand-edited dates belong to nobody's chip, so the named range goes with
+  // the lit class -- otherwise the next load would quietly overwrite what was
+  // just typed with whatever the old chip means today.
+  const clearApChips = () => {
+    state.apRange = "";
+    $$('#view-accounting [data-ap-range]').forEach((c) => c.classList.remove("active"));
+  };
   $("#ap-filter-start").addEventListener("change", () => {
     clearApChips();
     state.apFilter.start = $("#ap-filter-start").value;

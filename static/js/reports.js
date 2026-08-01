@@ -29,6 +29,36 @@ export function computeQuickRange(kind) {
   return { start, end };
 }
 
+/* The quick ranges the Reports toolbar offers, by name.
+   Also the list readReportDateInputs matches hand-typed dates against, so a
+   chip can't exist in the toolbar and be unrecognised a few lines later. */
+export const QUICK_RANGES = ["today", "week", "month", "year", "all"];
+
+/* Re-resolve the active quick range against today.
+
+   A named range has to be carried as a *name*, never as the two dates it
+   happened to mean when it was clicked, because what it means changes every
+   day. Both ways of forgetting that shipped:
+
+   - Reopening the app replayed the saved dates, so "This Month" could sit lit
+     over July 1-29 on July 31 -- two days of work missing from every number on
+     the screen, from the printed sheet and from the CSV, with the chip above
+     them insisting the month was covered.
+   - The shop works evenings and leaves this open; past midnight "Today" still
+     meant yesterday.
+
+   Called on every fetch (see generateReport), so simply opening Reports is
+   enough to correct it. Returns true when the dates actually moved, so the
+   toolbar can be re-synced only when there's something to re-sync. */
+export function refreshQuickRange() {
+  if (!QUICK_RANGES.includes(state.reportRange)) return false;
+  const { start, end } = computeQuickRange(state.reportRange);
+  if (start === state.reportStart && end === state.reportEnd) return false;
+  state.reportStart = start;
+  state.reportEnd = end;
+  return true;
+}
+
 /* ---------- what the four reports are ----------
    Everything that differs between them -- the title, which segment of the
    board they cover, which endpoint backs them -- is declared once here.
@@ -156,31 +186,47 @@ const REPORT_STAT_CARDS = {
 const REPORT_PREFS_KEY = "dao-report-view";
 
 export function loadReportPrefs() {
-  let saved;
+  let saved = null;
   try {
     saved = JSON.parse(localStorage.getItem(REPORT_PREFS_KEY) || "{}");
   } catch {
-    return; // a corrupt entry shouldn't stop the screen from opening
+    saved = null; // a corrupt entry shouldn't stop the screen from opening
   }
-  if (!saved || typeof saved !== "object") return;
-  if (REPORT_TITLES[saved.type]) state.reportType = saved.type;
-  if (typeof saved.range === "string") state.reportRange = saved.range;
-  if (typeof saved.start === "string") state.reportStart = saved.start;
-  if (typeof saved.end === "string") state.reportEnd = saved.end;
-  // Only restore a sort that was chosen for the report we're reopening --
-  // sortShape is what says so. An older saved entry has no sortShape, so it
-  // is treated as nobody's choice and the report opens in its own order.
-  if (saved.sort && saved.sortShape === reportShape(state.reportType) && REPORT_SORTS[saved.sortShape][saved.sort.key]) {
-    state.reportSort = { key: saved.sort.key, dir: saved.sort.dir === "asc" ? "asc" : "desc" };
-    state.reportSortShape = saved.sortShape;
+  if (saved && typeof saved === "object") {
+    if (REPORT_TITLES[saved.type]) state.reportType = saved.type;
+    if (typeof saved.range === "string") state.reportRange = saved.range;
+    // Hand-typed dates are the only ones worth restoring literally: they name
+    // a specific window somebody asked for, and it means the same thing next
+    // week. A named range's dates are resolved below instead -- an older saved
+    // entry still has them written down, and they are deliberately ignored.
+    if (!QUICK_RANGES.includes(state.reportRange)) {
+      if (typeof saved.start === "string") state.reportStart = saved.start;
+      if (typeof saved.end === "string") state.reportEnd = saved.end;
+    }
+    // Only restore a sort that was chosen for the report we're reopening --
+    // sortShape is what says so. An older saved entry has no sortShape, so it
+    // is treated as nobody's choice and the report opens in its own order.
+    if (saved.sort && saved.sortShape === reportShape(state.reportType) && REPORT_SORTS[saved.sortShape][saved.sort.key]) {
+      state.reportSort = { key: saved.sort.key, dir: saved.sort.dir === "asc" ? "asc" : "desc" };
+      state.reportSortShape = saved.sortShape;
+    }
   }
+  // Outside the block on purpose: with nothing saved at all -- a fresh browser,
+  // a corrupt entry -- the default range is still a named one, and it still has
+  // to mean today. It used to reach the first fetch as two empty dates, so the
+  // screen opened with This Month lit over every car the shop has ever had.
+  refreshQuickRange();
 }
 
 export function saveReportPrefs() {
+  const named = QUICK_RANGES.includes(state.reportRange);
   try {
     localStorage.setItem(REPORT_PREFS_KEY, JSON.stringify({
       type: state.reportType, range: state.reportRange,
-      start: state.reportStart, end: state.reportEnd,
+      // A named range is stored by name and nothing else. Writing its dates
+      // down is what let a saved "This Month" reopen days later still covering
+      // the days it was saved on -- see refreshQuickRange.
+      ...(named ? {} : { start: state.reportStart, end: state.reportEnd }),
       sort: state.reportSort, sortShape: state.reportSortShape,
     }));
   } catch { /* private mode / quota -- the screen still works, it just forgets */ }
@@ -203,7 +249,7 @@ export function setReportRange(kind) {
 function readReportDateInputs() {
   state.reportStart = $("#report-start").value || "";
   state.reportEnd = $("#report-end").value || "";
-  const match = ["today", "week", "month", "year", "all"].find((kind) => {
+  const match = QUICK_RANGES.find((kind) => {
     const r = computeQuickRange(kind);
     return r.start === state.reportStart && r.end === state.reportEnd;
   });
@@ -993,6 +1039,11 @@ let reportSeq = 0;
 
 async function generateReport() {
   const seq = ++reportSeq;
+  // Every fetch resolves the named range against today first, so an app left
+  // open past midnight or reopened days later corrects itself the moment the
+  // screen asks for anything. syncReportControls only when it moved, so the
+  // From/To fields never sit showing a window the numbers below don't cover.
+  if (refreshQuickRange()) syncReportControls();
   const type = state.reportType;
   const shape = reportShape(type);
   /* Each shape gets its own reading order until somebody chooses otherwise.

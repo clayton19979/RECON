@@ -17,6 +17,11 @@ class JobIn(BaseModel):
     actor: str = "ui"
 
 
+class JobDoneIn(BaseModel):
+    done: bool = True
+    actor: str = "ui"
+
+
 def build_jobs_router(connect: Callable[[], sqlite3.Connection], now_fn: Callable[[], str]) -> APIRouter:
     router = APIRouter(prefix="/api")
 
@@ -86,6 +91,46 @@ def build_jobs_router(connect: Callable[[], sqlite3.Connection], now_fn: Callabl
             )
             record_activity(
                 db, order_id, "job_updated", item.actor, {"job_id": job_id, "title": item.title.strip()}, now_fn
+            )
+            return job_dict(db, job_id)
+
+    @router.patch("/orders/{order_id}/jobs/{job_id}/done")
+    def set_job_done(order_id: int, job_id: int, item: JobDoneIn):
+        """Tick a repair off, or put it back.
+
+        Deliberately does NOT call assert_estimate_editable. That guard exists
+        to freeze the *money* on a ticket once it's been billed out, and
+        whether the brake job is finished is not a number on an invoice --
+        locking it would leave a retail ticket's work permanently un-tickable
+        while the car is still in the bay. Voided and archived vehicles are
+        still blocked (assert_vehicle_editable): there is no work left to
+        record on a ticket that never happened.
+
+        Ticking a job is real work happening on the car, so it goes through
+        record_activity -- which bumps the ticket's idle clock. That matters:
+        finishing a repair is exactly the moment a car should stop counting as
+        forgotten, and before this it was invisible to the board unless
+        somebody also happened to change the ticket's status.
+        """
+        with connect() as db:
+            order = order_row(db, order_id)
+            assert_vehicle_editable(db, order)
+            job = job_row(db, order_id, job_id)
+            already_done = bool(job["completed_at"])
+            if already_done == item.done:
+                return job_dict(db, job_id)
+            actor = item.actor.strip() or "ui"
+            db.execute(
+                "UPDATE estimate_jobs SET completed_at=?,completed_by=? WHERE id=?",
+                (now_fn() if item.done else "", actor if item.done else "", job_id),
+            )
+            record_activity(
+                db,
+                order_id,
+                "job_completed" if item.done else "job_reopened",
+                actor,
+                {"job_id": job_id, "title": job["title"]},
+                now_fn,
             )
             return job_dict(db, job_id)
 

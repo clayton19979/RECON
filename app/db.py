@@ -22,6 +22,19 @@ def normalize_vin(vin: str | None) -> str | None:
     return cleaned or None
 
 
+def normalize_stock_number(stock_number: str | None) -> str | None:
+    """The key two records of the same *stock number* have to agree on.
+
+    Same idea as normalize_vin, and for the same reason: R-1042 off the lot's
+    sheet, R1042 typed in a hurry and "r 1042" read off a windshield are one
+    car with one stock number, and the shop only ever means one of them. Only
+    the separators go -- letters and digits are kept exactly as typed, so
+    R-1042 and R-1043 stay the two different cars they are.
+    """
+    cleaned = "".join(ch for ch in (stock_number or "") if ch.isalnum()).upper()
+    return cleaned or None
+
+
 SCHEMA = """
 PRAGMA journal_mode=WAL;
 PRAGMA foreign_keys=ON;
@@ -168,9 +181,27 @@ CREATE TABLE IF NOT EXISTS estimate_items (
   quantity REAL NOT NULL,
   unit_price REAL NOT NULL,
   unit_cost REAL NOT NULL DEFAULT 0,
+  /* What this line was written down at, before any vendor invoice touched it.
+   *
+   * unit_cost is what the shop actually pays, and receiving a part overwrites
+   * it with the price the invoice really said -- which is right, and which
+   * also destroyed the only record of what we thought it would cost. Every
+   * "cost against quote" figure in the app was then comparing a number to
+   * itself: a part quoted at 100 and billed at 175 reported quoted 175,
+   * actual 175, and the board's Over Quote card could never say anything but
+   * zero. The quote lives here so it survives the bill.
+   *
+   * NULL means "no separate quote recorded" -- rows written before this
+   * column existed -- and every reader falls back to unit_cost for those,
+   * which is exactly the answer they gave before.
+   */
+  quoted_unit_cost REAL,
   received_quantity REAL NOT NULL DEFAULT 0,
   line_total REAL NOT NULL,
   status TEXT NOT NULL DEFAULT 'quoted',
+  -- When this line was marked ordered. Kept after it's received, so how long
+  -- a part took to turn up stays answerable; see the migration in _migrate.
+  ordered_at TEXT NOT NULL DEFAULT '',
   received_invoice_number TEXT NOT NULL DEFAULT '',
   -- Who the part actually came from. See the migration in _migrate for why
   -- the invoice number above is not enough on its own.
@@ -197,7 +228,15 @@ CREATE TABLE IF NOT EXISTS estimate_jobs (
   title TEXT NOT NULL,
   technician_id INTEGER REFERENCES staff(id),
   sort_order INTEGER NOT NULL DEFAULT 0,
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  -- A job is one repair on the car ("front brakes", "windshield"). Ticking it
+  -- off is the only per-repair progress the app has: without it a car with
+  -- four jobs reads exactly the same whether three are finished or none are,
+  -- and "what does this car still need" could only ever be answered in money.
+  -- Empty string, not NULL, so every "is it done" test is the same string
+  -- test the other *_at flags on estimate_items already use.
+  completed_at TEXT NOT NULL DEFAULT '',
+  completed_by TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS staff (
@@ -345,6 +384,10 @@ CREATE TABLE IF NOT EXISTS ap_invoice_items (
   quantity REAL NOT NULL,
   unit_cost REAL NOT NULL,
   line_total REAL NOT NULL,
+  -- What the vendor is billing for on this line: 'part', 'core_charge',
+  -- 'credit', 'freight', 'shop_supplies', 'labor'. The Accounting screen has
+  -- always offered that choice and it used to be thrown away on the way in.
+  kind TEXT NOT NULL DEFAULT 'part',
   -- The part line this billed line paid for, when it came from receiving on
   -- a ticket. Null for invoices typed in whole on the Accounting screen.
   estimate_item_id INTEGER REFERENCES estimate_items(id)
@@ -446,6 +489,13 @@ def _migrate(db: sqlite3.Connection) -> None:
     ap_item_columns = {row[1] for row in db.execute("PRAGMA table_info(ap_invoice_items)")}
     if "estimate_item_id" not in ap_item_columns:
         db.execute("ALTER TABLE ap_invoice_items ADD COLUMN estimate_item_id INTEGER REFERENCES estimate_items(id)")
+    # What the vendor billed for on this line. Needed to tell a core deposit
+    # apart from the part it came with: the deposit is real money out that
+    # comes back only when the old unit does, and reversing it later means
+    # being able to find it. Everything already posted was a part or a
+    # straight credit, and 'part' is the harmless default for both.
+    if "kind" not in ap_item_columns:
+        db.execute("ALTER TABLE ap_invoice_items ADD COLUMN kind TEXT NOT NULL DEFAULT 'part'")
 
     # The Gmail email-report and PartsTech integrations were removed --
     # neither ever had a working real integration behind it (PartsTech was
@@ -516,6 +566,17 @@ def _migrate(db: sqlite3.Connection) -> None:
         # sitting at the shop waiting to go back -- the difference between
         # "I still have this" and "it's gone, waiting on their credit".
         ("part_picked_up_at", "part_picked_up_at TEXT NOT NULL DEFAULT ''"),
+        # When a part line was marked ordered. Without it, a part ordered this
+        # morning and one ordered three weeks ago were indistinguishable
+        # everywhere in the app -- and a part nobody chases is the most common
+        # reason a car sits on the lot doing nothing.
+        #
+        # Deliberately NOT backfilled. Lines already sitting on 'ordered' when
+        # this shipped were never stamped, and there is nothing honest to
+        # stamp them with: the action logs no event and the ticket's own dates
+        # answer a different question. They report the date as unrecorded and
+        # say so on screen, rather than wearing a plausible invention.
+        ("ordered_at", "ordered_at TEXT NOT NULL DEFAULT ''"),
     ):
         if column not in estimate_item_columns:
             db.execute(f"ALTER TABLE estimate_items ADD COLUMN {ddl}")
@@ -559,6 +620,15 @@ def _migrate(db: sqlite3.Connection) -> None:
         except (json.JSONDecodeError, TypeError):
             pass
         db.execute("UPDATE tasks SET assigned_to=? WHERE id=?", (json.dumps([raw] if raw else []), task_id))
+
+    # Per-repair progress on a ticket. Purely additive: every job in an
+    # existing database comes back as not-yet-done, which is exactly what the
+    # app assumed before this column existed, so no live record changes
+    # meaning and nothing has to be re-entered.
+    job_columns = {row[1] for row in db.execute("PRAGMA table_info(estimate_jobs)")}
+    for column in ("completed_at", "completed_by"):
+        if column not in job_columns:
+            db.execute(f"ALTER TABLE estimate_jobs ADD COLUMN {column} TEXT NOT NULL DEFAULT ''")
 
     workflow_columns = {row[1] for row in db.execute("PRAGMA table_info(order_workflow)")}
     if "date_in" not in workflow_columns:

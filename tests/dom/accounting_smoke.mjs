@@ -66,7 +66,7 @@ const patches = [];
 let processAnswer = () => ({ status: "posted", issues: [] });
 
 const { w, doc, fetchLog, settle, ok, finish, rejections } = await boot({
-  expose: ["state", "showView", "loadAccountingView", "renderApTable", "filterApInvoices"],
+  expose: ["state", "showView", "loadAccountingView", "renderApTable", "filterApInvoices", "computeQuickRange"],
   fetch: async (url, opts) => {
     if (url === "/api/vendors" && opts.method === "GET") return VENDORS;
     if (url === "/api/vendors" && opts.method === "POST") {
@@ -89,7 +89,9 @@ const { w, doc, fetchLog, settle, ok, finish, rejections } = await boot({
       patches.push({ url, body: JSON.parse(opts.body) });
       const id = Number(url.split("/")[4]);
       invoices = invoices.map((a) => (a.id === id ? { ...a, status: "voided" } : a));
-      return { ok: true };
+      // The server reports what the void undid on the tickets behind the
+      // invoice -- two parts put back on order, $250 off the car.
+      return { ok: true, unreceived_items: 2, unreceived_value: 250, credits_cleared: 0 };
     }
     if (url === "/api/agent/invoices/process" && opts.method === "POST") {
       const body = JSON.parse(opts.body);
@@ -306,6 +308,12 @@ await settle();
 const confirm = $("#confirm-dialog");
 ok(confirm.open, "Void fired without asking");
 ok(/INV-8990/.test($("#confirm-title").textContent), "the confirm doesn't name the invoice it's about to void");
+// Voiding a bill moves money off a car -- the ask has to say so, because
+// that consequence is the whole reason it's the right move for a mis-posted
+// invoice and the whole reason it needs confirming.
+const confirmBody = $("#confirm-dialog").textContent.replace(/\s+/g, " ");
+ok(/go back to Ordered/i.test(confirmBody) && /cost comes off the vehicle/i.test(confirmBody),
+   `the confirm doesn't say what voiding does to the car: "${confirmBody.trim()}"`);
 $("#confirm-cancel").click();
 await settle();
 ok(patches.length === patchesBefore, "cancelling a void sent the PATCH anyway");
@@ -316,6 +324,12 @@ $("#confirm-accept").click();
 await settle();
 ok(patches.some((p) => p.url === "/api/ap/invoices/1/void"), "confirming the void never hit the endpoint");
 ok($$("#ap-table .voided-row").length === 2, "the voided invoice didn't re-render as voided");
+// "Invoice voided" alone hides the half that matters: a bare confirmation
+// beside a car whose cost just dropped by $250 is how the two screens end up
+// disagreeing with nobody noticing.
+const voidToast = $("#toast").textContent;
+ok(/2 parts back on order/.test(voidToast) && /\$250\.00/.test(voidToast),
+   `the void toast doesn't report what came off the car: "${voidToast}"`);
 
 /* ---------- vendor chips open the editor pre-filled ---------- */
 const chip = $$("#vendor-list .vendor-chip").find((c) => /WorldPac/.test(c.textContent));
@@ -339,6 +353,35 @@ ok(vendorPatch && vendorPatch.body.account_number === "A-200",
    `the vendor PATCH carried account "${vendorPatch && vendorPatch.body.account_number}"`);
 ok($("#vendor-form-title").textContent === "Vendors", "the form is stuck in editing mode after an update");
 
+/* ---------- the range chips mean today, not the day they were clicked ----------
+   Nothing here is saved to localStorage, so the way this screen goes stale is
+   being left open: the shop works evenings, and past midnight a lit "Today"
+   is showing yesterday's invoices under today's heading. */
+$('#view-accounting [data-ap-range="today"]').click();
+await settle();
+const today = w.computeQuickRange("today");
+ok(w.state.apFilter.start === today.start, `clicking Today filtered from ${w.state.apFilter.start}`);
+ok(fetchLog.at(-1).url.includes(`start=${today.start}`), `the chip didn't reach the query: ${fetchLog.at(-1).url}`);
+
+// Roll the clock: put yesterday's answer back under a chip still reading Today.
+w.state.apFilter = { start: "2020-01-01", end: "2020-01-01" };
+await w.loadAccountingView();
+await settle();
+ok(w.state.apFilter.start === today.start,
+   `a lit Today chip kept covering ${w.state.apFilter.start} after the day rolled over`);
+ok($("#ap-filter-start").value === today.start, "the From field kept the stale date");
+ok(fetchLog.at(-1).url.includes(`start=${today.start}`), `the stale range still reached the query: ${fetchLog.at(-1).url}`);
+
+// A hand-typed date belongs to no chip, and must not be overwritten by one.
+$("#ap-filter-start").value = "2026-02-03";
+$("#ap-filter-start").dispatchEvent(new w.Event("change", { bubbles: true }));
+await settle();
+ok(!$("#view-accounting [data-ap-range].active"), "a range chip stayed lit after the dates were typed by hand");
+await w.loadAccountingView();
+await settle();
+ok(w.state.apFilter.start === "2026-02-03",
+   `reloading the screen overwrote the typed date with ${w.state.apFilter.start}`);
+
 ok(rejections.length === 0, `unhandled rejections during the run: ${rejections.map((e) => e && e.message).join(" | ")}`);
 
-finish("accounting: stats, PO/vendor selects, table states, shared-invoice coverage, search, line math + validation, post payload, held/duplicate feedback, void confirm, vendor edit");
+finish("accounting: stats, PO/vendor selects, table states, search, line math + validation, post payload, held/duplicate feedback, void confirm, vendor edit, range chips");

@@ -1,8 +1,9 @@
 import { $, $$, api, fmtHours, get, patch, post, put } from "./core.js";
 import { toast } from "./notify.js";
 import { confirmAction } from "./confirm.js";
-import { currentActor, esc, fmtDate, money, relativeTime, withLoading } from "./shortcuts.js";
+import { currentActor, esc, fmtDate, fmtDay, money, relativeTime, withLoading } from "./shortcuts.js";
 import { emptyState } from "./empty-states.js";
+import { actualTotal, costDeltaBadge, isReturnedPart, quotedLineTotal, quotedTotal } from "./estimate-money.js";
 import { AUTH_METHOD_LABEL, ITEM_STATUS_LABEL, KIND_GROUP_LABEL, KIND_GROUP_ORDER, PAY_METHOD_LABEL, STATUS_LABEL, STATUS_OPTIONS, STATUS_PILL_CLASS, fieldLabels, state } from "./state.js";
 import { showView } from "./error-boundary.js";
 import { isStalled } from "./vehicles-board.js";
@@ -246,6 +247,10 @@ function renderDetailHead() {
   $("#vd-recon-model").value = item.model;
   $("#vd-recon-trim").value = item.trim || "";
   $("#vd-recon-color").value = item.color || "";
+  // Arrival date is a recon-only fact: a we-owe car was bought and sold long
+  // before this shop wrote it down, so there is no lot arrival to record.
+  $("#vd-acquired-row").hidden = segment !== "recon";
+  $("#vd-recon-acquired").value = segment === "recon" ? item.acquisition_date || "" : "";
   if (segment === "recon") {
     $("#vd-title").textContent = `${item.stock_number} — ${item.year} ${item.make} ${item.model}`;
     $("#vd-sub").textContent = [item.vin, item.mileage ? `${item.mileage.toLocaleString()} mi` : "", item.trim].filter(Boolean).join(" · ");
@@ -312,7 +317,7 @@ function renderCostSummary() {
 // Compact read-only summary replacing the old always-open inline edit form --
 // the full form still exists verbatim, just relocated into #vehicle-edit-dialog.
 function renderVehicleInfoSummary() {
-  const { item } = state.detail;
+  const { segment, item } = state.detail;
   const lifetime = item.lifetime;
   const rows = [
     // A VIN gets retyped into parts catalogues and vendor sites all day long,
@@ -328,6 +333,15 @@ function renderVehicleInfoSummary() {
     ["Trim", esc(item.trim || "—")],
     ["Color", esc(item.color || "—")],
   ];
+  // The day the car landed, on the card rather than buried in the edit
+  // dialog: it is what the board's Age column counts from, so a wrong one is
+  // only ever noticed if somebody can see it. Recon only -- a we-owe car has
+  // no arrival on this lot to record.
+  if (segment === "recon") {
+    rows.push(["Arrived on the lot", item.acquisition_date
+      ? esc(item.acquisition_date)
+      : `<span title="Age counts from the day this car was written up instead">Not recorded</span>`]);
+  }
   // What the lot paid isn't entered here any more -- Walt keeps that figure
   // and this app answers "what did we spend fixing it". Cars carried over from
   // when it *was* entered still show theirs rather than silently losing it.
@@ -596,7 +610,7 @@ function applyArchivedLockUI(archived) {
     "vd-save-assignment", "vd-technician", "vd-advisor",
     "vd-save-timing", "vd-date-in", "vd-odometer", "vd-promised",
     "vd-edit-vehicle", "vd-recon-info-save", "vd-decode-vin", "vd-recon-vin", "vd-recon-mileage", "vd-recon-year",
-    "vd-recon-make", "vd-recon-model", "vd-recon-trim", "vd-recon-color",
+    "vd-recon-make", "vd-recon-model", "vd-recon-trim", "vd-recon-color", "vd-recon-acquired",
     "vd-edit-customer", "vd-we-owe-save", "vd-we-owe-description", "vd-we-owe-category", "vd-we-owe-target", "vd-we-owe-status",
     "vd-take-payment", "vd-deposit-add", "vd-deposit-amount", "vd-deposit-method", "vd-deposit-note",
   ];
@@ -657,6 +671,28 @@ function receivedSourceHtml(item) {
   }</span>`;
 }
 
+/* What the line was written down at, before any vendor invoice touched it.
+   unit_cost is overwritten with the price the invoice actually said when a
+   part is received, so it is the wrong figure to quote against -- comparing
+   it to itself is why the ticket could only ever say "On quote". Lines from
+   before the quote was kept separately have no quoted_unit_cost and fall
+   back to unit_cost, which is the answer they have always given. */
+function quotedUnitCost(item) {
+  return item.quoted_unit_cost ?? item.unit_cost ?? 0;
+}
+
+// Only worth saying when the bill and the estimate actually disagree; on an
+// ordinary line this would just be the same number printed twice.
+function quoteDiffersFromCost(item) {
+  return item.quoted_unit_cost != null && Math.abs(item.quoted_unit_cost - (item.unit_cost ?? 0)) >= 0.005;
+}
+
+// A returned line reads $0 and is out of every total, so there is nothing for
+// a quote to disagree with.
+function showQuoteNote(item) {
+  return quoteDiffersFromCost(item) && !item.part_returned;
+}
+
 function receivedFromTitle(item) {
   const vendor = item.received_vendor_name;
   const invoice = item.received_invoice_number;
@@ -666,14 +702,27 @@ function receivedFromTitle(item) {
   return "Received";
 }
 
+/* Group a ticket's lines by kind for display -- Parts, Labor, Fees, and then
+   anything else actually present.
+
+   Exhaustive rather than a fixed list of three, because vendor-invoice ingest
+   writes kind="credit" lines that nobody picks by hand. A grid that only knew
+   the three simply left them out: on a ticket grouped into jobs, a $60 vendor
+   credit was subtracted from the total with no line on screen to explain
+   where it had come from. The printed ticket already worked this way; the
+   screen it was printed from did not. */
+function kindGroupsOf(items) {
+  const extra = [...new Set(items.map((i) => i.kind).filter((k) => !KIND_GROUP_ORDER.includes(k)))];
+  return [...KIND_GROUP_ORDER, ...extra]
+    .map((kind) => ({ kind, kindItems: items.filter((i) => i.kind === kind) }))
+    .filter((group) => group.kindItems.length);
+}
+
 function renderEstimate(order) {
   const items = order.estimate ? order.estimate.items : [];
   const jobs = order.estimate?.jobs ?? [];
   const box = $("#vd-estimate-items");
   box.classList.toggle("has-jobs", jobs.length > 0);
-  // A part sent back to the vendor stops costing the shop anything -- every
-  // cost total on this ticket (job subtotals, Quoted, Actual) excludes it.
-  const notReturned = (i) => !(i.kind === "part" && i.part_returned);
 
   const jobOptionsHtml = (selectedId) => `<option value="" ${!selectedId ? "selected" : ""}>General</option>` +
     jobs.map((j) => `<option value="${j.id}" ${selectedId === j.id ? "selected" : ""}>${esc(j.title)}</option>`).join("");
@@ -688,8 +737,11 @@ function renderEstimate(order) {
   // data-label is what the narrow-screen layout prints above each field
   // (.pr-cell::before). An empty cell must not carry one, or a labor line
   // shows a "Part #"/"Core" caption with no field under it.
-  const cell = (cls, label, inner) =>
-    `<div class="pr-cell pr-${cls}${inner ? "" : " pr-spacer"}"${label && inner ? ` data-label="${label}"` : ""}>${inner}</div>`;
+  // `extra` is for a cell that needs a modifier of its own -- currently only
+  // the cost cell, which stacks a second line under the price on a part the
+  // vendor billed at something other than its estimate.
+  const cell = (cls, label, inner, extra = "") =>
+    `<div class="pr-cell pr-${cls}${extra ? ` ${extra}` : ""}${inner ? "" : " pr-spacer"}"${label && inner ? ` data-label="${label}"` : ""}>${inner}</div>`;
 
   const rowHtml = (item, i) => {
     const remaining = (item.quantity ?? 0) - (item.received_quantity ?? 0);
@@ -697,7 +749,7 @@ function renderEstimate(order) {
     const isPart = item.kind === "part";
     const L = fieldLabels(item.kind);
     return `
-    <div class="part-row" draggable="true" data-index="${i}" data-id="${item.id || ""}" data-source="${item.source || "manual"}" data-received-quantity="${item.received_quantity ?? 0}">
+    <div class="part-row" draggable="true" data-index="${i}" data-id="${item.id || ""}" data-source="${item.source || "manual"}" data-received-quantity="${item.received_quantity ?? 0}" data-part-returned="${isReturnedPart(item) ? "1" : "0"}">
       ${cell("handle", "", `<span class="row-drag-handle" title="Drag to reorder">⋮⋮</span>`)}
       ${cell("check", "", receivable ? `<input type="checkbox" class="ei-receive-check" data-id="${item.id}" title="Select to receive against a vendor invoice">` : "")}
       ${cell("kind", "Kind", `<select class="ei-kind">
@@ -717,9 +769,17 @@ function renderEstimate(order) {
       ${cell("desc", "Description", `<input class="ei-desc" value="${esc(item.description || "")}" placeholder="Description">`)}
       ${cell("part", L.part, `<input class="ei-part" value="${esc(item.part_number || "")}" placeholder="Part #"${isPart ? "" : " hidden"}>`)}
       ${cell("qty", L.qty, `<input class="ei-qty" type="number" min="0.01" step="0.01" value="${item.quantity ?? 1}"${item.kind === "labor" ? ` title="Hours"` : ""}>`)}
-      ${cell("cost", L.cost, item.part_returned
+      ${/* A line billed at something other than what it was quoted at says so
+            right here, next to the price that changed. The receive dialog
+            already showed this while the invoice was being keyed in; without
+            it on the row, the difference disappeared the moment the dialog
+            closed and nobody could see afterwards which part had moved. */""}
+      ${cell("cost", L.cost, (item.part_returned
         ? `<input class="ei-cost" type="number" value="0" disabled title="Returned to the vendor -- no longer counted" data-real-cost="${item.unit_cost ?? 0}">`
-        : `<input class="ei-cost" type="number" min="0" step="0.01" value="${item.unit_cost ?? 0}"${item.kind === "labor" ? ` title="Hourly rate"` : ""}>`)}
+        : `<input class="ei-cost" type="number" min="0" step="0.01" value="${item.unit_cost ?? 0}"${item.kind === "labor" ? ` title="Hourly rate"` : ""}>`)
+        + (showQuoteNote(item)
+          ? `<span class="ei-quote-note ${item.unit_cost > item.quoted_unit_cost ? "over" : "under"}" title="This line was quoted at ${money(item.quoted_unit_cost)} each">Quoted ${money(item.quoted_unit_cost)}</span>`
+          : ""), showQuoteNote(item) ? "has-quote-note" : "")}
       ${cell("core", L.core, item.kind === "part"
         ? `<label class="core-toggle" title="Tick only if this part carries a core deposit the vendor owes back">
              <input type="checkbox" class="ei-core-on" ${(item.core_charge ?? 0) > 0 ? "checked" : ""} aria-label="This part has a core charge">
@@ -790,20 +850,43 @@ function renderEstimate(order) {
     })}</div>`);
   } else {
     const buckets = [...jobs, { id: null, title: "General" }];
-    box.innerHTML = buckets.map((bucket) => {
+    // How far through the car we are, in one line, above the work itself.
+    // The ticket's own status is a single flag for the whole car and cannot
+    // say this; without it a ticket with four repairs looked identical
+    // whether three were finished or none were.
+    const doneCount = jobs.filter((j) => j.completed_at).length;
+    const progress = `<div class="job-progress${doneCount === jobs.length ? " all-done" : ""}">${
+      doneCount === jobs.length
+        ? `All ${jobs.length} repair${jobs.length === 1 ? "" : "s"} finished`
+        : `${doneCount} of ${jobs.length} repair${jobs.length === 1 ? "" : "s"} finished`
+    }</div>`;
+    box.innerHTML = progress + buckets.map((bucket) => {
       const bucketItems = items.filter((i) => (i.job_id ?? null) === bucket.id);
       const isGeneral = bucket.id === null;
-      const jobSubtotal = bucketItems.filter(notReturned).reduce((s, i) => s + i.quantity * i.unit_cost, 0);
+      const jobSubtotal = quotedTotal(bucketItems);
       // Parts and labor render as their own mini-sections within the job
       // (Tekmetric-style) rather than one interleaved list, so it's obvious
       // at a glance which lines are parts vs labor for this job -- not just
       // which job a line belongs to.
-      const kindGroups = KIND_GROUP_ORDER
-        .map((kind) => ({ kind, kindItems: bucketItems.filter((i) => i.kind === kind) }))
-        .filter((g) => g.kindItems.length);
+      const kindGroups = kindGroupsOf(bucketItems);
       return `
-        <div class="job-group" data-job-id="${bucket.id ?? ""}">
+        <div class="job-group${jobDone ? " job-done" : ""}" data-job-id="${bucket.id ?? ""}">
           <div class="job-group-head">
+            ${/* One click is the whole interaction, on purpose: this gets
+                 ticked with a part in the other hand, and anything that
+                 needed a dialog would simply not get done on a busy morning.
+                 General has no checkbox -- it is the ungrouped leftovers, not
+                 a repair somebody can finish. */""}
+            ${/* "by Unspecified" is worse than saying nothing: that's the
+                 placeholder the Working-as picker uses when nobody has
+                 chosen a name, not somebody's answer. */""}
+            ${isGeneral ? "" : `<label class="job-done-toggle" title="${bucket.completed_at ? `Finished${bucket.completed_by && bucket.completed_by !== "Unspecified" ? ` by ${esc(bucket.completed_by)}` : ""} — click to reopen` : "Tick when this repair is finished"}">
+              ${/* job-control rides on the input, not the label: that's the
+                   class the archived-vehicle pass disables, and disabling a
+                   <label> does nothing at all. */""}
+              <input type="checkbox" class="ei-job-done job-control" data-job-id="${bucket.id}" ${jobDone ? "checked" : ""} aria-label="${esc(bucket.title)} is finished">
+              <span>Done</span>
+            </label>`}
             <span class="job-group-title">${esc(bucket.title)}</span>
             ${bucketItems.length ? `<span class="job-group-subtotal">${money(jobSubtotal)}</span>` : ""}
             ${isGeneral ? "" : `
@@ -819,7 +902,7 @@ function renderEstimate(order) {
           </div>
           ${kindGroups.length ? kindGroups.map((g) => `
             <div class="kind-subgroup" data-kind="${g.kind}">
-              ${headRow(KIND_GROUP_LABEL[g.kind], "", g.kind)}
+              ${headRow(KIND_GROUP_LABEL[g.kind] || g.kind, "", g.kind)}
               ${g.kindItems.map(rowHtml).join("")}
             </div>
           `).join("") : `<div class="ei-empty">${emptyState({ icon: "invoice", title: "No lines in this job yet", compact: true })}</div>`}
@@ -848,38 +931,36 @@ function updateReceiveButtonState() {
   btn.textContent = checked.length ? `Receive ${checked.length} Line${checked.length === 1 ? "" : "s"}` : "Receive Selected";
 }
 
-// Quoted = every line at its full quantity, whether or not it's landed yet
-// (matches cost_rollup's quoted_cost); actual = only what's really in the
-// car so far -- parts count once received, labor/fees count the moment
-// they're logged. Same "at cost" basis as everywhere else (unit_cost, not
-// unit_price) -- this panel has never shown customer-facing markup.
+// The arithmetic itself lives in estimate-money.js, which mirrors the
+// server's cost_rollup -- so this card, the board's Cost column and the
+// vehicle's own total can't tell three different stories about one ticket.
 // Split out of renderEstimate because an in-place sync has to recompute
 // these without touching the rows.
+//
+// A core deposit the vendor hasn't credited back yet is in both figures, on
+// the same terms cost_rollup uses server-side: it is money the shop paid for
+// this car and won't see again until the old unit goes back. Counting it in
+// the quote as well as the actual is what stops a deposit from reading as
+// "over quote" the day the part lands.
+const coreOwing = (i) => i.kind === "part" && !i.part_returned && !i.core_return_invoice_number ? (i.core_charge || 0) : 0;
 function renderEstimateTotals(order) {
   const items = order.estimate ? order.estimate.items : [];
-  const notReturned = (i) => !(i.kind === "part" && i.part_returned);
-  const quotedTotal = items.filter(notReturned).reduce((s, i) => s + i.quantity * i.unit_cost, 0);
-  const actualParts = items.filter((i) => i.kind === "part" && !i.part_returned).reduce((s, i) => s + i.received_quantity * i.unit_cost, 0);
-  const actualOther = items.filter((i) => i.kind !== "part").reduce((s, i) => s + i.quantity * i.unit_cost, 0);
-  const actual = actualParts + actualOther;
-  $("#vd-quoted-cost").textContent = money(quotedTotal);
+  applyTicketTotals(quotedTotal(items), actualTotal(items));
+}
+
+// One writer for the three elements the ticket's cost card is made of, shared
+// by the post-save render and the live-typing recompute below. Two copies of
+// this is how the badge ended up saying "under quote" while the figures above
+// it said the opposite.
+function applyTicketTotals(quoted, actual) {
+  $("#vd-quoted-cost").textContent = money(quoted);
   $("#vd-actual-cost").textContent = money(actual);
-  // The single most decision-relevant number on a recon ticket -- are we
-  // over the quote -- shouldn't have to be computed mentally from two
-  // adjacent figures.
   const delta = $("#vd-cost-delta");
-  if (delta) {
-    if (!quotedTotal) {
-      delta.hidden = true;
-    } else {
-      const diff = actual - quotedTotal;
-      delta.hidden = false;
-      delta.className = `cost-delta ${diff > 0.005 ? "over" : Math.abs(diff) <= 0.005 ? "zero" : ""}`;
-      delta.textContent = Math.abs(diff) <= 0.005 ? "On quote"
-        : diff > 0 ? `${money(diff)} over quote`
-        : `${money(-diff)} under quote`;
-    }
-  }
+  if (!delta) return;
+  const badge = costDeltaBadge(quoted, actual);
+  delta.hidden = badge.hidden;
+  delta.className = badge.className;
+  delta.textContent = badge.text;
 }
 
 // Debounce handle for keystroke-driven autosave (wired in wireEstimateGrid).
@@ -889,49 +970,41 @@ function clearEstimateTypingTimer() {
   estimateTypingTimer = null;
 }
 
+/* Read a grid row back as the same shape estimate-money.js takes, so the
+   totals that follow each keystroke run through exactly the definition the
+   saved ticket does. Kind matters here and used not to be read at all: a
+   credit row was summed as an ordinary cost and pushed the ticket's quote
+   UP by the size of the refund. */
+function rowAsEstimateItem(row) {
+  const num = (sel) => {
+    const el = row.querySelector(sel);
+    return el ? parseFloat(el.value || "0") || 0 : 0;
+  };
+  return {
+    kind: row.querySelector(".ei-kind")?.value || "part",
+    quantity: num(".ei-qty"),
+    // A returned part's cost input renders as a disabled 0; part_returned
+    // below is what actually drops it, so either reading gives the same
+    // answer and neither depends on the other.
+    unit_cost: num(".ei-cost"),
+    received_quantity: parseFloat(row.dataset.receivedQuantity || "0") || 0,
+    part_returned: row.dataset.partReturned === "1",
+  };
+}
+
 // The live-typing counterpart to renderEstimateTotals: same math, but read
 // straight from the grid's inputs instead of state, so totals track each
-// keystroke without waiting for the save round-trip. A returned part's cost
-// input reads 0 (that's how it renders), which drops it from every figure
-// here exactly like the notReturned filter does server-side.
+// keystroke without waiting for the save round-trip.
 function updateEstimateTotalsFromDom() {
   const box = $("#vd-estimate-items");
   if (!box) return;
-  const num = (el) => (el ? parseFloat(el.value || "0") || 0 : 0);
-  let quoted = 0;
-  let actual = 0;
-  for (const row of $$(".part-row:not(.head)", box)) {
-    const qty = num(row.querySelector(".ei-qty")) || 0;
-    const cost = num(row.querySelector(".ei-cost"));
-    quoted += qty * cost;
-    actual += row.querySelector(".ei-kind")?.value === "part"
-      ? (parseFloat(row.dataset.receivedQuantity || "0") || 0) * cost
-      : qty * cost;
-  }
-  $("#vd-quoted-cost").textContent = money(quoted);
-  $("#vd-actual-cost").textContent = money(actual);
-  const delta = $("#vd-cost-delta");
-  if (delta) {
-    if (!quoted) {
-      delta.hidden = true;
-    } else {
-      const diff = actual - quoted;
-      delta.hidden = false;
-      delta.className = `cost-delta ${diff > 0.005 ? "over" : Math.abs(diff) <= 0.005 ? "zero" : ""}`;
-      delta.textContent = Math.abs(diff) <= 0.005 ? "On quote"
-        : diff > 0 ? `${money(diff)} over quote`
-        : `${money(-diff)} under quote`;
-    }
-  }
+  const rows = $$(".part-row:not(.head)", box).map(rowAsEstimateItem);
+  applyTicketTotals(quotedTotal(rows), actualTotal(rows));
   // Job subtotals live in each group's header; keep them moving too.
   for (const group of $$(".job-group", box)) {
     const label = group.querySelector(".job-group-subtotal");
     if (!label) continue;
-    let sub = 0;
-    for (const row of $$(".part-row:not(.head)", group)) {
-      sub += (num(row.querySelector(".ei-qty")) || 0) * num(row.querySelector(".ei-cost"));
-    }
-    label.textContent = money(sub);
+    label.textContent = money(quotedTotal($$(".part-row:not(.head)", group).map(rowAsEstimateItem)));
   }
 }
 
@@ -962,7 +1035,10 @@ function estimateShape(order) {
   const jobs = order.estimate?.jobs ?? [];
   const items = order.estimate?.items ?? [];
   return JSON.stringify([
-    jobs.map((j) => [j.id, j.title, j.technician_id ?? null]),
+    // completed_at is in the shape (not just synced in place) because ticking
+    // a job changes the group's classes, its title's styling and the progress
+    // line above the grid -- none of which syncEstimateInPlace touches.
+    jobs.map((j) => [j.id, j.title, j.technician_id ?? null, j.completed_at ? 1 : 0]),
     items.map((i) => [
       i.id ?? null,
       i.kind,
@@ -1029,14 +1105,11 @@ function syncEstimateInPlace(order) {
 
   // Subtotals key off quantity x cost, which the shape signature ignores on
   // purpose -- so they have to be recomputed here explicitly.
-  const notReturned = (i) => !(i.kind === "part" && i.part_returned);
   $$(".job-group", box).forEach((groupEl) => {
     const sub = $(".job-group-subtotal", groupEl);
     if (!sub) return;
     const jobId = groupEl.dataset.jobId === "" ? null : Number(groupEl.dataset.jobId);
-    sub.textContent = money(
-      items.filter((i) => (i.job_id ?? null) === jobId).filter(notReturned).reduce((s, i) => s + i.quantity * i.unit_cost, 0),
-    );
+    sub.textContent = money(quotedTotal(items.filter((i) => (i.job_id ?? null) === jobId)));
   });
   renderEstimateTotals(order);
   updateReceiveButtonState();
@@ -1163,6 +1236,7 @@ export function wireEstimateGrid() {
     if (t.matches(".ei-receive-check")) return void updateReceiveButtonState();
     if (t.matches(".ei-status")) return void onEstimateStatusChange(t);
     if (t.matches(".ei-job-tech")) return void onJobTechnicianChange(t);
+    if (t.matches(".ei-job-done")) return void onJobDoneChange(t);
   });
 
   // Keystroke-level feedback. The change handler above only fires on blur, so
@@ -1330,7 +1404,7 @@ async function onEstimateStatusChange(sel) {
   const itemId = sel.closest(".part-row")?.dataset.id;
   if (!order || !itemId) return;
   try {
-    await patch(`/api/orders/${order.id}/estimate/items/${itemId}/status`, { status: sel.value });
+    await patch(`/api/orders/${order.id}/estimate/items/${itemId}/status`, { status: sel.value, actor: currentActor() });
     sel.dataset.prev = sel.value;
     toast("Status updated");
     await loadVehicleDetail();
@@ -1354,7 +1428,7 @@ async function onEstimatePartReturn(btn) {
     ? ` Its ${money(line.core_charge)} core charge reverses with it, so the core drops off the cores board — there's no old unit to send back.`
     : "";
   // No paperwork at this step: the part goes back to the vendor first, and
-  // the credit invoice arrives later -- it's recorded on the Cores & Returns
+  // the credit invoice arrives later -- it's recorded on the Parts & Cores
   // page once it shows up.
   if (returned && !(await confirmAction({
     eyebrow: "VENDOR RETURN",
@@ -1364,7 +1438,7 @@ async function onEstimatePartReturn(btn) {
   }))) return;
   try {
     await patch(`/api/orders/${order.id}/estimate/items/${btn.dataset.id}/part-return`, { returned, actor: currentActor() });
-    toast(returned ? "Marked returned — it's waiting for pickup in Cores & Returns" : "Return undone");
+    toast(returned ? "Marked returned — it's waiting for pickup in Parts & Cores" : "Return undone");
     await loadVehicleDetail();
   } catch (err) {
     toast(err.message, true);
@@ -1384,6 +1458,25 @@ async function onJobTechnicianChange(sel) {
     toast("Job technician updated");
     await loadVehicleDetail();
   } catch (err) {
+    toast(err.message, true);
+  }
+}
+
+/* Ticking a repair off. No confirmation either way -- it is one click to undo,
+   and a dialog in front of the most-repeated action on the screen is how a
+   feature stops being used. The checkbox is put back if the save fails, so a
+   tick that never reached the server can't sit on screen looking saved. */
+async function onJobDoneChange(box) {
+  const order = state.detail.order;
+  const job = currentEstimateJob(box.dataset.jobId);
+  if (!order || !job) return;
+  const done = box.checked;
+  try {
+    await patch(`/api/orders/${order.id}/jobs/${job.id}/done`, { done, actor: currentActor() });
+    toast(done ? `“${job.title}” ticked off` : `“${job.title}” reopened`);
+    await loadVehicleDetail();
+  } catch (err) {
+    box.checked = !done;
     toast(err.message, true);
   }
 }
@@ -1492,32 +1585,77 @@ function collectEstimateItems() {
 // elsewhere on the page (that was the bug: adding a part, then clicking any
 // other Save/Advance/Order-Parts button, reloaded the page and discarded it).
 //
-// Fast successive edits (tabbing through several fields) fire several of
-// these calls in flight at once; an earlier, slower response landing after
-// a newer one would overwrite fresher data with stale data. estimateSaveToken
-// tags each call so only the most recently *started* one is allowed to render.
-let estimateSaveToken = 0;
-async function persistEstimate() {
+/* One save is in flight at a time, and that is not just tidiness -- it is what
+   keeps the estimate's optimistic lock honest.
+
+   Every save carries the edit_version it was written against, and the server
+   bumps that version as part of the UPDATE (see save_estimate in app/main.py).
+   The version only moves in this browser when a response comes back. So two
+   saves started before the first one answers necessarily quote the *same*
+   expected_version, the server takes the first and rejects the second with
+   "Someone else changed this estimate" -- from the one person typing. The
+   advisor then gets a scare about a colleague who wasn't there, and the 409
+   handler reloads the ticket out from under whatever they were mid-way through
+   typing.
+   That pairing is completely ordinary: a keystroke save fires 800ms after the
+   last character (the debounce in wireEstimateGrid), and tabbing to the next
+   field an instant later fires the change save on top of it. On the shop LAN,
+   where a round trip to the shop PC is not free, the overlap window is wide
+   open.
+   So: while a save is posting, further calls collapse into one follow-up run
+   that starts when the response lands -- by which time order.estimate holds the
+   version the server just wrote, and the DOM is re-read so the follow-up
+   carries the newest typing rather than a snapshot taken before it. Callers
+   still get a promise that settles once their edit has actually been flushed
+   (addEstimateRow waits on it to focus the new line). */
+let estimateSaveInFlight = null;
+let estimateSaveQueued = null;
+function persistEstimate() {
+  if (estimateSaveInFlight) {
+    if (!estimateSaveQueued) {
+      let settle;
+      const promise = new Promise((resolve) => { settle = resolve; });
+      estimateSaveQueued = { promise, settle };
+    }
+    return estimateSaveQueued.promise;
+  }
+  estimateSaveInFlight = sendEstimate().then((saved) => {
+    estimateSaveInFlight = null;
+    const queued = estimateSaveQueued;
+    estimateSaveQueued = null;
+    if (!queued) return;
+    // A failed save has already dealt with itself -- a real conflict reloaded
+    // the ticket from the server, anything else left "Not saved" showing for
+    // the next edit to clear. Re-firing on top of that would either re-post
+    // what the reload just replaced or fail the identical way twice.
+    if (saved) return void persistEstimate().then(queued.settle);
+    queued.settle();
+  });
+  return estimateSaveInFlight;
+}
+
+/** One round trip. Resolves true when the estimate was saved, false when it
+    wasn't -- persistEstimate uses that to decide whether a coalesced follow-up
+    save is still worth sending. */
+async function sendEstimate() {
   const order = state.detail.order;
-  if (!order) return;
+  if (!order) return false;
   const items = collectEstimateItems();
-  const token = ++estimateSaveToken;
   const expectedVersion = order.estimate ? order.estimate.edit_version : null;
   setEstimateSaveState("saving");
   try {
     const estimate = await post(`/api/orders/${order.id}/estimate`, { labor_rate: 0, tax_rate: 0, actor: currentActor(), items, expected_version: expectedVersion });
-    if (token !== estimateSaveToken) return; // a newer edit has already been sent; drop this stale response
     order.estimate = estimate;
     applyEstimateResponse(order);
     setEstimateSaveState("saved");
+    return true;
   } catch (err) {
-    if (token === estimateSaveToken) setEstimateSaveState("failed");
-    if (String(err.message).includes("Someone else changed")) {
-      toast(err.message, true);
-      await loadVehicleDetail(); // pull the latest version instead of leaving stale data on screen
-      return;
-    }
+    setEstimateSaveState("failed");
     toast(err.message, true);
+    // A conflict now means what it says: somebody else really did change this
+    // ticket, so the only safe move is to show what they wrote.
+    if (String(err.message).includes("Someone else changed")) await loadVehicleDetail();
+    return false;
   }
 }
 
@@ -1727,11 +1865,16 @@ const ACTIVITY_LABEL = {
   job_created: "Job added",
   job_updated: "Job updated",
   job_deleted: "Job removed",
+  job_completed: "Repair finished",
+  job_reopened: "Repair reopened",
   estimate_approved: "Estimate approved",
   estimate_declined: "Estimate declined",
   estimate_item_moved_in: "Line moved onto this ticket",
   estimate_item_moved_out: "Line moved to another ticket",
+  parts_ordered: "Parts marked ordered",
+  parts_order_undone: "Part put back to quoted",
   parts_received: "Parts received",
+  ap_invoice_posted: "Vendor invoice posted",
   part_returned: "Part returned",
   part_return_undone: "Part return undone",
   part_return_credited: "Return credited",
@@ -1822,10 +1965,11 @@ function renderPrintTicket() {
   const customerLabel = isWeOwe ? (item.customer_name || "") : "";
   const items = order.estimate ? order.estimate.items : [];
   const jobs = order.estimate?.jobs ?? [];
-  const quotedTotal = items.filter((i) => !(i.kind === "part" && i.part_returned)).reduce((s, i) => s + i.quantity * i.unit_cost, 0);
-  const actualParts = items.filter((i) => i.kind === "part" && !i.part_returned).reduce((s, i) => s + i.received_quantity * i.unit_cost, 0);
-  const actualOther = items.filter((i) => i.kind !== "part").reduce((s, i) => s + i.quantity * i.unit_cost, 0);
-  const actualTotal = actualParts + actualOther;
+  // Same rules as the on-screen card (estimate-money.js). Paper that
+  // disagreed with the screen it was printed from was the worst version of
+  // this bug: the screen can be refreshed, the sheet in someone's hand can't.
+  const printQuoted = quotedTotal(items);
+  const printActual = actualTotal(items);
   const a = order.assignment;
   const techName = (a && a.technician_name) || "Unassigned";
   const advisorName = (a && a.advisor_name) || "Unassigned";
@@ -1845,34 +1989,33 @@ function renderPrintTicket() {
   // parts-only concept (labor/fees have no order lifecycle), mirroring the
   // on-screen grid.
   const itemRow = (i) => {
-    const returned = i.kind === "part" && i.part_returned;
+    const returned = isReturnedPart(i);
     let status = "";
     if (i.kind === "part") {
       if (returned) status = "Returned";
       else if ((i.received_quantity ?? 0) > 0 && i.received_quantity < i.quantity) status = `Received ${i.received_quantity}/${i.quantity}`;
       else status = ITEM_STATUS_LABEL[i.status] || "Quoted";
     }
+    // The deposit is in this row's own total when it's still owed back, so
+    // say which it is -- a printed line that reads "Core charge $45" but adds
+    // $45 into some rows and not others is unauditable on paper.
+    // Say where the deposit stands, since it is in the totals below only
+    // while it's still owed back.
     const coreSub = i.kind === "part" && (i.core_charge || 0) > 0
-      ? `<div class="pt-desc-sub">Core charge ${money(i.core_charge)}</div>` : "";
+      ? `<div class="pt-desc-sub">Core charge ${money(i.core_charge)}${coreOwing(i) ? " — owed back" : i.core_return_invoice_number ? " — credited back" : " — reversed with the return"}</div>`
+      : "";
     return `<tr><td>${esc(i.description)}${coreSub}</td><td>${i.part_number ? esc(i.part_number) : ""}</td>
       <td class="num-col">${i.quantity}</td><td class="num-col">${money(returned ? 0 : i.unit_cost)}</td>
-      <td class="num-col">${money(returned ? 0 : i.quantity * i.unit_cost)}</td><td>${status}</td></tr>`;
+      <td class="num-col">${money(quotedLineTotal(i))}</td><td>${status}</td></tr>`;
   };
 
   // Parts/Labor/Fees sub-headers replace the old Kind column -- the same
-  // grouping whether or not the ticket has jobs, so the column count never
-  // changes shape between tickets. Exhaustive over every kind actually
-  // present, not just the three named groups: vendor-credit ingest writes
-  // kind="credit" lines, and a printed row list that drops them stops
-  // summing to its own printed totals.
-  const kindGroupRows = (bucketItems) => {
-    const extraKinds = [...new Set(bucketItems.map((x) => x.kind).filter((k) => !KIND_GROUP_ORDER.includes(k)))];
-    return [...KIND_GROUP_ORDER, ...extraKinds]
-      .map((kind) => ({ kind, kindItems: bucketItems.filter((x) => x.kind === kind) }))
-      .filter((g) => g.kindItems.length)
-      .map((g) => `<tr class="print-kind-head"><td colspan="6">${KIND_GROUP_LABEL[g.kind] || (g.kind === "credit" ? "Credits" : esc(g.kind))}</td></tr>` + g.kindItems.map(itemRow).join(""))
+  // grouping (kindGroupsOf) the on-screen grid uses, so the paper and the
+  // page it was printed from can't list different lines.
+  const kindGroupRows = (bucketItems) =>
+    kindGroupsOf(bucketItems)
+      .map((g) => `<tr class="print-kind-head"><td colspan="6">${esc(KIND_GROUP_LABEL[g.kind] || g.kind)}</td></tr>` + g.kindItems.map(itemRow).join(""))
       .join("");
-  };
 
   // Same job/General buckets as the on-screen ticket (renderEstimate) --
   // a printed ticket that's grouped differently than what the advisor was
@@ -1887,22 +2030,22 @@ function renderPrintTicket() {
       const bucketItems = items.filter((i) => (i.job_id ?? null) === bucket.id);
       if (!bucketItems.length) return "";
       const jobTech = bucket.id === null ? "" : (bucket.technician_name || "Use ticket default");
-      const jobSubtotal = bucketItems.filter((i) => !(i.kind === "part" && i.part_returned)).reduce((s, i) => s + i.quantity * i.unit_cost, 0);
+      const jobSubtotal = quotedTotal(bucketItems);
       return `<tbody class="print-job"><tr class="print-job-head"><td colspan="4">${esc(bucket.title)}${jobTech ? ` — ${esc(jobTech)}` : ""}</td><td class="num-col">${money(jobSubtotal)}</td><td></td></tr>${kindGroupRows(bucketItems)}</tbody>`;
     }).join("") || `<tbody><tr><td colspan="6">No parts or labor lines.</td></tr></tbody>`;
   }
 
   // Invoice-style totals. With deposits (we-owe), the balance is the grand
   // row; without them Actual Cost is the bottom line itself.
-  const totalsRows = [`<div class="tl-row"><span>Total Quote</span><span class="num">${money(quotedTotal)}</span></div>`];
+  const totalsRows = [`<div class="tl-row"><span>Total Quote</span><span class="num">${money(printQuoted)}</span></div>`];
   if (paid > 0) {
-    totalsRows.push(`<div class="tl-row"><span>Actual Cost</span><span class="num">${money(actualTotal)}</span></div>`);
+    totalsRows.push(`<div class="tl-row"><span>Actual Cost</span><span class="num">${money(printActual)}</span></div>`);
     // The API returns payments newest-first; paper reads oldest-first.
     payments.slice().reverse().forEach((p) => totalsRows.push(
       `<div class="tl-row muted"><span>Deposit · ${PAY_METHOD_LABEL[p.method] || esc(p.method)} · ${esc(fmtDate(p.created_at))}</span><span class="num">−${money(p.amount)}</span></div>`));
     totalsRows.push(`<div class="tl-row grand"><span>Balance</span><span class="num">${money(item.net_cost)}</span></div>`);
   } else {
-    totalsRows.push(`<div class="tl-row grand"><span>Actual Cost</span><span class="num">${money(actualTotal)}</span></div>`);
+    totalsRows.push(`<div class="tl-row grand"><span>Actual Cost</span><span class="num">${money(printActual)}</span></div>`);
   }
   // net_cost/customer_paid roll up the whole vehicle, not just this RO --
   // say so whenever more than one RO shares them.
@@ -1945,16 +2088,16 @@ function renderPrintTicket() {
         <div class="pi-label">Stock</div>
         ${kv("Stock #", esc(item.stock_number || ""))}
         ${kv("Source", esc(item.acquisition_source || ""))}
-        ${kv("Acquired", item.acquisition_date ? esc(fmtDate(item.acquisition_date)) : "")}
+        ${kv("Acquired", item.acquisition_date ? esc(fmtDay(item.acquisition_date)) : "")}
       </div>`}
       <div class="print-info-block">
         <div class="pi-label">Service</div>
         ${kv("Technician", esc(techName))}
         ${kv("Advisor", esc(advisorName))}
-        ${kv("Date in", a?.date_in ? esc(fmtDate(a.date_in)) : "")}
+        ${kv("Date in", a?.date_in ? esc(fmtDay(a.date_in)) : "")}
         ${kv("Odometer in", a?.odometer_in ? `${esc(String(a.odometer_in))} mi` : "")}
-        ${kv("Promised", a?.promised_at ? esc(fmtDate(a.promised_at)) : "")}
-        ${isWeOwe && item.target_date ? kv("Target date", esc(fmtDate(item.target_date))) : ""}
+        ${kv("Promised", a?.promised_at ? esc(fmtDay(a.promised_at)) : "")}
+        ${isWeOwe && item.target_date ? kv("Promised to customer", esc(fmtDay(item.target_date))) : ""}
       </div>
     </div>
     <div class="print-subhead">Parts &amp; Labor</div>
@@ -2116,7 +2259,7 @@ export function wireVehicleDetail() {
       confirmLabel: "Mark Ordered",
     }))) return;
     try {
-      const res = await patch(`/api/orders/${state.detail.order.id}/estimate/order-parts`);
+      const res = await patch(`/api/orders/${state.detail.order.id}/estimate/order-parts`, { actor: currentActor() });
       toast(res.updated ? `${res.updated} part line(s) marked ordered` : "No quoted parts to order");
       await loadVehicleDetail();
     } catch (err) {
@@ -2143,15 +2286,24 @@ export function wireVehicleDetail() {
     if (e.key === "Enter") { e.preventDefault(); addNote(); }
   });
 
-  const saveAssignment = async (e) => {
+  /* The two Save buttons on the Assigned card write different halves of one
+     record, and each now sends only its own half. Both used to send all five
+     fields from whatever the page was showing, which had two everyday costs:
+     saving a mileage on the Timing card silently stamped the pre-selected
+     advisor onto a ticket nobody had assigned, and a save from either button
+     overwrote a change the other workstation had just made. Anything left out
+     of the payload is now left alone by the server.
+
+     expected_version is the version this page loaded. If someone else saved
+     the same ticket in between, the save is refused with a message telling
+     you to reload rather than quietly winning. */
+  const UNASSIGN = -1;
+  const saveAssignment = async (e, fields) => {
     await withLoading(e.target, "Saving…", async () => {
       try {
         await put(`/api/orders/${state.detail.order.id}/assignment`, {
-          advisor_id: $("#vd-advisor").value ? Number($("#vd-advisor").value) : null,
-          technician_id: $("#vd-technician").value ? Number($("#vd-technician").value) : null,
-          date_in: $("#vd-date-in").value,
-          odometer_in: Number($("#vd-odometer").value || 0),
-          promised_at: $("#vd-promised").value,
+          ...fields,
+          expected_version: state.detail.order.assignment?.version ?? null,
           actor: currentActor(),
         });
         toast("Saved");
@@ -2164,8 +2316,18 @@ export function wireVehicleDetail() {
       }
     });
   };
-  $("#vd-save-assignment").addEventListener("click", saveAssignment);
-  $("#vd-save-timing").addEventListener("click", saveAssignment);
+  // Picking "Unassigned" is a real choice, not an omission, so it sends the
+  // sentinel that clears the field rather than nothing at all.
+  const pickedStaff = (id) => (($(id).value && Number($(id).value)) || UNASSIGN);
+  $("#vd-save-assignment").addEventListener("click", (e) => saveAssignment(e, {
+    advisor_id: pickedStaff("#vd-advisor"),
+    technician_id: pickedStaff("#vd-technician"),
+  }));
+  $("#vd-save-timing").addEventListener("click", (e) => saveAssignment(e, {
+    date_in: $("#vd-date-in").value,
+    odometer_in: Number($("#vd-odometer").value || 0),
+    promised_at: $("#vd-promised").value,
+  }));
 
   $("#vd-we-owe-save").addEventListener("click", async (e) => {
     const { id, item } = state.detail;
@@ -2268,6 +2430,9 @@ export function wireVehicleDetail() {
           expected_version: item.edit_version,
         };
         if (segment === "recon") {
+          // Only recon carries an arrival date, and only recon's endpoint
+          // knows the field -- see the row's hidden state above.
+          payload.acquisition_date = $("#vd-recon-acquired").value;
           await patch(`/api/recon/vehicles/${id}`, payload);
         } else if (segment === "retail") {
           await patch(`/api/retail/vehicles/${id}`, payload);

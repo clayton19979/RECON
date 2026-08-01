@@ -135,6 +135,14 @@ def set_status(client: TestClient, order_id: int, status: str) -> None:
     patch(client, f"/api/orders/{order_id}/status", {"status": status, "actor": "advisor"})
 
 
+def add_job(client: TestClient, order_id: int, title: str, technician_id: int | None = None) -> dict:
+    return post(client, f"/api/orders/{order_id}/jobs", {"title": title, "technician_id": technician_id})
+
+
+def finish_job(client: TestClient, order_id: int, job_id: int, actor: str = "technician") -> None:
+    patch(client, f"/api/orders/{order_id}/jobs/{job_id}/done", {"done": True, "actor": actor})
+
+
 # How long each seeded car has been on the lot, and how long since anyone
 # touched it. Everything above is created through the API, which timestamps it
 # "now" -- so without this pass every Age reads 0d, every Idle reads "today",
@@ -556,6 +564,13 @@ def main() -> None:
         "/api/orders",
         {"concern": "Recon prep: brakes, windshield, detail", "segment": "recon", "recon_vehicle_id": r2["id"]},
     )
+    # The one seeded car whose ticket is split into the individual repairs,
+    # with one of them already ticked off. That's the state the Lot Report's
+    # "still needs" sentence exists to describe -- without it every seeded car
+    # is all-or-nothing and the sheet can only ever talk in dollars.
+    job_glass = add_job(client, ro_r2["id"], "Windshield", ray["id"])
+    job_brakes = add_job(client, ro_r2["id"], "Front + rear brakes", ray["id"])
+    job_detail = add_job(client, ro_r2["id"], "Detail", ray["id"])
     save_estimate(
         client,
         ro_r2["id"],
@@ -567,6 +582,7 @@ def main() -> None:
                 "unit_price": 0,
                 "unit_cost": 180.0,
                 "part_number": "WS-4471",
+                "job_id": job_glass["id"],
             },
             {
                 "kind": "part",
@@ -575,16 +591,27 @@ def main() -> None:
                 "unit_price": 0,
                 "unit_cost": 240.0,
                 "part_number": "BR-KIT-90",
+                "job_id": job_brakes["id"],
             },
             {
                 "kind": "labor",
-                "description": "Install windshield, full brake job, detail",
-                "quantity": 4.5,
+                "description": "Install windshield, full brake job",
+                "quantity": 4.0,
                 "unit_price": 0,
+                "job_id": job_brakes["id"],
+            },
+            {
+                "kind": "labor",
+                "description": "Wash, vacuum, interior wipe-down",
+                "quantity": 1.5,
+                "unit_price": 0,
+                "job_id": job_detail["id"],
             },
         ],
         labor_rate=0.0,
     )
+    # The detail is done; the two repairs waiting on parts are not.
+    finish_job(client, ro_r2["id"], job_detail["id"], actor="Ray Ortiz")
     # Parts are on order and haven't landed, which is why this car is still
     # sitting -- the board's Parts column and its "Waiting on parts" card
     # exist for exactly this state, and until now no lot vehicle in the seed
@@ -889,6 +916,7 @@ def main() -> None:
     print("  7 retail repair orders across every status (estimate, pending approval,")
     print("    in progress, complete + paid, complete + partial, voided, needs review)")
     print("  5 recon vehicles (acquired, in repair, ready, sold, archived/sold)")
+    print("    one of them split into three repairs, with the detail already ticked off")
     print("  4 we-owe items (open, open + deposit, fulfilled, waived)")
     print("  4 tasks (1 urgent, 1 done, 2 open) and 2 suggestions (1 resolved)")
     print("  6 staff members (2 advisors, 3 technicians, 1 manager)")

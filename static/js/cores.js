@@ -1,8 +1,9 @@
 import { $, $$, get, patch, post } from "./core.js";
 import { toast } from "./notify.js";
 import { confirmAction } from "./confirm.js";
-import { currentActor, esc, money, promptInvoiceNumber, withLoading } from "./shortcuts.js";
+import { currentActor, esc, fmtDate, money, promptInvoiceNumber, withLoading } from "./shortcuts.js";
 import { emptyRow } from "./empty-states.js";
+import { ON_ORDER_COLUMNS } from "./skeletons.js";
 import { state } from "./state.js";
 import { renderViewFailure } from "./error-boundary.js";
 import { ageClass } from "./vehicles-board.js";
@@ -13,8 +14,16 @@ import { openVehicleDetail } from "./vehicle-detail.js";
    ================================================================== */
 export async function loadCoresView() {
   // Fetched independently: one dead endpoint should degrade one panel, not
-  // freeze the other half of the screen on skeleton rows forever.
-  const [coresRes, returnsRes] = await Promise.allSettled([get("/api/cores"), get("/api/returns")]);
+  // freeze the other two thirds of the screen on skeleton rows forever.
+  const [onOrderRes, coresRes, returnsRes] = await Promise.allSettled([
+    get("/api/parts/on-order"), get("/api/cores"), get("/api/returns"),
+  ]);
+  if (onOrderRes.status === "fulfilled") {
+    state.partsOnOrder = onOrderRes.value;
+    renderPartsOnOrderTable();
+  } else {
+    renderViewFailure("cores", onOrderRes.reason, [["#on-order-table", ON_ORDER_COLUMNS]]);
+  }
   if (coresRes.status === "fulfilled") {
     state.cores = coresRes.value;
     state.coresSelected = new Set();
@@ -40,14 +49,26 @@ function daysSince(value) {
   return Math.max(0, Math.floor((Date.now() - new Date(value).getTime()) / 86400000));
 }
 
-// One summary row above both tables: what's still owed back across cores
-// and returns combined, since a vendor call to chase credits doesn't care
-// which table a line started in.
+// A part waiting this long or longer is the one worth a phone call. Same
+// number the board draws its Stalled line at, and deliberately so: a car
+// untouched for a week and a part uncollected for a week are the same
+// complaint, and two thresholds would have the two screens disagreeing about
+// which jobs are late.
+const OVERDUE_AFTER_DAYS = 7;
+
+function isOverdueOnOrder(p) {
+  return p.days_waiting != null && p.days_waiting >= OVERDUE_AFTER_DAYS;
+}
+
+// One summary row above all three tables: what the shop is waiting on from
+// its vendors, and what its vendors owe back. The credit figures span cores
+// and returns together, since a call to chase a credit doesn't care which
+// table the line started in.
 function renderCoresReturnsStats() {
   const cores = state.cores.filter((c) => !c.voided);
   const returns = state.returns.filter((r) => !r.voided);
   const outstanding =
-    cores.filter((c) => coreStatus(c) !== "credited").reduce((s, c) => s + c.core_charge, 0) +
+    cores.filter((c) => coreStatus(c) !== "credited").reduce((s, c) => s + c.core_total, 0) +
     returns.filter((r) => returnStatus(r) !== "credited").reduce((s, r) => s + Math.abs(r.credit_total), 0);
   const awaitingCores = cores.filter((c) => coreStatus(c) === "awaiting");
   const awaitingReturns = returns.filter((r) => returnStatus(r) === "awaiting");
@@ -65,7 +86,30 @@ function renderCoresReturnsStats() {
     ...returns.filter((r) => returnStatus(r) !== "credited").map((r) => r.vendor_name),
   ].filter(Boolean)).size;
 
+  // Waits are only counted where one is known -- a line ordered before the app
+  // started recording the date has no age, and averaging it in as zero would
+  // quietly make the oldest wait look younger than it is.
+  const onOrder = state.partsOnOrder;
+  const knownWaits = onOrder.map((p) => p.days_waiting).filter((d) => d != null);
+  const oldestWait = knownWaits.length ? Math.max(...knownWaits) : 0;
+  const undated = onOrder.length - knownWaits.length;
+  const onOrderValue = onOrder.reduce((s, p) => s + (p.value || 0), 0);
+  const onOrderTone = oldestWait >= 14 ? "crit" : oldestWait >= OVERDUE_AFTER_DAYS ? "warn" : "";
+  // Spelled out separately rather than folded into the oldest wait: an
+  // undated line is not a line that was ordered today, and rolling the two
+  // together is how "oldest 0d" ends up printed over a part from last month.
+  const onOrderSub = [
+    money(onOrderValue),
+    knownWaits.length ? (oldestWait ? `oldest ${oldestWait}d` : "all ordered today") : "",
+    undated ? `${undated} with no date` : "",
+  ].filter(Boolean).join(" · ");
+
   $("#cores-returns-stats").innerHTML = `
+    <div class="stat">
+      <div class="stat-label">On Order</div>
+      <div class="stat-value${onOrderTone ? ` ${onOrderTone}` : ""}">${onOrder.length}</div>
+      <div class="stat-sub">${onOrder.length ? onOrderSub : "nothing on order"}</div>
+    </div>
     <div class="stat">
       <div class="stat-label">Outstanding</div>
       <div class="stat-value num">${money(outstanding)}</div>
@@ -96,6 +140,97 @@ function openVehicleFromRow(row) {
   if (refId != null && (row.segment === "recon" || row.segment === "we_owe" || row.segment === "retail")) {
     openVehicleDetail(row.segment, refId);
   }
+}
+
+/* ---------- On Order ----------
+   The one table on this page that isn't about money coming back: it's the
+   list of parts a car is sitting and waiting for. */
+
+function onOrderMatchesSearch(p, query) {
+  if (!query) return true;
+  return [p.description, p.part_number, p.ro_number, p.vehicle_label, p.vehicle]
+    .some((f) => (f || "").toLowerCase().includes(query));
+}
+
+// Date only. The Ordered column answers "which day did we call this in", and
+// a timestamp to the minute is noise beside a Waiting column in whole days.
+function orderedOnHtml(value) {
+  if (!value) return '<span class="muted-dash" title="This part was marked ordered before RECON started recording the date">not recorded</span>';
+  return esc(fmtDate(value).replace(/,\s+\d{1,2}:\d{2}\s*(AM|PM)$/i, ""));
+}
+
+// Whole days, coloured on the same age scale the board uses for its own day
+// counts. An unknown wait gets no number and no colour rather than a zero,
+// which would read as "ordered today".
+function waitingHtml(p) {
+  if (p.days_waiting == null) return '<span class="muted-dash">—</span>';
+  const label = p.days_waiting === 0 ? "today" : `${p.days_waiting}d`;
+  return `<span class="${ageClass(p.days_waiting)}">${label}</span>`;
+}
+
+function visibleOnOrderRows() {
+  const query = (state.onOrderSearch || "").toLowerCase();
+  return state.partsOnOrder.filter((p) => {
+    if (!onOrderMatchesSearch(p, query)) return false;
+    return state.onOrderFilter === "overdue" ? isOverdueOnOrder(p) : true;
+  });
+}
+
+function renderPartsOnOrderTable() {
+  const rows = visibleOnOrderRows();
+  const query = (state.onOrderSearch || "").toLowerCase();
+  $("#on-order-count").textContent = `${rows.length} part${rows.length === 1 ? "" : "s"}`;
+  const total = rows.reduce((s, p) => s + (p.value || 0), 0);
+  const cars = new Set(rows.map((p) => p.vehicle_label)).size;
+  $("#on-order-total").textContent = rows.length
+    ? `${money(total)} across ${cars} vehicle${cars === 1 ? "" : "s"}`
+    : "";
+
+  $("#on-order-table").innerHTML = rows.length ? rows.map((p) => `
+    <tr class="clickable" data-id="${p.id}" title="Open ${esc(p.vehicle_label)}">
+      <td>${esc(p.description)}<div class="veh-sub">${esc(p.vehicle)}</div></td>
+      <td>${p.part_number ? esc(p.part_number) : '<span class="muted-dash">—</span>'}</td>
+      <td>${esc(p.ro_number)} · ${esc(p.vehicle_label)}</td>
+      <td class="num-col">${esc(String(p.outstanding_quantity))}</td>
+      <td class="num-col">${money(p.value)}</td>
+      <td>${orderedOnHtml(p.ordered_at)}</td>
+      <td>${waitingHtml(p)}</td>
+    </tr>
+  `).join("") : emptyRow(ON_ORDER_COLUMNS, query ? {
+    icon: "search",
+    title: "No parts on order match that search",
+    hint: `Nothing matched "${state.onOrderSearch}".`,
+  } : state.onOrderFilter === "overdue" ? {
+    icon: "check",
+    title: "Nothing has been waiting a week",
+    hint: `Every part on order was called in less than ${OVERDUE_AFTER_DAYS} days ago.`,
+  } : {
+    icon: "check",
+    title: "Nothing on order",
+    hint: "Parts you mark ordered on a ticket wait here until they're received, so you can see at a glance what every car is waiting for.",
+  });
+
+  $$(".clickable", $("#on-order-table")).forEach((row) => {
+    row.addEventListener("click", () => {
+      const item = state.partsOnOrder.find((p) => p.id === Number(row.dataset.id));
+      if (item) openVehicleFromRow(item);
+    });
+  });
+}
+
+export function wirePartsOnOrderView() {
+  $$("#view-cores [data-on-order-filter]").forEach((chip) => {
+    chip.addEventListener("click", () => {
+      state.onOrderFilter = chip.dataset.onOrderFilter;
+      $$("#view-cores [data-on-order-filter]").forEach((c) => c.classList.remove("active"));
+      chip.classList.add("active");
+      renderPartsOnOrderTable();
+    });
+  });
+  $("#on-order-search").addEventListener("input", (e) => {
+    state.onOrderSearch = e.target.value.trim();
+    renderPartsOnOrderTable();
+  });
 }
 
 function coresMatchesSearch(c, query) {
@@ -132,7 +267,7 @@ function renderCoresTable() {
   // Voided tickets aren't money owed back -- keep them out of the headline
   // figure. A deposit stays outstanding until the credit is recorded, not
   // merely until the core leaves the shop.
-  const outstanding = state.cores.filter((c) => coreStatus(c) !== "credited" && !c.voided).reduce((s, c) => s + c.core_charge, 0);
+  const outstanding = state.cores.filter((c) => coreStatus(c) !== "credited" && !c.voided).reduce((s, c) => s + c.core_total, 0);
   $("#cores-total").textContent = state.cores.length
     ? (outstanding > 0 ? `${money(outstanding)} outstanding` : "all deposits recovered")
     : "";
@@ -164,7 +299,7 @@ function renderCoresTable() {
       <td>${c.part_number ? esc(c.part_number) : '<span class="muted-dash">—</span>'}</td>
       <td>${esc(c.ro_number)} · ${esc(c.vehicle_label)}</td>
       <td>${esc(c.vendor_name || "—")}</td>
-      <td class="num-col">${money(c.core_charge)}</td>
+      <td class="num-col">${money(c.core_total)}${c.quantity > 1 ? `<div class="veh-sub num">${c.quantity} × ${money(c.core_charge)}</div>` : ""}</td>
       <td><span class="pill ${CORE_PILL[status]}">${CORE_LABEL[status]}</span></td>
       <td class="actions-col"><div class="row-actions">${actions}</div></td>
     </tr>
@@ -220,7 +355,7 @@ function renderCoresTable() {
       const answer = await promptInvoiceNumber({
         eyebrow: "CORE CREDIT",
         title: "Record the vendor's credit",
-        body: item ? `${item.description}${item.part_number ? ` (${item.part_number})` : ""} — ${money(item.core_charge)} deposit coming back.` : "",
+        body: item ? `${item.description}${item.part_number ? ` (${item.part_number})` : ""} — ${money(item.core_total)} deposit coming back, and off this car's cost.` : "",
         label: "Credit / invoice #",
         confirmLabel: "Record Credit",
       });

@@ -1,6 +1,10 @@
 import { $, $$, get, patch, post } from "./core.js";
 import { toast } from "./notify.js";
-import { esc, withLoading } from "./shortcuts.js";
+// fmtDay used to be a private copy here, for the Last Visit column. It is
+// shared now: the ticket printer needed the same "a day, not a timestamp"
+// answer, and two functions of the same name in two modules become one
+// arbitrary winner in the flattened bundle the DOM tests run against.
+import { esc, fmtDay, withLoading } from "./shortcuts.js";
 import { emptyRow } from "./empty-states.js";
 import { CUSTOMER_COLUMNS } from "./skeletons.js";
 import { STATUS_LABEL, STATUS_PILL_CLASS, state } from "./state.js";
@@ -107,15 +111,6 @@ function renderCustomersStats() {
       <div class="stat-value${noContact ? " warn" : ""}">${noContact}</div>
       <div class="stat-sub">${noContact ? "no phone or email on file" : "everyone is reachable"}</div>
     </button>`;
-}
-
-// Date-only formatting for the Last Visit column -- fmtDate's time-of-day
-// reads as noise at this distance.
-function fmtDay(value) {
-  if (!value) return "";
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return String(value);
-  return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }
 
 function customerRowHtml(c, open) {

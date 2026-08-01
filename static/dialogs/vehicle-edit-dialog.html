@@ -21,6 +21,15 @@
         <label>Trim<input id="vd-recon-trim"></label>
         <label>Color<input id="vd-recon-color"></label>
       </div>
+      <!-- Recon only: a we-owe car was sold long before the shop saw it, so
+           it has no arrival date to keep. Hidden rather than disabled for the
+           other segments -- see renderDetailHead. -->
+      <div id="vd-acquired-row">
+        <div class="form-row">
+          <label>Arrived on the lot<input id="vd-recon-acquired" type="date"></label>
+        </div>
+        <p class="hint">What the Age column counts from. Leave it blank if nobody knows, and Age falls back to the day the car was written up.</p>
+      </div>
     </div>
     <div class="modal-actions">
       <button class="btn btn-ghost" formnovalidate type="button" id="vehicle-edit-cancel-2">Cancel</button>

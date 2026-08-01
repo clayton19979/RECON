@@ -323,7 +323,7 @@ button { font-family: inherit; }
    means "go look at something" earns the color, and a zero is quiet.
    The :nth-child rules above are position-based and would otherwise paint
    card 2 we-owe-purple whatever it happens to be counting. */
-.stats-board { grid-template-columns: repeat(5, 1fr); }
+.stats-board { grid-template-columns: repeat(6, 1fr); }
 .stats-board .stat:nth-child(n+2) { border-top-color: var(--line); }
 .stats-board .stat:nth-child(1) { border-top-color: var(--accent); }
 .stats-board .stat:has(.stat-value.warn) { border-top-color: var(--warn); }
@@ -395,6 +395,17 @@ button { font-family: inherit; }
 .filters-note { font-size: 12px; color: var(--ink-faint); }
 .filters-search { width: 220px; padding: 6px 10px; font-size: 12.5px; }
 
+/* "Your search also matched cars this view can't show." Quieter than the bulk
+   bar beneath it -- it's information, not a mode you're in -- but it has to be
+   noticed, because the alternative is believing the car doesn't exist. */
+.search-reach {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
+  background: var(--paper-raise); border: 1px solid var(--line);
+  border-radius: var(--radius); padding: 7px 14px; margin-bottom: 12px;
+  font-size: 12.5px; color: var(--ink-soft);
+}
+.search-reach-sep { color: var(--ink-faint); }
+
 .bulk-bar {
   display: flex; align-items: center; gap: 10px; background: var(--accent-tint);
   border: 1px solid var(--accent); border-radius: var(--radius); padding: 8px 14px;
@@ -445,6 +456,21 @@ td.age-crit { color: var(--crit); font-weight: 700; }
 .idle-cell.age-crit { color: var(--crit); font-weight: 700; }
 .idle-cell { cursor: help; }
 td.over-quote { color: var(--crit); font-weight: 700; }
+/* Sits under the Cost figure on a car whose closed ticket still has parts
+   nobody marked received: the number above it is short by this much. Warn
+   rather than crit, and a second line rather than a recolour of the total,
+   because the total isn't wrong so much as incomplete -- and a car can be
+   over quote and missing receipts at the same time.
+
+   nowrap because the Cost column is sized for "$1,234.56" and this wrapped to
+   three lines inside it, which made a flagged row half again as tall as its
+   neighbours and the whole board jump as cars came and went. Letting the
+   column widen by the few pixels it needs is the cheaper of the two. */
+.cost-missing {
+  display: block; margin-top: 2px; white-space: nowrap;
+  font-size: 11px; font-weight: 700; color: var(--warn);
+  cursor: help;
+}
 .muted-dash { color: var(--ink-faint); }
 
 /* ---------- vehicles board ----------
@@ -549,6 +575,27 @@ table.sticky-head thead th {
   fill: none; stroke: currentColor; stroke-width: 1.8;
   stroke-linecap: round; stroke-linejoin: round;
 }
+
+/* ---------- promised date ----------
+   Blank on every recon row (they have no promise), so like the parts column
+   the only cells with anything in them are the ones worth reading. The date
+   itself stays plain text and the judgement rides in a small tag beside it:
+   the date is a fact, "3 days late" is the thing to act on, and separating
+   them means a promise that is merely due soon doesn't shout. A settled
+   promise fades out rather than keeping a colour it has earned its way out
+   of -- same rule the Idle column follows for finished cars. */
+.promised-col { width: 112px; white-space: nowrap; }
+.promise-cell { display: inline-flex; align-items: baseline; gap: 6px; color: var(--ink-soft); cursor: default; }
+.promise-settled { color: var(--ink-faint); }
+.promise-tag {
+  padding: 1px 6px; border-radius: 999px;
+  font-size: 11px; font-weight: 700; letter-spacing: .2px;
+  background: var(--line-soft); color: var(--ink-faint);
+}
+.promise-today { color: var(--ink); }
+.promise-today .promise-tag { background: var(--warn-tint); color: var(--warn); }
+.promise-late { color: var(--crit); font-weight: 600; }
+.promise-late .promise-tag { background: var(--crit-tint); color: var(--crit); }
 
 /* ---------- back link ---------- */
 .back-link {
@@ -682,6 +729,19 @@ textarea { min-height: 70px; resize: vertical; font-family: inherit; }
 .part-row.head .pr-qty, .part-row.head .pr-cost, .part-row.head .pr-core { justify-content: flex-end; }
 .pr-job > select { color: var(--ink-soft); }
 .pr-cost > input:disabled { text-decoration: line-through; }
+/* "Quoted $100.00" under a line the vendor billed at something else. Only
+   rendered when the two actually differ, so it never appears on a line where
+   it would just repeat the box above it.
+   The cell turns into a column for it. Left as a plain row, the note is a
+   second flex item and steals half the width from the price box beside it --
+   which in the wide layout squeezed the Cost field to about 48px. */
+.pr-cost.has-quote-note { flex-direction: column; align-items: stretch; justify-content: center; }
+.ei-quote-note {
+  display: block; margin-top: 2px; text-align: right; font-size: 10px; font-weight: 600;
+  font-family: "IBM Plex Mono", "Cascadia Mono", Consolas, monospace;
+}
+.ei-quote-note.over { color: var(--crit); }
+.ei-quote-note.under { color: var(--good); }
 
 .row-move-btn {
   background: none; border: none; color: var(--ink-faint); cursor: pointer; font-size: 14px; padding: 2px 4px;
@@ -767,7 +827,11 @@ textarea { min-height: 70px; resize: vertical; font-family: inherit; }
 .job-group { border-bottom: 1px solid var(--line); }
 .job-group:last-child { border-bottom: none; }
 .job-group-head {
-  display: flex; align-items: center; gap: 8px; padding: 9px 16px;
+  /* Wrapping rather than overflowing. On a wide screen nothing ever reaches
+     the edge and this changes nothing; on a narrow one the row's controls
+     used to run off the side of the card and become unreachable, which the
+     Done tick made more likely by adding one more of them. */
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 9px 16px;
   background: var(--paper-raise); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line-soft);
   font-size: 12px; font-weight: 700;
 }
@@ -790,6 +854,41 @@ textarea { min-height: 70px; resize: vertical; font-family: inherit; }
   padding: 2px 6px; white-space: nowrap;
 }
 .job-mini-add:hover { text-decoration: underline; }
+
+/* ---------- job completion ----------
+   A finished repair stays on the ticket -- its parts and its cost are still
+   the car's history -- so it is dimmed and struck through rather than moved
+   or hidden. What's left to do is whatever is still in normal ink. */
+.job-done-toggle {
+  /* flex-direction and margin-bottom are re-stated, not inherited: the base
+     `label` rule stacks its contents in a column with 12px under it, which is
+     right for a form field and wrong for a tick box beside its own word --
+     without these the box sits above "Done" and the header grows 20px taller. */
+  display: inline-flex; flex-direction: row; align-items: center; gap: 5px; margin-bottom: 0;
+  cursor: pointer; user-select: none;
+  font-size: 11px; font-weight: 700; color: var(--ink-faint); white-space: nowrap;
+  text-transform: uppercase; letter-spacing: 0.03em;
+  /* The header is a nowrap flex row and this is the narrowest thing in it, so
+     without this it is the first item squeezed when a job title runs long. */
+  flex: none;
+}
+.job-done-toggle input[type="checkbox"] { width: auto; accent-color: var(--good); }
+/* The job title is the one thing in the header that can afford to lose room:
+   everything else is a control. */
+.job-group-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.job-done-toggle input { cursor: pointer; margin: 0; }
+.job-done-toggle input:disabled { cursor: default; }
+.job-group.job-done .job-done-toggle { color: var(--good); }
+.job-group.job-done .job-group-title { text-decoration: line-through; color: var(--ink-faint); }
+.job-group.job-done .job-group-head { background: var(--paper); }
+
+/* One line above the grid: how far through this car we are. The ticket's own
+   status is a single flag for the whole car and cannot say this. */
+.job-progress {
+  padding: 8px 16px; font-size: 11.5px; font-weight: 700; color: var(--ink-soft);
+  text-transform: uppercase; letter-spacing: 0.04em; border-bottom: 1px solid var(--line-soft);
+}
+.job-progress.all-done { color: var(--good); }
 
 /* ---------- cost summary ---------- */
 .cost-summary { padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; }
@@ -991,6 +1090,12 @@ td.ap-coverage { padding-top: 6px; padding-bottom: 6px; }
    jump to (retail ROs). Reads as a label, not a dead button. */
 .task-order-link.is-static { cursor: default; color: var(--ink-soft); background: var(--line-soft); }
 .task-order-link.is-static:hover { text-decoration: none; }
+/* "voided" / "in History" riding inside the chip. Quieter than the stock
+   number it follows -- it qualifies the car, it isn't the name of it. */
+.task-order-state {
+  margin-left: 5px; padding-left: 5px; border-left: 1px solid currentColor;
+  font-weight: 600; opacity: .72; text-transform: none;
+}
 /* Chip + its unlink × travel as one unit so wrapping can't strand the ×. */
 .task-order-wrap { display: inline-flex; align-items: center; gap: 2px; }
 .task-link-clear {
@@ -1725,10 +1830,11 @@ input:focus-visible, select:focus-visible, textarea:focus-visible { outline: non
 .filters { flex-wrap: wrap; row-gap: 10px; }
 .topbar { flex-wrap: wrap; row-gap: 8px; }
 
-/* Five cards need a stop the four-card rows don't: at 1440 the board's row
-   squeezes its 26px numbers before Reports' does, so it drops to three
-   (2 + 1 reads worse than 3 + 2) a step earlier than everything else. */
-@media (max-width: 1440px) {
+/* Six cards need stops the four-card rows don't: the board's row squeezes its
+   26px numbers well before Reports' does, so it steps down earlier and lands
+   on counts that divide evenly (3 + 3, then 2 + 2 + 2) -- a lone card on a
+   second line reads as an afterthought rather than as part of the row. */
+@media (max-width: 1600px) {
   .stats-board { grid-template-columns: repeat(3, 1fr); }
 }
 @media (max-width: 1240px) {
@@ -2046,6 +2152,14 @@ tr.apl-invalid input.apl-desc { border-color: var(--crit); box-shadow: 0 0 0 3px
   margin: 2px 0 10px; font-size: 12.5px; color: var(--accent-strong);
   background: var(--accent-tint); border-radius: 6px; padding: 7px 10px;
 }
+/* The variant that carries an action button beside its text. The button keeps
+   its own width so a note long enough to wrap squashes the sentence, not the
+   way out of it. */
+div.field-note { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+div.field-note > .btn { flex: none; }
+/* Same note, but about something the form is going to refuse -- worth
+   reading before another ten fields get typed. */
+.field-note.warn { color: var(--warn); background: var(--warn-tint); }
 
 /* Inline copy affordance -- sits quietly beside the value it copies and only
    gains weight on hover, so it never competes with the value itself. */
@@ -2078,7 +2192,10 @@ tbody tr.voided-row td:nth-child(-n+3) { text-decoration: line-through; }
 /* "Pending credit" is money owed back, not work in progress -- accent, not
    amber, so the two tables' pending states read differently at a glance. */
 .pill-credit-pending { background: var(--accent); }
-.stats-cores { grid-template-columns: repeat(4, 1fr); margin-bottom: 16px; }
+/* Five now: On Order joined the four credit-chasing figures, and it's the one
+   that holds a car up, so it leads. Same neutral-edge rule as the board --
+   the colour is earned by the number, not by the position. */
+.stats-cores { grid-template-columns: repeat(5, 1fr); margin-bottom: 16px; }
 .stats-cores .stat { border-top-color: var(--line); }
 .stats-cores .stat:has(.stat-value.warn) { border-top-color: var(--warn); }
 .stats-cores .stat:has(.stat-value.crit) { border-top-color: var(--crit); }
@@ -2193,6 +2310,12 @@ input.overdue { border-color: var(--crit); color: var(--crit); }
    above -- so at equal specificity they always won, and none of the three
    ever actually collapsed on a narrow window. Re-apply the same breakpoints
    here, after their declarations, so they do. */
+/* Five cards, so .stats-cores needs the same early stop .stats-board has --
+   and it has to be declared here, after its own unconditional rule above,
+   for the same cascade reason this whole block exists. */
+@media (max-width: 1440px) {
+  .stats-cores { grid-template-columns: repeat(3, 1fr); }
+}
 @media (max-width: 1240px) {
   .stats-staff, .stats-ap, .stats-backup, .stats-cores { grid-template-columns: repeat(2, 1fr); }
 }

@@ -36,6 +36,9 @@ function receiveLineRow(line) {
       <div class="rl-main">
         <span class="rl-desc">${esc(line.desc)}</span>
         <span class="rl-note" hidden></span>
+        ${/* Its own class, not a second .rl-note: the price-changed note is
+             found by class and a second match would swallow it. */""}
+        ${line.core > 0 ? `<span class="rl-note rl-core-note">plus ${money(line.core)} core deposit each</span>` : ""}
       </div>
       <span class="rl-qty">${line.remaining} ×</span>
       <input class="rl-cost" type="number" min="0" step="0.01" value="${line.quoted}"
@@ -55,10 +58,16 @@ export async function openReceiveDialog() {
     const receivedQty = Number(row.dataset.receivedQuantity || 0);
     const remaining = qty - receivedQty;
     const cost = parseFloat(row.querySelector(".ei-cost").value || "0");
+    // The deposit is charged on the same vendor invoice as the part, so it
+    // belongs in the total this dialog promises before you post it -- the
+    // number here has to be the number on the paper in your hand.
+    const core = row.querySelector(".ei-core-on")?.checked
+      ? parseFloat(row.querySelector(".ei-core")?.value || "0") || 0
+      : 0;
     // `quoted` is what the ticket says and never changes while the dialog is
     // open; it's what the entered price is compared against and what decides
     // whether this line needs an override sent at all.
-    return { id: Number(cb.dataset.id), desc, remaining, quoted: cost };
+    return { id: Number(cb.dataset.id), desc, remaining, quoted: cost, core };
   });
   state.receiveLines = lines;
 
@@ -90,9 +99,11 @@ function updateReceiveTotalSummary() {
   const tax = parseFloat($("#receive-tax")?.value || "0");
   let subtotal = 0;
   let quotedTotal = 0;
+  let coreTotal = 0;
   let changed = 0;
   for (const line of lines) {
     quotedTotal += line.remaining * line.quoted;
+    coreTotal += line.remaining * (line.core || 0);
     const row = $(`.receive-line[data-id="${line.id}"]`, $("#receive-lines"));
     if (!row) continue;
     const entered = lineCostValue($(".rl-cost", row));
@@ -129,9 +140,15 @@ function updateReceiveTotalSummary() {
     ? `<div class="cost-line"><span>Quoted for these lines</span><span class="num">${money(quotedTotal)}</span></div>
        <div class="cost-line"><span>${diff > 0 ? "Over" : "Under"} the quote</span><span class="num ${diff > 0 ? "over" : "under"}">${money(Math.abs(diff))}</span></div>`
     : "";
-  $("#receive-total-summary").innerHTML = quotedLine + `
-    <div class="cost-line"><span>Subtotal</span><span class="num">${money(subtotal)}</span></div>
-    <div class="cost-line total"><span>Total</span><span class="num">${money(subtotal + tax)}</span></div>
+  // Deposits are posted as their own lines on the vendor invoice, so they are
+  // shown as their own line here: the Total is what the bill will say.
+  const coreLine = coreTotal
+    ? `<div class="cost-line"><span>Parts</span><span class="num">${money(subtotal)}</span></div>
+       <div class="cost-line"><span>Core deposits</span><span class="num">${money(coreTotal)}</span></div>`
+    : "";
+  $("#receive-total-summary").innerHTML = quotedLine + coreLine + `
+    <div class="cost-line"><span>Subtotal</span><span class="num">${money(subtotal + coreTotal)}</span></div>
+    <div class="cost-line total"><span>Total</span><span class="num">${money(subtotal + coreTotal + tax)}</span></div>
   `;
 }
 

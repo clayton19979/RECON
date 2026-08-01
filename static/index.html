@@ -38,7 +38,7 @@
     </button>
     <button class="rail-item" data-view="cores">
       <svg viewBox="0 0 24 24"><path d="M17 2l4 4-4 4M3 11V9a4 4 0 014-4h14M7 22l-4-4 4-4M21 13v2a4 4 0 01-4 4H3"/></svg>
-      <span>Cores &amp; Returns</span>
+      <span>Parts &amp; Cores</span>
     </button>
     <div class="rail-group-label">Team</div>
     <button class="rail-item" data-view="staff">
@@ -144,15 +144,15 @@
           </div>
         </div>
 
-        <!-- These five describe exactly the rows in the table below, not the
+        <!-- These six describe exactly the rows in the table below, not the
              whole lot: filter to Recon and every number here follows. The
              scope line spells out what's included so the count can't be
              misread as lot-wide.
 
-             Three of them are the "go look at something" cards -- they go
+             Four of them are the "go look at something" cards -- they go
              warn/crit when they're non-zero, and they're real <button>s
              because clicking one filters the board to what it counts. Those
-             three count with their own filter lifted (see boardStats), so
+             four count with their own filter lifted (see boardStats), so
              clicking a card never changes the number printed on it. Vehicles
              and Cost aren't filters and stay plain divs; a card you can't
              click shouldn't look like one you can. -->
@@ -183,6 +183,15 @@
             <div class="stat-value" id="stat-over-quote">0</div>
             <div class="stat-sub" id="stat-over-quote-sub">none past estimate</div>
           </button>
+          <!-- We-owe only: a promise a customer was given a date for, and the
+               date has gone by. Settled promises never count, so this number
+               comes down as the work gets done instead of climbing forever. -->
+          <button type="button" class="stat stat-action" data-board-filter="late" aria-pressed="false"
+                  title="We-owe promises whose date has already passed. Fulfilled and waived promises aren't counted.">
+            <div class="stat-label">Past Promised</div>
+            <div class="stat-value" id="stat-late-promises">0</div>
+            <div class="stat-sub" id="stat-late-promises-sub">no promise past due</div>
+          </button>
         </div>
         <p class="stats-scope" id="vehicles-scope" role="status" aria-live="polite" aria-atomic="true">Every vehicle on the board.</p>
 
@@ -212,6 +221,11 @@
              a 60-car lot the table itself is what people came for. -->
         <div id="vehicles-chart" class="board-chart"></div>
 
+        <!-- Where else the search found the car: hidden by this view's own
+             filters, or filed to History. Sits directly above the rows it's
+             talking about, and only exists while a search is running. -->
+        <div class="search-reach" id="vehicles-search-reach" role="status" aria-live="polite" hidden></div>
+
         <div class="bulk-bar" id="vehicles-bulk-bar" hidden>
           <span id="vehicles-bulk-count"></span>
           <span class="bulk-hint">Esc clears · Shift+click for a range</span>
@@ -239,6 +253,8 @@
                   <th class="num-col age-col sortable" data-sort-key="age" aria-sort="none">Age <span class="sort-arrow"></span></th>
                   <th class="num-col idle-col sortable" data-sort-key="idle" aria-sort="none"
                       title="Time since anything last happened on this vehicle's repair order">Idle <span class="sort-arrow"></span></th>
+                  <th class="promised-col sortable" data-sort-key="promised" aria-sort="none"
+                      title="The date a we-owe was promised to the customer. Recon cars have no promise, so the cell is blank.">Promised <span class="sort-arrow"></span></th>
                   <th class="num-col quoted-col sortable" data-sort-key="quoted" aria-sort="none">Quoted <span class="sort-arrow"></span></th>
                   <th class="num-col sortable" data-sort-key="cost" aria-sort="none">Cost <span class="sort-arrow"></span></th>
                 </tr>
@@ -687,12 +703,48 @@
       <section class="view" id="view-cores">
         <div class="page-head">
           <div>
-            <h1>Cores &amp; Returns</h1>
-            <p class="page-desc">Core deposits owed back from vendors on parts like calipers, alternators, and engines — tracked per part from still-on-the-shelf, to picked up, to credited, so nothing gets left uncollected.</p>
+            <h1>Parts &amp; Cores</h1>
+            <p class="page-desc">Everything in flight between the shop and its vendors: parts that are on order and haven't turned up, core deposits owed back, and parts going back for credit.</p>
           </div>
         </div>
 
         <div class="stats stats-cores" id="cores-returns-stats"></div>
+
+        <!-- On Order sits first because it's the one that holds a car up. The
+             board already counts these per car; what it can't say is which
+             part, or how long it's been coming, which is the bit that gets
+             somebody to pick up the phone. -->
+        <div class="subsection-head">
+          <div>
+            <h2>On Order</h2>
+            <p class="page-desc">Parts marked ordered that haven't been received yet — longest wait first. Click a row to open the vehicle and receive it.</p>
+          </div>
+        </div>
+
+        <div class="filters">
+          <button class="chip active" data-on-order-filter="">All</button>
+          <button class="chip" data-on-order-filter="overdue" title="Ordered a week or more ago and still not here">Waiting 7+ days</button>
+          <input id="on-order-search" class="filters-search" placeholder="Search parts on order…" title="Searches part, part #, RO, and vehicle" aria-label="Search parts on order" autocomplete="off">
+          <div class="filters-gap"></div>
+          <span class="filters-note" id="on-order-count" aria-live="polite">0 parts</span>
+          <span class="filters-note" id="on-order-total"></span>
+        </div>
+
+        <div class="panel">
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Part</th><th>Part #</th><th>RO / Vehicle</th><th class="num-col">Qty</th><th class="num-col">Value</th><th>Ordered</th><th>Waiting</th></tr></thead>
+              <tbody id="on-order-table"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="subsection-head">
+          <div>
+            <h2>Core Deposits</h2>
+            <p class="page-desc">Deposits the vendor adds on parts like calipers, alternators and engines — tracked per part from still-on-the-shelf, to picked up, to credited, so nothing gets left uncollected.</p>
+          </div>
+        </div>
 
         <!-- Same three-state vocabulary as Returned Parts below: a core is
              Pending (still here), Awaiting Credit (sent back, no paperwork
@@ -767,7 +819,7 @@
             <p class="page-desc">Technicians and advisors. Deactivate rather than delete — history stays attributed.</p>
           </div>
           <div class="page-head-actions">
-            <button type="button" class="btn btn-ghost" id="staff-report-link" title="Repair orders, hours and labor cost per technician">
+            <button type="button" class="btn btn-ghost" id="staff-report-link" title="Repair orders, hours and still-open work per technician">
               <svg viewBox="0 0 24 24"><path d="M9 17H5a2 2 0 01-2-2V5a2 2 0 012-2h14a2 2 0 012 2v10a2 2 0 01-2 2h-4M9 17l3 4 3-4M9 17h6"/></svg>
               Productivity Report
             </button>

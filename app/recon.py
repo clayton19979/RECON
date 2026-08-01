@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Callable, Mapping
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException
@@ -89,6 +89,19 @@ def is_stalled(row: Mapping[str, Any]) -> bool:
     return max(0, int(row.get("idle_days") or 0)) >= STALLED_AFTER_DAYS
 
 
+def live_orders(orders: list[dict]) -> list[dict]:
+    """The tickets that actually count, in the order cost_rollup returned them.
+
+    Voiding a ticket writes `status='complete', voided=1` (see workflow.void_order):
+    the flag is the meaning, the status is only how the row leaves the open-orders
+    count. Reading the status without the flag therefore reports a mistake as
+    finished work, so everything that judges what a car is doing filters here
+    first -- the same rule cost_rollup applies to the money and last_activity
+    applies to the clock.
+    """
+    return [o for o in orders if not o.get("voided")]
+
+
 def order_status_bucket(orders: list[dict]) -> str:
     """Finished or still in progress, judged by the repair tickets themselves.
 
@@ -96,9 +109,17 @@ def order_status_bucket(orders: list[dict]) -> str:
     so the ticket is what the answer has to come from: finished means every
     ticket that exists is closed, and at least one exists. A car with no
     ticket at all has not finished anything -- it has not started.
+
+    Voided tickets are not tickets. A car whose only one had been voided read
+    as finished here, which showed a green Complete pill on the board, filed
+    the car under "Ready to sell" on Walt's Lot Report, and -- because
+    is_stalled deliberately never flags a finished car -- took it out of the
+    Stalled count for good. One mis-click made a car invisible in the three
+    places that exist to stop cars going missing.
     """
-    active = next((o for o in reversed(orders) if o["status"] != "complete"), None)
-    has_closed = any(o["status"] == "complete" for o in orders)
+    live = live_orders(orders)
+    active = next((o for o in reversed(live) if o["status"] != "complete"), None)
+    has_closed = any(o["status"] == "complete" for o in live)
     return "finished" if (active is None and has_closed) else "in_progress"
 
 
@@ -246,20 +267,16 @@ def cost_rollup(db: sqlite3.Connection, column: str, ref_id: int, segment: str |
     again once sent back to the vendor (part_returned). quoted_cost (full
     quantity regardless of receipt) is returned alongside for comparison.
 
-    quoted_cost is priced at quoted_unit_cost -- what the line was written
-    down at -- not at unit_cost, which receiving overwrites with the price the
-    vendor's invoice actually said. Using unit_cost for both made every
-    comparison self-referential: the moment a part was received, its quote
-    became its cost and the overrun vanished. Rows from before that column
-    existed carry NULL and fall back to unit_cost, which is the answer they
-    have always given.
-
-    open_cost is the other half of that split: what finishing this car should
-    still cost, priced at the quote, counting only part lines that have not
-    landed yet. It used to be worked out as quoted minus actual, which is only
-    the same number while receiving is busy rewriting the quote -- with a real
-    quote kept, a part that came in $40 UNDER its estimate would otherwise
-    read as $40 of work still to do on a car nobody owes anything else on.
+    A core deposit is money out of the shop's pocket that comes back only when
+    the old unit does, so an outstanding one counts as part of what the car
+    cost -- quoted and actual alike, so a deposit can never make a car read as
+    over its own quote. It stops counting the moment the vendor's credit is
+    recorded (core_return_invoice_number), which is the same "outstanding"
+    line the Cores board draws. A car whose alternator core never went back
+    really did cost that $45, and leaving it out understated every such car
+    forever while the only place the money appeared was a board nobody had a
+    money reason to work. A returned part takes its deposit with it: there is
+    no old unit owed to anyone once the new part goes back.
 
     parts_pending counts part lines that have been ordered from a vendor but
     haven't shown up yet (status='ordered'; 'received' means it landed,
@@ -268,9 +285,13 @@ def cost_rollup(db: sqlite3.Connection, column: str, ref_id: int, segment: str |
     only visible by opening the ticket -- see the board's Parts column.
     Returned parts are excluded: a line sent back to the vendor isn't
     something the shop is still waiting on."""
+    # An outstanding deposit: charged per unit, so it scales with quantity the
+    # same way the part's own cost does.
+    core_owing = "ei.kind='part' AND ei.part_returned=0 AND ei.core_return_invoice_number='' AND ei.core_charge>0"
     rows = db.execute(
         f"""SELECT o.id, o.number, o.status, o.voided,
-               coalesce(sum(CASE WHEN ei.kind='part' AND ei.part_returned=0 THEN ei.received_quantity*ei.unit_cost ELSE 0 END),0) parts_cost,
+               coalesce(sum(CASE WHEN ei.kind='part' AND ei.part_returned=0 THEN ei.received_quantity*ei.unit_cost ELSE 0 END),0)
+                 + coalesce(sum(CASE WHEN {core_owing} THEN ei.received_quantity*ei.core_charge ELSE 0 END),0) parts_cost,
                coalesce(sum(CASE WHEN ei.kind='labor' THEN ei.quantity*ei.unit_cost ELSE 0 END),0) labor_cost,
                -- Hours in their own right, not just as an input to cost. On
                -- recon and we-owe the labor rate is always 0 (in-house time
@@ -285,17 +306,25 @@ def cost_rollup(db: sqlite3.Connection, column: str, ref_id: int, segment: str |
                -- -- parts_cost above already drops a returned line via
                -- part_returned, and subtracting the credit as well would count
                -- the same money back twice.
-               coalesce(sum(CASE WHEN ei.kind='credit' THEN -ei.quantity*coalesce(ei.quoted_unit_cost,ei.unit_cost)
-                                 ELSE ei.quantity*coalesce(ei.quoted_unit_cost,ei.unit_cost) END),0) quoted_cost,
-               -- Still to spend: the quoted value of every part line that has
-               -- not landed yet. Labor and fees are never outstanding -- they
-               -- count the moment they're logged -- and a line sent back to
-               -- the vendor is nobody's problem any more.
-               coalesce(sum(CASE WHEN ei.kind='part' AND ei.part_returned=0
-                                 THEN max(ei.quantity-ei.received_quantity,0)*coalesce(ei.quoted_unit_cost,ei.unit_cost)
-                                 ELSE 0 END),0) open_cost,
+               --
+               -- A part sent back to the vendor drops out of the quote as well
+               -- as out of the actual. It is not money the shop is going to
+               -- spend, and leaving it in made the comparison the board and
+               -- the Lot Report exist to draw meaningless: order a $500
+               -- alternator, get the wrong one, send it back and buy the right
+               -- $520 one, and the car read "quoted $1,020, spent $520" --
+               -- $500 under estimate on a job that came in $20 over. The two
+               -- exclusions cannot double-subtract, because the credit line a
+               -- vendor invoice writes is a line of its own and never sets
+               -- part_returned on the line it refunds.
+               coalesce(sum(CASE WHEN ei.kind='part' AND ei.part_returned=1 THEN 0
+                                 WHEN ei.kind='credit' THEN -ei.quantity*ei.unit_cost
+                                 ELSE ei.quantity*ei.unit_cost END),0) quoted_cost,
                coalesce(sum(CASE WHEN ei.kind='part' AND ei.status='ordered' AND ei.part_returned=0 THEN 1 ELSE 0 END),0) parts_pending,
-               coalesce(sum(CASE WHEN ei.kind='part' AND ei.status='ordered' AND ei.part_returned=0 THEN ei.quantity*ei.unit_cost ELSE 0 END),0) parts_pending_value
+               -- Core deposits ride in here too: they land on the same vendor
+               -- invoice as the part, so this is what that bill will say.
+               coalesce(sum(CASE WHEN ei.kind='part' AND ei.status='ordered' AND ei.part_returned=0 THEN ei.quantity*ei.unit_cost ELSE 0 END),0)
+                 + coalesce(sum(CASE WHEN {core_owing} AND ei.status='ordered' THEN ei.quantity*ei.core_charge ELSE 0 END),0) parts_pending_value
            FROM orders o
            LEFT JOIN estimates e ON e.order_id=o.id
            LEFT JOIN estimate_items ei ON ei.estimate_id=e.id
@@ -548,12 +577,17 @@ def vehicle_board_rows(
         ).fetchall()
         for row in rows:
             rollup = cost_rollup(db, "recon_vehicle_id", row["id"])
-            order_ids = [o["id"] for o in rollup["orders"]]
+            # Voided tickets are excluded from everything the row says the car
+            # is doing, the same way they're already excluded from what it
+            # cost -- see live_orders.
+            live = live_orders(rollup["orders"])
+            voided_count = len(rollup["orders"]) - len(live)
+            order_ids = [o["id"] for o in live]
             # Recon status/sale tracking isn't used here -- the repair order's
             # own status is what the advisor actually maintains, so that's
             # what drives the displayed status and in-progress/finished bucket.
-            active_order = next((o for o in reversed(rollup["orders"]) if o["status"] != "complete"), None)
-            latest_order = rollup["orders"][-1] if rollup["orders"] else None
+            active_order = next((o for o in reversed(live) if o["status"] != "complete"), None)
+            latest_order = live[-1] if live else None
             current_order = active_order or latest_order
             display_status = current_order["status"] if current_order else "acquired"
             activity_at = last_activity(db, "recon_vehicle_id", row["id"], row["created_at"])
@@ -586,6 +620,11 @@ def vehicle_board_rows(
                     # board link through this, so "follow up on that stalled car"
                     # lands on the RO rather than floating unattached.
                     "order_id": current_order["id"] if current_order else None,
+                    # How many tickets on this car were taken back. Only used
+                    # to tell "nobody has written one" apart from "the one
+                    # somebody wrote was voided" -- two rows that otherwise
+                    # read identically and need different things done to them.
+                    "voided_order_count": voided_count,
                     "updated_at": row["updated_at"],
                     "age_days": age_days(row["created_at"]),
                     "last_activity_at": activity_at,
@@ -606,9 +645,13 @@ def vehicle_board_rows(
         ).fetchall()
         for row in rows:
             rollup = cost_rollup(db, "we_owe_id", row["id"])
-            order_ids = [o["id"] for o in rollup["orders"]]
-            active_order = next((o for o in reversed(rollup["orders"]) if o["status"] != "complete"), None)
-            latest_order = rollup["orders"][-1] if rollup["orders"] else None
+            # Same rule as recon above: a voided ticket says nothing about the
+            # promise, and voiding one is certainly not keeping it.
+            live = live_orders(rollup["orders"])
+            voided_count = len(rollup["orders"]) - len(live)
+            order_ids = [o["id"] for o in live]
+            active_order = next((o for o in reversed(live) if o["status"] != "complete"), None)
+            latest_order = live[-1] if live else None
             current_order = active_order or latest_order
             # fulfilled/waived is the authoritative "is this promise resolved"
             # signal (set explicitly by the advisor, separate from any
@@ -625,6 +668,7 @@ def vehicle_board_rows(
                 2,
             )
             activity_at = last_activity(db, "we_owe_id", row["id"], row["created_at"])
+            status_bucket = we_owe_status_bucket(row["status"])
             result.append(
                 {
                     "segment": "we_owe",
@@ -636,7 +680,14 @@ def vehicle_board_rows(
                     "customer_name": row["customer_name"],
                     "description": row["description"],
                     "status": display_status,
-                    "status_bucket": we_owe_status_bucket(row["status"]),
+                    "status_bucket": status_bucket,
+                    # What the salesman told the customer they'd get their car
+                    # back by. It was captured at intake and then shown nowhere
+                    # anybody makes decisions -- the board, the summary cards
+                    # and the lot sheet all read these two fields now, so a
+                    # promise going past due is visible without opening the car.
+                    "target_date": row["target_date"],
+                    "promise_days_late": promise_days_late(row["target_date"], status_bucket),
                     # A we-owe car has a purchase price too -- it's just usually
                     # entered here, because the shop bought and recon'd it long
                     # before RECON ever saw it.
@@ -658,6 +709,7 @@ def vehicle_board_rows(
                     # board link through this, so "follow up on that stalled car"
                     # lands on the RO rather than floating unattached.
                     "order_id": current_order["id"] if current_order else None,
+                    "voided_order_count": voided_count,
                     "updated_at": row["updated_at"],
                     "age_days": age_days(row["created_at"]),
                     "last_activity_at": activity_at,

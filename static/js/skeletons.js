@@ -28,18 +28,24 @@ export function skeletonCards(count = 3) {
     </div>`).join("");
 }
 
-// Select, Stock #, Vehicle, Type, Status, Technician, Parts, Age, Quoted,
-// Cost. Two places have to agree with the board's <thead>: the loading
-// skeleton (a short one makes the table visibly jump a column wider the
-// moment data lands) and the empty state's colspan (a short one narrows the
-// "no vehicles" panel to part of the table). Both were separate literals and
-// both were wrong the moment the Parts column went in, so they share one
-// constant now. tests/test_static_assets.py holds it to the real <th> count.
-export const BOARD_COLUMNS = 11;
+// Select, Stock #, Vehicle, Type, Status, Technician, Parts, Age, Idle,
+// Promised, Quoted, Cost. Two places have to agree with the board's <thead>:
+// the loading skeleton (a short one makes the table visibly jump a column
+// wider the moment data lands) and the empty state's colspan (a short one
+// narrows the "no vehicles" panel to part of the table). Both were separate
+// literals and both were wrong the moment the Parts column went in, so they
+// share one constant now. tests/test_static_assets.py holds it to the real
+// <th> count.
+export const BOARD_COLUMNS = 12;
 
 // Name, Contact, Location, Vehicles, Repair Orders, Last Visit. Same
 // skeleton/empty-state colspan contract as BOARD_COLUMNS above.
 export const CUSTOMER_COLUMNS = 6;
+
+// Part, Part #, RO / Vehicle, Qty, Value, Ordered, Waiting. Same contract
+// again: the loading skeleton, the empty state and the error state all have
+// to span the On Order table's real width.
+export const ON_ORDER_COLUMNS = 7;
 
 // Which containers to fill with a placeholder when a view is opened, and how
 // many columns each table has (so the skeleton lines up with its header).
@@ -51,7 +57,7 @@ export const VIEW_PLACEHOLDERS = {
   // failed load should say so once rather than three times down the page.
   reports:     [["#report-output", 0]],
   accounting:  [["#ap-table", 8]],
-  cores:       [["#cores-table", 8], ["#returns-table", 8]],
+  cores:       [["#on-order-table", ON_ORDER_COLUMNS], ["#cores-table", 8], ["#returns-table", 8]],
   staff:       [["#staff-table", 5]],
   backup:      [["#backup-table", 4]],
   tasks:       [["#tasks-list", 0]],

@@ -1,7 +1,7 @@
 import { $, $$, get } from "./core.js";
 import { esc, money } from "./shortcuts.js";
-import { emptyRow } from "./empty-states.js";
-import { BOARD_COLUMNS, showPlaceholders } from "./skeletons.js";
+import { emptyRow, emptyState } from "./empty-states.js";
+import { BOARD_COLUMNS, showPlaceholders, skeletonCards } from "./skeletons.js";
 import { STATUS_LABEL, STATUS_PILL_CLASS, state } from "./state.js";
 import { renderViewFailure } from "./error-boundary.js";
 import { barChart } from "./reports.js";
@@ -25,6 +25,15 @@ export async function loadVehiclesView() {
   $$("#vehicles-stats .stat-sub").forEach((el) => { el.textContent = ""; });
   $("#vehicles-scope").textContent = "";
   $("#vehicles-chart").innerHTML = "";
+  // The columns aren't a table, so VIEW_PLACEHOLDERS can't paint them -- and
+  // leaving the previous segment's cards up under the new segment's chips is
+  // exactly what showPlaceholders exists to prevent.
+  const columns = state.vehicleLayout === "columns" ? $("#vehicles-columns") : null;
+  if (columns) {
+    columns.innerHTML = LOT_COLUMNS.map((col) =>
+      `<section class="veh-col"><header class="veh-col-head"><span class="veh-col-title">${esc(col.label)}</span></header>
+       <div class="veh-col-body">${skeletonCards(2)}</div></section>`).join("");
+  }
   try {
     state.vehicles = await get(state.filter === "history" ? "/api/vehicles-board?archived=true" : "/api/vehicles-board");
   } catch (err) {
@@ -64,10 +73,41 @@ export function loadVehicleViewPrefs() {
     state.vehicleIdleBucket = saved.idleBucket;
   }
   if (typeof saved.chartOpen === "boolean") state.vehicleChartOpen = saved.chartOpen;
+  if (saved.layout === "columns" || saved.layout === "list") state.vehicleLayout = saved.layout;
   const chips = $$("#view-vehicles .filters .chip[data-filter]");
   chips.forEach((c) => c.classList.toggle("active", (c.dataset.filter || "") === state.filter));
   $("#vehicles-status-filter").value = state.vehicleStatus;
   syncPartsFilterChip();
+  syncLayoutSwitch();
+}
+
+/* Which of the two layouts is on show. One writer for everything the DOM
+   carries about it -- the pressed button and the [hidden] on each of the two
+   containers -- so a layout set by a click, by restored preferences or by a
+   reload can't leave the switch saying one thing and the screen showing the
+   other. */
+export function syncLayoutSwitch() {
+  const columns = state.vehicleLayout === "columns";
+  $$("#vehicles-layout-switch .view-switch-btn").forEach((btn) => {
+    const on = btn.dataset.vehLayout === state.vehicleLayout;
+    btn.classList.toggle("active", on);
+    btn.setAttribute("aria-pressed", on ? "true" : "false");
+  });
+  const colWrap = $("#vehicles-columns");
+  const listWrap = $("#vehicles-list-panel");
+  if (colWrap) colWrap.hidden = !columns;
+  if (listWrap) listWrap.hidden = columns;
+}
+
+export function setVehicleLayout(layout) {
+  if (layout !== "columns" && layout !== "list") return;
+  if (state.vehicleLayout === layout) return;
+  state.vehicleLayout = layout;
+  // The cursor is a row in one layout and a card in the other; the key is the
+  // same either way, so it survives the switch and applyVehicleCursor just
+  // finds it in the container that's now on screen.
+  syncLayoutSwitch();
+  renderVehiclesTable();
 }
 
 // The toggle's pressed state lives in two places the DOM cares about --
@@ -112,10 +152,12 @@ function saveVehicleViewPrefs() {
       partsOnly: state.vehiclePartsOnly, overOnly: state.vehicleOverOnly,
       idleBucket: state.vehicleIdleBucket,
       chartOpen: state.vehicleChartOpen,
+      layout: state.vehicleLayout,
     }));
   } catch {}
-  // chartOpen is deliberately not part of "dirty": showing or hiding the chart
-  // doesn't hide any rows, so offering to reset the view over it would be
+  // chartOpen and layout are deliberately not part of "dirty": showing or
+  // hiding the chart, or reading the same cars as columns instead of rows,
+  // doesn't hide any of them, so offering to reset the view over it would be
   // noise. Every other pref here changes which cars you can see.
   const dirty = !!(state.filter || state.vehicleStatus || state.vehicleSort.key || state.search
     || state.vehiclePartsOnly || state.vehicleOverOnly || state.vehicleIdleBucket);
@@ -415,7 +457,13 @@ function idleClass(days) {
 // follow the same rule: a finished car states its idle days plainly instead
 // of in alarm red. A waived promise from five weeks ago is not a problem, and
 // painting it like one trains you to ignore the cars that are.
-function idleCellHtml(v) {
+//
+// `spelled` is for the columns layout: in the table the column header supplies
+// the meaning, so the cell can be a bare "12d", but a card has no header over
+// it and "12d" sitting beside "41d old" is two unlabelled day counts that mean
+// completely different things. Same tone and same tooltip either way -- one
+// function, so the two layouts cannot end up disagreeing about a car.
+function idleCellHtml(v, { spelled = false } = {}) {
   const days = v.idle_days || 0;
   const when = v.last_activity_at ? String(v.last_activity_at).slice(0, 10) : "";
   const finished = v.status_bucket === "finished";
@@ -424,7 +472,10 @@ function idleCellHtml(v) {
       + (finished && days >= STALLED_AFTER_DAYS ? " — work is finished, so this isn't stalled" : "")
     : "No activity recorded";
   const tone = finished ? "age-ok" : idleClass(days);
-  return `<span class="idle-cell ${tone}" title="${esc(title)}">${days === 0 ? "today" : `${days}d`}</span>`;
+  const text = spelled
+    ? (days === 0 ? "Active today" : `Idle ${days}d`)
+    : (days === 0 ? "today" : `${days}d`);
+  return `<span class="idle-cell ${tone}" title="${esc(title)}">${text}</span>`;
 }
 
 /* The board's one chart. Cost-by-vehicle already exists on Reports and would
@@ -765,6 +816,10 @@ export function renderVehiclesTable() {
   renderIdleChart(rows);
   renderVehicleSortHeaders();
   saveVehicleViewPrefs();
+  // The columns are built from these same rows -- one filtered, sorted list,
+  // two ways of reading it. No-ops unless the columns layout is the one on
+  // screen (syncLayoutSwitch owns which container is visible).
+  renderVehicleColumns(rows);
 
   if (!rows.length) {
     body.innerHTML = emptyRow(BOARD_COLUMNS, vehiclesEmptyState());
@@ -819,11 +874,215 @@ export function renderVehiclesTable() {
   if (scroller && scroller.scrollTop !== scrollTop) scroller.scrollTop = scrollTop;
 }
 
+/* ---------- the columns layout ----------
+
+   The same filtered, sorted rows the table shows, dealt into the three piles
+   Walt actually asks about: what hasn't been started, what's in the shop, and
+   what can go out. Left to right is the direction a car travels, which is the
+   shape everyone who has used a shop job board already reads without being
+   told.
+
+   The piles are the *server's* -- every board row arrives stamped with the
+   lot_bucket the Lot Report groups by (app/recon.py::lot_bucket), so a car
+   cannot be under "In the shop" here and under "Not started" on the sheet
+   Walt is holding. Same reason each card's "what it still needs" line is the
+   server's sentence rather than one assembled in the browser.
+
+   Sort still applies: it orders the cards inside each column, so "Idle,
+   longest first" reads as "the most forgotten car at the top of every pile". */
+const LOT_WAITING = "waiting";
+const LOT_WORKING = "working";
+const LOT_READY = "ready";
+
+export const LOT_COLUMNS = [
+  { key: LOT_WAITING, label: "Not started", blank: "Nothing waiting to be started." },
+  { key: LOT_WORKING, label: "In the shop", blank: "Nothing in the shop right now." },
+  { key: LOT_READY, label: "Ready to sell", blank: "Nothing finished yet." },
+];
+
+const LOT_COLUMN_KEYS = new Set(LOT_COLUMNS.map((c) => c.key));
+
+// The server stamps every row, so the fallback is unreachable -- but a car
+// that quietly vanished off the board because its bucket was a string nobody
+// recognised would be the worst possible way to find that out, so an unknown
+// bucket lands in the middle pile rather than nowhere.
+function columnKey(v) {
+  return LOT_COLUMN_KEYS.has(v.lot_bucket) ? v.lot_bucket : LOT_WORKING;
+}
+
+/* The rows in the order they appear on screen.
+
+   In the table that's just the sorted list; in columns it's the same list
+   re-grouped, and the keyboard has to walk what you can actually see -- with
+   the table's order, ArrowDown from the last card of column one would jump to
+   a card three columns over. */
+export function displayedVehicles() {
+  const rows = visibleVehicles();
+  if (state.vehicleLayout !== "columns") return rows;
+  return LOT_COLUMNS.flatMap((col) => rows.filter((v) => columnKey(v) === col.key));
+}
+
+/* "$1,240.00 spent" plus, where there is any, what finishing the column's
+   cars should still cost. The same two numbers the Lot Report prints under
+   each of its groups, so the two screens can be read side by side.
+
+   A column with no money in it either way says nothing at all rather than
+   "$0.00 spent" -- three columns of zeroes across the top of the board is
+   three pieces of furniture, and it makes the one real number harder to spot
+   than if it were alone. */
+function columnSummary(rows) {
+  const spent = rows.reduce((s, v) => s + (v.actual_cost || 0), 0);
+  const left = rows.reduce((s, v) => s + (v.remaining_cost || 0), 0);
+  const bits = [];
+  if (spent > 0.005) bits.push(`${money(spent)} spent`);
+  if (left > 0.005) bits.push(`${money(left)} left`);
+  return bits.join(" · ");
+}
+
+function cardSubHtml(v) {
+  if (v.segment === "we_owe") {
+    return `<span class="veh-customer"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-7 8-7s8 3 8 7"/></svg>${esc(v.customer_name || "—")}</span>`;
+  }
+  // Nobody scans a full 17-character VIN -- the last 8 identify the car.
+  return v.vin
+    ? `<span title="${esc(v.vin)}">VIN …${esc(String(v.vin).slice(-8))}</span>`
+    : `<span class="muted-dash">No VIN on file</span>`;
+}
+
+function vehicleCardHtml(v) {
+  const key = vehicleKey(v);
+  const over = isOverQuote(v);
+  const age = v.age_days == null ? "" : `${v.age_days}d old`;
+  const ref = v.stock_number || (v.segment === "we_owe" ? "We-Owe" : "—");
+  return `
+    <label class="veh-card-select" title="Select ${esc(v.stock_number || v.vehicle)}">
+      <input type="checkbox" class="veh-select" data-key="${key}" aria-label="Select ${esc(v.stock_number || v.vehicle)}" ${state.vehicleSelection.has(key) ? "checked" : ""}>
+    </label>
+    <div class="veh-card-head">
+      <span class="pill ${vehicleStatusPillClass(v)}">${esc(STATUS_LABEL[v.status] || v.status)}</span>
+      <span class="veh-card-ref">${esc(ref)}${age ? ` <span class="${ageClass(v.age_days)}">· ${esc(age)}</span>` : ""}</span>
+    </div>
+    <div class="veh-card-name" title="${esc(v.vehicle)}">${esc(v.vehicle)}</div>
+    <div class="veh-card-sub">${cardSubHtml(v)}</div>
+    <div class="veh-card-needs" title="${esc(v.needs || "")}">${esc(v.needs || "")}</div>
+    <div class="veh-card-foot">
+      <span class="veh-card-facts">
+        ${idleCellHtml(v, { spelled: true })}
+        ${v.technicians.length ? `<span class="tech"><span class="tech-dot"></span>${esc(v.technicians.join(", "))}</span>` : ""}
+      </span>
+      <span class="veh-card-money">
+        <span class="veh-card-cost${over ? " over-quote" : ""}"${over ? ` title="Over the estimate by ${money(v.actual_cost - v.quoted_cost)}"` : ""}>${money(v.actual_cost)}</span>
+        <span class="veh-card-quoted">${v.quoted_cost ? `of ${money(v.quoted_cost)} quoted` : "nothing quoted yet"}</span>
+      </span>
+    </div>`;
+}
+
+// Same contract as vehicleRowSignature: everything vehicleCardHtml reads, so
+// an unchanged card is moved rather than rebuilt.
+function vehicleCardSignature(v) {
+  return [
+    vehicleRowSignature(v), v.needs, v.remaining_cost, v.lot_bucket,
+  ].join("");
+}
+
+/* Keyed, incremental, per column -- the same reasoning as the table's render.
+   Each column is its own scroll container on a full lot, and rebuilding
+   innerHTML would throw that scroll away on every keystroke of the search
+   box. */
+function renderVehicleColumns(rows) {
+  // Only the layout on screen is painted. Both are rebuilt from the same rows
+  // the moment you switch (setVehicleLayout re-renders), so they can't show
+  // two different boards -- there's just no reason to build sixty cards
+  // nobody can see on every keystroke of the search box.
+  if (state.vehicleLayout !== "columns") return;
+  const host = $("#vehicles-columns");
+  if (!host) return;
+
+  if (!rows.length) {
+    // One empty state for the whole board, not three identical ones.
+    host.innerHTML = `<div class="panel veh-columns-empty">${emptyState(vehiclesEmptyState())}</div>`;
+    return;
+  }
+  if (!host.firstElementChild || host.querySelector(".skeleton-card") || host.querySelector(".veh-columns-empty")) {
+    host.innerHTML = LOT_COLUMNS.map((col) => `
+      <section class="veh-col" data-lot-column="${col.key}">
+        <header class="veh-col-head">
+          <span class="veh-col-title">${esc(col.label)}</span>
+          <span class="veh-col-count" data-col-count></span>
+          <span class="veh-col-money" data-col-money></span>
+        </header>
+        <div class="veh-col-body" data-col-body></div>
+      </section>`).join("");
+  }
+
+  for (const col of LOT_COLUMNS) {
+    const section = $(`[data-lot-column="${col.key}"]`, host);
+    if (!section) continue;
+    const inColumn = rows.filter((v) => columnKey(v) === col.key);
+    $("[data-col-count]", section).textContent = String(inColumn.length);
+    $("[data-col-money]", section).textContent = inColumn.length ? columnSummary(inColumn) : "";
+    const body = $("[data-col-body]", section);
+
+    const existing = new Map();
+    for (const el of body.children) {
+      if (el.dataset && el.dataset.key) existing.set(el.dataset.key, el);
+    }
+    let cursor = body.firstElementChild;
+    for (const v of inColumn) {
+      const key = vehicleKey(v);
+      const sig = vehicleCardSignature(v);
+      let card = existing.get(key);
+      if (card) {
+        existing.delete(key);
+        if (card.dataset.sig !== sig) {
+          card.innerHTML = vehicleCardHtml(v);
+          card.dataset.sig = sig;
+        }
+      } else {
+        card = document.createElement("article");
+        card.className = "veh-card clickable";
+        card.dataset.segment = v.segment;
+        card.dataset.id = String(v.segment === "recon" ? v.recon_id : v.we_owe_id);
+        card.dataset.key = key;
+        card.dataset.sig = sig;
+        card.innerHTML = vehicleCardHtml(v);
+      }
+      card.classList.toggle("selected", state.vehicleSelection.has(key));
+      if (card === cursor) cursor = cursor.nextElementSibling;
+      else body.insertBefore(card, cursor);
+    }
+    for (const el of existing.values()) el.remove();
+    while (cursor) { const next = cursor.nextElementSibling; cursor.remove(); cursor = next; }
+    // A column that's empty because of a filter still has to say so; a blank
+    // panel under a "0" reads as a screen that failed to load.
+    let blank = $(".veh-col-blank", section);
+    if (!inColumn.length && !blank) {
+      blank = document.createElement("p");
+      blank.className = "veh-col-blank";
+      blank.textContent = col.blank;
+      body.appendChild(blank);
+    } else if (inColumn.length && blank) {
+      blank.remove();
+    }
+  }
+}
+
+/* The row or card for a key, in whichever layout is on screen.
+
+   The cursor, "scroll it into view" and Enter-to-open all need it, and all
+   three have to look in the container the user is actually looking at. The
+   element selector is explicit because a card's own select checkbox carries
+   the same data-key -- an unqualified [data-key] would be a coin toss. */
+export function vehicleNodeFor(key) {
+  const root = state.vehicleLayout === "columns" ? $("#vehicles-columns") : $("#vehicles-table");
+  if (!root || !key) return null;
+  return $(`tr[data-key="${cssEscape(key)}"], article[data-key="${cssEscape(key)}"]`, root);
+}
+
 export function applyVehicleCursor() {
-  $$("#vehicles-table tr.cursor").forEach((tr) => tr.classList.remove("cursor"));
-  if (!state.vehicleCursor) return;
-  const tr = $(`#vehicles-table tr[data-key="${cssEscape(state.vehicleCursor)}"]`);
-  if (tr) tr.classList.add("cursor");
+  $$("#view-vehicles tr.cursor, #view-vehicles article.cursor").forEach((el) => el.classList.remove("cursor"));
+  const el = vehicleNodeFor(state.vehicleCursor);
+  if (el) el.classList.add("cursor");
 }
 
 // Keys are "segment:id" -- the colon needs escaping inside an attribute
@@ -877,14 +1136,14 @@ export function setVehicleSelected(key, on) {
 // one, in the order they're currently displayed -- the standard file-list
 // gesture, and the only sane way to archive twenty cars at once.
 export function selectVehicleRange(fromKey, toKey) {
-  const keys = visibleVehicles().map(vehicleKey);
+  const keys = displayedVehicles().map(vehicleKey);
   const a = keys.indexOf(fromKey), b = keys.indexOf(toKey);
   if (a === -1 || b === -1) return setVehicleSelected(toKey, true);
   for (let i = Math.min(a, b); i <= Math.max(a, b); i++) state.vehicleSelection.add(keys[i]);
 }
 
 export function moveVehicleCursor(delta) {
-  const keys = visibleVehicles().map(vehicleKey);
+  const keys = displayedVehicles().map(vehicleKey);
   if (!keys.length) return;
   const at = state.vehicleCursor ? keys.indexOf(state.vehicleCursor) : -1;
   let next;
@@ -893,6 +1152,6 @@ export function moveVehicleCursor(delta) {
   else next = at === -1 ? (delta > 0 ? 0 : keys.length - 1) : Math.min(keys.length - 1, Math.max(0, at + delta));
   state.vehicleCursor = keys[next];
   applyVehicleCursor();
-  const tr = $(`#vehicles-table tr[data-key="${cssEscape(state.vehicleCursor)}"]`);
-  if (tr && tr.scrollIntoView) tr.scrollIntoView({ block: "nearest" });
+  const el = vehicleNodeFor(state.vehicleCursor);
+  if (el && el.scrollIntoView) el.scrollIntoView({ block: "nearest" });
 }

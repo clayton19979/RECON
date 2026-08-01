@@ -19,6 +19,11 @@ export const state = {
   vehicleOverOnly: false,                 // "Over Quote" card toggle
   vehicleIdleBucket: "",                  // "" == any; else an IDLE_SELECTIONS key (a chart bar, or "stalled" from the card)
   vehicleChartOpen: true,                 // the idle-bucket chart above the table
+  // "columns" (cards grouped into the three piles) | "list" (sortable table).
+  // Columns is the default because "where is everything up to" is the
+  // question the board is opened for first thing in the morning; the table is
+  // one click away and is the better answer once you want it sorted by cost.
+  vehicleLayout: "columns",
   vehicleCursor: null,                    // key of the keyboard-focused row
   vehicleAnchor: null,                    // key of the last row clicked, for Shift+click ranges
   staff: [],            // active staff only -- what every assignment picker reads

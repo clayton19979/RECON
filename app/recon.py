@@ -89,6 +89,105 @@ def is_stalled(row: Mapping[str, Any]) -> bool:
     return max(0, int(row.get("idle_days") or 0)) >= STALLED_AFTER_DAYS
 
 
+# The three piles Walt sorts the lot into, and the only three the app knows
+# about. They live here rather than in reports.py because the Vehicles screen
+# groups its columns by them and the Lot Report groups its sections by them --
+# two screens reading one rule, so a car cannot be "In the shop" on one and
+# "Not started" on the other.
+LOT_READY = "ready"
+LOT_WORKING = "working"
+LOT_WAITING = "waiting"
+
+
+def lot_bucket(row: Mapping[str, Any]) -> str:
+    """Which of Walt's three piles this car is in.
+
+    Driven by the repair ticket, same as the board -- the recon record has a
+    status field of its own but nobody maintains it, and a report that reads
+    the field nobody updates is a report that quietly lies.
+
+    Money already spent or parts already on order also count as started, no
+    matter what the ticket still says. A ticket sits on "Estimate" until
+    somebody thinks to move it, so grouping on status alone put cars with
+    hundreds of dollars of parts in them under a heading that read "Not
+    started" -- and the group's own subtotal then contradicted its title on
+    the same line. What has actually happened to the car wins over what the
+    ticket was last set to.
+    """
+    if row["status_bucket"] == "finished":
+        return LOT_READY
+    if row["status"] in ("in_progress", "pending_approval"):
+        return LOT_WORKING
+    if (row.get("actual_cost") or 0) > 0 or (row.get("parts_pending") or 0) > 0:
+        return LOT_WORKING
+    return LOT_WAITING
+
+
+def lot_needs_text(row: Mapping[str, Any]) -> str:
+    """One plain sentence answering "what does this car still need?".
+
+    Built on the server rather than in the browser so the board's cards, the
+    report's screen, the printed sheet and the CSV cannot drift into four
+    different phrasings of the same car -- Walt reads whichever one is in
+    front of him and they have to agree.
+    """
+    if row["lot_bucket"] == LOT_READY:
+        return "Nothing — ready to go"
+
+    bits = []
+    if row["status"] == "pending_approval":
+        bits.append("waiting on approval")
+    if not row.get("order_id"):
+        bits.append("no ticket written yet")
+    elif row["status"] == "estimate" and row["lot_bucket"] == LOT_WAITING:
+        # Only true while nothing has actually been spent or ordered -- see
+        # lot_bucket. Saying it about a car with parts in it reads as a
+        # contradiction of the money on the same row.
+        bits.append("quoted, work not started")
+
+    pending = row.get("parts_pending") or 0
+    if pending:
+        value = row.get("parts_pending_value") or 0
+        amount = f" (${value:,.2f})" if value else ""
+        bits.append(f"{pending} part{'' if pending == 1 else 's'} on order{amount}")
+
+    if row["remaining_cost"]:
+        bits.append(f"${row['remaining_cost']:,.2f} of quoted work left")
+
+    # Only worth saying once a car has actually gone quiet; every car is idle
+    # for a day or two between visits and flagging that is just noise. Same
+    # is_stalled the board's card uses, so the two screens can't disagree
+    # about which cars have been forgotten.
+    if is_stalled(row):
+        bits.append(f"untouched {row['idle_days']} days")
+
+    if not bits:
+        return "work under way"
+    return " · ".join(bits).capitalize()
+
+
+def add_lot_status(row: dict) -> dict:
+    """Stamp a board row with its pile, what finishing it should still cost,
+    and the plain sentence describing what it is waiting on."""
+    row["lot_bucket"] = lot_bucket(row)
+    # Quoted but not yet spent: what finishing this car should still cost.
+    # Floored at zero -- going over the estimate is real, but it is money
+    # already counted in what we spent, not money still to come.
+    #
+    # Zero on a finished car, whatever the quote said. Nothing is open on it,
+    # so nobody is going to spend that money: a car that came in under its
+    # estimate was putting the difference in the "still to spend" column and
+    # into the lot's total, on the same row whose Needs cell read "Nothing --
+    # ready to go". Two answers to one question, one line apart. The shortfall
+    # against the quote is still visible where it belongs, in the board's
+    # Cost-against-quote column.
+    row["remaining_cost"] = (
+        0.0 if row["lot_bucket"] == LOT_READY else max(round(row["quoted_cost"] - row["actual_cost"], 2), 0)
+    )
+    row["needs"] = lot_needs_text(row)
+    return row
+
+
 def order_status_bucket(orders: list[dict]) -> str:
     """Finished or still in progress, judged by the repair tickets themselves.
 
@@ -651,7 +750,10 @@ def vehicle_board_rows(
                     "idle_days": idle_days(activity_at),
                 }
             )
-    return result
+    # Every board row carries its pile and its "what's it waiting on" sentence.
+    # Computed once here so the Vehicles screen's columns, the Lot Report's
+    # sections, the printed sheet and the CSV are all reading the same answer.
+    return [add_lot_status(row) for row in result]
 
 
 def build_recon_router(connect: Callable[[], sqlite3.Connection], now_fn: Callable[[], str]) -> APIRouter:

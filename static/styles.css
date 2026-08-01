@@ -488,6 +488,121 @@ table.sticky-head thead th {
 .board-table tbody tr.cursor td:first-child { box-shadow: inset 1px 1px 0 var(--accent-strong), inset 0 -1px 0 var(--accent-strong); }
 .board-table tbody tr.cursor td:last-child { box-shadow: inset -1px 1px 0 var(--accent-strong), inset 0 -1px 0 var(--accent-strong); }
 
+/* ---------- layout switch ----------
+   Two ways to read one list, so it reads as a switch (one segmented control,
+   one of the two always lit) rather than as two buttons that each do
+   something. Sits at the end of the filter bar, after the row count, because
+   it changes how the rows are presented rather than which rows there are. */
+.view-switch {
+  display: inline-flex; gap: 2px; padding: 2px;
+  background: var(--paper-raise); border: 1px solid var(--line); border-radius: 999px;
+}
+.view-switch-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 5px 11px; border: none; border-radius: 999px; background: transparent;
+  font: inherit; font-size: 12px; font-weight: 600; color: var(--ink-faint); cursor: pointer;
+}
+.view-switch-btn svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; }
+.view-switch-btn:hover { color: var(--ink); }
+.view-switch-btn.active { background: var(--surface); color: var(--ink); box-shadow: var(--shadow); }
+.view-switch-btn:focus-visible { outline: 2px solid var(--accent-strong); outline-offset: 1px; }
+
+/* ---------- vehicles: the columns layout ----------
+   The three piles the owner asks about, left to right in the direction a car
+   travels through the shop. Each column scrolls on its own so a lot with
+   thirty cars in the shop doesn't push "Ready to sell" off the bottom of the
+   screen -- the whole point is seeing all three at once. */
+.veh-columns { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; align-items: start; }
+.veh-col {
+  background: var(--paper-raise); border: 1px solid var(--line); border-radius: var(--radius);
+  display: flex; flex-direction: column; min-width: 0; overflow: hidden;
+}
+.veh-col-head {
+  display: flex; align-items: baseline; gap: 8px; padding: 11px 14px;
+  border-bottom: 1px solid var(--line); background: var(--surface);
+}
+.veh-col-title { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--ink); }
+.veh-col-count {
+  font-family: "IBM Plex Mono", "Cascadia Mono", Consolas, monospace; font-size: 12px; font-weight: 600;
+  color: var(--ink-soft); background: var(--paper-raise); border: 1px solid var(--line);
+  border-radius: 999px; padding: 1px 8px;
+}
+/* Pushed to the trailing edge and quiet: the money is the answer to a
+   follow-up question, not the column's headline. */
+.veh-col-money { margin-left: auto; font-size: 11.5px; color: var(--ink-faint); font-variant-numeric: tabular-nums; white-space: nowrap; }
+/* Each column scrolls on its own, but never squeezes below a couple of cards:
+   min-height beats max-height in CSS, which is deliberate here. On a short
+   laptop screen with the activity chart open the arithmetic would otherwise
+   leave a 130px slot showing one card and half of another, and the page
+   scrolling a little is a much better trade than that. */
+.veh-col-body {
+  display: flex; flex-direction: column; gap: 9px; padding: 11px;
+  max-height: calc(100vh - 360px); min-height: 300px; overflow-y: auto;
+}
+#view-vehicles:has(#vehicles-chart:not([hidden])) .veh-col-body { max-height: calc(100vh - 550px); }
+.veh-col-blank { margin: 6px 2px; font-size: 12px; color: var(--ink-faint); }
+.veh-columns-empty { padding: 8px 0; }
+
+.veh-card {
+  position: relative; background: var(--surface); border: 1px solid var(--line);
+  border-left: 3px solid var(--recon); border-radius: 8px; padding: 10px 12px 11px 13px;
+  display: flex; flex-direction: column; gap: 5px; min-width: 0;
+}
+/* Type carries no pill on a card -- there's a whole edge available, and the
+   colour says "lot car" or "customer promise" without spending a line on it. */
+.veh-card[data-segment="we_owe"] { border-left-color: var(--weowe); }
+.veh-card.clickable { cursor: pointer; }
+.veh-card.clickable:hover { background: var(--paper-raise); border-color: var(--accent); }
+.veh-card.selected { background: var(--accent-tint); border-color: var(--accent); }
+.veh-card.cursor { box-shadow: 0 0 0 2px var(--accent-strong); }
+
+/* The checkbox lives in the card's top-right corner, out of the reading path
+   until you go looking for it -- bulk selection is an occasional job, and a
+   permanent box on every card competes with the status pill for the eye. */
+.veh-card-select { position: absolute; top: 8px; right: 9px; padding: 3px; line-height: 0; cursor: pointer; }
+.veh-card-head { display: flex; align-items: center; gap: 8px; padding-right: 22px; }
+.veh-card-ref {
+  margin-left: auto; font-family: "IBM Plex Mono", "Cascadia Mono", Consolas, monospace;
+  font-size: 11px; color: var(--ink-faint); white-space: nowrap;
+}
+.veh-card-ref .age-warn { color: var(--warn); font-weight: 700; }
+.veh-card-ref .age-crit { color: var(--crit); font-weight: 700; }
+.veh-card-name {
+  font-size: 13.5px; font-weight: 600; color: var(--ink);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.veh-card-sub { font-size: 11.5px; color: var(--ink-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.veh-card-sub .veh-customer { display: inline-flex; align-items: center; gap: 4px; color: var(--ink-soft); font-weight: 500; }
+.veh-card-sub .veh-customer svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 2; opacity: .8; }
+/* The one line answering "what does this car still need?" -- the server's
+   own sentence, the same one the Lot Report prints. Clamped to two lines with
+   the full text on hover, so a car with four outstanding things doesn't make
+   its card three times the height of its neighbours. */
+.veh-card-needs {
+  font-size: 12px; color: var(--ink-soft); margin-top: 1px;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.veh-card-foot {
+  display: flex; align-items: flex-end; gap: 8px; margin-top: 3px;
+  padding-top: 7px; border-top: 1px solid var(--line-soft);
+}
+.veh-card-facts { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; min-width: 0; font-size: 12px; }
+.veh-card-money { margin-left: auto; display: flex; flex-direction: column; align-items: flex-end; line-height: 1.25; }
+.veh-card-cost {
+  font-family: "IBM Plex Mono", "Cascadia Mono", Consolas, monospace;
+  font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--ink);
+}
+.veh-card-cost.over-quote { color: var(--crit); }
+.veh-card-quoted { font-size: 10.5px; color: var(--ink-faint); white-space: nowrap; }
+
+/* Three columns need the width; below that they stack, which is still a
+   better read on a narrow window than three 190px columns of ellipsis. */
+@media (max-width: 1100px) {
+  .veh-columns { grid-template-columns: 1fr; }
+  .veh-col-body { max-height: none; }
+  #view-vehicles:has(#vehicles-chart:not([hidden])) .veh-col-body { max-height: none; }
+}
+
 .board-hint { margin: 10px 2px 0; font-size: 11.5px; color: var(--ink-faint); display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
 .board-hint kbd {
   font-family: "IBM Plex Mono", "Cascadia Mono", Consolas, monospace; font-size: 10.5px;

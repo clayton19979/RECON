@@ -4,7 +4,7 @@ import { confirmAction } from "./confirm.js";
 import { currentActor } from "./shortcuts.js";
 import { state } from "./state.js";
 import { showView } from "./error-boundary.js";
-import { applyVehicleCursor, bulkTaskTitle, clearGlobalSearch, cssEscape, loadVehiclesView, moveVehicleCursor, renderVehicleStatusOptions, renderVehiclesTable, resetVehicleView, selectVehicleRange, setVehicleSelected, syncPartsFilterChip, syncSearchChrome, vehicleKey, visibleVehicles } from "./vehicles-board.js";
+import { applyVehicleCursor, bulkTaskTitle, clearGlobalSearch, loadVehiclesView, moveVehicleCursor, renderVehicleStatusOptions, renderVehiclesTable, resetVehicleView, selectVehicleRange, setVehicleLayout, setVehicleSelected, syncPartsFilterChip, syncSearchChrome, vehicleKey, vehicleNodeFor, visibleVehicles } from "./vehicles-board.js";
 import { openVehicleDetail } from "./vehicle-detail.js";
 import { openReconDialog } from "./dialog-new-recon.js";
 import { openWeOweDialog } from "./dialog-new-weowe.js";
@@ -214,11 +214,27 @@ export function wireVehiclesView() {
   $("#add-recon-btn").addEventListener("click", () => openReconDialog());
   $("#add-we-owe-btn").addEventListener("click", () => openWeOweDialog());
 
-  // One delegated click handler for the whole table body: the empty state's
-  // buttons, the per-row checkboxes and opening a vehicle. Rows are recycled
-  // across renders now, so per-row binding would either double up or be lost
-  // depending on which side of the reuse a row landed on.
-  $("#vehicles-table").addEventListener("click", (e) => {
+  // Reading the same list as columns instead of as rows. Not a filter, so it
+  // doesn't touch the cursor, the selection or Reset view -- the exact same
+  // cars stay on screen, dealt into piles instead of stacked in one list.
+  const layoutSwitch = $("#vehicles-layout-switch");
+  if (layoutSwitch) {
+    layoutSwitch.addEventListener("click", (e) => {
+      const btn = e.target.closest("[data-veh-layout]");
+      if (btn) setVehicleLayout(btn.dataset.vehLayout);
+    });
+  }
+
+  /* One delegated click handler, bound to both layouts: the empty state's
+     buttons, the per-row checkboxes and opening a vehicle. Rows and cards are
+     both recycled across renders, so per-row binding would either double up
+     or be lost depending on which side of the reuse a node landed on.
+
+     Table rows and column cards are deliberately handled by one function
+     rather than two: click, ctrl-click to toggle and shift-click for a range
+     have to behave identically, and two copies of this is exactly how they
+     would stop. */
+  const handleBoardClick = (e) => {
     const trigger = e.target.closest("[data-empty-action]");
     if (trigger) {
       if (trigger.dataset.emptyAction === "add-recon") openReconDialog();
@@ -239,13 +255,14 @@ export function wireVehiclesView() {
       }
       return;
     }
-    const row = e.target.closest("tr.clickable");
+    const row = e.target.closest("tr.clickable, article.veh-card");
     if (!row) return;
     const key = row.dataset.key;
-    // The whole select cell is the hit target, not just the ~13px native
-    // box inside it -- clicking the cell's padding used to fall through to
-    // the row handler and navigate away mid-bulk-selection.
-    const selectCell = e.target.closest("td.col-select");
+    // The whole select cell (or, on a card, the corner it sits in) is the hit
+    // target, not just the ~13px native box inside it -- clicking the padding
+    // used to fall through to the row handler and navigate away mid-bulk-
+    // selection.
+    const selectCell = e.target.closest("td.col-select, .veh-card-select");
     const box = e.target.closest(".veh-select") || (selectCell ? $(".veh-select", selectCell) : null);
     if (box) {
       // the checkbox owns the click; opening the vehicle would be a surprise
@@ -268,7 +285,10 @@ export function wireVehiclesView() {
     }
     state.vehicleCursor = key;
     openVehicleDetail(row.dataset.segment, Number(row.dataset.id));
-  });
+  };
+  $("#vehicles-table").addEventListener("click", handleBoardClick);
+  const columnsHost = $("#vehicles-columns");
+  if (columnsHost) columnsHost.addEventListener("click", handleBoardClick);
 
   // The shared triage-list keyboard model (see wireListKeyboard). Enter
   // opens the cursor row's detail page -- on this screen a row is a door,
@@ -279,9 +299,10 @@ export function wireVehiclesView() {
     searchEscape: () => clearGlobalSearch(),
     move: moveVehicleCursor,
     primary: () => {
-      if (!state.vehicleCursor) return;
-      const tr = $(`#vehicles-table tr[data-key="${cssEscape(state.vehicleCursor)}"]`);
-      if (tr) openVehicleDetail(tr.dataset.segment, Number(tr.dataset.id));
+      // Looked up in whichever layout is showing -- the cursor is a table row
+      // in one and a card in the other, and carries the same key in both.
+      const el = vehicleNodeFor(state.vehicleCursor);
+      if (el) openVehicleDetail(el.dataset.segment, Number(el.dataset.id));
     },
     select: () => {
       if (!state.vehicleCursor) return false;

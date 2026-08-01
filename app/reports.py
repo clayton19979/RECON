@@ -63,9 +63,10 @@ def vehicle_profit_rows(
         {"start": start, "end": end_bound, "vin": vin},
     ).fetchall()
 
+    lifetimes = unit_lifetimes(db, [row["id"] for row in rows])
     result = []
     for row in rows:
-        lifetime = unit_lifetime(db, row["id"])
+        lifetime = lifetimes[row["id"]]
         result.append(
             {
                 **lifetime,

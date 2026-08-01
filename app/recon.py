@@ -83,12 +83,7 @@ def last_activity(db: sqlite3.Connection, column: str, ref_id: int, fallback: st
 
     Voided tickets are excluded for the same reason cost_rollup excludes them:
     voiding one means the work never happened."""
-    row = db.execute(
-        f"SELECT max(last_activity_at) FROM orders WHERE {column}=? AND voided=0 AND last_activity_at!=''"
-        + (" AND segment=?" if segment else ""),
-        (ref_id, segment) if segment else (ref_id,),
-    ).fetchone()
-    return (row[0] if row and row[0] else None) or fallback
+    return last_activity_map(db, column, [ref_id], segment).get(ref_id) or fallback
 
 
 def idle_days(last_activity_at: str) -> int:
@@ -303,7 +298,25 @@ class WeOwePaymentIn(BaseModel):
     actor: str = ""
 
 
-def cost_rollup(db: sqlite3.Connection, column: str, ref_id: int, segment: str | None = None) -> dict:
+def _rollup_from_orders(orders: list[dict]) -> dict:
+    """The per-vehicle totals, given that vehicle's already-summed tickets."""
+    # Voided ROs (started by mistake) are kept in the order history
+    # (traceability) but never count toward the vehicle's cost -- that work
+    # was never actually done.
+    countable = [o for o in orders if not o["voided"]]
+    return {
+        "orders": orders,
+        "total_cost": round(sum(o["total_cost"] for o in countable), 2),
+        "quoted_cost": round(sum(o["quoted_cost"] for o in countable), 2),
+        "labor_hours": round(sum(o["labor_hours"] for o in countable), 2),
+        "parts_pending": int(sum(o["parts_pending"] for o in countable)),
+        "parts_pending_value": round(sum(o["parts_pending_value"] for o in countable), 2),
+    }
+
+
+def cost_rollups(
+    db: sqlite3.Connection, column: str, ref_ids: Sequence[int], segment: str | None = None
+) -> dict[int, dict]:
     """Actual cost = what's really landed: labor/fees count in full the moment
     they're logged, but parts only count once received, and stop counting
     again once sent back to the vendor (part_returned). quoted_cost (full
@@ -370,9 +383,9 @@ def cost_rollup(db: sqlite3.Connection, column: str, ref_id: int, segment: str |
            FROM orders o
            LEFT JOIN estimates e ON e.order_id=o.id
            LEFT JOIN estimate_items ei ON ei.estimate_id=e.id
-           WHERE o.{column}=?"""
-        + (" AND o.segment=?" if segment else "")
-        + """
+           WHERE o.{column} IN ({placeholders})"""
+            + (" AND o.segment=?" if segment else "")
+            + """
            GROUP BY o.id
            ORDER BY o.id""",
         (ref_id, segment) if segment else (ref_id,),
@@ -475,6 +488,57 @@ def relink_unit(db: sqlite3.Connection, vehicle_id: int, new_vin: str | None, ts
     return new_unit_id
 
 
+def _ids_by_unit(db: sqlite3.Connection, table: str, unit_ids: Sequence[int]) -> dict[int, list[int]]:
+    """The recon episodes (or we-owe promises) hanging off each physical car."""
+    result: dict[int, list[int]] = {unit_id: [] for unit_id in unit_ids}
+    ids = _unique_ids(unit_ids)
+    if not ids:
+        return result
+    for chunk in _chunked(ids):
+        placeholders = ",".join("?" for _ in chunk)
+        rows = db.execute(
+            f"""SELECT v.unit_id, t.id FROM {table} t JOIN vehicles v ON v.id=t.vehicle_id
+                 WHERE v.unit_id IN ({placeholders}) ORDER BY t.id""",
+            tuple(chunk),
+        ).fetchall()
+        for row in rows:
+            result[row["unit_id"]].append(row["id"])
+    return result
+
+
+def unit_lifetimes(db: sqlite3.Connection, unit_ids: Sequence[int]) -> dict[int, dict]:
+    """unit_lifetime for a whole list of cars, in a fixed number of queries.
+
+    The profit report asks this about every car in the range at once, and one
+    car's answer already spans several tables -- doing that per car meant the
+    report got slower every month whether or not anything about it changed.
+    Units that don't exist are simply absent from the result.
+    """
+    units = {}
+    for chunk in _chunked(_unique_ids(unit_ids)):
+        placeholders = ",".join("?" for _ in chunk)
+        for row in db.execute(f"SELECT * FROM vehicle_units WHERE id IN ({placeholders})", tuple(chunk)):
+            units[row["id"]] = row
+    found = list(units)
+
+    recon_ids_by_unit = _ids_by_unit(db, "recon_vehicles", found)
+    we_owe_ids_by_unit = _ids_by_unit(db, "we_owe_items", found)
+    recon_rollups = cost_rollups(db, "recon_vehicle_id", [i for ids in recon_ids_by_unit.values() for i in ids])
+    we_owe_rollups = cost_rollups(db, "we_owe_id", [i for ids in we_owe_ids_by_unit.values() for i in ids])
+    paid = we_owe_payment_totals(db, [i for ids in we_owe_ids_by_unit.values() for i in ids])
+
+    return {
+        unit_id: _unit_lifetime(
+            unit_id,
+            units[unit_id],
+            [recon_rollups[i] for i in recon_ids_by_unit[unit_id]],
+            [we_owe_rollups[i] for i in we_owe_ids_by_unit[unit_id]],
+            sum(paid[i] for i in we_owe_ids_by_unit[unit_id]) if we_owe_ids_by_unit[unit_id] else 0.0,
+        )
+        for unit_id in found
+    }
+
+
 def unit_lifetime(db: sqlite3.Connection, unit_id: int) -> dict:
     """Everything one physical car cost and earned, across its whole life.
 
@@ -483,6 +547,21 @@ def unit_lifetime(db: sqlite3.Connection, unit_id: int) -> dict:
     after it was sold and quietly ate the margin". So it sums every ticket
     reachable from every recon episode AND every we-owe promise on this VIN,
     then nets out whatever the customer chipped in on the we-owe side.
+    """
+    lifetime = unit_lifetimes(db, [unit_id]).get(unit_id)
+    if lifetime is None:
+        raise HTTPException(404, "Vehicle unit not found")
+    return lifetime
+
+
+def _unit_lifetime(
+    unit_id: int,
+    unit: sqlite3.Row,
+    recon_rollups: list[dict],
+    we_owe_rollups: list[dict],
+    customer_paid: float,
+) -> dict:
+    """The lifetime arithmetic, once its inputs have been gathered.
 
     profit is None when it cannot honestly be worked out, which is either of
     two cases. No sale price: an unsold car has a cost, not a profit, and
@@ -493,37 +572,12 @@ def unit_lifetime(db: sqlite3.Connection, unit_id: int) -> dict:
     missing number has to stay missing rather than become a flattering one.
     Cars from when purchase price *was* entered still get a real profit.
     """
-    unit = db.execute("SELECT * FROM vehicle_units WHERE id=?", (unit_id,)).fetchone()
-    if unit is None:
-        raise HTTPException(404, "Vehicle unit not found")
-
-    recon_ids = [
-        r["id"]
-        for r in db.execute(
-            "SELECT rv.id FROM recon_vehicles rv JOIN vehicles v ON v.id=rv.vehicle_id WHERE v.unit_id=?", (unit_id,)
-        )
-    ]
-    we_owe_ids = [
-        r["id"]
-        for r in db.execute(
-            "SELECT w.id FROM we_owe_items w JOIN vehicles v ON v.id=w.vehicle_id WHERE v.unit_id=?", (unit_id,)
-        )
-    ]
-
-    recon_rollups = [cost_rollup(db, "recon_vehicle_id", rid) for rid in recon_ids]
-    we_owe_rollups = [cost_rollup(db, "we_owe_id", wid) for wid in we_owe_ids]
     recon_cost = sum(r["total_cost"] for r in recon_rollups)
     we_owe_cost = sum(r["total_cost"] for r in we_owe_rollups)
     # Every hour any tech flagged on this car, across both halves of its life.
     # On recon and we-owe the rate is 0, so this is the only measure of the
     # work that actually went into it.
     labor_hours = round(sum(r["labor_hours"] for r in recon_rollups + we_owe_rollups), 2)
-    customer_paid = 0.0
-    if we_owe_ids:
-        placeholders = ",".join("?" for _ in we_owe_ids)
-        customer_paid = db.execute(
-            f"SELECT coalesce(sum(amount),0) FROM we_owe_payments WHERE we_owe_id IN ({placeholders})", we_owe_ids
-        ).fetchone()[0]
 
     purchase_price = unit["purchase_price"] or 0.0
     we_owe_net = round(we_owe_cost - customer_paid, 2)
@@ -548,8 +602,8 @@ def unit_lifetime(db: sqlite3.Connection, unit_id: int) -> dict:
         # Margin is against the sale price, which is how a lot talks about it
         # ("we made 12 points on that car"), not against what was put in.
         "margin_pct": round(profit / sale_price * 100, 1) if profit is not None and sale_price else None,
-        "recon_count": len(recon_ids),
-        "we_owe_count": len(we_owe_ids),
+        "recon_count": len(recon_rollups),
+        "we_owe_count": len(we_owe_rollups),
     }
 
 
@@ -584,16 +638,34 @@ def assert_vehicle_editable(db: sqlite3.Connection, order_row: sqlite3.Row) -> N
             _assert_not_archived(row)
 
 
-def technician_names(db: sqlite3.Connection, order_ids: list[int]) -> list[str]:
-    if not order_ids:
-        return []
-    placeholders = ",".join("?" for _ in order_ids)
-    rows = db.execute(
-        f"""SELECT DISTINCT s.name FROM order_workflow w JOIN staff s ON s.id=w.technician_id
-            WHERE w.order_id IN ({placeholders}) AND w.technician_id IS NOT NULL ORDER BY s.name""",
-        order_ids,
-    ).fetchall()
-    return [row["name"] for row in rows]
+def technician_names_map(
+    db: sqlite3.Connection, column: str, ref_ids: Sequence[int], segment: str | None = None
+) -> dict[int, list[str]]:
+    """Every technician assigned to any of a vehicle's tickets, per vehicle.
+
+    Keyed on the vehicle rather than on a list of ticket ids so the board can
+    ask once for the whole list. Names come back sorted, and a vehicle with no
+    technician assigned yet gets an empty list rather than being missing.
+    """
+    result: dict[int, list[str]] = {ref_id: [] for ref_id in ref_ids}
+    ids = _unique_ids(ref_ids)
+    if not ids:
+        return result
+    for chunk in _chunked(ids):
+        placeholders = ",".join("?" for _ in chunk)
+        rows = db.execute(
+            f"""SELECT DISTINCT o.{column} ref_id, s.name
+                  FROM orders o
+                  JOIN order_workflow w ON w.order_id=o.id
+                  JOIN staff s ON s.id=w.technician_id
+                 WHERE o.{column} IN ({placeholders}) AND w.technician_id IS NOT NULL"""
+            + (" AND o.segment=?" if segment else "")
+            + " ORDER BY s.name",
+            (*chunk, segment) if segment else tuple(chunk),
+        ).fetchall()
+        for row in rows:
+            result[row["ref_id"]].append(row["name"])
+    return result
 
 
 def vehicle_board_rows(
@@ -607,7 +679,13 @@ def vehicle_board_rows(
     with rolled-up cost and assigned technicians. This is the primary view
     of the app and also backs the date-range vehicle-spend report.
     `archived` selects the History view instead of the live job board --
-    reports/export always use the default (live board only)."""
+    reports/export always use the default (live board only).
+
+    Every per-vehicle number here is fetched for the whole list at once rather
+    than car by car. This screen reloads after every save, and History and the
+    all-time reports have no upper bound on how many cars they cover, so a
+    handful of queries per car is a screen that gets slower every month the
+    shop uses the app."""
     end_bound = f"{end}T23:59:59" if end else None
     archived_flag = 1 if archived else 0
     result = []
@@ -623,6 +701,10 @@ def vehicle_board_rows(
                ORDER BY rv.created_at DESC""",
             {"start": start, "end": end_bound, "archived": archived_flag},
         ).fetchall()
+        recon_ids = [row["id"] for row in rows]
+        rollups = cost_rollups(db, "recon_vehicle_id", recon_ids)
+        activity = last_activity_map(db, "recon_vehicle_id", recon_ids)
+        techs = technician_names_map(db, "recon_vehicle_id", recon_ids)
         for row in rows:
             rollup = cost_rollup(db, "recon_vehicle_id", row["id"])
             # Voided tickets are excluded from everything the row says the car
@@ -638,7 +720,7 @@ def vehicle_board_rows(
             latest_order = live[-1] if live else None
             current_order = active_order or latest_order
             display_status = current_order["status"] if current_order else "acquired"
-            activity_at = last_activity(db, "recon_vehicle_id", row["id"], row["created_at"])
+            activity_at = activity.get(row["id"]) or row["created_at"]
             result.append(
                 {
                     "segment": "recon",
@@ -698,6 +780,11 @@ def vehicle_board_rows(
                ORDER BY w.created_at DESC""",
             {"start": start, "end": end_bound, "archived": archived_flag},
         ).fetchall()
+        we_owe_ids = [row["id"] for row in rows]
+        rollups = cost_rollups(db, "we_owe_id", we_owe_ids)
+        activity = last_activity_map(db, "we_owe_id", we_owe_ids)
+        techs = technician_names_map(db, "we_owe_id", we_owe_ids)
+        paid = we_owe_payment_totals(db, we_owe_ids)
         for row in rows:
             rollup = cost_rollup(db, "we_owe_id", row["id"])
             # Same rule as recon above: a voided ticket says nothing about the
@@ -760,7 +847,7 @@ def vehicle_board_rows(
                     "unreceived_closed_parts": rollup["unreceived_closed_parts"],
                     "customer_paid": customer_paid,
                     "net_cost": round(rollup["total_cost"] - customer_paid, 2),
-                    "technicians": technician_names(db, order_ids),
+                    "technicians": techs[row["id"]],
                     # The ticket a board-level action should attach itself to:
                     # the open one if there is one, else the most recent, else
                     # nothing (a car with no ticket yet). Tasks created off the

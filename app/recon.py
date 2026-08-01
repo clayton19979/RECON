@@ -270,7 +270,20 @@ def cost_rollup(db: sqlite3.Connection, column: str, ref_id: int, segment: str |
                -- -- parts_cost above already drops a returned line via
                -- part_returned, and subtracting the credit as well would count
                -- the same money back twice.
-               coalesce(sum(CASE WHEN ei.kind='credit' THEN -ei.quantity*ei.unit_cost ELSE ei.quantity*ei.unit_cost END),0) quoted_cost,
+               --
+               -- A part sent back to the vendor drops out of the quote as well
+               -- as out of the actual. It is not money the shop is going to
+               -- spend, and leaving it in made the comparison the board and
+               -- the Lot Report exist to draw meaningless: order a $500
+               -- alternator, get the wrong one, send it back and buy the right
+               -- $520 one, and the car read "quoted $1,020, spent $520" --
+               -- $500 under estimate on a job that came in $20 over. The two
+               -- exclusions cannot double-subtract, because the credit line a
+               -- vendor invoice writes is a line of its own and never sets
+               -- part_returned on the line it refunds.
+               coalesce(sum(CASE WHEN ei.kind='part' AND ei.part_returned=1 THEN 0
+                                 WHEN ei.kind='credit' THEN -ei.quantity*ei.unit_cost
+                                 ELSE ei.quantity*ei.unit_cost END),0) quoted_cost,
                coalesce(sum(CASE WHEN ei.kind='part' AND ei.status='ordered' AND ei.part_returned=0 THEN 1 ELSE 0 END),0) parts_pending,
                coalesce(sum(CASE WHEN ei.kind='part' AND ei.status='ordered' AND ei.part_returned=0 THEN ei.quantity*ei.unit_cost ELSE 0 END),0) parts_pending_value
            FROM orders o

@@ -3,6 +3,7 @@ import { toast } from "./notify.js";
 import { confirmAction } from "./confirm.js";
 import { currentActor, esc, fmtDate, money, relativeTime, withLoading } from "./shortcuts.js";
 import { emptyState } from "./empty-states.js";
+import { actualTotal, costDeltaBadge, isReturnedPart, quotedLineTotal, quotedTotal } from "./estimate-money.js";
 import { AUTH_METHOD_LABEL, ITEM_STATUS_LABEL, KIND_GROUP_LABEL, KIND_GROUP_ORDER, PAY_METHOD_LABEL, STATUS_LABEL, STATUS_OPTIONS, STATUS_PILL_CLASS, fieldLabels, state } from "./state.js";
 import { showView } from "./error-boundary.js";
 import { isStalled } from "./vehicles-board.js";
@@ -666,14 +667,27 @@ function receivedFromTitle(item) {
   return "Received";
 }
 
+/* Group a ticket's lines by kind for display -- Parts, Labor, Fees, and then
+   anything else actually present.
+
+   Exhaustive rather than a fixed list of three, because vendor-invoice ingest
+   writes kind="credit" lines that nobody picks by hand. A grid that only knew
+   the three simply left them out: on a ticket grouped into jobs, a $60 vendor
+   credit was subtracted from the total with no line on screen to explain
+   where it had come from. The printed ticket already worked this way; the
+   screen it was printed from did not. */
+function kindGroupsOf(items) {
+  const extra = [...new Set(items.map((i) => i.kind).filter((k) => !KIND_GROUP_ORDER.includes(k)))];
+  return [...KIND_GROUP_ORDER, ...extra]
+    .map((kind) => ({ kind, kindItems: items.filter((i) => i.kind === kind) }))
+    .filter((group) => group.kindItems.length);
+}
+
 function renderEstimate(order) {
   const items = order.estimate ? order.estimate.items : [];
   const jobs = order.estimate?.jobs ?? [];
   const box = $("#vd-estimate-items");
   box.classList.toggle("has-jobs", jobs.length > 0);
-  // A part sent back to the vendor stops costing the shop anything -- every
-  // cost total on this ticket (job subtotals, Quoted, Actual) excludes it.
-  const notReturned = (i) => !(i.kind === "part" && i.part_returned);
 
   const jobOptionsHtml = (selectedId) => `<option value="" ${!selectedId ? "selected" : ""}>General</option>` +
     jobs.map((j) => `<option value="${j.id}" ${selectedId === j.id ? "selected" : ""}>${esc(j.title)}</option>`).join("");
@@ -697,7 +711,7 @@ function renderEstimate(order) {
     const isPart = item.kind === "part";
     const L = fieldLabels(item.kind);
     return `
-    <div class="part-row" draggable="true" data-index="${i}" data-id="${item.id || ""}" data-source="${item.source || "manual"}" data-received-quantity="${item.received_quantity ?? 0}">
+    <div class="part-row" draggable="true" data-index="${i}" data-id="${item.id || ""}" data-source="${item.source || "manual"}" data-received-quantity="${item.received_quantity ?? 0}" data-part-returned="${isReturnedPart(item) ? "1" : "0"}">
       ${cell("handle", "", `<span class="row-drag-handle" title="Drag to reorder">⋮⋮</span>`)}
       ${cell("check", "", receivable ? `<input type="checkbox" class="ei-receive-check" data-id="${item.id}" title="Select to receive against a vendor invoice">` : "")}
       ${cell("kind", "Kind", `<select class="ei-kind">
@@ -793,14 +807,12 @@ function renderEstimate(order) {
     box.innerHTML = buckets.map((bucket) => {
       const bucketItems = items.filter((i) => (i.job_id ?? null) === bucket.id);
       const isGeneral = bucket.id === null;
-      const jobSubtotal = bucketItems.filter(notReturned).reduce((s, i) => s + i.quantity * i.unit_cost, 0);
+      const jobSubtotal = quotedTotal(bucketItems);
       // Parts and labor render as their own mini-sections within the job
       // (Tekmetric-style) rather than one interleaved list, so it's obvious
       // at a glance which lines are parts vs labor for this job -- not just
       // which job a line belongs to.
-      const kindGroups = KIND_GROUP_ORDER
-        .map((kind) => ({ kind, kindItems: bucketItems.filter((i) => i.kind === kind) }))
-        .filter((g) => g.kindItems.length);
+      const kindGroups = kindGroupsOf(bucketItems);
       return `
         <div class="job-group" data-job-id="${bucket.id ?? ""}">
           <div class="job-group-head">
@@ -819,7 +831,7 @@ function renderEstimate(order) {
           </div>
           ${kindGroups.length ? kindGroups.map((g) => `
             <div class="kind-subgroup" data-kind="${g.kind}">
-              ${headRow(KIND_GROUP_LABEL[g.kind], "", g.kind)}
+              ${headRow(KIND_GROUP_LABEL[g.kind] || g.kind, "", g.kind)}
               ${g.kindItems.map(rowHtml).join("")}
             </div>
           `).join("") : `<div class="ei-empty">${emptyState({ icon: "invoice", title: "No lines in this job yet", compact: true })}</div>`}
@@ -848,38 +860,29 @@ function updateReceiveButtonState() {
   btn.textContent = checked.length ? `Receive ${checked.length} Line${checked.length === 1 ? "" : "s"}` : "Receive Selected";
 }
 
-// Quoted = every line at its full quantity, whether or not it's landed yet
-// (matches cost_rollup's quoted_cost); actual = only what's really in the
-// car so far -- parts count once received, labor/fees count the moment
-// they're logged. Same "at cost" basis as everywhere else (unit_cost, not
-// unit_price) -- this panel has never shown customer-facing markup.
+// The arithmetic itself lives in estimate-money.js, which mirrors the
+// server's cost_rollup -- so this card, the board's Cost column and the
+// vehicle's own total can't tell three different stories about one ticket.
 // Split out of renderEstimate because an in-place sync has to recompute
 // these without touching the rows.
 function renderEstimateTotals(order) {
   const items = order.estimate ? order.estimate.items : [];
-  const notReturned = (i) => !(i.kind === "part" && i.part_returned);
-  const quotedTotal = items.filter(notReturned).reduce((s, i) => s + i.quantity * i.unit_cost, 0);
-  const actualParts = items.filter((i) => i.kind === "part" && !i.part_returned).reduce((s, i) => s + i.received_quantity * i.unit_cost, 0);
-  const actualOther = items.filter((i) => i.kind !== "part").reduce((s, i) => s + i.quantity * i.unit_cost, 0);
-  const actual = actualParts + actualOther;
-  $("#vd-quoted-cost").textContent = money(quotedTotal);
+  applyTicketTotals(quotedTotal(items), actualTotal(items));
+}
+
+// One writer for the three elements the ticket's cost card is made of, shared
+// by the post-save render and the live-typing recompute below. Two copies of
+// this is how the badge ended up saying "under quote" while the figures above
+// it said the opposite.
+function applyTicketTotals(quoted, actual) {
+  $("#vd-quoted-cost").textContent = money(quoted);
   $("#vd-actual-cost").textContent = money(actual);
-  // The single most decision-relevant number on a recon ticket -- are we
-  // over the quote -- shouldn't have to be computed mentally from two
-  // adjacent figures.
   const delta = $("#vd-cost-delta");
-  if (delta) {
-    if (!quotedTotal) {
-      delta.hidden = true;
-    } else {
-      const diff = actual - quotedTotal;
-      delta.hidden = false;
-      delta.className = `cost-delta ${diff > 0.005 ? "over" : Math.abs(diff) <= 0.005 ? "zero" : ""}`;
-      delta.textContent = Math.abs(diff) <= 0.005 ? "On quote"
-        : diff > 0 ? `${money(diff)} over quote`
-        : `${money(-diff)} under quote`;
-    }
-  }
+  if (!delta) return;
+  const badge = costDeltaBadge(quoted, actual);
+  delta.hidden = badge.hidden;
+  delta.className = badge.className;
+  delta.textContent = badge.text;
 }
 
 // Debounce handle for keystroke-driven autosave (wired in wireEstimateGrid).
@@ -889,49 +892,41 @@ function clearEstimateTypingTimer() {
   estimateTypingTimer = null;
 }
 
+/* Read a grid row back as the same shape estimate-money.js takes, so the
+   totals that follow each keystroke run through exactly the definition the
+   saved ticket does. Kind matters here and used not to be read at all: a
+   credit row was summed as an ordinary cost and pushed the ticket's quote
+   UP by the size of the refund. */
+function rowAsEstimateItem(row) {
+  const num = (sel) => {
+    const el = row.querySelector(sel);
+    return el ? parseFloat(el.value || "0") || 0 : 0;
+  };
+  return {
+    kind: row.querySelector(".ei-kind")?.value || "part",
+    quantity: num(".ei-qty"),
+    // A returned part's cost input renders as a disabled 0; part_returned
+    // below is what actually drops it, so either reading gives the same
+    // answer and neither depends on the other.
+    unit_cost: num(".ei-cost"),
+    received_quantity: parseFloat(row.dataset.receivedQuantity || "0") || 0,
+    part_returned: row.dataset.partReturned === "1",
+  };
+}
+
 // The live-typing counterpart to renderEstimateTotals: same math, but read
 // straight from the grid's inputs instead of state, so totals track each
-// keystroke without waiting for the save round-trip. A returned part's cost
-// input reads 0 (that's how it renders), which drops it from every figure
-// here exactly like the notReturned filter does server-side.
+// keystroke without waiting for the save round-trip.
 function updateEstimateTotalsFromDom() {
   const box = $("#vd-estimate-items");
   if (!box) return;
-  const num = (el) => (el ? parseFloat(el.value || "0") || 0 : 0);
-  let quoted = 0;
-  let actual = 0;
-  for (const row of $$(".part-row:not(.head)", box)) {
-    const qty = num(row.querySelector(".ei-qty")) || 0;
-    const cost = num(row.querySelector(".ei-cost"));
-    quoted += qty * cost;
-    actual += row.querySelector(".ei-kind")?.value === "part"
-      ? (parseFloat(row.dataset.receivedQuantity || "0") || 0) * cost
-      : qty * cost;
-  }
-  $("#vd-quoted-cost").textContent = money(quoted);
-  $("#vd-actual-cost").textContent = money(actual);
-  const delta = $("#vd-cost-delta");
-  if (delta) {
-    if (!quoted) {
-      delta.hidden = true;
-    } else {
-      const diff = actual - quoted;
-      delta.hidden = false;
-      delta.className = `cost-delta ${diff > 0.005 ? "over" : Math.abs(diff) <= 0.005 ? "zero" : ""}`;
-      delta.textContent = Math.abs(diff) <= 0.005 ? "On quote"
-        : diff > 0 ? `${money(diff)} over quote`
-        : `${money(-diff)} under quote`;
-    }
-  }
+  const rows = $$(".part-row:not(.head)", box).map(rowAsEstimateItem);
+  applyTicketTotals(quotedTotal(rows), actualTotal(rows));
   // Job subtotals live in each group's header; keep them moving too.
   for (const group of $$(".job-group", box)) {
     const label = group.querySelector(".job-group-subtotal");
     if (!label) continue;
-    let sub = 0;
-    for (const row of $$(".part-row:not(.head)", group)) {
-      sub += (num(row.querySelector(".ei-qty")) || 0) * num(row.querySelector(".ei-cost"));
-    }
-    label.textContent = money(sub);
+    label.textContent = money(quotedTotal($$(".part-row:not(.head)", group).map(rowAsEstimateItem)));
   }
 }
 
@@ -1029,14 +1024,11 @@ function syncEstimateInPlace(order) {
 
   // Subtotals key off quantity x cost, which the shape signature ignores on
   // purpose -- so they have to be recomputed here explicitly.
-  const notReturned = (i) => !(i.kind === "part" && i.part_returned);
   $$(".job-group", box).forEach((groupEl) => {
     const sub = $(".job-group-subtotal", groupEl);
     if (!sub) return;
     const jobId = groupEl.dataset.jobId === "" ? null : Number(groupEl.dataset.jobId);
-    sub.textContent = money(
-      items.filter((i) => (i.job_id ?? null) === jobId).filter(notReturned).reduce((s, i) => s + i.quantity * i.unit_cost, 0),
-    );
+    sub.textContent = money(quotedTotal(items.filter((i) => (i.job_id ?? null) === jobId)));
   });
   renderEstimateTotals(order);
   updateReceiveButtonState();
@@ -1816,10 +1808,11 @@ function renderPrintTicket() {
   const customerLabel = isWeOwe ? (item.customer_name || "") : "";
   const items = order.estimate ? order.estimate.items : [];
   const jobs = order.estimate?.jobs ?? [];
-  const quotedTotal = items.filter((i) => !(i.kind === "part" && i.part_returned)).reduce((s, i) => s + i.quantity * i.unit_cost, 0);
-  const actualParts = items.filter((i) => i.kind === "part" && !i.part_returned).reduce((s, i) => s + i.received_quantity * i.unit_cost, 0);
-  const actualOther = items.filter((i) => i.kind !== "part").reduce((s, i) => s + i.quantity * i.unit_cost, 0);
-  const actualTotal = actualParts + actualOther;
+  // Same rules as the on-screen card (estimate-money.js). Paper that
+  // disagreed with the screen it was printed from was the worst version of
+  // this bug: the screen can be refreshed, the sheet in someone's hand can't.
+  const printQuoted = quotedTotal(items);
+  const printActual = actualTotal(items);
   const a = order.assignment;
   const techName = (a && a.technician_name) || "Unassigned";
   const advisorName = (a && a.advisor_name) || "Unassigned";
@@ -1839,7 +1832,7 @@ function renderPrintTicket() {
   // parts-only concept (labor/fees have no order lifecycle), mirroring the
   // on-screen grid.
   const itemRow = (i) => {
-    const returned = i.kind === "part" && i.part_returned;
+    const returned = isReturnedPart(i);
     let status = "";
     if (i.kind === "part") {
       if (returned) status = "Returned";
@@ -1850,23 +1843,16 @@ function renderPrintTicket() {
       ? `<div class="pt-desc-sub">Core charge ${money(i.core_charge)}</div>` : "";
     return `<tr><td>${esc(i.description)}${coreSub}</td><td>${i.part_number ? esc(i.part_number) : ""}</td>
       <td class="num-col">${i.quantity}</td><td class="num-col">${money(returned ? 0 : i.unit_cost)}</td>
-      <td class="num-col">${money(returned ? 0 : i.quantity * i.unit_cost)}</td><td>${status}</td></tr>`;
+      <td class="num-col">${money(quotedLineTotal(i))}</td><td>${status}</td></tr>`;
   };
 
   // Parts/Labor/Fees sub-headers replace the old Kind column -- the same
-  // grouping whether or not the ticket has jobs, so the column count never
-  // changes shape between tickets. Exhaustive over every kind actually
-  // present, not just the three named groups: vendor-credit ingest writes
-  // kind="credit" lines, and a printed row list that drops them stops
-  // summing to its own printed totals.
-  const kindGroupRows = (bucketItems) => {
-    const extraKinds = [...new Set(bucketItems.map((x) => x.kind).filter((k) => !KIND_GROUP_ORDER.includes(k)))];
-    return [...KIND_GROUP_ORDER, ...extraKinds]
-      .map((kind) => ({ kind, kindItems: bucketItems.filter((x) => x.kind === kind) }))
-      .filter((g) => g.kindItems.length)
-      .map((g) => `<tr class="print-kind-head"><td colspan="6">${KIND_GROUP_LABEL[g.kind] || (g.kind === "credit" ? "Credits" : esc(g.kind))}</td></tr>` + g.kindItems.map(itemRow).join(""))
+  // grouping (kindGroupsOf) the on-screen grid uses, so the paper and the
+  // page it was printed from can't list different lines.
+  const kindGroupRows = (bucketItems) =>
+    kindGroupsOf(bucketItems)
+      .map((g) => `<tr class="print-kind-head"><td colspan="6">${esc(KIND_GROUP_LABEL[g.kind] || g.kind)}</td></tr>` + g.kindItems.map(itemRow).join(""))
       .join("");
-  };
 
   // Same job/General buckets as the on-screen ticket (renderEstimate) --
   // a printed ticket that's grouped differently than what the advisor was
@@ -1881,22 +1867,22 @@ function renderPrintTicket() {
       const bucketItems = items.filter((i) => (i.job_id ?? null) === bucket.id);
       if (!bucketItems.length) return "";
       const jobTech = bucket.id === null ? "" : (bucket.technician_name || "Use ticket default");
-      const jobSubtotal = bucketItems.filter((i) => !(i.kind === "part" && i.part_returned)).reduce((s, i) => s + i.quantity * i.unit_cost, 0);
+      const jobSubtotal = quotedTotal(bucketItems);
       return `<tbody class="print-job"><tr class="print-job-head"><td colspan="4">${esc(bucket.title)}${jobTech ? ` — ${esc(jobTech)}` : ""}</td><td class="num-col">${money(jobSubtotal)}</td><td></td></tr>${kindGroupRows(bucketItems)}</tbody>`;
     }).join("") || `<tbody><tr><td colspan="6">No parts or labor lines.</td></tr></tbody>`;
   }
 
   // Invoice-style totals. With deposits (we-owe), the balance is the grand
   // row; without them Actual Cost is the bottom line itself.
-  const totalsRows = [`<div class="tl-row"><span>Total Quote</span><span class="num">${money(quotedTotal)}</span></div>`];
+  const totalsRows = [`<div class="tl-row"><span>Total Quote</span><span class="num">${money(printQuoted)}</span></div>`];
   if (paid > 0) {
-    totalsRows.push(`<div class="tl-row"><span>Actual Cost</span><span class="num">${money(actualTotal)}</span></div>`);
+    totalsRows.push(`<div class="tl-row"><span>Actual Cost</span><span class="num">${money(printActual)}</span></div>`);
     // The API returns payments newest-first; paper reads oldest-first.
     payments.slice().reverse().forEach((p) => totalsRows.push(
       `<div class="tl-row muted"><span>Deposit · ${PAY_METHOD_LABEL[p.method] || esc(p.method)} · ${esc(fmtDate(p.created_at))}</span><span class="num">−${money(p.amount)}</span></div>`));
     totalsRows.push(`<div class="tl-row grand"><span>Balance</span><span class="num">${money(item.net_cost)}</span></div>`);
   } else {
-    totalsRows.push(`<div class="tl-row grand"><span>Actual Cost</span><span class="num">${money(actualTotal)}</span></div>`);
+    totalsRows.push(`<div class="tl-row grand"><span>Actual Cost</span><span class="num">${money(printActual)}</span></div>`);
   }
   // net_cost/customer_paid roll up the whole vehicle, not just this RO --
   // say so whenever more than one RO shares them.

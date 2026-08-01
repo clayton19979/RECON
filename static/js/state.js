@@ -20,6 +20,11 @@ export const state = {
   vehicleLateOnly: false,                 // "Past Promised" card toggle -- we-owe promises past their date
   vehicleIdleBucket: "",                  // "" == any; else an IDLE_SELECTIONS key (a chart bar, or "stalled" from the card)
   vehicleChartOpen: true,                 // the idle-bucket chart above the table
+  // "columns" (cards grouped into the three piles) | "list" (sortable table).
+  // Columns is the default because "where is everything up to" is the
+  // question the board is opened for first thing in the morning; the table is
+  // one click away and is the better answer once you want it sorted by cost.
+  vehicleLayout: "columns",
   vehicleCursor: null,                    // key of the keyboard-focused row
   vehicleAnchor: null,                    // key of the last row clicked, for Shift+click ranges
   // The half of the board that isn't loaded -- History while you're on the

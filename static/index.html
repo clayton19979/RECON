@@ -130,7 +130,7 @@
         <div class="page-head">
           <div>
             <h1>Vehicles</h1>
-            <p class="page-desc">Every recon car and we-owe promise, one list. Click a row for the full picture — cost, parts, technician, linked repair order.</p>
+            <p class="page-desc">Every recon car and we-owe promise, grouped by where it is up to. Click a car for the full picture — cost, parts, technician, linked repair order.</p>
           </div>
           <div class="page-head-actions">
             <button class="btn btn-ghost" id="add-we-owe-btn">
@@ -213,6 +213,23 @@
           <button type="button" class="btn btn-ghost btn-sm btn-quiet" id="vehicles-chart-toggle"
                   aria-controls="vehicles-chart" aria-expanded="true">Hide activity chart</button>
           <span class="filters-note" id="vehicles-count">0 vehicles</span>
+          <!-- Two ways to read the same filtered list. Columns answer "where
+               is everything up to" at a glance; the table answers "sort this
+               by cost / idle / age". Neither replaces the other, so this is a
+               switch rather than a redesign, and which one you left it on is
+               remembered like every other view preference. -->
+          <div class="view-switch" id="vehicles-layout-switch" role="group" aria-label="Vehicles layout">
+            <button type="button" class="view-switch-btn active" data-veh-layout="columns" aria-pressed="true"
+                    title="Group the vehicles into columns by where they are up to">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="5" height="16" rx="1"/><rect x="9.5" y="4" width="5" height="16" rx="1"/><rect x="16" y="4" width="5" height="16" rx="1"/></svg>
+              Columns
+            </button>
+            <button type="button" class="view-switch-btn" data-veh-layout="list" aria-pressed="false"
+                    title="One sortable row per vehicle">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+              List
+            </button>
+          </div>
         </div>
 
         <!-- Every bar is a filter (see renderIdleChart). Kept above the table
@@ -238,7 +255,14 @@
           <button type="button" class="btn btn-primary btn-sm" id="vehicles-bulk-archive">Send Selected to History</button>
         </div>
 
-        <div class="panel" style="margin-bottom:0">
+        <!-- The columns layout, and the board's default. renderVehicleColumns
+             fills it from exactly the same filtered, sorted rows the table
+             below is built from; the switch above shows one or the other.
+             The two [hidden] attributes here have to start out agreeing with
+             state.vehicleLayout -- syncLayoutSwitch owns them from then on. -->
+        <div class="veh-columns" id="vehicles-columns"></div>
+
+        <div class="panel" id="vehicles-list-panel" style="margin-bottom:0" hidden>
           <div class="table-wrap table-scroll" id="vehicles-scroll">
             <table class="board-table sticky-head">
               <thead>

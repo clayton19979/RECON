@@ -207,7 +207,7 @@ export function resetVehicleView() {
 
    - The car is filed to History. Search a stock number from a job finished
      last month and the board said nothing matched it.
-   - The board is narrowed. Segment, status, waiting-on-parts, over-quote and
+   - The board is narrowed. Segment, status, waiting-on-parts, past-promised and
      the idle bucket all persist between sessions, so a view left on "Recon"
      weeks ago silently hides every we-owe car from every search after it.
 

@@ -224,7 +224,7 @@ def lot_needs_text(row: dict) -> str:
         # Only true while nothing has actually been spent or ordered -- see
         # lot_bucket. Saying it about a car with parts in it reads as a
         # contradiction of the money on the same row.
-        bits.append("quoted, work not started")
+        bits.append("written up, work not started")
 
     # The work itself goes ahead of the money: it is the answer to the
     # question, and the dollars are the follow-up.
@@ -239,7 +239,7 @@ def lot_needs_text(row: dict) -> str:
         bits.append(f"{pending} part{'' if pending == 1 else 's'} on order{amount}")
 
     if row["remaining_cost"]:
-        bits.append(f"${row['remaining_cost']:,.2f} of quoted work left")
+        bits.append(f"${row['remaining_cost']:,.2f} of work left")
 
     # Only worth saying once a car has actually gone quiet; every car is idle
     # for a day or two between visits and flagging that is just noise. Same

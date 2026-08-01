@@ -76,16 +76,14 @@ ok(!costCell("R-300").querySelector(".cost-missing"),
 /* ---------- the Cost card stops calling it a saving ---------- */
 
 const stats = w.boardStats(w.visibleVehicles());
-ok(stats.cost === 600 && stats.quoted === 1075,
-  `card totals drifted: ${stats.cost} of ${stats.quoted}`);
+ok(stats.cost === 600, `Cost card total drifted: ${stats.cost}`);
+ok(stats.quoted === undefined, "boardStats is back to computing a quoted total");
 ok(stats.unreceived === 475, `unreceived should total 475, got ${stats.unreceived}`);
 
-const sub = $("#stat-quoted-sub").textContent;
-ok(!/under the/.test(sub),
-  `the Cost card still reports unrecorded spending as coming in under quote: "${sub}"`);
+const sub = $("#stat-cost-sub").textContent;
 ok(sub.includes("$475.00") && /not marked received/i.test(sub),
-  `the Cost card should name the unreceived money instead, got "${sub}"`);
-ok(!/var\(--good\)/.test($("#stat-quoted-sub").style.color),
+  `the Cost card should name the unreceived money, got "${sub}"`);
+ok(!/var\(--good\)/.test($("#stat-cost-sub").style.color),
   "the Cost card is still painting this green");
 
 /* ---------- a genuine saving still reads as one ---------- */
@@ -93,18 +91,23 @@ ok(!/var\(--good\)/.test($("#stat-quoted-sub").style.color),
 board = [veh({ recon_id: 9, stock_number: "R-900", vehicle: "2015 Chevrolet Malibu", quoted_cost: 500, actual_cost: 400 })];
 await w.loadVehiclesView();
 await settle();
-ok(/under the \$500\.00 quoted/.test($("#stat-quoted-sub").textContent),
-  `a car that really did come in under quote should still say so, got "${$("#stat-quoted-sub").textContent}"`);
-ok($("#stat-quoted-sub").style.color.includes("--good"),
+// With nothing unreceived, the sub goes back to saying what the number is
+// made of. Deliberately NOT "under the $500 quoted": the shop doesn't quote
+// recon work, so there is no estimate for the total to be under.
+ok($("#stat-cost-sub").textContent === "received parts + labor",
+  `the Cost sub should state its composition, got "${$("#stat-cost-sub").textContent}"`);
+ok(!$("#stat-cost-sub").style.color.includes("--good"),
   "a real saving lost its green");
 
-/* ---------- over quote still wins ---------- */
+/* ---------- unreceived money still outranks the plain sub ---------- */
 
 board = [veh({ recon_id: 10, stock_number: "R-910", vehicle: "2019 Toyota RAV4", quoted_cost: 500, actual_cost: 800, unreceived_cost: 120 })];
 await w.loadVehiclesView();
 await settle();
-ok(/over the \$500\.00 quoted/.test($("#stat-quoted-sub").textContent),
-  `running past the estimate is real whatever else is outstanding, got "${$("#stat-quoted-sub").textContent}"`);
+// No over-quote reading -- the shop doesn't quote recon work -- but money
+// spent and never receipted is a fact about the total, so it still shows.
+ok(/\$120\.00 of parts not marked received/.test($("#stat-cost-sub").textContent),
+  `unreceipted spending should be named on the Cost card, got "${$("#stat-cost-sub").textContent}"`);
 
 ok(!rejections.length, `unhandled rejections: ${rejections.map((r) => r && r.message).join(", ")}`);
 finish("unreceived parts");

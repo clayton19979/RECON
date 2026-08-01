@@ -192,3 +192,55 @@ def test_last_activity_backfills_from_the_activity_log_and_is_idempotent(tmp_pat
         again = {r["number"]: r["last_activity_at"] for r in db.execute("SELECT number, last_activity_at FROM orders")}
     assert again["RO-ACT-0001"] == "2026-06-01T12:00:00", "the backfill overwrote a live timestamp"
     assert again["RO-ACT-0002"] == "2026-02-09T08:00:00"
+
+
+def test_every_estimate_item_column_reaches_a_legacy_database(tmp_path):
+    """A fresh database gets its columns from CREATE TABLE; an existing one
+    gets them from the ALTER list in init_db. Those two lists drifted once --
+    quoted_unit_cost was in the CREATE and missing from the list -- and every
+    test passed, because tests build fresh databases. The shop's database is
+    never fresh: the first board load after that update 500'd on a column
+    that didn't exist.
+
+    So: strip estimate_items down to the columns the ALTER list would need to
+    re-add, run init_db over it the way an update does, and require the table
+    to come out shaped exactly like a brand-new one."""
+    import re
+    import sqlite3
+    from pathlib import Path
+
+    source = (Path(__file__).parent.parent / "app" / "db.py").read_text(encoding="utf-8")
+    alter_columns = set(re.findall(r'\("([a-z_0-9]+)", "\1 ', source))
+    assert alter_columns, "could not read the ALTER list out of app/db.py"
+
+    fresh_path = tmp_path / "fresh.db"
+    init_db(fresh_path)
+    with connect(fresh_path) as db:
+        fresh_columns = {row[1] for row in db.execute("PRAGMA table_info(estimate_items)")}
+        legacy_keep = [row[1] for row in db.execute("PRAGMA table_info(estimate_items)") if row[1] not in alter_columns]
+
+    legacy_path = tmp_path / "legacy.db"
+    init_db(legacy_path)
+    raw = sqlite3.connect(legacy_path)
+    try:
+        cols = ", ".join(legacy_keep)
+        raw.executescript(
+            f"""
+            CREATE TABLE estimate_items_old AS SELECT {cols} FROM estimate_items;
+            DROP TABLE estimate_items;
+            ALTER TABLE estimate_items_old RENAME TO estimate_items;
+            """
+        )
+        raw.commit()
+    finally:
+        raw.close()
+
+    # An update is just init_db running again over whatever is on disk.
+    init_db(legacy_path)
+    with connect(legacy_path) as db:
+        migrated = {row[1] for row in db.execute("PRAGMA table_info(estimate_items)")}
+    missing = fresh_columns - migrated
+    assert not missing, (
+        f"columns a fresh database has that an updated one never gets: {sorted(missing)} "
+        "-- add them to the ALTER list in init_db"
+    )

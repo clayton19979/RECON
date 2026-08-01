@@ -53,7 +53,7 @@ const veh = (over) => ({
    same-order fixture, and fails this one. */
 let board = [
   veh({ recon_id: 1, stock_number: "B204", vehicle: "2019 Ford F-150", vin: "1FTEW1E5XKF", status: "in_progress", technicians: ["Dana"], acquired_at: "2026-06-09", age_days: 22, quoted_cost: 900, actual_cost: 1450, parts_pending: 2, parts_pending_value: 340, idle_days: 0, last_activity_at: "2026-07-25T08:15:00", needs: "2 parts on order ($340.00)" }),
-  veh({ recon_id: 2, stock_number: "A118", vehicle: "2021 Honda Civic", vin: "2HGFC2F69MH", status: "estimate", technicians: [], age_days: 3, quoted_cost: 600, actual_cost: 0, idle_days: 2, last_activity_at: "2026-07-23T11:00:00", lot_bucket: "waiting", remaining_cost: 600, needs: "No ticket written yet · $600.00 of quoted work left" }),
+  veh({ recon_id: 2, stock_number: "A118", vehicle: "2021 Honda Civic", vin: "2HGFC2F69MH", status: "estimate", technicians: [], age_days: 3, quoted_cost: 600, actual_cost: 0, idle_days: 2, last_activity_at: "2026-07-23T11:00:00", lot_bucket: "waiting", remaining_cost: 600, needs: "No ticket written yet · $600.00 of work left" }),
   veh({ segment: "we_owe", we_owe_id: 5, stock_number: "", vehicle: "2017 Toyota Camry", customer_name: "R. Alvarez", status: "pending_approval", status_bucket: "in_progress", technicians: ["Chris", "Dana"], age_days: 41, quoted_cost: 300, actual_cost: 310, parts_pending: 1, parts_pending_value: 85, idle_days: 4, last_activity_at: "2026-07-21T09:30:00", needs: "Waiting on approval · 1 part on order ($85.00)" }),
   // The two stalled cars carry real ticket ids: they're what "Make Tasks"
   // acts on, and the id is what gives the resulting task its jump-to-vehicle
@@ -66,7 +66,7 @@ let board = [
   // a fixture whose only long-idle cars were a completed RO and a fulfilled
   // promise was asserting the exact bug this file now guards against. The
   // finished case gets its own scoped section further down.
-  veh({ recon_id: 3, order_id: 71, stock_number: "C007", vehicle: "2015 Chevy Silverado", vin: "3GCUKREC0FG", status: "in_progress", technicians: ["Bo"], age_days: 9, quoted_cost: 1200, actual_cost: 1180, idle_days: 9, last_activity_at: "2026-07-16T14:00:00", remaining_cost: 20, needs: "$20.00 of quoted work left · untouched 9 days" }),
+  veh({ recon_id: 3, order_id: 71, stock_number: "C007", vehicle: "2015 Chevy Silverado", vin: "3GCUKREC0FG", status: "in_progress", technicians: ["Bo"], age_days: 9, quoted_cost: 1200, actual_cost: 1180, idle_days: 9, last_activity_at: "2026-07-16T14:00:00", remaining_cost: 20, needs: "$20.00 of work left · untouched 9 days" }),
   veh({ segment: "we_owe", we_owe_id: 6, order_id: 72, stock_number: "D451", vehicle: "2020 Subaru Outback", customer_name: "T. Nguyen", status: "open", status_bucket: "in_progress", technicians: [], age_days: 15, quoted_cost: 0, actual_cost: 0, idle_days: 21, last_activity_at: "2026-07-04T10:00:00", lot_bucket: "waiting", needs: "Untouched 21 days" }),
 ];
 
@@ -1029,7 +1029,7 @@ ok(colMoney("ready") === "", `an empty column's money reads "${colMoney("ready")
 
 /* The card's "what does this still need" line is the server's sentence, not
    one the browser assembled -- the whole reason it is computed once. */
-ok(cardFor("recon:2").querySelector(".veh-card-needs").textContent === "No ticket written yet · $600.00 of quoted work left",
+ok(cardFor("recon:2").querySelector(".veh-card-needs").textContent === "No ticket written yet · $600.00 of work left",
    `the Civic's needs line reads "${cardFor("recon:2").querySelector(".veh-card-needs").textContent}"`);
 ok(cardFor("recon:1").querySelector(".veh-card-needs").textContent === "2 parts on order ($340.00)",
    "a card rewrote the server's needs sentence");

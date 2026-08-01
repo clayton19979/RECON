@@ -566,6 +566,17 @@ def _migrate(db: sqlite3.Connection) -> None:
         # sitting at the shop waiting to go back -- the difference between
         # "I still have this" and "it's gone, waiting on their credit".
         ("part_picked_up_at", "part_picked_up_at TEXT NOT NULL DEFAULT ''"),
+        # What the line was written down at, kept apart from what the vendor
+        # eventually billed. Deliberately nullable with no backfill: on an
+        # existing database every row arrives NULL, readers coalesce to
+        # unit_cost, and the numbers on screen are unchanged until somebody
+        # writes a new line. Backfilling would have to invent a written price
+        # for parts already received at a price nobody can now compare to.
+        # (This entry was silently dropped in the 2026-07-31 merge wave while
+        # the CREATE TABLE kept the column -- fresh databases worked, every
+        # existing one 500'd on the first board load. Tests build fresh
+        # databases, which is exactly why they never caught it.)
+        ("quoted_unit_cost", "quoted_unit_cost REAL"),
         # When a part line was marked ordered. Without it, a part ordered this
         # morning and one ordered three weeks ago were indistinguishable
         # everywhere in the app -- and a part nobody chases is the most common

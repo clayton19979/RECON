@@ -780,7 +780,7 @@ function renderEstimate(order) {
         ? `<input class="ei-cost" type="number" value="0" disabled title="Returned to the vendor -- no longer counted" data-real-cost="${item.unit_cost ?? 0}">`
         : `<input class="ei-cost" type="number" min="0" step="0.01" value="${item.unit_cost ?? 0}"${item.kind === "labor" ? ` title="Hourly rate"` : ""}>`)
         + (showQuoteNote(item)
-          ? `<span class="ei-quote-note ${item.unit_cost > item.quoted_unit_cost ? "over" : "under"}" title="This line was quoted at ${money(item.quoted_unit_cost)} each">Quoted ${money(item.quoted_unit_cost)}</span>`
+          ? `<span class="ei-quote-note ${item.unit_cost > item.quoted_unit_cost ? "over" : "under"}" title="This line was written up at ${money(item.quoted_unit_cost)} each; the vendor billed ${money(item.unit_cost)}">Was ${money(item.quoted_unit_cost)}</span>`
           : ""), showQuoteNote(item) ? "has-quote-note" : "")}
       ${cell("core", L.core, item.kind === "part"
         ? `<label class="core-toggle" title="Tick only if this part carries a core deposit the vendor owes back">
@@ -944,7 +944,7 @@ function updateReceiveButtonState() {
 // the same terms cost_rollup uses server-side: it is money the shop paid for
 // this car and won't see again until the old unit goes back. Counting it in
 // the quote as well as the actual is what stops a deposit from reading as
-// "over quote" the day the part lands.
+// short by that part the day it lands.
 const coreOwing = (i) => i.kind === "part" && !i.part_returned && !i.core_return_invoice_number ? (i.core_charge || 0) : 0;
 function renderEstimateTotals(order) {
   const items = order.estimate ? order.estimate.items : [];

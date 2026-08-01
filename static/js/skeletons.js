@@ -38,9 +38,9 @@ export function skeletonCards(count = 3) {
 // <th> count.
 export const BOARD_COLUMNS = 12;
 
-// Name, Contact, Location, Vehicles, Repair Orders, Last Visit. Same
+// Name, Contact, Location, Vehicles, Repair Orders, We-Owe, Last Visit. Same
 // skeleton/empty-state colspan contract as BOARD_COLUMNS above.
-export const CUSTOMER_COLUMNS = 6;
+export const CUSTOMER_COLUMNS = 7;
 
 // Part, Part #, RO / Vehicle, Qty, Value, Ordered, Waiting. Same contract
 // again: the loading skeleton, the empty state and the error state all have

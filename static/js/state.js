@@ -68,7 +68,7 @@ export const state = {
   // fresh visit always shows fresh orders.
   customers: [],
   customersSearch: "",
-  customerFilter: "",           // "" | "open" (has open ROs) | "no_contact"
+  customerFilter: "",           // "" | "open" (has open ROs) | "owed" (open we-owe) | "no_contact"
   customerCursor: null,         // customer id under the keyboard cursor
   customerOpenId: null,         // customer id whose row is expanded
   customerDetails: {},          // id -> /api/customers/{id} payload

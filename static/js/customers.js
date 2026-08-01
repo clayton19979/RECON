@@ -46,11 +46,19 @@ function customerHasContact(c) {
   return Boolean(String(c.phone || "").trim() || String(c.email || "").trim());
 }
 
+// One reading of "the shop still owes this person work", used by the column,
+// the stat card and the card's filter so the three can never disagree about
+// who is on the hook list. Archived promises are already excluded server-side.
+function openPromises(c) {
+  return Number(c.we_owe_open || 0);
+}
+
 function visibleCustomers() {
   const query = state.customersSearch.trim().toLowerCase();
   const queryDigits = query.replace(/\D/g, "");
   let rows = state.customers.filter((c) => {
     if (state.customerFilter === "open" && !c.open_orders) return false;
+    if (state.customerFilter === "owed" && !openPromises(c)) return false;
     if (state.customerFilter === "no_contact" && customerHasContact(c)) return false;
     if (!query) return true;
     // Phone matches on digits so "(219) 555" and "2195 55" both find the
@@ -87,8 +95,11 @@ function renderCustomersStats() {
   const all = state.customers;
   const vehicles = all.reduce((n, c) => n + (c.vehicle_count || 0), 0);
   const withOpen = all.filter((c) => c.open_orders > 0).length;
+  const owed = all.filter((c) => openPromises(c) > 0).length;
+  const promises = all.reduce((n, c) => n + openPromises(c), 0);
   const noContact = all.filter((c) => !customerHasContact(c)).length;
   const openOn = state.customerFilter === "open";
+  const owedOn = state.customerFilter === "owed";
   const contactOn = state.customerFilter === "no_contact";
   $("#customers-stats").innerHTML = `
     <div class="stat">
@@ -105,6 +116,11 @@ function renderCustomersStats() {
       <div class="stat-label">With Open ROs</div>
       <div class="stat-value">${withOpen}</div>
       <div class="stat-sub">${withOpen ? "have work in the shop right now" : "no open repair orders"}</div>
+    </button>
+    <button type="button" class="stat stat-action" data-customer-filter="owed" aria-pressed="${owedOn}" ${owed || owedOn ? "" : "disabled"} title="${owedOn ? "Showing customers still owed a we-owe — click to clear" : (owed ? "Show only customers the shop still owes work" : "")}">
+      <div class="stat-label">Owed a We-Owe</div>
+      <div class="stat-value${owed ? " warn" : ""}">${owed}</div>
+      <div class="stat-sub">${owed ? `${promises} promise${promises === 1 ? "" : "s"} still open` : "nothing promised outstanding"}</div>
     </button>
     <button type="button" class="stat stat-action" data-customer-filter="no_contact" aria-pressed="${contactOn}" ${noContact || contactOn ? "" : "disabled"} title="${contactOn ? "Showing customers with no contact info — click to clear" : (noContact ? "Show customers the shop has no way to reach" : "")}">
       <div class="stat-label">Missing Contact</div>
@@ -125,6 +141,15 @@ function customerRowHtml(c, open) {
   const ros = c.order_count
     ? `${c.order_count}${c.open_orders ? ` <span class="cust-open-badge">· ${c.open_orders} open</span>` : ""}`
     : '<span class="muted-dash">—</span>';
+  // The We-Owe cell reads "how many promises are still owed", not "how many
+  // were ever made" -- a settled promise is not something anyone needs to
+  // scan for. When they're all settled the count is still worth saying
+  // quietly, because "0 owed" and "never promised anything" are different
+  // answers to give someone on the phone.
+  const owedCount = openPromises(c);
+  const owed = owedCount
+    ? `<span class="cust-owed-badge">${owedCount} owed</span>`
+    : (c.we_owe_count ? `<span class="cust-sub">${c.we_owe_count} settled</span>` : '<span class="muted-dash">—</span>');
   return `
     <tr class="clickable${open ? " cust-open" : ""}" data-id="${c.id}" aria-expanded="${open}">
       <td><strong>${esc(c.name)}</strong>${since ? `<div class="cust-sub">customer since ${since}</div>` : ""}</td>
@@ -132,17 +157,45 @@ function customerRowHtml(c, open) {
       <td>${place ? esc(place) : '<span class="muted-dash">—</span>'}</td>
       <td class="num-col">${c.vehicle_count || '<span class="muted-dash">—</span>'}</td>
       <td class="num-col">${ros}</td>
+      <td class="num-col">${owed}</td>
       <td>${c.last_visit_at ? esc(fmtDay(c.last_visit_at)) : '<span class="muted-dash">never</span>'}</td>
     </tr>
     ${open ? customerExpandRowHtml(c) : ""}`;
 }
 
-/* The expansion: contact block on the left, vehicles-with-their-ROs on the
-   right. Every unvoided chip jumps to the vehicle detail page -- recon and
-   we-owe to their container's page, retail to the vehicle's own retail page.
-   Voided ROs stay visible but inert: there's nothing left to do on them.
+// A promise's own chip, above the vehicle's repair-order chips. It jumps to
+// the same we-owe page the promise's ticket would, which is where a ticket
+// for promised work is started -- so the advisor who came here looking for
+// "what were we supposed to do for them?" lands somewhere they can act.
+const WE_OWE_PILL_CLASS = { open: "pill-status-pending", fulfilled: "pill-status-complete", waived: "pill-inactive" };
+
+function promiseChipHtml(p) {
+  const status = STATUS_LABEL[p.status] || p.status;
+  const pill = WE_OWE_PILL_CLASS[p.status] || "";
+  // Only ever said about a promise that is still owed: "no ticket written
+  // yet" on a fulfilled or waived promise is noise, not a nudge.
+  const bits = [
+    p.archived_at ? "History" : "",
+    p.status === "open" && !p.order_count ? "no ticket yet" : "",
+    p.target_date ? `due ${fmtCalendarDay(p.target_date)}` : "",
+  ].filter(Boolean);
+  return `<button type="button" class="cust-owe-chip" data-owe-id="${p.id}" title="Open this we-owe promise">
+      <span class="cust-owe-what">${esc(p.description)}</span>
+      <span class="pill ${pill}">${esc(status)}</span>
+      ${bits.length ? `<span class="cust-sub">${esc(bits.join(" · "))}</span>` : ""}
+    </button>`;
+}
+
+/* The expansion: contact block on the left, vehicles-with-their-promises-and-ROs
+   on the right. Every unvoided chip jumps to the vehicle detail page -- recon
+   and we-owe to their container's page, retail to the vehicle's own retail
+   page. Voided ROs stay visible but inert: there's nothing left to do on them.
    Each vehicle also gets a Write RO button -- this is where a retail ticket
-   for an existing customer starts. */
+   for an existing customer starts.
+
+   Promises sit above the tickets because they come first in time and in the
+   conversation: the promise is the reason the car is coming back, and it can
+   exist for weeks before anyone writes a ticket against it. */
 function customerExpandRowHtml(c) {
   const detail = state.customerDetails[c.id];
   let body;
@@ -173,11 +226,16 @@ function customerExpandRowHtml(c) {
           ? `<button type="button" class="cust-ro-chip" data-seg="${esc(o.segment)}" data-ref-id="${refId}" title="${esc(o.concern || "Open this repair order")}">${label}</button>`
           : `<span class="cust-ro-chip cust-ro-static" title="${esc(o.concern || "")}">${label}</span>`;
       }).join("") : '<span class="cust-sub">no repair orders yet</span>';
+      const promises = (v.we_owe || []).map(promiseChipHtml).join("");
+      // Said on the button itself so the warning arrives before the click,
+      // not only inside the dialog it opens.
+      const stillOwed = (v.we_owe || []).some((p) => p.status === "open" && !p.archived_at);
       return `
         <div class="cust-vehicle">
           <div class="cust-vehicle-name">${esc(name)}${meta ? `<span class="cust-sub"> · ${meta}</span>` : ""}
-            <button type="button" class="btn btn-ghost btn-sm cust-new-ro" data-vehicle-id="${v.id}" title="Start a retail repair order on this vehicle">+ Write RO</button>
+            <button type="button" class="btn btn-ghost btn-sm cust-new-ro" data-vehicle-id="${v.id}" title="${stillOwed ? "Start a retail (paid) repair order — promised work belongs on the we-owe above" : "Start a retail repair order on this vehicle"}">+ Write RO</button>
           </div>
+          ${promises ? `<div class="cust-owe-chips">${promises}</div>` : ""}
           <div class="cust-ro-chips">${orders}</div>
         </div>`;
     }).join("") : '<div class="cust-sub">No vehicles on file.</div>';
@@ -311,6 +369,11 @@ export function wireCustomersView() {
       openVehicleDetail(chip.dataset.seg, Number(chip.dataset.refId));
       return;
     }
+    const oweChip = e.target.closest(".cust-owe-chip[data-owe-id]");
+    if (oweChip) {
+      openVehicleDetail("we_owe", Number(oweChip.dataset.oweId));
+      return;
+    }
     if (e.target.closest("a")) return; // tel:/mailto: links do their own thing
     const tr = e.target.closest("tr[data-id]");
     if (!tr) return;
@@ -382,6 +445,17 @@ function openRetailRoDialog(vehicleId) {
   retailRoTarget = { customer, vehicle };
   $("#retail-ro-customer").textContent = customer.name || "";
   $("#retail-ro-vehicle").textContent = [vehicle.year, vehicle.make, vehicle.model].filter(Boolean).join(" ");
+  // A retail ticket on a car that's still owed a we-owe is legitimate (they
+  // came in and paid for something else) but it is also the easy mistake:
+  // promised work billed as retail never reaches the promise, so the promise
+  // stays open forever and the cost lands on the wrong side of the shop's
+  // books. Naming the promise is enough -- the advisor knows which it is.
+  const owed = (vehicle.we_owe || []).filter((p) => p.status === "open" && !p.archived_at);
+  const note = $("#retail-ro-owe-note");
+  note.hidden = owed.length === 0;
+  note.textContent = owed.length
+    ? `This car is still owed: ${owed.map((p) => p.description).join("; ")}. If that's what you're writing up, do it on the we-owe instead — it's billed at cost and closes the promise.`
+    : "";
   $("#retail-ro-concern").value = "";
   $("#retail-ro-dialog").showModal();
   $("#retail-ro-concern").focus();

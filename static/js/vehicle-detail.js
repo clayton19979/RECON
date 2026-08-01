@@ -1660,7 +1660,13 @@ async function openMoveItemDialog(orderId, itemId, desc) {
       $("#move-item-no-invoice-note").style.display = "none";
       const warning = $("#move-item-invoice-warning");
       if (invoice.other_item_count > 0) {
-        warning.textContent = `⚠ This invoice also covers ${invoice.other_item_count} other part${invoice.other_item_count === 1 ? "" : "s"} still on this ticket — checking this moves ALL of them, not just this one.`;
+        const others = invoice.other_item_count;
+        // An invoice that also covers another car is the case most worth
+        // stopping on, and it used to be the one case this said nothing about.
+        const cars = invoice.other_order_count > 0
+          ? ` — including work on ${invoice.other_order_count} other vehicle${invoice.other_order_count === 1 ? "" : "s"}`
+          : "";
+        warning.textContent = `⚠ This invoice also covers ${others} other part${others === 1 ? "" : "s"}${cars}. Checking this moves ALL of them, not just this one.`;
         warning.style.display = "";
       } else {
         warning.style.display = "none";

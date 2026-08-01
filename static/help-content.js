@@ -94,13 +94,30 @@ const HELP_TOPICS = [
     aliases: ["main screen", "the list", "board", "home screen", "all cars", "columns", "what do the columns mean"],
     summary: "One row per vehicle in the shop, with the numbers that tell you which ones need attention today.",
     steps: [
-      "The five cards across the top count exactly the rows shown below them — filter the board and every number follows.",
-      "Waiting on Parts, Stalled and Over Quote are clickable: clicking one filters the board down to what it counts.",
+      "The six cards across the top count exactly the rows shown below them — filter the board and every number follows.",
+      "Waiting on Parts, Stalled, Over Quote and Past Promised are clickable: clicking one filters the board down to what it counts.",
       "The chips below switch between All, Recon, We-Owe and History (finished work).",
       "Click any column heading to sort by it.",
       "'Reset view' appears once you've filtered, and puts everything back.",
     ],
-    related: ["idle-and-age", "over-quote", "find-a-vehicle", "send-to-history"],
+    related: ["idle-and-age", "over-quote", "promised-dates", "find-a-vehicle", "send-to-history"],
+  },
+
+  {
+    id: "promised-dates",
+    title: "We-owe promises and their dates",
+    view: "vehicles",
+    aliases: ["promised", "promise date", "target date", "due date", "past due", "overdue", "when did we say",
+              "customer is waiting", "we owe by"],
+    summary: "The date a customer was promised their we-owe work, on the board so a promise can't quietly go past it.",
+    steps: [
+      "The date comes from the we-owe itself — it's the 'Target date' asked for when the promise is written down.",
+      "The Promised column shows it. It turns red with a 'late' tag once the date has gone by, and says 'today' on the day.",
+      "The Past Promised card counts the promises already past due — click it to see only those.",
+      "A promise marked fulfilled or waived stops counting: it's closed, so it can't be late.",
+      "Recon cars have no promise, so their Promised cell stays blank.",
+    ],
+    related: ["vehicles-board", "add-we-owe", "we-owe-close-out"],
   },
 
   {
@@ -114,7 +131,7 @@ const HELP_TOPICS = [
       "Type any part of a stock number, VIN, or the customer's name.",
       "The board filters as you type and switches to the Vehicles screen if you were somewhere else.",
       "Press Esc or click the × to clear it.",
-      "Finished vehicles are hidden by default — click the History chip to search those too.",
+      "If the car is filed to History, or a filter you left on is hiding it, the board says so and offers a button that takes you straight to it — a search never comes back empty about a car RECON has.",
     ],
     related: ["vehicles-board", "find-a-customer", "send-to-history"],
   },
@@ -225,8 +242,9 @@ const HELP_TOPICS = [
       "Every quoted part line on that ticket flips to ordered.",
       "This is bookkeeping only. Call, fax or order from the vendor exactly as you always have.",
       "The vehicle now counts on the board's 'Waiting on Parts' card until those parts are received.",
+      "It also records the date, which is what the On Order list counts the wait from — and it counts as work on the car, so the car stops looking untouched.",
     ],
-    related: ["receive-parts", "add-parts-and-labor", "vehicles-board"],
+    related: ["receive-parts", "add-parts-and-labor", "vehicles-board", "parts-on-order"],
   },
 
   {
@@ -501,14 +519,30 @@ const HELP_TOPICS = [
   },
 
   {
+    id: "parts-on-order",
+    title: "Seeing what you're waiting on",
+    view: "cores",
+    aliases: ["on order", "what am i waiting on", "where is that part", "part hasn't come", "backorder", "back order", "chase the vendor", "why is that car sitting", "parts on order", "late part"],
+    summary: "One list of every part that's been ordered and hasn't turned up, longest wait first.",
+    steps: [
+      "Open Parts & Cores. On Order is the first table.",
+      "Each row is one part somebody is waiting for, with which car it's for and how many days it's been coming.",
+      "'Waiting 7+ days' narrows it to the ones worth a phone call.",
+      "Click a row to open that vehicle and receive the part once it arrives.",
+      "A part ordered before this list existed shows its order date as 'not recorded' — nothing was written down at the time, so it isn't guessed.",
+    ],
+    related: ["order-parts", "receive-parts", "cores-explained"],
+  },
+
+  {
     id: "cores-explained",
-    title: "What the Cores screen is for",
+    title: "What Core Deposits is for",
     view: "cores",
     aliases: ["core", "cores", "core charge", "core deposit", "old part", "alternator", "caliper", "money back from the vendor", "core money"],
     summary: "Tracks core deposits the vendor owes back, so the shop actually collects them instead of eating the charge.",
     steps: [
       "A core charge is money the vendor adds to a part until you send the old one back.",
-      "Cores & Returns lists every one still outstanding, with the charge and which RO and vehicle it came from.",
+      "The Core Deposits table on Parts & Cores lists every one still outstanding, with the charge and which RO and vehicle it came from.",
       "Each core moves through three states: Pending, Awaiting Credit, then Credited.",
       "The chips at the top filter to whichever state you care about.",
     ],
@@ -535,7 +569,7 @@ const HELP_TOPICS = [
     title: "Sending a part back",
     view: "cores",
     aliases: ["return", "returns", "wrong part", "send it back", "didn't need it", "credit due", "returned parts", "restock"],
-    summary: "Returned Parts is the lower half of the Cores screen — parts going back for credit rather than core deposits.",
+    summary: "Returned Parts is the bottom table on Parts & Cores — parts going back for credit rather than core deposits.",
     steps: [
       "Find the part in the Returned Parts section.",
       "Mark it picked up when the driver collects it.",
@@ -598,7 +632,7 @@ const HELP_TOPICS = [
     title: "Seeing what each technician produced",
     view: "reports",
     aliases: ["productivity", "tech report", "hours", "who did what", "labor", "performance", "technician report"],
-    summary: "Repair orders, hours and labor cost broken out per technician, over any date range.",
+    summary: "Repair orders, hours, and what each technician still has open, over any date range.",
     steps: [
       "Open Reports and pick the Technicians tab, or click 'Productivity Report' from the Staff screen.",
       "Choose a date range across the top.",
@@ -732,7 +766,7 @@ const HELP_GROUPS = [
   },
   {
     title: "The Vehicles board",
-    ids: ["vehicles-board", "find-a-vehicle", "idle-and-age", "over-quote"],
+    ids: ["vehicles-board", "find-a-vehicle", "idle-and-age", "over-quote", "promised-dates"],
   },
   {
     title: "Starting work on a vehicle",
@@ -760,7 +794,7 @@ const HELP_GROUPS = [
     title: "Vendors, invoices and cores",
     ids: [
       "post-vendor-invoice", "invoice-approval", "manage-vendors",
-      "cores-explained", "core-workflow", "returned-parts",
+      "parts-on-order", "cores-explained", "core-workflow", "returned-parts",
     ],
   },
   {

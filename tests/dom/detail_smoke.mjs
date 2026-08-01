@@ -49,6 +49,11 @@ let suggestMode = "results"; // "results" | "empty" | "error"
 const customerPatchBodies = []; // what the editor actually saved
 const reconPatchBodies = []; // ...and what the Edit Vehicle dialog saved
 
+// The Assigned card's two Save buttons each write their own half of one
+// record; these capture exactly what each one puts on the wire.
+const assignmentPuts = [];
+let assignmentStale = false;
+
 const { w, doc, fetchLog, settle, ok, finish, rejections } = await boot({
   expose: ["state", "openVehicleDetail", "renderLastWorked", "activityLabel", "ACTIVITY_LABEL",
            "STALLED_AFTER_DAYS", "loadTasksView"],
@@ -75,9 +80,21 @@ const { w, doc, fetchLog, settle, ok, finish, rejections } = await boot({
     // Plain /api/orders is what the Tasks screen builds its link dropdown
     // from, so it has to answer too -- not just the detail page's ?segment=
     // variant. Getting this wrong is what an empty dropdown looks like.
+    if (url === "/api/orders/42/assignment" && opts.method === "PUT") {
+      assignmentPuts.push(JSON.parse(opts.body));
+      if (assignmentStale) {
+        return { __status: 409, body: { detail: "Someone else changed this ticket since you loaded it -- reload to see their update" } };
+      }
+      return order.assignment;
+    }
     if (url === "/api/orders" || url.startsWith("/api/orders?")) return [order];
     if (/^\/api\/orders\/42$/.test(url)) return order;
-    if (url.startsWith("/api/staff")) return [{ id: 1, name: "Dana Ruiz", role: "technician", active: 1 }];
+    if (url.startsWith("/api/staff")) {
+      return [
+        { id: 1, name: "Dana Ruiz", role: "technician", active: 1 },
+        { id: 9, name: "Pat Nolan", role: "advisor", active: 1 },
+      ];
+    }
     if (url.startsWith("/api/tasks")) return [];
     return [];
   },
@@ -406,41 +423,70 @@ await settle();
 ok(customerPatches() === 4, `a valid phone should PATCH exactly once more, saw ${customerPatches()}`);
 ok(customerPatchBodies[3].phone === "(219) 555-0100", `phone should save masked, sent "${customerPatchBodies[3].phone}"`);
 
-/* ---------- the arrival date ----------
-   The day the car landed drives the board's Age column, so a wrong one has to
-   be visible and fixable from the car's own page. It was write-once at the
-   write-up before this and stuck there for the life of the record.
+/* ------------------------------------------------------------------
+   The Assigned card. Two Save buttons write one record between them --
+   who is on the ticket, and the dates. Each must send only its own half.
 
-   Two things worth holding: the read-only card shows it (a value nobody can
-   see is a value nobody corrects), and Save actually sends it. */
-const infoRows = () => [...doc.querySelectorAll("#vd-vehicle-info-summary .kv-row")]
-  .map((r) => [r.querySelector(".kv-label").textContent, r.querySelector(".kv-value").textContent]);
-
-vehicle = { ...vehicle, acquisition_date: "2026-06-09" };
+   Sending both halves from either button had a specific everyday cost: the
+   advisor dropdown pre-selects whoever is "working as" on a ticket nobody
+   has assigned, so saving a *mileage* on the Timing side quietly stamped
+   that name onto the ticket as the advisor of record -- and it then printed
+   on the ticket. The other half of the same bug was that either save blindly
+   overwrote whatever the other workstation had just put there.
+   ------------------------------------------------------------------ */
+order.assignment = {
+  order_id: 42, advisor_id: null, technician_id: 1,
+  date_in: "2026-01-15", odometer_in: 98000, promised_at: "", version: 4,
+  advisor_name: null, technician_name: "Dana Ruiz",
+};
+w.state.currentUser = "Pat Nolan"; // an advisor, so the pre-selection kicks in
 await w.openVehicleDetail("recon", 7);
 await settle();
-ok(infoRows().some(([l, v]) => l === "Arrived on the lot" && v === "2026-06-09"),
-   `the Vehicle Info card doesn't show the arrival date: ${JSON.stringify(infoRows())}`);
-ok(doc.querySelector("#vd-recon-acquired").value === "2026-06-09",
-   `the edit field didn't load the arrival date, reads "${doc.querySelector("#vd-recon-acquired").value}"`);
-ok(!doc.querySelector("#vd-acquired-row").hidden, "the arrival date row is hidden on a recon car");
 
-// A car with no arrival date says so rather than leaving a blank that reads
-// as "today" -- the count silently falls back to the write-up date.
-vehicle = { ...vehicle, acquisition_date: "" };
-await w.openVehicleDetail("recon", 7);
-await settle();
-ok(infoRows().some(([l, v]) => l === "Arrived on the lot" && v === "Not recorded"),
-   `a missing arrival date should read "Not recorded": ${JSON.stringify(infoRows())}`);
+// The pre-selection is the setup, not the bug: the dropdown offers Pat while
+// the record still has no advisor at all.
+ok(doc.querySelector("#vd-advisor").value === "9",
+   `the advisor dropdown should pre-select the current user, reads "${doc.querySelector("#vd-advisor").value}"`);
+ok(order.assignment.advisor_id === null, "the fixture should start with no advisor on the record");
 
-// Saving sends it. Correcting the date is the whole point of the field.
-doc.querySelector("#vd-recon-acquired").value = "2026-05-04";
-doc.querySelector("#vehicle-edit-form").dispatchEvent(new w.Event("submit", { bubbles: true, cancelable: true }));
+// Save the Timing half.
+doc.querySelector("#vd-odometer").value = "142300";
+doc.querySelector("#vd-save-timing").click();
 await settle();
-ok(reconPatchBodies.length === 1, `Save should PATCH the recon vehicle once, saw ${reconPatchBodies.length}`);
-ok(reconPatchBodies[0].acquisition_date === "2026-05-04",
-   `Save sent acquisition_date "${reconPatchBodies[0].acquisition_date}"`);
+const timing = assignmentPuts.at(-1);
+ok(timing && timing.odometer_in === 142300, `the timing save should send the odometer, sent ${JSON.stringify(timing)}`);
+ok(timing && !("advisor_id" in timing),
+   `saving a mileage still writes the advisor: ${JSON.stringify(timing)}`);
+ok(timing && !("technician_id" in timing),
+   `saving a mileage still writes the technician: ${JSON.stringify(timing)}`);
+ok(timing && timing.expected_version === 4,
+   `the timing save should carry the version the page loaded, sent ${timing && timing.expected_version}`);
+
+// Save the who-is-on-it half.
+doc.querySelector("#vd-save-assignment").click();
+await settle();
+const assign = assignmentPuts.at(-1);
+ok(assign && assign.advisor_id === 9 && assign.technician_id === 1,
+   `the assign save should send both people, sent ${JSON.stringify(assign)}`);
+ok(assign && !("date_in" in assign) && !("odometer_in" in assign) && !("promised_at" in assign),
+   `assigning somebody still rewrites the dates: ${JSON.stringify(assign)}`);
+
+// "Unassigned" is a real choice and has to reach the server as one -- leaving
+// the field out would mean "don't touch it", which is the opposite.
+doc.querySelector("#vd-technician").value = "";
+doc.querySelector("#vd-save-assignment").click();
+await settle();
+ok(assignmentPuts.at(-1).technician_id === -1,
+   `picking Unassigned should clear the slot, sent ${JSON.stringify(assignmentPuts.at(-1))}`);
+
+// A save refused because someone else got there first has to say so.
+assignmentStale = true;
+doc.querySelector("#vd-save-timing").click();
+await settle();
+ok(toastEl.classList.contains("error") && /reload/.test(toastEl.textContent),
+   `a stale save should surface the reload message, toast reads "${toastEl.textContent}"`);
+assignmentStale = false;
 
 ok(rejections.length === 0, `unhandled rejections during the run: ${rejections.map((e) => e && e.message).join(" | ")}`);
 
-finish("vehicle detail: last-worked-on line, stalled nudge, activity labels, address autocomplete + validation, arrival date");
+finish("vehicle detail: last-worked-on line, stalled nudge, activity labels, address autocomplete + validation, assigned-card saves");

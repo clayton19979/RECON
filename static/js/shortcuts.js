@@ -116,18 +116,27 @@ export function fmtDate(value) {
   if (Number.isNaN(d.getTime())) return value;
   return d.toLocaleString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" });
 }
-/* A calendar date the way a <input type="date"> wants it, read off the wall
-   clock in Merrillville.
-
-   Never toISOString(): that converts to UTC first, so from about 7 PM onward
-   it hands back *tomorrow*. The shop works evenings, so "today" defaulted into
-   a date field after closing time was routinely a day that hadn't started --
-   a car written up at eight o'clock went on file as arriving the next morning.
-   The same rule the back end follows (see app/db.py::now), which is why it
-   lives here once instead of being re-derived per screen. */
-export function todayLocal(date = new Date()) {
-  const pad = (n) => String(n).padStart(2, "0");
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+/* A plain calendar day -- "Jul 30, 2026" -- with no time of day.
+ *
+ * Two kinds of value end up here and only one of them is safe to hand to
+ * Date. A bare YYYY-MM-DD is defined to be *UTC* midnight, so
+ * `new Date("2026-07-30")` is 7pm on the 29th in Indiana: every bare date on
+ * the printed repair order came out a day early, captioned with a 7:00 PM
+ * nobody typed. "Promised Jul 29" on a ticket promised for the 30th is the
+ * kind of wrong that gets argued about at the counter, so that form is
+ * pulled apart by hand and never goes near Date at all.
+ *
+ * A full timestamp (what the database stamps records with) has no such
+ * problem and keeps the locale formatting it always had.
+ */
+const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+export function fmtDay(value) {
+  if (!value) return "";
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value).trim());
+  if (m && MONTH_NAMES[Number(m[2]) - 1]) return `${MONTH_NAMES[Number(m[2]) - 1]} ${Number(m[3])}, ${m[1]}`;
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return String(value);
+  return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }
 // Awareness for the two-people-editing-the-same-car case: seeing "updated 2
 // minutes ago" is often enough to make someone check with a coworker before

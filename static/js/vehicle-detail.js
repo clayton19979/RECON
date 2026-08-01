@@ -2171,15 +2171,24 @@ export function wireVehicleDetail() {
     if (e.key === "Enter") { e.preventDefault(); addNote(); }
   });
 
-  const saveAssignment = async (e) => {
+  /* The two Save buttons on the Assigned card write different halves of one
+     record, and each now sends only its own half. Both used to send all five
+     fields from whatever the page was showing, which had two everyday costs:
+     saving a mileage on the Timing card silently stamped the pre-selected
+     advisor onto a ticket nobody had assigned, and a save from either button
+     overwrote a change the other workstation had just made. Anything left out
+     of the payload is now left alone by the server.
+
+     expected_version is the version this page loaded. If someone else saved
+     the same ticket in between, the save is refused with a message telling
+     you to reload rather than quietly winning. */
+  const UNASSIGN = -1;
+  const saveAssignment = async (e, fields) => {
     await withLoading(e.target, "Saving…", async () => {
       try {
         await put(`/api/orders/${state.detail.order.id}/assignment`, {
-          advisor_id: $("#vd-advisor").value ? Number($("#vd-advisor").value) : null,
-          technician_id: $("#vd-technician").value ? Number($("#vd-technician").value) : null,
-          date_in: $("#vd-date-in").value,
-          odometer_in: Number($("#vd-odometer").value || 0),
-          promised_at: $("#vd-promised").value,
+          ...fields,
+          expected_version: state.detail.order.assignment?.version ?? null,
           actor: currentActor(),
         });
         toast("Saved");
@@ -2192,8 +2201,18 @@ export function wireVehicleDetail() {
       }
     });
   };
-  $("#vd-save-assignment").addEventListener("click", saveAssignment);
-  $("#vd-save-timing").addEventListener("click", saveAssignment);
+  // Picking "Unassigned" is a real choice, not an omission, so it sends the
+  // sentinel that clears the field rather than nothing at all.
+  const pickedStaff = (id) => (($(id).value && Number($(id).value)) || UNASSIGN);
+  $("#vd-save-assignment").addEventListener("click", (e) => saveAssignment(e, {
+    advisor_id: pickedStaff("#vd-advisor"),
+    technician_id: pickedStaff("#vd-technician"),
+  }));
+  $("#vd-save-timing").addEventListener("click", (e) => saveAssignment(e, {
+    date_in: $("#vd-date-in").value,
+    odometer_in: Number($("#vd-odometer").value || 0),
+    promised_at: $("#vd-promised").value,
+  }));
 
   $("#vd-we-owe-save").addEventListener("click", async (e) => {
     const { id, item } = state.detail;

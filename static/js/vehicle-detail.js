@@ -1760,6 +1760,7 @@ const ACTIVITY_LABEL = {
   parts_ordered: "Parts marked ordered",
   parts_order_undone: "Part put back to quoted",
   parts_received: "Parts received",
+  ap_invoice_posted: "Vendor invoice posted",
   part_returned: "Part returned",
   part_return_undone: "Part return undone",
   part_return_credited: "Return credited",

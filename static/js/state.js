@@ -16,7 +16,6 @@ export const state = {
   vehicleSort: { key: "", dir: "desc" }, // key "" == the server's own order (newest first)
   vehicleStatus: "",                      // "" == any status
   vehiclePartsOnly: false,                // "Waiting on parts" toggle
-  vehicleOverOnly: false,                 // "Over Quote" card toggle
   vehicleIdleBucket: "",                  // "" == any; else an IDLE_SELECTIONS key (a chart bar, or "stalled" from the card)
   vehicleChartOpen: true,                 // the idle-bucket chart above the table
   // "columns" (cards grouped into the three piles) | "list" (sortable table).

@@ -28,14 +28,14 @@ export function skeletonCards(count = 3) {
     </div>`).join("");
 }
 
-// Select, Stock #, Vehicle, Type, Status, Technician, Parts, Age, Quoted,
-// Cost. Two places have to agree with the board's <thead>: the loading
-// skeleton (a short one makes the table visibly jump a column wider the
-// moment data lands) and the empty state's colspan (a short one narrows the
-// "no vehicles" panel to part of the table). Both were separate literals and
-// both were wrong the moment the Parts column went in, so they share one
-// constant now. tests/test_static_assets.py holds it to the real <th> count.
-export const BOARD_COLUMNS = 11;
+// Select, Stock #, Vehicle, Type, Status, Technician, Parts, Age, Idle, Cost.
+// Two places have to agree with the board's <thead>: the loading skeleton (a
+// short one makes the table visibly jump a column wider the moment data
+// lands) and the empty state's colspan (a short one narrows the "no vehicles"
+// panel to part of the table). Both were separate literals and both were
+// wrong the moment the Parts column went in, so they share one constant now.
+// tests/test_static_assets.py holds it to the real <th> count.
+export const BOARD_COLUMNS = 10;
 
 // Name, Contact, Location, Vehicles, Repair Orders, Last Visit. Same
 // skeleton/empty-state colspan contract as BOARD_COLUMNS above.
@@ -58,7 +58,31 @@ export const VIEW_PLACEHOLDERS = {
   suggestions: [["#suggestions-list", 0]],
 };
 
+/* The summary strip above a view's table, and how many cards it holds.
+   Without this the cards popped in from a blank strip while the table below
+   them shimmered -- the one part of the screen that looked broken rather than
+   loading. Card counts have to match what the view actually renders, or the
+   strip visibly changes width as the real numbers land.
+
+   Two views are deliberately absent. Reports paints a shape-matched set of
+   its own (showReportPlaceholders), because its cards change per report. The
+   vehicles board's five cards are fixed-id children written once in
+   index.html and mutated in place, so replacing the container's innerHTML
+   would delete those ids out from under renderStats -- it blanks their text
+   instead (see loadVehiclesView). */
+export const VIEW_STAT_STRIPS = {
+  accounting: ["#ap-stats", 4],
+  cores:      ["#cores-returns-stats", 4],
+  staff:      ["#staff-stats", 4],
+  backup:     ["#backup-stats", 5],
+};
+
 export function showPlaceholders(viewName) {
+  const strip = VIEW_STAT_STRIPS[viewName];
+  if (strip) {
+    const stats = $(strip[0]);
+    if (stats) stats.innerHTML = skeletonCards(strip[1]);
+  }
   for (const [selector, cols] of VIEW_PLACEHOLDERS[viewName] || []) {
     const el = $(selector);
     if (el) el.innerHTML = cols > 0 ? skeletonRows(cols) : skeletonCards();

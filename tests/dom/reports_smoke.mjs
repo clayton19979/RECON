@@ -24,11 +24,10 @@ const veh = (over) => ({
 // The Camry is quoted at 2000 against 1000 of actual cost, which makes the
 // largest *quote* larger than the largest *bar* -- the case where a chart
 // scaled to its bars alone pushes the quote marker off the end.
-const CHART_MAX = 2000;
 const spend = [
   veh({ recon_id: 1, stock_number: "B204", vehicle: "2019 Ford F-150", status: "in_progress", technicians: ["Dana"], quoted_cost: 900, actual_cost: 1450 }),
   veh({ recon_id: 2, stock_number: "A118", vehicle: "2021 Honda Civic", status: "estimate", technicians: [], quoted_cost: 600, actual_cost: 550 }),
-  veh({ segment: "we_owe", we_owe_id: 5, vehicle: "2017 Toyota Camry", customer_name: "R. Alvarez", status: "pending_approval", technicians: ["Chris"], quoted_cost: CHART_MAX, actual_cost: 1000 }),
+  veh({ segment: "we_owe", we_owe_id: 5, vehicle: "2017 Toyota Camry", customer_name: "R. Alvarez", status: "pending_approval", technicians: ["Chris"], quoted_cost: 2000, actual_cost: 1000 }),
   veh({ recon_id: 3, stock_number: "C007", vehicle: "2015 Chevy Silverado", status: "complete", status_bucket: "finished", technicians: ["Bo"], quoted_cost: 0, actual_cost: 0 }),
 ];
 
@@ -87,7 +86,7 @@ ok(s.length === 3, `expected 3 summary cards, got ${s.length}`);
 ok(s[0].value === "4", `Vehicles card reads ${s[0].value}, expected 4`);
 ok(s[0].sub === "3 recon · 1 we-owe", `segment split reads "${s[0].sub}"`);
 ok(s[1].value === "$3,000.00", `Total Cost reads ${s[1].value}, expected $3,000.00`);
-ok(s[2].value === "$750.00", `Average Per Vehicle reads ${s[2].value}, expected $750.00`);
+ok(s[2].value === "$750.00", `Average Per Vehicle reads ${s[2].value}, expected $750.00 ($3,000 over all 4)`);
 
 // The cards describe the same rows as the table below them -- the whole
 // reason they live on this screen rather than being a second lot-wide
@@ -100,17 +99,14 @@ ok(tableTotal.includes("4 vehicles"), `table footer says "${tableTotal.trim()}" 
 ok(bars().length === 3, `expected 3 bars (the $0 vehicle is dropped), got ${bars().length}`);
 const widths = bars().map((b) => parseFloat(b.querySelector(".bar-fill").style.width));
 ok(widths[0] > widths[1] && widths[1] > widths[2], `bars aren't sorted by size: ${widths.join(", ")}`);
-// Bars and markers share one scale, and that scale has to account for a
-// quote that runs past every bar -- otherwise the Camry's $2,000 estimate
-// pins to the end of the track and reads as if it were the biggest number
-// on the chart.
+// One scale, set by the largest cost on the chart -- the biggest bar fills
+// the track and every other bar is read against it. There is deliberately
+// nothing else on the track: the shop doesn't quote recon work, so a marker
+// showing "what this was supposed to cost" would be a number nobody gave.
 const near = (a, b) => Math.abs(a - b) < 0.05;
-ok(near(widths[0], (1450 / CHART_MAX) * 100), `largest bar is ${widths[0]}%, expected ${(1450 / CHART_MAX) * 100}%`);
-ok(near(widths[1], (1000 / CHART_MAX) * 100), `second bar is ${widths[1]}%, expected ${(1000 / CHART_MAX) * 100}%`);
-const markers = bars().map((b) => parseFloat(b.querySelector(".bar-marker").style.left));
-ok(near(markers[0], (900 / CHART_MAX) * 100), `F-150 quote marker at ${markers[0]}%, expected ${(900 / CHART_MAX) * 100}%`);
-ok(near(markers[1], 100), `the largest quote should sit at the end of the track, got ${markers[1]}%`);
-ok(markers[1] > widths[1], "the Camry's quote marker isn't past its cost bar, so the chart can't show it came in under");
+ok(near(widths[0], 100), `largest bar is ${widths[0]}%, expected it to fill the track`);
+ok(near(widths[1], (1000 / 1450) * 100), `second bar is ${widths[1]}%, expected ${(1000 / 1450) * 100}%`);
+ok(!doc.querySelector(".bar-marker"), "a quote marker is back on the report chart");
 
 /* ---------- sorting ---------- */
 const costCol = col("cost");
@@ -187,14 +183,27 @@ await settle();
 ok(!doc.querySelector("#view-reports .chip.active"), "a quick-range chip stayed lit after the dates were edited by hand");
 ok(fetchLog.at(-1).url.includes("start=2020-01-01"), `hand-typed date didn't reach the query: ${fetchLog.at(-1).url}`);
 
-// ...but typing the exact dates a chip stands for should light it again.
-const month = w.computeQuickRange("month");
+/* ...but typing the exact dates a chip stands for should light it again.
+
+   Which chip to test with has to be decided on the day: two chips can
+   describe the identical range and then only the first one can ever light.
+   On the 1st of a month "Today" and "This Month" are the same two dates; on
+   the 1st of January so is "This Year", and "This Week" collides with
+   "Today" every Sunday. That's a real tie, not a bug -- the range in effect
+   is the same either way -- so this picks a chip that is unambiguous today
+   rather than asserting one that only holds for part of the year. */
+const RANGE_KINDS = ["today", "week", "month", "year", "all"];
+const rangeKey = (k) => { const r = w.computeQuickRange(k); return `${r.start}..${r.end}`; };
+const unambiguous = (k) => RANGE_KINDS.filter((o) => rangeKey(o) === rangeKey(k)).length === 1;
+const rangeKind = ["month", "year", "week"].find(unambiguous);
+ok(!!rangeKind, "no quick range is unambiguous today, so no chip could ever light");
+const month = w.computeQuickRange(rangeKind);
 doc.querySelector("#report-start").value = month.start;
 doc.querySelector("#report-end").value = month.end;
 doc.querySelector("#report-end").dispatchEvent(new w.Event("change", { bubbles: true }));
 await settle();
-ok(doc.querySelector('[data-report-range="month"]').classList.contains("active"),
-   "typing this month's dates by hand didn't light the This Month chip");
+ok(doc.querySelector(`[data-report-range="${rangeKind}"]`).classList.contains("active"),
+   `typing the ${rangeKind} range by hand didn't light its chip`);
 
 /* ---------- CSV link ---------- */
 const href = doc.querySelector("#report-csv").getAttribute("href");
@@ -209,12 +218,12 @@ ok(reconHref.startsWith("/api/export/report/vehicle-spend.csv") && reconHref.inc
 /* ---------- prefs survive a reload ---------- */
 const saved = JSON.parse(w.localStorage.getItem(w.REPORT_PREFS_KEY));
 ok(saved.type === "vehicle-spend-recon", `saved report type is ${saved.type}`);
-ok(saved.range === "month", `saved range is ${saved.range}`);
+ok(saved.range === rangeKind, `saved range is ${saved.range}, expected ${rangeKind}`);
 w.state.reportType = "technicians";
 w.state.reportRange = "all";
 w.state.reportSort = { key: "cost", dir: "asc" };
 w.loadReportPrefs();
-ok(w.state.reportType === "vehicle-spend-recon" && w.state.reportRange === "month",
+ok(w.state.reportType === "vehicle-spend-recon" && w.state.reportRange === rangeKind,
    `prefs didn't round-trip: ${w.state.reportType} / ${w.state.reportRange}`);
 
 /* ---------- rows, but nothing to chart ----------

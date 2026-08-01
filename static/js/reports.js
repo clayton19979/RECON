@@ -375,18 +375,20 @@ function lotStatCards(rows) {
       sub: stalled ? `${stalled} untouched ${STALLED_AFTER_DAYS}+ days` : "nothing stalled",
       tone: stalled ? "warn" : "",
     },
-    { label: "Spent On The Lot", value: money(spent), sub: left ? `${money(left)} of quoted work still to do` : "nothing else quoted" },
+    { label: "Spent On The Lot", value: money(spent), sub: left ? `${money(left)} written up, not yet landed` : "nothing outstanding" },
   ];
 }
 
 function vehicleSpendStatCards(rows) {
   const recon = rows.filter((r) => r.segment === "recon").length;
   const total = rows.reduce((s, r) => s + r.actual_cost, 0);
-  const quoted = rows.reduce((s, r) => s + (r.quoted_cost || 0), 0);
   return [
     { label: "Vehicles", value: String(rows.length), sub: `${recon} recon · ${rows.length - recon} we-owe` },
     { label: "Total Cost", value: money(total), sub: "received parts + labor" },
-    { label: "Average Per Vehicle", value: money(rows.length ? total / rows.length : 0), sub: quoted ? `${money(quoted)} quoted overall` : "nothing quoted in this range" },
+    // Averaged over every vehicle in the report, including the ones nothing
+    // has been spent on yet -- that's what the label says, and it's the only
+    // denominator someone reading the row count above can check.
+    { label: "Average Per Vehicle", value: money(rows.length ? total / rows.length : 0), sub: `across ${rows.length} vehicle${rows.length === 1 ? "" : "s"} in range` },
   ];
 }
 
@@ -459,14 +461,13 @@ function chartNothingToPlot(hasRows, what) {
 // to know about it -- both default to nothing, so Reports is unchanged.
 export function barChart({ title, note, legend = "", items, rowAttrs = null, rowClass = null }) {
   if (!items.length) return "";
-  const max = Math.max(...items.map((i) => Math.max(i.value || 0, i.marker || 0)));
+  const max = Math.max(...items.map((i) => i.value || 0));
   const pct = (n) => (max > 0 ? Math.min((n / max) * 100, 100) : 0);
   const bars = items.map((i) => `
     <li class="bar-row ${rowClass ? rowClass(i) : ""}" ${rowAttrs ? rowAttrs(i) : ""}>
       <span class="bar-label" title="${esc(i.label)}">${esc(i.label)}</span>
       <span class="bar-track">
         <span class="bar-fill${i.tone ? ` ${i.tone}` : ""}" style="width:${pct(i.value).toFixed(2)}%"></span>
-        ${i.marker > 0 ? `<span class="bar-marker" style="left:${pct(i.marker).toFixed(2)}%" title="${esc(i.markerLabel || "")}"></span>` : ""}
       </span>
       <span class="bar-value">${esc(i.display)}</span>
     </li>`).join("");
@@ -524,8 +525,6 @@ function renderReportChart(rows, shape) {
     label: `${r.stock_number || r.customer_name || "—"} · ${r.vehicle}`,
     value: r.actual_cost,
     display: money(r.actual_cost),
-    marker: r.quoted_cost || 0,
-    markerLabel: r.quoted_cost ? `Quoted ${money(r.quoted_cost)}` : "",
     seg: r.segment,
     refId: r.segment === "recon" ? r.recon_id : r.we_owe_id,
   }));
@@ -537,8 +536,6 @@ function renderReportChart(rows, shape) {
   const chart = barChart({
     title: "What we have in it",
     note: priced.length > CHART_LIMIT ? `Top ${CHART_LIMIT} of ${priced.length} vehicles with cost` : "Click a bar to open the vehicle",
-    legend: `<span class="legend-item"><span class="legend-swatch"></span>Cost</span>
-             <span class="legend-item"><span class="legend-swatch marker"></span>Quoted</span>`,
     items,
     rowAttrs: (i) => (i.refId != null ? `role="button" tabindex="0" data-seg="${esc(i.seg)}" data-ref-id="${i.refId}"` : ""),
   }) || chartNothingToPlot(rows.length, "cost");

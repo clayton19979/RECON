@@ -114,7 +114,7 @@ def build_export_router(connect: Callable[[], sqlite3.Connection], now_fn: Calla
                 "Type",
                 "Status",
                 "Technicians",
-                "Quoted",
+                "Written Up",
                 "Cost",
                 "Customer Paid",
                 "Net to Shop",

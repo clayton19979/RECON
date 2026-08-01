@@ -92,15 +92,16 @@ ok(lineRows()[0].querySelector(".rl-total").textContent === "$45.00",
    `line total not recomputed: ${lineRows()[0].querySelector(".rl-total").textContent}`);
 ok(lineRows()[1].querySelector(".rl-total").textContent === "$32.50",
    `a multi-quantity line total ignored the quantity: ${lineRows()[1].querySelector(".rl-total").textContent}`);
-ok(/Quoted \$60\.00 . \$15\.00 less each/.test(lineRows()[0].querySelector(".rl-note").textContent),
-   `the "was quoted" note is wrong: ${lineRows()[0].querySelector(".rl-note").textContent}`);
+ok(/Written up at \$60\.00 . \$15\.00 less each/.test(lineRows()[0].querySelector(".rl-note").textContent),
+   `the "written up at" note is wrong: ${lineRows()[0].querySelector(".rl-note").textContent}`);
 ok(lineRows()[0].querySelector(".rl-note").classList.contains("under")
    && lineRows()[1].querySelector(".rl-note").classList.contains("over"),
-   "cheaper and dearer than quoted are not toned differently");
-// 45 + 2 x 16.25 = 77.50, against 89.00 quoted, plus 6.20 tax.
+   "cheaper and dearer than the line are not toned differently");
+// 45 + 2 x 16.25 = 77.50, plus 6.20 tax. The per-line notes above are the
+// data-entry check; nothing totals them into an over/under figure, because
+// the shop doesn't quote recon work -- there is no estimate to come in under.
 type(doc.querySelector("#receive-tax"), "6.20");
-ok(/Quoted for these lines\s*\$89\.00/.test(summary()), `quote total wrong: ${summary()}`);
-ok(/Under the quote\s*\$11\.50/.test(summary()), `quote delta wrong: ${summary()}`);
+ok(!/Quoted for these lines|the quote/i.test(summary()), `a quote comparison is back on the receive dialog: ${summary()}`);
 ok(/Subtotal\s*\$77\.50/.test(summary()), `subtotal ignored the entered prices: ${summary()}`);
 ok(/Total\s*\$83\.70/.test(summary()), `total ignored tax: ${summary()}`);
 

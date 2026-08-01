@@ -173,7 +173,13 @@ function renderCoresTable() {
     icon: "search",
     title: "No cores match that search",
     hint: `Nothing matched "${state.coresSearch}".`,
+    actions: `<button type="button" class="btn btn-ghost btn-sm" data-empty-action="cores-clear-search">Clear search</button>`,
   } : {
+    // A filter chip that comes back empty is usually the answer somebody
+    // wanted, but it still has to offer the way back out -- every other list
+    // in the app does, and a dead end reads as a broken screen.
+    actions: filter === "all" ? "" :
+      `<button type="button" class="btn btn-ghost btn-sm" data-empty-action="cores-show-all">Show all cores</button>`,
     icon: filter === "credited" ? "check" : "core",
     title: filter === "pending" ? "Nothing waiting to go back"
       : filter === "awaiting" ? "No cores awaiting credit"
@@ -271,6 +277,21 @@ export function wireCoresView() {
     state.coresSearch = e.target.value.trim();
     renderCoresTable();
   });
+  // Delegated: the empty state is rebuilt on every render, so a listener
+  // bound to its button would be lost the moment anything changed.
+  $("#cores-table").addEventListener("click", (e) => {
+    const trigger = e.target.closest("[data-empty-action]");
+    if (!trigger) return;
+    if (trigger.dataset.emptyAction === "cores-clear-search") {
+      state.coresSearch = "";
+      $("#cores-search").value = "";
+    } else if (trigger.dataset.emptyAction === "cores-show-all") {
+      state.coresFilter = "all";
+      $$('#view-cores [data-cores-filter]').forEach((c) =>
+        c.classList.toggle("active", c.dataset.coresFilter === "all"));
+    } else return;
+    renderCoresTable();
+  });
   $("#cores-select-all").addEventListener("change", (e) => {
     const ids = $$(".cores-select", $("#cores-table")).map((box) => Number(box.dataset.id));
     state.coresSelected = new Set(e.target.checked ? ids : []);
@@ -363,7 +384,10 @@ function renderReturnsTable() {
     icon: "search",
     title: "No returns match that search",
     hint: `Nothing matched "${state.returnsSearch}".`,
+    actions: `<button type="button" class="btn btn-ghost btn-sm" data-empty-action="returns-clear-search">Clear search</button>`,
   } : {
+    actions: filter === "all" ? "" :
+      `<button type="button" class="btn btn-ghost btn-sm" data-empty-action="returns-show-all">Show all returns</button>`,
     icon: filter === "credited" ? "check" : "core",
     title: filter === "pending" ? "Nothing waiting to go back"
       : filter === "awaiting" ? "No returns awaiting credit"
@@ -442,6 +466,19 @@ export function wireReturnsView() {
   });
   $("#returns-search").addEventListener("input", (e) => {
     state.returnsSearch = e.target.value.trim();
+    renderReturnsTable();
+  });
+  $("#returns-table").addEventListener("click", (e) => {
+    const trigger = e.target.closest("[data-empty-action]");
+    if (!trigger) return;
+    if (trigger.dataset.emptyAction === "returns-clear-search") {
+      state.returnsSearch = "";
+      $("#returns-search").value = "";
+    } else if (trigger.dataset.emptyAction === "returns-show-all") {
+      state.returnsFilter = "all";
+      $$('#view-cores [data-returns-filter]').forEach((c) =>
+        c.classList.toggle("active", c.dataset.returnsFilter === "all"));
+    } else return;
     renderReturnsTable();
   });
   $("#returns-select-all").addEventListener("change", (e) => {

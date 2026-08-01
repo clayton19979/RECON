@@ -309,22 +309,21 @@ button { font-family: inherit; }
   box-shadow: var(--shadow);
   transition: border-top-color .18s ease, box-shadow .12s ease;
 }
-.stats .stat:nth-child(2) { border-top-color: var(--weowe); }
-.stats .stat:nth-child(3) { border-top-color: var(--ink-faint); }
-.stats .stat:nth-child(4) { border-top-color: var(--accent-strong); }
 .stat-label { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--ink-faint); font-weight: 600; }
 .stat-value { font-family: "IBM Plex Mono", "Cascadia Mono", Consolas, monospace; font-size: 26px; font-weight: 600; margin-top: 6px; }
 .stat-value.warn { color: var(--warn); }
 .stat-value.crit { color: var(--crit); }
 .stat-sub { font-size: 11.5px; color: var(--ink-faint); margin-top: 3px; }
 
-/* The board's cards summarize the filtered rows below them, so their edges
-   are driven by what the number says rather than by position: a card that
-   means "go look at something" earns the color, and a zero is quiet.
-   The :nth-child rules above are position-based and would otherwise paint
-   card 2 we-owe-purple whatever it happens to be counting. */
-.stats-board { grid-template-columns: repeat(5, 1fr); }
-.stats-board .stat:nth-child(n+2) { border-top-color: var(--line); }
+/* Every summary strip in the app paints its card edges by what the number
+   SAYS, never by where the card sits: a card that means "go look at
+   something" earns the colour and a zero stays quiet. There used to be
+   generic .stats .stat:nth-child(2|3|4) rules above this, which painted card
+   2 we-owe-purple whatever it happened to be counting -- every strip then had
+   to override them, so they're gone and each strip states its own intent.
+   Lead card accent, the rest neutral until their value earns otherwise. */
+.stats-board { grid-template-columns: repeat(4, 1fr); }
+.stats-board .stat { border-top-color: var(--line); }
 .stats-board .stat:nth-child(1) { border-top-color: var(--accent); }
 .stats-board .stat:has(.stat-value.warn) { border-top-color: var(--warn); }
 .stats-board .stat:has(.stat-value.crit) { border-top-color: var(--crit); }
@@ -407,6 +406,10 @@ button { font-family: inherit; }
   overflow: hidden;
   box-shadow: var(--shadow);
 }
+/* A panel wrapping prose/controls instead of a table brings its own padding;
+   a panel around a table must not, or the table stops meeting its edges. */
+.panel-padded { padding: 16px 20px; }
+.panel-padded-tight { padding: 14px 20px; }
 .table-wrap { overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
 thead th {
@@ -444,7 +447,6 @@ td.age-crit { color: var(--crit); font-weight: 700; }
 .idle-cell.age-warn { color: var(--warn); font-weight: 700; }
 .idle-cell.age-crit { color: var(--crit); font-weight: 700; }
 .idle-cell { cursor: help; }
-td.over-quote { color: var(--crit); font-weight: 700; }
 .muted-dash { color: var(--ink-faint); }
 
 /* ---------- vehicles board ----------
@@ -477,7 +479,6 @@ table.sticky-head thead th {
 .board-table .veh-sub { font-size: 11.5px; color: var(--ink-faint); min-height: 16px; }
 .board-table .veh-customer { display: inline-flex; align-items: center; gap: 4px; color: var(--ink-soft); font-weight: 500; }
 .board-table .veh-customer svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 2; opacity: .8; }
-.board-table td.quoted-col { color: var(--ink-soft); }
 .board-table tbody tr.selected { background: var(--accent-tint); }
 .board-table tbody tr.selected td { border-bottom-color: var(--accent); }
 /* A selected row that's also hovered still has to answer the mouse. */
@@ -592,8 +593,6 @@ table.sticky-head thead th {
   font-family: "IBM Plex Mono", "Cascadia Mono", Consolas, monospace;
   font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--ink);
 }
-.veh-card-cost.over-quote { color: var(--crit); }
-.veh-card-quoted { font-size: 10.5px; color: var(--ink-faint); white-space: nowrap; }
 
 /* Three columns need the width; below that they stack, which is still a
    better read on a narrow window than three 190px columns of ellipsis. */
@@ -603,8 +602,12 @@ table.sticky-head thead th {
   #view-vehicles:has(#vehicles-chart:not([hidden])) .veh-col-body { max-height: none; }
 }
 
-.board-hint { margin: 10px 2px 0; font-size: 11.5px; color: var(--ink-faint); display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
-.board-hint kbd {
+/* The keyboard legend under a list. Named for any page, not just the board:
+   Customers and Tasks have the same keyboard model and used to advertise
+   none of it. .board-hint is kept as an alias so the board's markup and the
+   shortcuts overlay's shared keycap styling don't have to move at once. */
+.page-hint, .board-hint { margin: 10px 2px 0; font-size: 11.5px; color: var(--ink-faint); display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.page-hint kbd, .board-hint kbd {
   font-family: "IBM Plex Mono", "Cascadia Mono", Consolas, monospace; font-size: 10.5px;
   background: var(--paper-raise); border: 1px solid var(--line); border-bottom-width: 2px;
   border-radius: 4px; padding: 1px 5px; color: var(--ink-soft);
@@ -666,9 +669,12 @@ table.sticky-head thead th {
 }
 
 /* ---------- back link ---------- */
+/* Used on both an <a> and a <button>; the button styling is reset here so the
+   markup doesn't have to carry an inline one. */
 .back-link {
   display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 600;
   color: var(--ink-soft); text-decoration: none; cursor: pointer; margin-bottom: 16px;
+  background: none; border: none; font-family: inherit; padding: 0;
 }
 .back-link svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2.2; }
 .back-link:hover { color: var(--accent); }
@@ -720,7 +726,15 @@ table.sticky-head thead th {
   display: flex; justify-content: space-between; align-items: center; gap: 12px;
   padding: 13px 16px; border-bottom: 1px solid var(--line);
 }
+/* A card body's padding was written inline on every card that had one, which
+   is how they drifted apart. Two classes: the whole body, or the tail of a
+   body whose top half is another block (a form-row, then its Save button).
+   The 2px under an eyebrow is for the case where a title follows it -- inside
+   a card head it's the only thing there, so it gives that back. */
+.card-body { padding: 14px 16px; }
+.card-body-bottom { padding: 0 16px 14px; }
 .section-eyebrow { font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--ink-faint); font-weight: 700; margin: 0 0 2px; }
+.card-head .section-eyebrow { margin: 0; }
 .section-title { font-size: 15px; }
 
 /* Autosave indicator. Sits inline after a section title, reserves no layout
@@ -735,6 +749,21 @@ table.sticky-head thead th {
 .save-state.show { opacity: 1; }
 .save-state.saved { color: var(--good); }
 .save-state.failed { color: var(--crit); opacity: 1; }
+
+/* The "show completed / show done" tail under a list, and the list it
+   reveals. Both were inline margins, and the list was toggled with
+   style.display while the rest of the app uses [hidden]. */
+.list-tail-toggle { margin-top: 14px; }
+.list-tail { margin-top: 10px; }
+/* Buttons sharing a .form-row with fields. Without these they stretch to the
+   height of the tallest field beside them. -end sits on the field baseline
+   (the row's fields carry a 12px label margin, hence the matching offset). */
+.form-row-btn { align-self: flex-start; }
+.form-row-btn-mid { align-self: center; }
+.form-row-btn-end { align-self: flex-end; margin-bottom: 12px; }
+/* A button that closes out a list (Show all N) sits under it, left-aligned,
+   rather than stretching across a flex column. */
+.list-tail-btn { align-self: flex-start; }
 
 /* ---------- forms ---------- */
 label { display: flex; flex-direction: column; gap: 5px; font-size: 12px; font-weight: 600; color: var(--ink-soft); margin-bottom: 12px; }
@@ -911,8 +940,6 @@ textarea { min-height: 70px; resize: vertical; font-family: inherit; }
 .cost-line { display: flex; justify-content: space-between; font-size: 13px; }
 .cost-line span:last-child { font-family: "IBM Plex Mono", "Cascadia Mono", Consolas, monospace; font-weight: 600; }
 .cost-line.total { border-top: 1px solid var(--line); padding-top: 8px; font-weight: 700; font-size: 14.5px; }
-.cost-line .num.over { color: var(--crit); }
-.cost-line .num.under { color: var(--good); }
 
 /* ---------- receive parts lines ----------
    Description / qty / an editable price / that line's total. The price is a
@@ -1686,9 +1713,9 @@ tbody tr.skeleton-row:hover { background: none; }
    metrics per report. Neutral edges; tone is earned by the value. */
 .stats-report .stat { border-top-color: var(--line); }
 .stats-report .stat:nth-child(1) { border-top-color: var(--accent); }
-/* The over-quote card is the one that means "go look at something", so it
-   carries the warning color on its edge as well as its number -- and "none
-   over quote" reads as the good news it is. */
+/* A card that means "go look at something" carries the warning color on its
+   edge as well as its number; a good-news card earns the green the same way.
+   Meaning, never position -- see the note on .stats-board. */
 .stats-report .stat:has(.stat-value.warn) { border-top-color: var(--warn); }
 .stats-report .stat:has(.stat-value.good) { border-top-color: var(--good); }
 .stat-value.good { color: var(--good); }
@@ -1723,12 +1750,6 @@ tbody tr.skeleton-row:hover { background: none; }
 @media (prefers-reduced-motion: reduce) { .bar-fill { animation: none; } }
 .bar-fill.over { background: var(--crit); }
 .bar-fill.warn { background: var(--warn); }
-/* Where the estimate was. A hairline on the bar answers "how far past quote"
-   without a second bar or a second column. */
-.bar-marker {
-  position: absolute; top: -2px; bottom: -2px; width: 2px;
-  background: var(--ink); opacity: .55;
-}
 .bar-value {
   font-family: "IBM Plex Mono", "Cascadia Mono", Consolas, monospace;
   font-size: 12.5px; font-variant-numeric: tabular-nums; text-align: right; color: var(--ink);
@@ -1778,7 +1799,6 @@ tbody tr.skeleton-row:hover { background: none; }
 .chart-legend { display: flex; gap: 16px; margin-top: 12px; font-size: 11.5px; color: var(--ink-faint); }
 .legend-item { display: inline-flex; align-items: center; gap: 6px; }
 .legend-swatch { width: 12px; height: 8px; border-radius: 2px; background: var(--accent); }
-.legend-swatch.marker { width: 2px; height: 12px; border-radius: 0; background: var(--ink); opacity: .55; }
 
 /* A technician with nothing in the range still belongs on the roster, but
    shouldn't read as an equal row to one with work on it. */
@@ -1825,15 +1845,17 @@ input:focus-visible, select:focus-visible, textarea:focus-visible { outline: non
 .filters { flex-wrap: wrap; row-gap: 10px; }
 .topbar { flex-wrap: wrap; row-gap: 8px; }
 
-/* Five cards need a stop the four-card rows don't: at 1440 the board's row
-   squeezes its 26px numbers before Reports' does, so it drops to three
-   (2 + 1 reads worse than 3 + 2) a step earlier than everything else. */
+/* Five cards need a stop the four-card rows don't: at 1440 Backup's row
+   squeezes its 26px numbers before the others do, so it drops to three
+   (2 + 1 reads worse than 3 + 2) a step earlier than everything else. The
+   board used to be the five-card row and carried this; it's four now. */
 @media (max-width: 1440px) {
-  .stats-board { grid-template-columns: repeat(3, 1fr); }
+  .stats-backup { grid-template-columns: repeat(3, 1fr); }
 }
 @media (max-width: 1240px) {
   .stats { grid-template-columns: repeat(2, 1fr); }
   .stats-board { grid-template-columns: repeat(2, 1fr); }
+  .stats-backup { grid-template-columns: repeat(2, 1fr); }
 }
 @media (max-width: 1100px) {
   :root { --rail-w: 208px; }
@@ -1862,7 +1884,6 @@ input:focus-visible, select:focus-visible, textarea:focus-visible { outline: non
      Targeted by class, not by nth-child(8): inserting the Parts column ahead
      of it silently moved position 8 onto Quoted's neighbour, and a
      position-based rule breaks again on the next column anyone adds. */
-  .board-table th.quoted-col, .board-table td.quoted-col { display: none; }
 }
 @media (max-width: 900px) {
   /* Age goes next, and Idle stays: both are day counts, but "how long since
@@ -1900,7 +1921,7 @@ input:focus-visible, select:focus-visible, textarea:focus-visible { outline: non
   .content { padding: 16px 14px 48px; }
   .table-scroll { max-height: none; }
   /* Touch has no arrow keys and no hover; the shortcut legend is just noise. */
-  .board-hint { display: none; }
+  .page-hint, .board-hint { display: none; }
   .topbar { height: auto; padding: 10px 14px; gap: 12px; }
   .detail-head { flex-direction: column; }
   .modal-actions { flex-wrap: wrap; }
@@ -2137,7 +2158,7 @@ tr.apl-invalid input.apl-desc { border-color: var(--crit); box-shadow: 0 0 0 3px
    broken" answering Mileage). */
 .checkbox-inline {
   display: inline-flex; align-items: center; gap: 6px; white-space: nowrap;
-  font-size: 13px; color: var(--ink-dim); cursor: pointer; user-select: none;
+  font-size: 13px; color: var(--ink-soft); cursor: pointer; user-select: none;
 }
 .checkbox-inline input { accent-color: var(--accent); margin: 0; }
 
@@ -2160,7 +2181,7 @@ tr.apl-invalid input.apl-desc { border-color: var(--crit); box-shadow: 0 0 0 3px
    sitting next to Cost waiting to catch the part's own cost by mistake. */
 .core-toggle {
   display: inline-flex; align-items: center; gap: 4px;
-  font-size: 11.5px; color: var(--ink-dim); cursor: pointer; user-select: none;
+  font-size: 11.5px; color: var(--ink-faint); cursor: pointer; user-select: none;
 }
 .core-toggle input { accent-color: var(--accent); margin: 0; }
 .part-row .ei-core { margin-top: 4px; }
@@ -2270,12 +2291,6 @@ th.sel-col, td.sel-col { width: 32px; padding-right: 0; }
 #view-reports .table-scroll { max-height: calc(100vh - 480px); min-height: 260px; }
 
 /* ---------- vehicle detail ---------- */
-.cost-delta {
-  display: inline-flex; font-size: 11px; font-weight: 700; padding: 2px 9px;
-  border-radius: 999px; background: var(--good-tint); color: var(--good);
-}
-.cost-delta.over { background: var(--crit-tint); color: var(--crit); }
-.cost-delta.zero { background: var(--line-soft); color: var(--ink-soft); }
 input.overdue { border-color: var(--crit); color: var(--crit); }
 
 /* ---------- tasks ---------- */

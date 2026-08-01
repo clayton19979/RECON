@@ -126,7 +126,7 @@ def test_needs_calls_out_parts_on_order_and_money_still_to_spend(client):
     assert "1 part on order" in row["needs"], row["needs"]
     # Quoted but not yet received, so it is money the car still needs spent.
     assert row["remaining_cost"] == 300
-    assert "$300.00 of quoted work left" in row["needs"], row["needs"]
+    assert "$300.00 of work left" in row["needs"], row["needs"]
 
 
 def test_needs_says_so_when_no_ticket_has_been_written(client):

@@ -143,7 +143,7 @@ def lot_needs_text(row: Mapping[str, Any]) -> str:
         # Only true while nothing has actually been spent or ordered -- see
         # lot_bucket. Saying it about a car with parts in it reads as a
         # contradiction of the money on the same row.
-        bits.append("quoted, work not started")
+        bits.append("written up, work not started")
 
     pending = row.get("parts_pending") or 0
     if pending:
@@ -152,7 +152,7 @@ def lot_needs_text(row: Mapping[str, Any]) -> str:
         bits.append(f"{pending} part{'' if pending == 1 else 's'} on order{amount}")
 
     if row["remaining_cost"]:
-        bits.append(f"${row['remaining_cost']:,.2f} of quoted work left")
+        bits.append(f"${row['remaining_cost']:,.2f} of work left")
 
     # Only worth saying once a car has actually gone quiet; every car is idle
     # for a day or two between visits and flagging that is just noise. Same
@@ -170,17 +170,17 @@ def add_lot_status(row: dict) -> dict:
     """Stamp a board row with its pile, what finishing it should still cost,
     and the plain sentence describing what it is waiting on."""
     row["lot_bucket"] = lot_bucket(row)
-    # Quoted but not yet spent: what finishing this car should still cost.
-    # Floored at zero -- going over the estimate is real, but it is money
-    # already counted in what we spent, not money still to come.
+    # Written up but not yet landed: what finishing this car should still cost.
+    # quoted_cost is not an estimate anyone gave -- the shop doesn't quote
+    # recon work, it buys what the car needs -- it is the sum of every line
+    # written on the ticket, and this is the part of it that hasn't arrived.
     #
-    # Zero on a finished car, whatever the quote said. Nothing is open on it,
-    # so nobody is going to spend that money: a car that came in under its
-    # estimate was putting the difference in the "still to spend" column and
-    # into the lot's total, on the same row whose Needs cell read "Nothing --
-    # ready to go". Two answers to one question, one line apart. The shortfall
-    # against the quote is still visible where it belongs, in the board's
-    # Cost-against-quote column.
+    # Floored at zero, and zero outright on a finished car. Nothing is open on
+    # it, so nobody is going to spend that money: a car with lines written up
+    # for more than they cost was putting the difference in the "still to
+    # spend" column and into the lot's total, on the same row whose Needs cell
+    # read "Nothing -- ready to go". Two answers to one question, one line
+    # apart.
     row["remaining_cost"] = (
         0.0 if row["lot_bucket"] == LOT_READY else max(round(row["quoted_cost"] - row["actual_cost"], 2), 0)
     )
@@ -343,7 +343,13 @@ def cost_rollup(db: sqlite3.Connection, column: str, ref_id: int, segment: str |
     """Actual cost = what's really landed: labor/fees count in full the moment
     they're logged, but parts only count once received, and stop counting
     again once sent back to the vendor (part_returned). quoted_cost (full
-    quantity regardless of receipt) is returned alongside for comparison.
+    quantity regardless of receipt) is returned alongside it.
+
+    quoted_cost is a historical field name and NOT an estimate: the shop does
+    not quote recon work, it buys what the car needs. It means "the sum of
+    every line written on the ticket", and the only thing it is ever used for
+    is remaining_cost -- what's been written up but hasn't arrived yet. Nothing
+    subtracts it from actual cost to report an over/under, and nothing should.
 
     parts_pending counts part lines that have been ordered from a vendor but
     haven't shown up yet (status='ordered'; 'received' means it landed,
@@ -365,18 +371,17 @@ def cost_rollup(db: sqlite3.Connection, column: str, ref_id: int, segment: str |
                -- A credit line (a returned part, a refunded core) is stored
                -- positive, the way the vendor prints it, so the sign has to be
                -- applied here: summing it raw made a $150 credit RAISE the
-               -- car's quoted cost by $150. Actual cost needs no matching term
-               -- -- parts_cost above already drops a returned line via
+               -- car's written-up total by $150. Actual cost needs no matching
+               -- term -- parts_cost above already drops a returned line via
                -- part_returned, and subtracting the credit as well would count
                -- the same money back twice.
                --
-               -- A part sent back to the vendor drops out of the quote as well
-               -- as out of the actual. It is not money the shop is going to
-               -- spend, and leaving it in made the comparison the board and
-               -- the Lot Report exist to draw meaningless: order a $500
-               -- alternator, get the wrong one, send it back and buy the right
-               -- $520 one, and the car read "quoted $1,020, spent $520" --
-               -- $500 under estimate on a job that came in $20 over. The two
+               -- A part sent back to the vendor drops out of the written-up
+               -- total as well as out of the actual. It is not money the shop
+               -- is going to spend, and leaving it in made remaining_cost
+               -- nonsense: order a $500 alternator, get the wrong one, send it
+               -- back and buy the right $520 one, and the car claimed $500 of
+               -- work still to land that nobody was ever going to buy. The two
                -- exclusions cannot double-subtract, because the credit line a
                -- vendor invoice writes is a line of its own and never sets
                -- part_returned on the line it refunds.

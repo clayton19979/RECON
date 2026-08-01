@@ -114,7 +114,7 @@ export function wireVehiclesView() {
   $("#vehicles-reset-view").addEventListener("click", () => resetVehicleView());
 
   /* The summary cards double as the filter for what they count. Reading "3
-     over quote" and then having to work out which three is the same
+     waiting on parts" and then having to work out which three is the same
      half-feature the chart's bars fixed; the number you're looking at should
      be the thing you can click.
 
@@ -131,7 +131,6 @@ export function wireVehiclesView() {
       if (!card || card.disabled) return;
       const which = card.dataset.boardFilter;
       if (which === "parts") state.vehiclePartsOnly = !state.vehiclePartsOnly;
-      else if (which === "over") state.vehicleOverOnly = !state.vehicleOverOnly;
       else if (which === "stalled") {
         // Any other bucket selected means the chart owns the idle filter;
         // taking it over is what the advisor asked for by clicking here.
@@ -243,10 +242,6 @@ export function wireVehiclesView() {
       if (trigger.dataset.emptyAction === "clear-parts") {
         state.vehiclePartsOnly = false;
         syncPartsFilterChip();
-        renderVehiclesTable();
-      }
-      if (trigger.dataset.emptyAction === "clear-over") {
-        state.vehicleOverOnly = false;
         renderVehiclesTable();
       }
       if (trigger.dataset.emptyAction === "clear-idle") {

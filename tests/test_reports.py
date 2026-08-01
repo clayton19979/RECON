@@ -51,6 +51,32 @@ def test_technician_productivity(client):
     assert row["labor_cost"] == 80
 
 
+def test_technician_productivity_ignores_voided_tickets(client):
+    """A ticket taken back is work that never happened -- the money already
+    knew that (cost_rollup skips voided orders) and so does the vehicle board.
+    Leaving it in here credited a technician with an RO and with the hours
+    flagged on it before the mistake was spotted."""
+    technician = client.post("/api/staff", json={"name": "Robin", "role": "technician"}).json()
+    vehicle = make_recon_vehicle(client, stock_number="R-1105")
+    order = make_recon_order(client, vehicle["id"])
+    save_estimate(
+        client,
+        order["id"],
+        [{"kind": "labor", "description": "Diag", "quantity": 2, "unit_price": 40, "unit_cost": 40}],
+    )
+    client.put(f"/api/orders/{order['id']}/assignment", json={"technician_id": technician["id"]})
+
+    before = next(r for r in client.get("/api/reports/technicians").json() if r["technician"] == "Robin")
+    assert before["ro_count"] == 1 and before["labor_hours"] == 2, "precondition: the work was counted"
+
+    assert client.post(f"/api/orders/{order['id']}/void", json={"actor": "tester"}).status_code == 200
+    after = next(r for r in client.get("/api/reports/technicians").json() if r["technician"] == "Robin")
+    assert after["ro_count"] == 0
+    assert after["completed_count"] == 0, "voiding sets the ticket to complete -- it is not a completed job"
+    assert after["labor_hours"] == 0
+    assert after["labor_cost"] == 0
+
+
 def test_technician_productivity_uses_job_technician_over_ticket_default(client):
     """A job's own technician should own that job's labor even when a
     different tech is the RO's ticket-level default -- e.g. the ticket

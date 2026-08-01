@@ -89,6 +89,19 @@ def is_stalled(row: Mapping[str, Any]) -> bool:
     return max(0, int(row.get("idle_days") or 0)) >= STALLED_AFTER_DAYS
 
 
+def live_orders(orders: list[dict]) -> list[dict]:
+    """The tickets that actually count, in the order cost_rollup returned them.
+
+    Voiding a ticket writes `status='complete', voided=1` (see workflow.void_order):
+    the flag is the meaning, the status is only how the row leaves the open-orders
+    count. Reading the status without the flag therefore reports a mistake as
+    finished work, so everything that judges what a car is doing filters here
+    first -- the same rule cost_rollup applies to the money and last_activity
+    applies to the clock.
+    """
+    return [o for o in orders if not o.get("voided")]
+
+
 def order_status_bucket(orders: list[dict]) -> str:
     """Finished or still in progress, judged by the repair tickets themselves.
 
@@ -96,9 +109,17 @@ def order_status_bucket(orders: list[dict]) -> str:
     so the ticket is what the answer has to come from: finished means every
     ticket that exists is closed, and at least one exists. A car with no
     ticket at all has not finished anything -- it has not started.
+
+    Voided tickets are not tickets. A car whose only one had been voided read
+    as finished here, which showed a green Complete pill on the board, filed
+    the car under "Ready to sell" on Walt's Lot Report, and -- because
+    is_stalled deliberately never flags a finished car -- took it out of the
+    Stalled count for good. One mis-click made a car invisible in the three
+    places that exist to stop cars going missing.
     """
-    active = next((o for o in reversed(orders) if o["status"] != "complete"), None)
-    has_closed = any(o["status"] == "complete" for o in orders)
+    live = live_orders(orders)
+    active = next((o for o in reversed(live) if o["status"] != "complete"), None)
+    has_closed = any(o["status"] == "complete" for o in live)
     return "finished" if (active is None and has_closed) else "in_progress"
 
 
@@ -537,12 +558,17 @@ def vehicle_board_rows(
         ).fetchall()
         for row in rows:
             rollup = cost_rollup(db, "recon_vehicle_id", row["id"])
-            order_ids = [o["id"] for o in rollup["orders"]]
+            # Voided tickets are excluded from everything the row says the car
+            # is doing, the same way they're already excluded from what it
+            # cost -- see live_orders.
+            live = live_orders(rollup["orders"])
+            voided_count = len(rollup["orders"]) - len(live)
+            order_ids = [o["id"] for o in live]
             # Recon status/sale tracking isn't used here -- the repair order's
             # own status is what the advisor actually maintains, so that's
             # what drives the displayed status and in-progress/finished bucket.
-            active_order = next((o for o in reversed(rollup["orders"]) if o["status"] != "complete"), None)
-            latest_order = rollup["orders"][-1] if rollup["orders"] else None
+            active_order = next((o for o in reversed(live) if o["status"] != "complete"), None)
+            latest_order = live[-1] if live else None
             current_order = active_order or latest_order
             display_status = current_order["status"] if current_order else "acquired"
             activity_at = last_activity(db, "recon_vehicle_id", row["id"], row["created_at"])
@@ -574,6 +600,11 @@ def vehicle_board_rows(
                     # board link through this, so "follow up on that stalled car"
                     # lands on the RO rather than floating unattached.
                     "order_id": current_order["id"] if current_order else None,
+                    # How many tickets on this car were taken back. Only used
+                    # to tell "nobody has written one" apart from "the one
+                    # somebody wrote was voided" -- two rows that otherwise
+                    # read identically and need different things done to them.
+                    "voided_order_count": voided_count,
                     "updated_at": row["updated_at"],
                     "age_days": age_days(row["created_at"]),
                     "last_activity_at": activity_at,
@@ -594,9 +625,13 @@ def vehicle_board_rows(
         ).fetchall()
         for row in rows:
             rollup = cost_rollup(db, "we_owe_id", row["id"])
-            order_ids = [o["id"] for o in rollup["orders"]]
-            active_order = next((o for o in reversed(rollup["orders"]) if o["status"] != "complete"), None)
-            latest_order = rollup["orders"][-1] if rollup["orders"] else None
+            # Same rule as recon above: a voided ticket says nothing about the
+            # promise, and voiding one is certainly not keeping it.
+            live = live_orders(rollup["orders"])
+            voided_count = len(rollup["orders"]) - len(live)
+            order_ids = [o["id"] for o in live]
+            active_order = next((o for o in reversed(live) if o["status"] != "complete"), None)
+            latest_order = live[-1] if live else None
             current_order = active_order or latest_order
             # fulfilled/waived is the authoritative "is this promise resolved"
             # signal (set explicitly by the advisor, separate from any
@@ -645,6 +680,7 @@ def vehicle_board_rows(
                     # board link through this, so "follow up on that stalled car"
                     # lands on the RO rather than floating unattached.
                     "order_id": current_order["id"] if current_order else None,
+                    "voided_order_count": voided_count,
                     "updated_at": row["updated_at"],
                     "age_days": age_days(row["created_at"]),
                     "last_activity_at": activity_at,

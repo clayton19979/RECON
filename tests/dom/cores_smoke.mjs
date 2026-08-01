@@ -1,6 +1,12 @@
-// Cores & Returns screen smoke test.
+// Parts & Cores screen smoke test.
 //
-// Two tables, one three-state vocabulary: Pending (still at the shop),
+// Three tables. On Order is the one that holds a car up -- parts somebody is
+// waiting for -- and its assertions are about honesty above all: a line with
+// no recorded order date must never render as "ordered today", must not claim
+// a wait it can't back, and must not lead a list sorted by how long things
+// have been waiting.
+//
+// The other two share one three-state vocabulary: Pending (still at the shop),
 // Awaiting Credit (physically gone, no paperwork), Credited (the vendor's
 // number recorded). The assertions are weighted toward the transitions,
 // because each one is a claim about where a real part and real money are:
@@ -25,24 +31,24 @@ const daysAgo = (n) => new Date(NOW - n * 86400000).toISOString();
 // and offer nothing.
 let cores = [
   { id: 11, order_id: 1, description: "Reman alternator", part_number: "ALT-300", ro_number: "RO-2607-0001",
-    vehicle_label: "2019 Ford Edge", vendor_name: "WorldPac", core_charge: 80, voided: 0,
+    vehicle_label: "2019 Ford Edge", vendor_name: "WorldPac", core_charge: 80, quantity: 1, core_total: 80, voided: 0,
     core_returned: 0, core_returned_at: null, core_return_invoice_number: null,
     segment: "recon", recon_vehicle_id: 7, we_owe_id: null, stock_number: "R-1042", we_owe_customer_name: null },
   { id: 12, order_id: 1, description: "Brake caliper", part_number: "CAL-12", ro_number: "RO-2607-0001",
-    vehicle_label: "2019 Ford Edge", vendor_name: "WorldPac", core_charge: 45, voided: 0,
+    vehicle_label: "2019 Ford Edge", vendor_name: "WorldPac", core_charge: 45, quantity: 1, core_total: 45, voided: 0,
     core_returned: 1, core_returned_at: daysAgo(20), core_return_invoice_number: null,
     segment: "recon", recon_vehicle_id: 7, we_owe_id: null, stock_number: "R-1042", we_owe_customer_name: null },
   { id: 13, order_id: 2, description: "Long block", part_number: "ENG-9", ro_number: "RO-2607-0002",
-    vehicle_label: "2021 Kia Sorento", vendor_name: "NAPA", core_charge: 400, voided: 0,
+    vehicle_label: "2021 Kia Sorento", vendor_name: "NAPA", core_charge: 400, quantity: 1, core_total: 400, voided: 0,
     core_returned: 1, core_returned_at: daysAgo(40), core_return_invoice_number: "CR-771",
     segment: "we_owe", recon_vehicle_id: null, we_owe_id: 9, stock_number: null, we_owe_customer_name: "Maria Soto" },
   { id: 14, order_id: 3, description: "Starter (voided ticket)", part_number: null, ro_number: "RO-2607-0003",
-    vehicle_label: "2018 Honda Civic", vendor_name: "NAPA", core_charge: 60, voided: 1,
+    vehicle_label: "2018 Honda Civic", vendor_name: "NAPA", core_charge: 60, quantity: 1, core_total: 60, voided: 1,
     core_returned: 0, core_returned_at: null, core_return_invoice_number: null,
     segment: "recon", recon_vehicle_id: 8, we_owe_id: null, stock_number: "R-0999", we_owe_customer_name: null },
   // A second pending core so the bulk path has a real batch to take.
   { id: 15, order_id: 2, description: "Power steering pump", part_number: "PSP-4", ro_number: "RO-2607-0002",
-    vehicle_label: "2021 Kia Sorento", vendor_name: "NAPA", core_charge: 55, voided: 0,
+    vehicle_label: "2021 Kia Sorento", vendor_name: "NAPA", core_charge: 55, quantity: 1, core_total: 55, voided: 0,
     core_returned: 0, core_returned_at: null, core_return_invoice_number: null,
     segment: "we_owe", recon_vehicle_id: null, we_owe_id: 9, stock_number: null, we_owe_customer_name: "Maria Soto" },
 ];
@@ -70,6 +76,26 @@ let returns = [
     segment: "recon", recon_vehicle_id: 8, we_owe_id: null, stock_number: "R-0999", we_owe_customer_name: null },
 ];
 
+// On order: one long overdue, one fresh, and one that predates the app
+// recording order dates at all.
+const ON_ORDER = [
+  { id: 31, order_id: 1, description: "Windshield", part_number: "WS-4471", ro_number: "RO-2607-0001",
+    vehicle_label: "R-1042", vehicle: "2019 Ford Edge", outstanding_quantity: 1, value: 180,
+    ordered_at: daysAgo(21), days_waiting: 21,
+    segment: "recon", recon_vehicle_id: 7, we_owe_id: null, vehicle_id: 5, stock_number: "R-1042",
+    we_owe_customer_name: null },
+  { id: 32, order_id: 2, description: "Serpentine belt", part_number: "SB-118", ro_number: "RO-2607-0002",
+    vehicle_label: "We-Owe: Maria Soto", vehicle: "2021 Kia Sorento", outstanding_quantity: 2, value: 28,
+    ordered_at: daysAgo(0), days_waiting: 0,
+    segment: "we_owe", recon_vehicle_id: null, we_owe_id: 9, vehicle_id: 6, stock_number: null,
+    we_owe_customer_name: "Maria Soto" },
+  { id: 33, order_id: 3, description: "Mounting bracket kit", part_number: null, ro_number: "RO-2607-0003",
+    vehicle_label: "R-0999", vehicle: "2018 Honda Civic", outstanding_quantity: 1, value: 95,
+    ordered_at: "", days_waiting: null,
+    segment: "recon", recon_vehicle_id: 8, we_owe_id: null, vehicle_id: 7, stock_number: "R-0999",
+    we_owe_customer_name: null },
+];
+
 const VENDORS = [
   { id: 1, name: "WorldPac", aliases: [], account_number: null },
   { id: 2, name: "NAPA", aliases: [], account_number: null },
@@ -81,6 +107,7 @@ const posts = [];
 const { w, doc, settle, ok, finish, rejections } = await boot({
   expose: ["state", "showView", "loadCoresView", "renderCoresTable", "renderReturnsTable"],
   fetch: async (url, opts) => {
+    if (url === "/api/parts/on-order") return ON_ORDER;
     if (url === "/api/cores") return cores;
     if (url === "/api/returns") return returns;
     if (url === "/api/vendors") return VENDORS;
@@ -127,6 +154,7 @@ await settle();
 
 const $ = (sel) => doc.querySelector(sel);
 const $$ = (sel) => [...doc.querySelectorAll(sel)];
+const onOrderRow = (id) => $(`#on-order-table tr[data-id="${id}"]`);
 const coreRow = (id) => $(`#cores-table tr[data-id="${id}"]`);
 const returnRow = (id) => $(`#returns-table tr[data-id="${id}"]`);
 const chip = (table, filter) => $(`[data-${table}-filter="${filter}"]`);
@@ -135,16 +163,62 @@ const input = (el, value) => {
   el.dispatchEvent(new w.Event("input", { bubbles: true }));
 };
 
-/* ---------- stats add up across both tables ---------- */
+/* ---------- stats add up across all three tables ---------- */
 const stats = $("#cores-returns-stats").textContent.replace(/\s+/g, " ");
 // Cores not credited & not voided: 80 + 45 + 55 = 180.
 // Returns not credited: 120 + 60 + 15 = 195. Total 375.
 ok(/\$375\.00/.test(stats), `Outstanding should read $375.00 across both tables: "${stats.trim()}"`);
 ok(/oldest 35d/.test(stats), `the awaiting card doesn't name the stalest pickup: "${stats.trim()}"`);
-const awaitingValue = $$("#cores-returns-stats .stat-value").find((el) => el.classList.contains("crit"));
-ok(awaitingValue, "a 35-day-old pickup doesn't tone the Awaiting Credit card critical");
-ok(/Credited/.test(stats) && /2/.test($$("#cores-returns-stats .stat-value")[2].textContent),
+const awaitingValue = $$("#cores-returns-stats .stat-value")[2];
+ok(awaitingValue.classList.contains("crit"), "a 35-day-old pickup doesn't tone the Awaiting Credit card critical");
+ok(/Credited/.test(stats) && /2/.test($$("#cores-returns-stats .stat-value")[3].textContent),
    "the Credited card should count the credited core and the credited return");
+
+// On Order leads the strip: 180 + 28 + 95 = 303, oldest known wait 21 days,
+// and the one line with no date is reported as such rather than folded into
+// the oldest wait as a zero.
+const onOrderCard = $$("#cores-returns-stats .stat")[0].textContent.replace(/\s+/g, " ");
+ok(/ON ORDER|On Order/i.test(onOrderCard), `the first summary card isn't On Order: "${onOrderCard.trim()}"`);
+ok(/\$303\.00/.test(onOrderCard), `the On Order card doesn't total what's outstanding: "${onOrderCard.trim()}"`);
+ok(/oldest 21d/.test(onOrderCard), `the On Order card doesn't name the longest wait: "${onOrderCard.trim()}"`);
+ok(/1 with no date/.test(onOrderCard),
+   `an undated line is being counted as if its wait were known: "${onOrderCard.trim()}"`);
+ok($$("#cores-returns-stats .stat-value")[0].classList.contains("crit"),
+   "a part 21 days on order doesn't tone the On Order card critical");
+
+/* ---------- on order: longest wait first, unknowns last and unclaimed ---------- */
+const onOrderIds = $$("#on-order-table tr[data-id]").map((r) => Number(r.dataset.id));
+ok(onOrderIds.join(",") === "31,32,33", `on-order rows aren't in server order: ${onOrderIds.join(",")}`);
+ok(/21d/.test(onOrderRow(31).textContent), "a 21-day wait isn't shown on the row");
+ok(/today/.test(onOrderRow(32).textContent), "a part ordered today reads as some number of days");
+ok(!/0d/.test(onOrderRow(33).textContent), "an undated line is claiming a wait of zero days");
+ok(/not recorded/.test(onOrderRow(33).textContent),
+   `an undated line doesn't say its order date is unknown: "${onOrderRow(33).textContent.replace(/\s+/g, " ")}"`);
+ok(!/null/.test(onOrderRow(33).textContent), "a null part number renders as the string null");
+ok(/2019 Ford Edge/.test(onOrderRow(31).textContent), "the row doesn't say which car is waiting");
+ok(/We-Owe: Maria Soto/.test(onOrderRow(32).textContent), "a we-owe part doesn't name whose promise it's for");
+ok(/3 parts/.test($("#on-order-count").textContent), `on-order count reads "${$("#on-order-count").textContent}"`);
+ok(/\$303\.00 across 3 vehicles/.test($("#on-order-total").textContent),
+   `on-order total reads "${$("#on-order-total").textContent}"`);
+
+// "Waiting 7+ days" is the phone-call list: only the ones we can prove are
+// late, so the undated line is not swept in on a guess.
+chip("on-order", "overdue").click();
+await settle();
+ok(onOrderRow(31) && !onOrderRow(32), "the overdue filter didn't narrow to the long waits");
+ok(!onOrderRow(33), "an undated line is being called overdue on no evidence");
+chip("on-order", "").click();
+await settle();
+ok($$("#on-order-table tr[data-id]").length === 3, "the All chip didn't restore every part on order");
+
+input($("#on-order-search"), "windshield");
+ok($$("#on-order-table tr[data-id]").length === 1, "searching a part description didn't narrow the on-order table");
+input($("#on-order-search"), "R-0999");
+ok(onOrderRow(33), "searching a stock number doesn't reach the on-order table");
+input($("#on-order-search"), "zzz-none");
+ok(/No parts on order match/.test($("#on-order-table").textContent), "a no-match on-order search explains nothing");
+input($("#on-order-search"), "");
+await settle();
 
 /* ---------- default filter shows pending, voided renders struck ---------- */
 ok(coreRow(11) && coreRow(15), "the pending cores didn't render under the default filter");
@@ -330,4 +404,4 @@ ok($("#returns-select-all").disabled, "select-all is enabled over a table with n
 
 ok(rejections.length === 0, `unhandled rejections during the run: ${rejections.map((e) => e && e.message).join(" | ")}`);
 
-finish("cores/returns: combined stats, three-state filters, pickup/undo, credit prompts, forced vendor choice, A/P confirm, bulk pickup");
+finish("parts & cores: on-order ordering/undated honesty and overdue filter, combined stats, three-state filters, pickup/undo, credit prompts, forced vendor choice, A/P confirm, bulk pickup");

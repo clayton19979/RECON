@@ -922,14 +922,23 @@ def create_app(db_path: Path = DEFAULT_DB, backups_dir: Path = DEFAULT_BACKUPS_D
                 )
                 if existing:
                     retained_ids.add(int(existing["id"]))
+                    # quoted_unit_cost only follows the typed cost while the
+                    # line is still a quote. Once a part has been received,
+                    # what's in the Cost box is what the vendor billed, and
+                    # editing it (a keyed-wrong invoice price, say) is a
+                    # correction to the bill -- it must not quietly rewrite
+                    # what the shop said the job would cost.
                     db.execute(
-                        "UPDATE estimate_items SET kind=?,description=?,part_number=?,quantity=?,unit_price=?,unit_cost=?,line_total=?,review_required=0,reviewed_by=?,reviewed_at=?,sort_order=?,job_id=?,core_charge=? WHERE id=?",
+                        "UPDATE estimate_items SET kind=?,description=?,part_number=?,quantity=?,unit_price=?,unit_cost=?,"
+                        "quoted_unit_cost=CASE WHEN received_quantity>0 THEN quoted_unit_cost ELSE ? END,"
+                        "line_total=?,review_required=0,reviewed_by=?,reviewed_at=?,sort_order=?,job_id=?,core_charge=? WHERE id=?",
                         (
                             item.kind,
                             item.description.strip(),
                             item.part_number.strip().upper(),
                             item.quantity,
                             item.unit_price,
+                            item.unit_cost,
                             item.unit_cost,
                             estimate_line_total(item.kind, item.quantity, item.unit_price),
                             estimate.actor,
@@ -942,7 +951,7 @@ def create_app(db_path: Path = DEFAULT_DB, backups_dir: Path = DEFAULT_BACKUPS_D
                     )
                 else:
                     cur = db.execute(
-                        "INSERT INTO estimate_items(estimate_id,kind,description,part_number,quantity,unit_price,unit_cost,line_total,source,review_required,reviewed_by,reviewed_at,sort_order,job_id,core_charge) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        "INSERT INTO estimate_items(estimate_id,kind,description,part_number,quantity,unit_price,unit_cost,quoted_unit_cost,line_total,source,review_required,reviewed_by,reviewed_at,sort_order,job_id,core_charge) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                         (
                             estimate_id,
                             item.kind,
@@ -950,6 +959,7 @@ def create_app(db_path: Path = DEFAULT_DB, backups_dir: Path = DEFAULT_BACKUPS_D
                             item.part_number.strip().upper(),
                             item.quantity,
                             item.unit_price,
+                            item.unit_cost,
                             item.unit_cost,
                             estimate_line_total(item.kind, item.quantity, item.unit_price),
                             item.source,

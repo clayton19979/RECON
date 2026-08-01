@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 
 from app.pages import render_index
+from tests.js_source import code_only
 
 STATIC = Path(__file__).resolve().parent.parent / "static"
 JS_DIR = STATIC / "js"
@@ -427,17 +428,36 @@ def test_every_report_sort_key_in_the_markup_has_a_spec(js: str) -> None:
     assert used <= specced, f"report columns sorted by an undefined key: {sorted(used - specced)}"
 
 
-def test_report_sort_specs_are_partitioned_by_shape(js: str) -> None:
-    """The two report shapes have different columns, so a key from one is
-    meaningless in the other -- generateReport() resets the sort on a shape
-    change and needs both tables keyed independently."""
+def test_every_report_shape_opens_on_a_sort_it_actually_has(js: str) -> None:
+    """Each report shape has its own columns, so a key from one is meaningless
+    in the other -- generateReport() resets the sort on a shape change and
+    falls back to that shape's DEFAULT_SORT. A default naming a column the
+    shape doesn't define sorts by nothing at all, silently.
+
+    This used to assert instead that every shape offered a "cost" key, from
+    when a single shared fallback was how the reset worked. It isn't any more:
+    defaultSortFor() is per shape, and the technician report has no money
+    column to fall back to (labor here is never charged out).
+    """
     block = js[js.index("const REPORT_SORTS") : js.index("function sortReportRows")]
-    shapes = re.split(r'^  (?:"vehicle-spend"|technicians): \{$', block, flags=re.MULTILINE)[1:]
-    assert len(shapes) == 2, f"expected 2 report shapes in REPORT_SORTS, found {len(shapes)}"
-    # Both must offer "cost" -- that's what generateReport falls back to when
-    # the saved sort key belongs to the other shape.
-    for body in shapes:
-        assert re.search(r"^\s{4}cost:", body, re.MULTILINE), "a report shape has no cost sort to fall back to"
+    names = [a or b for a, b in re.findall(r'^  (?:"([\w-]+)"|(\w+)): \{$', block, flags=re.MULTILINE)]
+    bodies = re.split(r'^  (?:"[\w-]+"|\w+): \{$', block, flags=re.MULTILINE)[1:]
+    keys_by_shape = {
+        name: set(re.findall(r"^\s{4}(\w+):\s*\{", body, re.MULTILINE))
+        for name, body in zip(names, bodies, strict=True)
+    }
+    assert len(keys_by_shape) >= 2, f"expected several report shapes in REPORT_SORTS, found {sorted(keys_by_shape)}"
+
+    defaults = js[js.index("const DEFAULT_SORT") : js.index("function defaultSortFor")]
+    chosen = {
+        (name or bare): key
+        for name, bare, key in re.findall(r'^  (?:"([\w-]+)"|(\w+)): \{ key: "(\w+)"', defaults, re.MULTILINE)
+    }
+    assert set(chosen) == set(keys_by_shape), (
+        f"DEFAULT_SORT and REPORT_SORTS disagree about the report shapes: {sorted(set(chosen) ^ set(keys_by_shape))}"
+    )
+    for shape, key in chosen.items():
+        assert key in keys_by_shape[shape], f"{shape} opens sorted by {key!r}, which it has no column spec for"
 
 
 def test_report_controls_refetch_rather_than_waiting_for_a_button(html: str, js: str) -> None:
@@ -463,11 +483,18 @@ def test_report_controls_refetch_rather_than_waiting_for_a_button(html: str, js:
 
     ranges = re.findall(r'data-report-range="(\w+)"', html)
     assert len(ranges) == len(set(ranges)) == 5, f"expected 5 distinct range chips, found {ranges}"
-    match_list = re.search(r"const match = \[([^\]]+)\]", js)
-    assert match_list is not None, "the report-range detection list is gone from app.js"
-    known = set(re.findall(r'"(\w+)"', match_list.group(1)))
+    # QUICK_RANGES is the one list: what a chip may be called, what a
+    # hand-typed pair is matched back to, and -- the part that matters -- which
+    # ranges get re-resolved against today instead of replayed from the day
+    # they were saved. A chip missing from it silently opts out of that.
+    quick = re.search(r"const QUICK_RANGES = \[([^\]]+)\]", js)
+    assert quick is not None, "QUICK_RANGES is gone from app.js"
+    known = set(re.findall(r'"(\w+)"', quick.group(1)))
     assert set(ranges) == known, (
         f"range chips {sorted(ranges)} don't match the ranges the app can detect {sorted(known)}"
+    )
+    assert "const match = QUICK_RANGES.find(" in js, (
+        "hand-typed dates are matched against their own list again; it will drift from the chips"
     )
 
 
@@ -499,6 +526,49 @@ def test_board_card_elements_all_exist(declared_ids: set[str], js: str) -> None:
     assert not missing, f"renderStats writes into ids index.html doesn't declare: {sorted(missing)}"
 
 
+def test_ticket_money_has_exactly_one_definition() -> None:
+    """A ticket's quote and actual cost are shown in four places -- the cost
+    card, the totals that follow each keystroke, the job subtotals and the
+    printed ticket -- and each one used to do the arithmetic itself. That is
+    how a vendor credit came to ADD to the ticket card while subtracting from
+    the board and the Lot Report an inch away, and how paper went out of the
+    printer disagreeing with the screen it was printed from.
+
+    estimate-money.js is the only place the rule lives now. Anything summing
+    quantity times unit_cost by hand somewhere else is a fifth copy waiting to
+    drift, so it fails here rather than in front of an advisor.
+    """
+    money_js = (JS_DIR / "estimate-money.js").read_text(encoding="utf-8")
+    assert 'kind === "credit"' in money_js, "estimate-money.js no longer applies the credit sign"
+
+    # Scoped to the vehicle screen: the A/P entry form sums its own lines too,
+    # but those are a vendor's invoice being typed in, every kind of them
+    # positive, and none of this applies to them.
+    detail_js = (JS_DIR / "vehicle-detail.js").read_text(encoding="utf-8")
+    hand_rolled = [
+        line.strip()
+        for line in detail_js.split("\n")
+        if re.search(r"(?:received_)?quantity\s*\*\s*\w*\.?unit_cost", line)
+    ]
+    assert not hand_rolled, (
+        "the vehicle screen sums ticket money itself instead of asking estimate-money.js:\n" + "\n".join(hand_rolled)
+    )
+
+
+def test_credit_lines_are_never_dropped_from_a_grouped_ticket(js: str) -> None:
+    """Vendor-invoice ingest writes kind="credit" lines nobody picked by hand.
+    The grid's job layout grouped by a fixed Parts/Labor/Fees list, so those
+    lines had no row on screen at all -- the total moved and nothing explained
+    why. Both the grid and the printed ticket group through kindGroupsOf now,
+    which is exhaustive over the kinds actually on the ticket."""
+    assert js.count("function kindGroupsOf(") == 1, "kindGroupsOf is no longer the single grouping helper"
+    grouping = re.findall(r"kindGroupsOf\(", js)
+    assert len(grouping) >= 3, (
+        f"only {len(grouping)} references to kindGroupsOf -- has a caller gone back to its own list?"
+    )
+    assert 'credit: "Credits"' in js, "KIND_GROUP_LABEL has no heading for credit lines"
+
+
 def test_over_quote_rule_has_exactly_one_definition(js: str) -> None:
     """The Over Quote card counts the cars whose Cost cell is red. Two copies
     of the 10%-past-estimate rule is two chances for the count and the
@@ -523,9 +593,48 @@ def test_parts_filter_toggle_is_not_a_segment_chip(js: str, html: str) -> None:
     )
     unscoped = re.findall(r'\$\$\("#view-vehicles \.filters \.chip"\)', js)
     assert not unscoped, "a segment-chip selector isn't scoped to [data-filter] and will sweep up the parts toggle"
-    assert len(re.findall(r'\$\$\("#view-vehicles \.filters \.chip\[data-filter\]"\)', js)) >= 3, (
-        "the segment chips are no longer selected by [data-filter] in all three places"
+    scoped = re.findall(r'\$\$\("#view-vehicles \.filters \.chip\[data-filter\]"\)', js)
+    assert scoped, "nothing selects the segment chips any more -- has the toolbar moved?"
+    # This used to require three copies, one per place that lit a chip. They
+    # are one function now (syncSegmentChips), which is what a fourth caller
+    # -- the search reach line's jump into History -- made worth doing: the
+    # count is not the property worth holding, having a single writer is.
+    assert "function syncSegmentChips" in js, (
+        "the segment chips have no single writer -- state.filter and the lit chip will drift apart"
     )
+    assert 'classList.add("active")' not in _function_source(js, "wireVehiclesView"), (
+        "the board's chip handler lights its own chip again instead of going through syncSegmentChips"
+    )
+
+
+def test_vehicle_search_rule_has_exactly_one_definition(js: str) -> None:
+    """Three call sites ask "does this car match what was typed?": the rows on
+    screen, the rows this view's filters are hiding, and the rows in the half
+    of the board that isn't loaded. A second copy of the rule is how the board
+    ends up telling someone a car isn't findable while the same query finds it
+    one line further down."""
+    assert js.count('(v.customer_name || "").toLowerCase().includes(q)') == 1, (
+        "the search-match rule has more than one definition -- matchesVehicleSearch should be the only one"
+    )
+    assert "matchesVehicleSearch(v, state.search)" in _function_source(js, "visibleVehicles"), (
+        "the board's own rows no longer go through the shared search rule"
+    )
+    assert "matchesVehicleSearch" in _function_source(js, "searchReach"), (
+        "the reach count no longer goes through the shared search rule"
+    )
+
+
+def test_search_reach_offers_only_actions_the_board_handles(js: str, html: str) -> None:
+    """Show all matches and Open History are rendered in two places -- the
+    line above the table and the empty state inside it -- and handled in a
+    third. A button naming an action nothing handles doesn't fail, it just
+    quietly does nothing, on the screen whose whole job is to stop a car being
+    lost."""
+    assert 'id="vehicles-search-reach"' in html, "the board has nowhere to say a match is somewhere else"
+    offered = set(re.findall(r'data-search-reach="([\w-]+)"', js))
+    assert offered, "nothing offers to reach past the current view any more"
+    handled = set(re.findall(r'name === "([\w-]+)"', _function_source(js, "runSearchReachAction")))
+    assert offered == handled, f"offered {sorted(offered)} but runSearchReachAction handles {sorted(handled)}"
 
 
 def test_board_view_preferences_round_trip_every_filter(js: str) -> None:
@@ -535,10 +644,42 @@ def test_board_view_preferences_round_trip_every_filter(js: str) -> None:
     visible way back."""
     save = _function_source(js, "saveVehicleViewPrefs")
     load = _function_source(js, "loadVehicleViewPrefs")
-    for key in ("filter", "status", "sort", "partsOnly"):
+    for key in ("filter", "status", "sort", "partsOnly", "lateOnly"):
         assert key in save, f"{key} isn't persisted with the board's view preferences"
     assert "partsOnly" in load, "the parts toggle is saved but never restored"
+    assert "lateOnly" in load, "the Past Promised filter is saved but never restored"
     assert "state.vehiclePartsOnly" in save, "Reset view won't appear for a board filtered to parts-only"
+    assert "state.vehicleLateOnly" in save, "Reset view won't appear for a board filtered to overdue promises"
+
+
+def test_promised_column_is_wired_end_to_end(js: str, html: str) -> None:
+    """Same contract the Idle column has. The promised date is the one part of
+    a we-owe with a deadline on it, and it reaches the screen through a header,
+    a comparator and a cell renderer that all have to agree."""
+    header = re.search(r'<th[^>]*data-sort-key="promised"[^>]*>', html)
+    assert header, "the board has no Promised column header"
+    assert "sortable" in header.group(0), "the Promised column isn't sortable"
+    assert "promisedCellHtml(v)" in _function_source(js, "vehicleRowHtml"), "the Promised cell isn't rendered"
+    assert "v.target_date" in _function_source(js, "promisedCellHtml"), "the Promised cell doesn't read target_date"
+    for field in ("target_date", "promise_days_late"):
+        assert field in _function_source(js, "vehicleRowSignature"), (
+            f"{field} isn't in the row signature, so a promise whose date moved won't re-render"
+        )
+
+
+# The columns whose stored value is a bare YYYY-MM-DD rather than a timestamp.
+# Each is written by an <input type="date">, so this is the whole set.
+_BARE_DATE_FIELDS = ("acquisition_date", "date_in", "promised_at", "target_date")
+
+
+def test_bare_dates_are_never_formatted_as_timestamps(js: str) -> None:
+    """A date-only string is UTC midnight by definition, so `new Date(...)` on
+    one lands the previous evening anywhere west of Greenwich -- and every one
+    of these ends up on the printed repair order. A ticket promised for the
+    30th that prints "Jul 29, 2026, 7:00 PM" is a fight at the counter, so
+    these fields go through fmtDay and never through fmtDate."""
+    bad = [field for field in _BARE_DATE_FIELDS if re.search(rf"fmtDate\(\s*[\w.?]*\b{field}\b", js)]
+    assert not bad, f"date-only fields formatted with fmtDate (use fmtDay): {bad}"
 
 
 def test_idle_column_is_wired_end_to_end(js: str, html: str) -> None:
@@ -555,6 +696,39 @@ def test_idle_column_is_wired_end_to_end(js: str, html: str) -> None:
     assert "v.idle_days" in _function_source(js, "idleCellHtml"), "the Idle cell doesn't read idle_days"
     assert "idle_days" in _function_source(js, "vehicleRowSignature"), (
         "idle_days isn't in the row signature, so a row whose idle time changed won't re-render"
+    )
+
+
+def test_no_calendar_date_is_derived_from_toisostring(js: str) -> None:
+    """toISOString() converts to UTC before it formats, so from about 7 PM in
+    Merrillville onward it hands back *tomorrow*.
+
+    The shop works evenings. A car written up at eight o'clock was going on
+    file as arriving the next morning, and the Reports date chips had already
+    been fixed for the same reason -- the back end stores shop-local time on
+    purpose (see app/db.py::now and tests/test_shop_local_time.py) and the
+    front end has to agree with it. todayLocal() reads the wall clock instead,
+    and lives in one place so this can't be re-derived wrongly per screen.
+
+    Formatting a stamp the shop already holds is fine; deriving a calendar date
+    from *now* is not, which is what the .slice() giveaway catches."""
+    offenders = [line.strip() for line in code_only(js).splitlines() if "toISOString" in line and ".slice(" in line]
+    assert not offenders, "a date is being derived via UTC instead of todayLocal(): " + " | ".join(offenders)
+
+
+def test_the_age_column_says_what_it_is_counting_from(js: str, html: str) -> None:
+    """Age answers "how long has this car been here", counted from the day it
+    landed on the lot rather than the day somebody typed it in. A bare "34d"
+    is unarguable and a wrong arrival date is invisible, so the cell carries
+    the date it came off -- and acquired_at has to be in the row signature or
+    a corrected date won't repaint the row."""
+    header = re.search(r'<th[^>]*data-sort-key="age"[^>]*>', html)
+    assert header, "the board has no Age column header"
+    cell = _function_source(js, "ageCellHtml")
+    assert "acquired_at" in cell, "the Age cell doesn't mention where the count starts"
+    assert "ageCellHtml(v)" in _function_source(js, "vehicleRowHtml"), "the Age cell isn't rendered"
+    assert "acquired_at" in _function_source(js, "vehicleRowSignature"), (
+        "acquired_at isn't in the row signature, so correcting an arrival date won't repaint the row"
     )
 
 

@@ -1,6 +1,10 @@
 import { $, $$, get, patch, post } from "./core.js";
 import { toast } from "./notify.js";
-import { esc, withLoading } from "./shortcuts.js";
+// fmtDay used to be a private copy here, for the Last Visit column. It is
+// shared now: the ticket printer needed the same "a day, not a timestamp"
+// answer, and two functions of the same name in two modules become one
+// arbitrary winner in the flattened bundle the DOM tests run against.
+import { esc, fmtDay, withLoading } from "./shortcuts.js";
 import { emptyRow } from "./empty-states.js";
 import { CUSTOMER_COLUMNS } from "./skeletons.js";
 import { STATUS_LABEL, STATUS_PILL_CLASS, state } from "./state.js";
@@ -123,27 +127,6 @@ function renderCustomersStats() {
       <div class="stat-value${noContact ? " warn" : ""}">${noContact}</div>
       <div class="stat-sub">${noContact ? "no phone or email on file" : "everyone is reachable"}</div>
     </button>`;
-}
-
-// Date-only formatting for the Last Visit column -- fmtDate's time-of-day
-// reads as noise at this distance.
-function fmtDay(value) {
-  if (!value) return "";
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return String(value);
-  return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
-}
-
-// A we-owe's target date is a bare calendar date ("2026-08-15"), not a moment.
-// new Date() reads those as UTC midnight, and Indiana is hours behind UTC, so
-// running one through fmtDay prints the day before -- a promise due Saturday
-// shown as due Friday. Split the string instead of parsing it.
-function fmtCalendarDay(value) {
-  const parts = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value || ""));
-  if (!parts) return fmtDay(value);
-  const [, year, month, day] = parts;
-  return new Date(Number(year), Number(month) - 1, Number(day))
-    .toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }
 
 function customerRowHtml(c, open) {

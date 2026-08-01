@@ -34,15 +34,30 @@ const AUDITS = [
   { invoice_number: "INV-8990", status: "posted", issues: [], created_at: new Date().toISOString().slice(0, 19) },
 ];
 
-// A posted recon invoice (clickable), a voided one, and a retail one (a
-// plain row -- there is no vehicle page behind it).
+// A posted recon invoice (clickable), a voided one, a retail one (a plain row
+// -- there is no vehicle page behind it), and one covering two cars at once.
+// `coverage` is what the row is actually built from: which cars the invoice's
+// lines paid for, and how much went to each.
+const covers = (o) => ({ recon_vehicle_id: null, we_owe_id: null, vehicle_id: null, stock_number: null, ...o });
 let invoices = [
   { id: 1, invoice_number: "INV-8990", posted_at: "2026-07-20T10:00:00", vendor_name: "WorldPac", po_number: "R-1042",
-    vehicle_label: "2019 Ford Edge", total: 250, status: "posted", segment: "recon", recon_vehicle_id: 7, we_owe_id: null },
+    vehicle_label: "R-1042", total: 250, status: "posted", segment: "recon", recon_vehicle_id: 7, we_owe_id: null,
+    coverage: [covers({ order_id: 42, ro_number: "RO-2607-0001", segment: "recon", recon_vehicle_id: 7, vehicle_label: "R-1042", amount: 250 })] },
   { id: 2, invoice_number: "INV-7777", posted_at: "2026-07-18T10:00:00", vendor_name: "NAPA", po_number: "R-1042",
-    vehicle_label: "2019 Ford Edge", total: 90, status: "voided", segment: "recon", recon_vehicle_id: 7, we_owe_id: null },
+    vehicle_label: "R-1042", total: 90, status: "voided", segment: "recon", recon_vehicle_id: 7, we_owe_id: null,
+    coverage: [covers({ order_id: 42, ro_number: "RO-2607-0001", segment: "recon", recon_vehicle_id: 7, vehicle_label: "R-1042", amount: 90 })] },
   { id: 3, invoice_number: "INV-6001", posted_at: "2026-07-19T10:00:00", vendor_name: "NAPA", po_number: "RO-2607-0009",
-    vehicle_label: "Walk-in — 2015 Toyota Camry", total: 40, status: "posted", segment: "retail", recon_vehicle_id: null, we_owe_id: null },
+    vehicle_label: "Retail: Walk-in", total: 40, status: "posted", segment: "retail", recon_vehicle_id: null, we_owe_id: null,
+    coverage: [covers({ order_id: 90, ro_number: "RO-2607-0009", segment: "retail", vehicle_label: "Retail: Walk-in", amount: 40 })] },
+  // The shared invoice. order_id/ro_number/segment are null on purpose -- once
+  // an invoice covers two tickets it belongs to neither, and the screen used
+  // to read that null and print "No ticket" over $100 of real parts.
+  { id: 4, invoice_number: "INV-5567", posted_at: "2026-07-21T10:00:00", vendor_name: "NAPA", po_number: "RO-2607-0001",
+    vehicle_label: "R-1042 +1 more", total: 100, status: "posted", segment: null, recon_vehicle_id: null, we_owe_id: null,
+    coverage: [
+      covers({ order_id: 42, ro_number: "RO-2607-0001", segment: "recon", recon_vehicle_id: 7, vehicle_label: "R-1042", amount: 70 }),
+      covers({ order_id: 55, ro_number: "RO-2607-0002", segment: "we_owe", we_owe_id: 9, vehicle_label: "We-Owe: Maria Soto", amount: 30 }),
+    ] },
 ];
 
 const posts = [];
@@ -51,7 +66,7 @@ const patches = [];
 let processAnswer = () => ({ status: "posted", issues: [] });
 
 const { w, doc, fetchLog, settle, ok, finish, rejections } = await boot({
-  expose: ["state", "showView", "loadAccountingView", "renderApTable", "filterApInvoices"],
+  expose: ["state", "showView", "loadAccountingView", "renderApTable", "filterApInvoices", "computeQuickRange"],
   fetch: async (url, opts) => {
     if (url === "/api/vendors" && opts.method === "GET") return VENDORS;
     if (url === "/api/vendors" && opts.method === "POST") {
@@ -74,7 +89,9 @@ const { w, doc, fetchLog, settle, ok, finish, rejections } = await boot({
       patches.push({ url, body: JSON.parse(opts.body) });
       const id = Number(url.split("/")[4]);
       invoices = invoices.map((a) => (a.id === id ? { ...a, status: "voided" } : a));
-      return { ok: true };
+      // The server reports what the void undid on the tickets behind the
+      // invoice -- two parts put back on order, $250 off the car.
+      return { ok: true, unreceived_items: 2, unreceived_value: 250, credits_cleared: 0 };
     }
     if (url === "/api/agent/invoices/process" && opts.method === "POST") {
       const body = JSON.parse(opts.body);
@@ -100,9 +117,9 @@ const input = (el, value) => {
 /* ---------- stats know the difference between live and voided ---------- */
 const stats = $("#ap-stats").textContent;
 ok(/plus 1 voided/.test(stats), `the Invoices card doesn't call out the voided invoice: "${stats.replace(/\s+/g, " ").trim()}"`);
-// 250 + 40, never the voided 90.
-ok(/\$290\.00/.test(stats), "Total Posted isn't the sum of the live invoices only");
-ok(!/\$380/.test(stats), "the voided invoice leaked into Total Posted");
+// 250 + 40 + 100, never the voided 90.
+ok(/\$390\.00/.test(stats), "Total Posted isn't the sum of the live invoices only");
+ok(!/\$480/.test(stats), "the voided invoice leaked into Total Posted");
 const heldValue = $$("#ap-stats .stat-value").find((el) => el.classList.contains("warn"));
 ok(heldValue && heldValue.textContent === "1", "one review_required audit should light the Held for Review card");
 
@@ -123,27 +140,47 @@ ok(!ticketIds.includes("60"), "a completed RO is still being offered as a ticket
 
 /* ---------- table rows: clickable, voided, retail ---------- */
 const apRows = $$("#ap-table tr");
-ok(apRows.length === 3, `expected 3 invoice rows, got ${apRows.length}`);
-const rowByInv = (n) => apRows.find((tr) => tr.textContent.includes(n));
+ok(apRows.length === 4, `expected 4 invoice rows, got ${apRows.length}`);
+const rowByInv = (n) => $$("#ap-table tr").find((tr) => tr.textContent.includes(n));
 ok(rowByInv("INV-8990").classList.contains("clickable"), "a recon invoice row isn't clickable");
 ok(rowByInv("INV-8990").getAttribute("role") === "button", "a clickable row is invisible to the keyboard");
 ok(rowByInv("INV-7777").classList.contains("voided-row"), "a voided invoice isn't struck as voided");
 ok(!rowByInv("INV-7777").querySelector(".ap-void"), "a voided invoice still offers a Void button");
 ok(!rowByInv("INV-6001").classList.contains("clickable"), "a retail invoice row pretends to open a vehicle page");
-ok(/2 invoices/.test($("#ap-count").textContent) === false, "sanity: count should include all 3");
-ok(/3 invoices/.test($("#ap-count").textContent), `count line reads "${$("#ap-count").textContent}"`);
-ok(/\$290\.00/.test($("#ap-count").textContent), "the count line's total counts voided money");
+ok(/3 invoices/.test($("#ap-count").textContent) === false, "sanity: count should include all 4");
+ok(/4 invoices/.test($("#ap-count").textContent), `count line reads "${$("#ap-count").textContent}"`);
+ok(/\$390\.00/.test($("#ap-count").textContent), "the count line's total counts voided money");
+
+/* ---------- an invoice covering two cars names both of them ---------- */
+// The bug this replaced: the cell said "No ticket" -- the same words used for
+// a genuine shop-supplies bill -- so the biggest invoices named no car at all.
+const shared = rowByInv("INV-5567");
+ok(!/No ticket/.test(shared.textContent), "a shared invoice still reads as belonging to no ticket");
+ok(/R-1042/.test(shared.textContent) && /Maria Soto/.test(shared.textContent),
+   `the shared invoice names ${shared.textContent.replace(/\s+/g, " ").trim()}`);
+ok(/\$70\.00/.test(shared.textContent) && /\$30\.00/.test(shared.textContent),
+   "the shared invoice doesn't say how much of the bill went to each car");
+ok(!shared.classList.contains("clickable"),
+   "a row covering two cars still claims to open one particular vehicle");
+const coverLines = [...shared.querySelectorAll(".ap-cover-line.clickable")];
+ok(coverLines.length === 2, `expected both cars to be openable, got ${coverLines.length}`);
+ok(coverLines[1].dataset.segment === "we_owe" && coverLines[1].dataset.refId === "9",
+   "the second car's link doesn't point at that car");
 
 /* ---------- search narrows, empty state offers the way back ---------- */
 input($("#ap-search"), "worldpac");
 ok($$("#ap-table tr").length === 1, `searching a vendor left ${$$("#ap-table tr").length} rows`);
+// The second car on a shared invoice is findable, not just the summary label.
+input($("#ap-search"), "maria soto");
+ok($$("#ap-table tr").length === 1 && /INV-5567/.test($("#ap-table").textContent),
+   "searching the second car on a shared invoice doesn't find it");
 input($("#ap-search"), "zzz-nothing");
 ok(/No invoices match/.test($("#ap-table").textContent), "a no-match search shows no explanation");
 const clearBtn = $('#ap-table [data-empty-action="ap-clear-search"]');
 ok(clearBtn, "the search empty state has no Clear search action");
 clearBtn && clearBtn.click();
 await settle();
-ok($$("#ap-table tr").length === 3, "Clear search didn't restore the table");
+ok($$("#ap-table tr").length === 4, "Clear search didn't restore the table");
 ok($("#ap-search").value === "", "Clear search left the stale query in the box");
 
 /* ---------- the invoice editor's arithmetic contract ---------- */
@@ -271,6 +308,12 @@ await settle();
 const confirm = $("#confirm-dialog");
 ok(confirm.open, "Void fired without asking");
 ok(/INV-8990/.test($("#confirm-title").textContent), "the confirm doesn't name the invoice it's about to void");
+// Voiding a bill moves money off a car -- the ask has to say so, because
+// that consequence is the whole reason it's the right move for a mis-posted
+// invoice and the whole reason it needs confirming.
+const confirmBody = $("#confirm-dialog").textContent.replace(/\s+/g, " ");
+ok(/go back to Ordered/i.test(confirmBody) && /cost comes off the vehicle/i.test(confirmBody),
+   `the confirm doesn't say what voiding does to the car: "${confirmBody.trim()}"`);
 $("#confirm-cancel").click();
 await settle();
 ok(patches.length === patchesBefore, "cancelling a void sent the PATCH anyway");
@@ -281,6 +324,12 @@ $("#confirm-accept").click();
 await settle();
 ok(patches.some((p) => p.url === "/api/ap/invoices/1/void"), "confirming the void never hit the endpoint");
 ok($$("#ap-table .voided-row").length === 2, "the voided invoice didn't re-render as voided");
+// "Invoice voided" alone hides the half that matters: a bare confirmation
+// beside a car whose cost just dropped by $250 is how the two screens end up
+// disagreeing with nobody noticing.
+const voidToast = $("#toast").textContent;
+ok(/2 parts back on order/.test(voidToast) && /\$250\.00/.test(voidToast),
+   `the void toast doesn't report what came off the car: "${voidToast}"`);
 
 /* ---------- vendor chips open the editor pre-filled ---------- */
 const chip = $$("#vendor-list .vendor-chip").find((c) => /WorldPac/.test(c.textContent));
@@ -304,6 +353,35 @@ ok(vendorPatch && vendorPatch.body.account_number === "A-200",
    `the vendor PATCH carried account "${vendorPatch && vendorPatch.body.account_number}"`);
 ok($("#vendor-form-title").textContent === "Vendors", "the form is stuck in editing mode after an update");
 
+/* ---------- the range chips mean today, not the day they were clicked ----------
+   Nothing here is saved to localStorage, so the way this screen goes stale is
+   being left open: the shop works evenings, and past midnight a lit "Today"
+   is showing yesterday's invoices under today's heading. */
+$('#view-accounting [data-ap-range="today"]').click();
+await settle();
+const today = w.computeQuickRange("today");
+ok(w.state.apFilter.start === today.start, `clicking Today filtered from ${w.state.apFilter.start}`);
+ok(fetchLog.at(-1).url.includes(`start=${today.start}`), `the chip didn't reach the query: ${fetchLog.at(-1).url}`);
+
+// Roll the clock: put yesterday's answer back under a chip still reading Today.
+w.state.apFilter = { start: "2020-01-01", end: "2020-01-01" };
+await w.loadAccountingView();
+await settle();
+ok(w.state.apFilter.start === today.start,
+   `a lit Today chip kept covering ${w.state.apFilter.start} after the day rolled over`);
+ok($("#ap-filter-start").value === today.start, "the From field kept the stale date");
+ok(fetchLog.at(-1).url.includes(`start=${today.start}`), `the stale range still reached the query: ${fetchLog.at(-1).url}`);
+
+// A hand-typed date belongs to no chip, and must not be overwritten by one.
+$("#ap-filter-start").value = "2026-02-03";
+$("#ap-filter-start").dispatchEvent(new w.Event("change", { bubbles: true }));
+await settle();
+ok(!$("#view-accounting [data-ap-range].active"), "a range chip stayed lit after the dates were typed by hand");
+await w.loadAccountingView();
+await settle();
+ok(w.state.apFilter.start === "2026-02-03",
+   `reloading the screen overwrote the typed date with ${w.state.apFilter.start}`);
+
 ok(rejections.length === 0, `unhandled rejections during the run: ${rejections.map((e) => e && e.message).join(" | ")}`);
 
-finish("accounting: stats, PO/vendor selects, table states, search, line math + validation, post payload, held/duplicate feedback, void confirm, vendor edit");
+finish("accounting: stats, PO/vendor selects, table states, search, line math + validation, post payload, held/duplicate feedback, void confirm, vendor edit, range chips");

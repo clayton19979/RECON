@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from tests.helpers import make_recon_order, make_recon_vehicle, make_we_owe
+from tests.helpers import make_recon_order, make_recon_vehicle, make_retail_order, make_we_owe
 
 
 def test_create_and_list_tasks(client):
@@ -129,6 +129,143 @@ def test_patch_task_rejects_unknown_order(client):
     task = client.post("/api/tasks", json={"title": "Follow up"}).json()
     res = client.patch(f"/api/tasks/{task['id']}", json={"order_id": 99999})
     assert res.status_code == 404
+
+
+# --- the vehicle picker ------------------------------------------------
+#
+# What the Tasks screen offers when you go to pin a follow-up to a car. It used
+# to be the whole of /api/orders filtered by segment in the browser, which meant
+# it offered voided tickets and cars sold months ago, and grew without limit.
+
+
+def test_linkable_orders_labels_each_segment_the_way_the_advisor_says_it(client):
+    recon = make_recon_order(client, make_recon_vehicle(client, stock_number="R-2200")["id"])
+    we_owe = make_we_owe(client, customer_name="Jamie Customer")
+    client.post("/api/orders", json={"concern": "Fix trim", "segment": "we_owe", "we_owe_id": we_owe["id"]})
+    make_retail_order(client)
+
+    rows = client.get("/api/tasks/linkable-orders").json()
+    by_segment = {row["segment"]: row for row in rows}
+    assert by_segment["recon"]["label"] == "R-2200 — 2019 Honda Civic"
+    assert by_segment["we_owe"]["label"] == "We-Owe: Jamie Customer — 2020 Kia Soul"
+    assert by_segment["retail"]["label"] == "Retail: Retail Customer — 2018 Ford Focus"
+    # The heading each row sits under travels with it, so Recon/We-Owe/Retail
+    # are named on the server and not a second time in the browser.
+    assert [row["group"] for row in rows] == ["Recon", "We-Owe", "Retail"]
+    assert by_segment["recon"]["id"] == recon["id"]
+
+
+def test_linkable_orders_groups_recon_first_then_we_owe_then_retail(client):
+    """Display order, not insertion order -- recon is the bulk of the work."""
+    make_retail_order(client)
+    we_owe = make_we_owe(client, customer_name="Second Customer")
+    client.post("/api/orders", json={"concern": "Fix trim", "segment": "we_owe", "we_owe_id": we_owe["id"]})
+    make_recon_order(client, make_recon_vehicle(client, stock_number="R-2201")["id"])
+
+    assert [row["segment"] for row in client.get("/api/tasks/linkable-orders").json()] == [
+        "recon",
+        "we_owe",
+        "retail",
+    ]
+
+
+def test_linkable_orders_leaves_out_voided_tickets(client):
+    """Pinning a follow-up to a cancelled ticket buries it: nobody opens that
+    car again, so the task is never seen and never done."""
+    vehicle = make_recon_vehicle(client, stock_number="R-2202")
+    keep = make_recon_order(client, vehicle["id"])
+    other = make_recon_vehicle(client, stock_number="R-2203", vin="1HGCM82633A004353")
+    voided = make_recon_order(client, other["id"])
+    assert client.post(f"/api/orders/{voided['id']}/void", json={"actor": "tester"}).status_code == 200
+
+    ids = [row["id"] for row in client.get("/api/tasks/linkable-orders").json()]
+    assert ids == [keep["id"]]
+
+
+def test_linkable_orders_leaves_out_cars_sent_to_history(client):
+    """A sold car's ticket sits in this list forever otherwise, and the list is
+    scrolled every time somebody writes a task."""
+    sold = make_recon_vehicle(client, stock_number="R-2204")
+    sold_order = make_recon_order(client, sold["id"])
+    client.patch(f"/api/orders/{sold_order['id']}/status", json={"status": "complete"})
+    assert client.post(f"/api/recon/vehicles/{sold['id']}/archive").status_code == 200
+
+    promise = make_we_owe(client, customer_name="Archived Customer")
+    promise_order = client.post(
+        "/api/orders", json={"concern": "Fix trim", "segment": "we_owe", "we_owe_id": promise["id"]}
+    ).json()
+    client.patch(f"/api/orders/{promise_order['id']}/status", json={"status": "complete"})
+    assert client.post(f"/api/we-owe/{promise['id']}/archive").status_code == 200
+
+    live = make_recon_order(client, make_recon_vehicle(client, stock_number="R-2205", vin="1HGCM82633A004353")["id"])
+    assert [row["id"] for row in client.get("/api/tasks/linkable-orders").json()] == [live["id"]]
+
+
+def test_linkable_orders_disambiguates_two_live_tickets_on_one_car(client):
+    """Two identical lines in a dropdown is a pick you can't check afterwards.
+    Only the colliding pair earns the RO number -- putting it on every row
+    would bury the stock number the label exists to show."""
+    twice = make_recon_vehicle(client, stock_number="R-2206")
+    first = make_recon_order(client, twice["id"], concern="Brakes")
+    second = make_recon_order(client, twice["id"], concern="Front end")
+    alone = make_recon_order(client, make_recon_vehicle(client, stock_number="R-2207", vin="1HGCM82633A004353")["id"])
+
+    by_id = {row["id"]: row["label"] for row in client.get("/api/tasks/linkable-orders").json()}
+    assert by_id[first["id"]].startswith("R-2206 — 2019 Honda Civic · RO-")
+    assert by_id[second["id"]].startswith("R-2206 — 2019 Honda Civic · RO-")
+    assert by_id[first["id"]] != by_id[second["id"]]
+    assert by_id[alone["id"]] == "R-2207 — 2019 Honda Civic"
+
+
+def test_linkable_orders_is_empty_before_any_ticket_exists(client):
+    make_recon_vehicle(client, stock_number="R-2208")
+    assert client.get("/api/tasks/linkable-orders").json() == []
+
+
+# --- a link that outlived its ticket ------------------------------------
+
+
+def test_task_says_when_its_ticket_was_voided(client):
+    order = make_recon_order(client, make_recon_vehicle(client, stock_number="R-2210")["id"])
+    task = client.post("/api/tasks", json={"title": "Chase the title", "order_id": order["id"]}).json()
+    assert task["order_state"] == ""
+
+    client.post(f"/api/orders/{order['id']}/void", json={"actor": "tester"})
+    listed = next(t for t in client.get("/api/tasks").json() if t["id"] == task["id"])
+    # The link is kept -- it is still the car that was meant -- but the row can
+    # now say the ticket is dead instead of looking like live work.
+    assert listed["order_id"] == order["id"]
+    assert listed["order_label"] == "R-2210"
+    assert listed["order_state"] == "voided"
+
+
+def test_task_says_when_its_car_went_to_history(client):
+    vehicle = make_recon_vehicle(client, stock_number="R-2211")
+    order = make_recon_order(client, vehicle["id"])
+    task = client.post("/api/tasks", json={"title": "Refund the core", "order_id": order["id"]}).json()
+
+    client.patch(f"/api/orders/{order['id']}/status", json={"status": "complete"})
+    client.post(f"/api/recon/vehicles/{vehicle['id']}/archive")
+    listed = next(t for t in client.get("/api/tasks").json() if t["id"] == task["id"])
+    assert listed["order_state"] == "archived"
+
+
+def test_task_says_when_a_we_owe_car_went_to_history(client):
+    we_owe = make_we_owe(client, customer_name="Gone Customer")
+    order = client.post(
+        "/api/orders", json={"concern": "Fix trim", "segment": "we_owe", "we_owe_id": we_owe["id"]}
+    ).json()
+    task = client.post("/api/tasks", json={"title": "Call them", "order_id": order["id"]}).json()
+
+    client.patch(f"/api/orders/{order['id']}/status", json={"status": "complete"})
+    client.post(f"/api/we-owe/{we_owe['id']}/archive")
+    listed = next(t for t in client.get("/api/tasks").json() if t["id"] == task["id"])
+    assert listed["order_state"] == "archived"
+
+
+def test_task_with_no_vehicle_has_no_order_state(client):
+    task = client.post("/api/tasks", json={"title": "Restock brake cleaner"}).json()
+    assert task["order_state"] == ""
 
 
 # --- bulk edit ---------------------------------------------------------

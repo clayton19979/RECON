@@ -470,6 +470,87 @@ def test_part_return_toggles_flag_and_drops_from_actual_cost(client):
     assert detail["total_cost"] == 10
 
 
+def test_a_returned_part_drops_out_of_the_quote_as_well_as_the_actual(client):
+    """Returning a part has to move the quote, not just the actual cost.
+
+    The everyday shape of this: order the alternator, the wrong one turns up,
+    send it back, order the right one against the same ticket. Leaving the
+    returned line in quoted_cost left the car reading "quoted $1,020, spent
+    $520" -- $500 under estimate on a job that actually came in $20 over --
+    on the board's Cost column, the Over Quote card and the Lot Report's
+    remaining spend, all of which read this one number.
+    """
+    vendor = client.post("/api/vendors", json={"name": "WorldPac"}).json()
+    vehicle = make_recon_vehicle(client, stock_number="R-7788")
+    order = make_recon_order(client, vehicle["id"])
+    estimate = save_estimate(
+        client,
+        order["id"],
+        [
+            {
+                "kind": "part",
+                "description": "Alternator (wrong one)",
+                "part_number": "ALT-1",
+                "quantity": 1,
+                "unit_price": 500,
+                "unit_cost": 500,
+            }
+        ],
+    )
+    wrong_part = estimate["items"][0]["id"]
+    client.post(
+        f"/api/orders/{order['id']}/estimate/receive-parts",
+        json={"item_ids": [wrong_part], "vendor_id": vendor["id"], "invoice_number": "INV-A"},
+    )
+    detail = client.get(f"/api/recon/vehicles/{vehicle['id']}").json()
+    assert detail["quoted_cost"] == 500
+    assert detail["total_cost"] == 500
+
+    # Wrong part goes back, and the one that fits is added to the same ticket.
+    client.patch(f"/api/orders/{order['id']}/estimate/items/{wrong_part}/part-return", json={"actor": "tester"})
+    estimate = save_estimate(
+        client,
+        order["id"],
+        [
+            {
+                "id": wrong_part,
+                "kind": "part",
+                "description": "Alternator (wrong one)",
+                "part_number": "ALT-1",
+                "quantity": 1,
+                "unit_price": 500,
+                "unit_cost": 500,
+            },
+            {
+                "kind": "part",
+                "description": "Alternator",
+                "part_number": "ALT-2",
+                "quantity": 1,
+                "unit_price": 520,
+                "unit_cost": 520,
+            },
+        ],
+    )
+    right_part = next(i["id"] for i in estimate["items"] if i["part_number"] == "ALT-2")
+    client.post(
+        f"/api/orders/{order['id']}/estimate/receive-parts",
+        json={"item_ids": [right_part], "vendor_id": vendor["id"], "invoice_number": "INV-B"},
+    )
+
+    detail = client.get(f"/api/recon/vehicles/{vehicle['id']}").json()
+    assert detail["quoted_cost"] == 520, "the returned line is still being quoted for"
+    assert detail["total_cost"] == 520
+    board = next(r for r in client.get("/api/vehicles-board").json() if r["recon_id"] == vehicle["id"])
+    assert board["quoted_cost"] == 520
+    assert board["actual_cost"] == 520
+
+    # Putting the return back (it fitted after all) restores it to both.
+    client.patch(f"/api/orders/{order['id']}/estimate/items/{wrong_part}/part-return", json={"returned": False})
+    detail = client.get(f"/api/recon/vehicles/{vehicle['id']}").json()
+    assert detail["quoted_cost"] == 1020
+    assert detail["total_cost"] == 1020
+
+
 def test_returning_the_new_part_drops_its_pending_core(client):
     """A core deposit exists only because a new part was bought and the old
     unit is owed back. Send the new part back instead of fitting it and the

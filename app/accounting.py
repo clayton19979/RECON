@@ -136,8 +136,8 @@ def _insert_invoice_items(
     links = list(estimate_item_ids or [None] * len(items))
     assert len(links) == len(items), "every billed line needs a link slot, even an empty one"
     db.executemany(
-        "INSERT INTO ap_invoice_items(ap_invoice_id,part_number,description,quantity,unit_cost,line_total,estimate_item_id)"
-        " VALUES(?,?,?,?,?,?,?)",
+        "INSERT INTO ap_invoice_items(ap_invoice_id,part_number,description,quantity,unit_cost,line_total,kind,estimate_item_id)"
+        " VALUES(?,?,?,?,?,?,?,?)",
         [
             (
                 ap_invoice_id,
@@ -146,11 +146,99 @@ def _insert_invoice_items(
                 item.quantity,
                 item.unit_cost,
                 round(item.quantity * item.unit_cost, 2),
+                item.kind,
             )
             + (link,)
             for item, link in zip(items, links, strict=True)
         ],
     )
+
+
+def ticket_vehicle_label(row: Any) -> str:
+    """How a repair order's car is named on the money screens.
+
+    One definition, because three screens print it (A/P, Returns, Cores) and a
+    car that reads "R-1002" on one and "Retail" on another is a car nobody can
+    reconcile against a vendor statement.
+    """
+    if row["stock_number"]:
+        return row["stock_number"]
+    if row["we_owe_customer_name"]:
+        return f"We-Owe: {row['we_owe_customer_name']}"
+    if row["order_customer_name"]:
+        return f"Retail: {row['order_customer_name']}"
+    return "Retail"
+
+
+# Everything needed to name and link the car behind a repair order. Shared by
+# the coverage query below and the A/P list itself so the two cannot drift.
+_TICKET_COLUMNS = """o.id order_id, o.number ro_number, o.segment,
+                     o.recon_vehicle_id, o.we_owe_id, o.vehicle_id,
+                     rv.stock_number, wc.name we_owe_customer_name, oc.name order_customer_name"""
+
+_TICKET_JOINS = """LEFT JOIN recon_vehicles rv ON rv.id=o.recon_vehicle_id
+                   LEFT JOIN we_owe_items wi ON wi.id=o.we_owe_id
+                   LEFT JOIN customers wc ON wc.id=wi.customer_id
+                   LEFT JOIN customers oc ON oc.id=o.customer_id"""
+
+
+def invoice_coverage(db: sqlite3.Connection) -> dict[int, list[dict]]:
+    """Which cars each vendor invoice actually paid for, and how much of it
+    went to each, worked out from the billed lines rather than from the
+    invoice's own order_id.
+
+    A vendor invoice routinely covers parts for more than one car -- that is
+    the normal way a parts counter works, not an edge case -- and when it does,
+    `ap_invoices.order_id` goes null on purpose because the invoice no longer
+    belongs to any single ticket. The A/P screen read that null and printed
+    "No ticket", the same words it uses for a genuine shop-supplies bill. So
+    the biggest invoices, the ones covering three cars at once, were the ones
+    that named no car at all -- and reconciling a vendor statement meant
+    opening tickets one by one to find where the money went.
+
+    The per-line links (`ap_invoice_items.estimate_item_id`) have carried the
+    real answer since they were added. This is what reads it back out.
+    """
+    rows = db.execute(
+        f"""SELECT ai.ap_invoice_id, {_TICKET_COLUMNS},
+                   round(sum(ai.line_total), 2) amount
+              FROM ap_invoice_items ai
+              JOIN estimate_items ei ON ei.id=ai.estimate_item_id
+              JOIN estimates e ON e.id=ei.estimate_id
+              JOIN orders o ON o.id=e.order_id
+              {_TICKET_JOINS}
+             GROUP BY ai.ap_invoice_id, o.id
+             ORDER BY ai.ap_invoice_id, amount DESC, o.id"""
+    ).fetchall()
+    coverage: dict[int, list[dict]] = {}
+    for row in rows:
+        entry = dict(row)
+        entry.pop("ap_invoice_id")
+        entry["vehicle_label"] = ticket_vehicle_label(row)
+        coverage.setdefault(row["ap_invoice_id"], []).append(entry)
+    return coverage
+
+
+def invoice_line_reach(
+    db: sqlite3.Connection, ap_invoice_id: int, excluding_item_id: int, excluding_order_id: int
+) -> tuple[int, int]:
+    """(other part lines, *other* repair orders) this invoice still covers --
+    what moving the whole invoice would drag along with it.
+
+    The ticket being looked at is excluded from the vehicle count. Counting it
+    made a plain two-part invoice on one car claim to reach "1 other vehicle",
+    which is the kind of warning people learn to ignore.
+    """
+    row = db.execute(
+        """SELECT count(DISTINCT ei.id),
+                  count(DISTINCT CASE WHEN e.order_id != :order_id THEN e.order_id END)
+             FROM ap_invoice_items ai
+             JOIN estimate_items ei ON ei.id=ai.estimate_item_id
+             JOIN estimates e ON e.id=ei.estimate_id
+            WHERE ai.ap_invoice_id=:invoice_id AND ei.id!=:item_id""",
+        {"invoice_id": ap_invoice_id, "item_id": excluding_item_id, "order_id": excluding_order_id},
+    ).fetchone()
+    return int(row[0]), int(row[1])
 
 
 def receive_onto_invoice(
@@ -226,6 +314,107 @@ def receive_onto_invoice(
     return {"status": "extended", "ap_invoice_id": existing["id"]}
 
 
+def unreceive_invoice_lines(db: sqlite3.Connection, invoice: sqlite3.Row) -> dict:
+    """Put the parts a voided invoice received back on order.
+
+    Voiding says "this bill is not real". The bill is how a part's cost got
+    onto a car, so leaving the receipt behind left the car carrying money the
+    shop had just said it does not owe -- the A/P total dropped and the
+    vehicle's spend did not, and the two screens disagreed with nothing on
+    either of them to explain why.
+
+    It also left no way forward. Receiving takes the whole outstanding
+    quantity, so a line already marked received refuses a second receipt: the
+    advisor who voided a mistyped invoice could not then post the corrected
+    one, and the only escape was to delete the line and retype it. Undoing the
+    receipt is what makes the corrected invoice postable.
+
+    Lines come back as `ordered`, not `quoted`: something is still outstanding
+    on that part -- a corrected invoice, usually -- and `ordered` is the state
+    that says so and keeps it in the board's Parts column until it is settled.
+
+    `unit_cost` is deliberately left where the invoice put it. What the vendor
+    actually billed is a better number than the guess it replaced, and the
+    original quote was overwritten at receiving time rather than kept.
+    """
+    # Which estimate line each billed line paid for. Recorded per line since
+    # ap_invoice_items grew estimate_item_id; invoices posted before that (and
+    # by the agent endpoint, which posts the bill whole) have no links, so
+    # those fall back to the invoice number the receipt itself recorded.
+    quantities: dict[int, float] = {}
+    for row in db.execute(
+        "SELECT estimate_item_id, quantity FROM ap_invoice_items WHERE ap_invoice_id=? AND estimate_item_id IS NOT NULL",
+        (invoice["id"],),
+    ):
+        quantities[row["estimate_item_id"]] = quantities.get(row["estimate_item_id"], 0.0) + float(row["quantity"])
+    if not quantities and invoice["order_id"] is not None:
+        for row in db.execute(
+            """SELECT ei.id, ei.received_quantity FROM estimate_items ei
+               JOIN estimates e ON e.id=ei.estimate_id
+               WHERE e.order_id=? AND ei.received_invoice_number=? AND ei.received_quantity>0""",
+            (invoice["order_id"], invoice["invoice_number"]),
+        ):
+            quantities[row["id"]] = float(row["received_quantity"])
+
+    unreceived = 0
+    value = 0.0
+    order_ids: set[int] = set()
+    for item_id, quantity in quantities.items():
+        row = db.execute(
+            """SELECT ei.*, e.order_id FROM estimate_items ei JOIN estimates e ON e.id=ei.estimate_id
+               WHERE ei.id=?""",
+            (item_id,),
+        ).fetchone()
+        if not row or float(row["received_quantity"]) <= 0:
+            continue
+        # A receipt that has since been superseded by a different invoice is
+        # not this invoice's to undo. Receiving always takes the whole
+        # outstanding quantity, so a line carries one invoice at a time and
+        # this is a straight identity check rather than an apportionment.
+        if row["received_invoice_number"] and normalize(row["received_invoice_number"]) != normalize(
+            invoice["invoice_number"]
+        ):
+            continue
+        remaining = round(max(0.0, float(row["received_quantity"]) - quantity), 4)
+        value += round((float(row["received_quantity"]) - remaining) * float(row["unit_cost"]), 2)
+        if remaining <= 0.0001:
+            db.execute(
+                "UPDATE estimate_items SET received_quantity=0,status='ordered',received_invoice_number='',"
+                "received_vendor_id=NULL WHERE id=?",
+                (item_id,),
+            )
+        else:
+            db.execute(
+                "UPDATE estimate_items SET received_quantity=?,received_invoice_number='',received_vendor_id=NULL"
+                " WHERE id=?",
+                (remaining, item_id),
+            )
+        unreceived += 1
+        order_ids.add(row["order_id"])
+
+    # A voided credit is not a credit. Clearing the number the return was
+    # credited under puts the part back in Cores & Returns as still owed a
+    # credit, which is where post-return-credit can reach it again.
+    credits_cleared = 0
+    if invoice["source"] == "part_return" and invoice["order_id"] is not None:
+        cur = db.execute(
+            """UPDATE estimate_items SET return_invoice_number=''
+               WHERE return_invoice_number=?
+                 AND estimate_id IN (SELECT id FROM estimates WHERE order_id=?)""",
+            (invoice["invoice_number"], invoice["order_id"]),
+        )
+        credits_cleared = cur.rowcount
+        if credits_cleared:
+            order_ids.add(invoice["order_id"])
+
+    return {
+        "unreceived_items": unreceived,
+        "unreceived_value": round(value, 2),
+        "credits_cleared": credits_cleared,
+        "order_ids": sorted(order_ids),
+    }
+
+
 def build_accounting_router(connect: Callable[[], sqlite3.Connection], now: Callable[[], str]) -> APIRouter:
     router = APIRouter(prefix="/api")
 
@@ -285,38 +474,55 @@ def build_accounting_router(connect: Callable[[], sqlite3.Connection], now: Call
         end_bound = f"{end}T23:59:59" if end else None
         with connect() as db:
             rows = db.execute(
-                """SELECT a.*, v.name vendor_name, o.number ro_number, o.segment,
-                       o.recon_vehicle_id, o.we_owe_id, o.vehicle_id,
-                       rv.stock_number, wc.name we_owe_customer_name, oc.name order_customer_name
+                f"""SELECT a.*, v.name vendor_name, {_TICKET_COLUMNS}
                    FROM ap_invoices a
                    JOIN vendors v ON v.id=a.vendor_id
                    -- LEFT: an invoice with no repair order behind it (shop
                    -- supplies, a bulk delivery) must still appear in the A/P
                    -- list. An inner join silently hid them entirely.
                    LEFT JOIN orders o ON o.id=a.order_id
-                   LEFT JOIN recon_vehicles rv ON rv.id=o.recon_vehicle_id
-                   LEFT JOIN we_owe_items wi ON wi.id=o.we_owe_id
-                   LEFT JOIN customers wc ON wc.id=wi.customer_id
-                   LEFT JOIN customers oc ON oc.id=o.customer_id
+                   {_TICKET_JOINS}
                    WHERE (:start IS NULL OR a.posted_at>=:start) AND (:end IS NULL OR a.posted_at<=:end)
                    ORDER BY a.id DESC""",
                 {"start": start, "end": end_bound},
-            )
+            ).fetchall()
+            coverage = invoice_coverage(db)
             result = []
             for row in rows:
                 value = dict(row)
-                if value["stock_number"]:
-                    value["vehicle_label"] = value["stock_number"]
-                elif value["we_owe_customer_name"]:
-                    value["vehicle_label"] = f"We-Owe: {value['we_owe_customer_name']}"
-                elif value["order_customer_name"]:
-                    value["vehicle_label"] = f"Retail: {value['order_customer_name']}"
-                elif value["order_id"] is None:
+                covers = coverage.get(value["id"], [])
+                if not covers and value["order_id"] is not None:
+                    # Typed in on this screen against a ticket: no per-line
+                    # links to read, so the invoice's own order is the answer.
+                    covers = [
+                        {
+                            "order_id": value["order_id"],
+                            "ro_number": value["ro_number"],
+                            "segment": value["segment"],
+                            "recon_vehicle_id": value["recon_vehicle_id"],
+                            "we_owe_id": value["we_owe_id"],
+                            "vehicle_id": value["vehicle_id"],
+                            "stock_number": value["stock_number"],
+                            "we_owe_customer_name": value["we_owe_customer_name"],
+                            "order_customer_name": value["order_customer_name"],
+                            "vehicle_label": ticket_vehicle_label(row),
+                            "amount": value["subtotal"],
+                        }
+                    ]
+                value["coverage"] = covers
+                if not covers:
                     # No ticket by design, not a broken link -- say so plainly
                     # rather than mislabelling it as a retail job.
                     value["vehicle_label"] = "No ticket"
                 else:
-                    value["vehicle_label"] = "Retail"
+                    # A one-line summary for search and for anywhere too narrow
+                    # to list every car. The invoice's own ro_number/segment are
+                    # deliberately left alone: they are null once it spans
+                    # tickets, because it no longer belongs to one, and the
+                    # coverage list is where the per-car truth lives.
+                    value["vehicle_label"] = covers[0]["vehicle_label"]
+                    if len(covers) > 1:
+                        value["vehicle_label"] += f" +{len(covers) - 1} more"
                 result.append(value)
             return result
 
@@ -324,11 +530,13 @@ def build_accounting_router(connect: Callable[[], sqlite3.Connection], now: Call
     def void_ap_invoice(invoice_id: int, item: VoidIn):
         """Voids a mistakenly-posted vendor invoice (wrong vendor, wrong PO
         match, duplicate entry) -- the row is kept for audit trail, just
-        excluded from being picked as a duplicate match going forward. This
-        does NOT reverse the "received" status it may have set on estimate
-        lines; ap_invoice_items has no link back to which specific estimate
-        line it came from, so that side has to be corrected on the ticket
-        itself if needed."""
+        excluded from being picked as a duplicate match going forward.
+
+        Voiding also undoes what the invoice did to the tickets behind it: the
+        parts it received go back on order and their cost comes off the
+        vehicle (see unreceive_invoice_lines). An invoice that covers parts
+        for several cars undoes all of them, because the whole bill is what
+        was declared unreal."""
         with connect() as db:
             invoice = db.execute("SELECT * FROM ap_invoices WHERE id=?", (invoice_id,)).fetchone()
             if not invoice:
@@ -344,19 +552,38 @@ def build_accounting_router(connect: Callable[[], sqlite3.Connection], now: Call
                 "UPDATE ap_invoices SET status='voided', normalized_invoice_number=? WHERE id=?",
                 (freed_number, invoice_id),
             )
+            reversal = unreceive_invoice_lines(db, invoice)
             # The activity log is per-ticket, so an invoice that belongs to no
             # ticket has nowhere to log to. The void is still recorded on the
             # invoice row itself, which is where anyone would look for it.
-            if invoice["order_id"] is not None:
+            # Every ticket the reversal actually touched gets the entry, not
+            # just the invoice's own order: a bill covering three cars carries
+            # no single order_id, and the two cars whose parts went back on
+            # order are exactly the ones whose history has to say why.
+            order_ids = list(reversal["order_ids"])
+            if invoice["order_id"] is not None and invoice["order_id"] not in order_ids:
+                order_ids.append(invoice["order_id"])
+            for order_id in order_ids:
                 record_activity(
                     db,
-                    invoice["order_id"],
+                    order_id,
                     "ap_invoice_voided",
                     item.actor,
-                    {"invoice_id": invoice_id, "invoice_number": invoice["invoice_number"]},
+                    {
+                        "invoice_id": invoice_id,
+                        "invoice_number": invoice["invoice_number"],
+                        "parts_put_back_on_order": reversal["unreceived_items"],
+                    },
                     now,
                 )
-            return dict(db.execute("SELECT * FROM ap_invoices WHERE id=?", (invoice_id,)).fetchone())
+            return dict(db.execute("SELECT * FROM ap_invoices WHERE id=?", (invoice_id,)).fetchone()) | {
+                # Response metadata, not invoice columns -- the UI says what
+                # the void actually changed instead of a bare "Invoice voided"
+                # that hides a car's cost dropping by four hundred dollars.
+                "unreceived_items": reversal["unreceived_items"],
+                "unreceived_value": reversal["unreceived_value"],
+                "credits_cleared": reversal["credits_cleared"],
+            }
 
     @router.get("/accounting/audits")
     def list_audits():
@@ -579,6 +806,14 @@ def build_accounting_router(connect: Callable[[], sqlite3.Connection], now: Call
                 estimate_id = cur.lastrowid
                 estimate = db.execute("SELECT * FROM estimates WHERE id=?", (estimate_id,)).fetchone()
             estimate_id = estimate["id"]
+            # None of the inserts below set quoted_unit_cost, on purpose. A
+            # line that arrives on a vendor invoice and was never on the
+            # ticket was never quoted, so it has no estimate to be measured
+            # against; leaving the column NULL makes every reader price it at
+            # what it cost, which is the only figure that exists for it. The
+            # UPDATE branch further down (a billed line matching a part
+            # already on the ticket) likewise leaves the quote alone -- that
+            # is the whole point of keeping it in its own column.
             for (_kind, part_key), item in merged_items.items():
                 if item.kind == "labor":
                     # At-cost shop: no markup, unit_price is just unit_cost.
@@ -690,6 +925,31 @@ def build_accounting_router(connect: Callable[[], sqlite3.Connection], now: Call
                 return {"status": "duplicate", "issues": duplicate_issues, "vendor_id": vendor_id, "order_id": order_id}
             ap_id = result["ap_invoice_id"]
             audit(db, invoice, "posted", [], order_id, vendor_id)
+            # A vendor bill landing on a ticket puts real money on the car and
+            # marks its parts received -- the biggest single thing that happens
+            # to a repair order short of closing it. It was invisible on the
+            # ticket: nothing in the activity log, and no movement on the idle
+            # clock (record_activity is what moves orders.last_activity_at), so
+            # a car whose parts arrived this morning still read as untouched.
+            # The invoice's own source is the actor: this path is fed by the
+            # invoice ingestion agent as often as by a person, and saying which
+            # is more use than logging a blank "ui".
+            record_activity(
+                db,
+                # order["id"], not order_id: the early return above means order
+                # is definitely a row by now, and reading it straight keeps
+                # that obvious instead of leaning on the nullable local.
+                order["id"],
+                "ap_invoice_posted",
+                invoice.source,
+                {
+                    "ap_invoice_id": ap_id,
+                    "invoice_number": invoice.invoice_number.strip(),
+                    "vendor_id": vendor_id,
+                    "total": invoice.total,
+                },
+                now,
+            )
             return {
                 "status": "posted",
                 "ap_invoice_id": ap_id,

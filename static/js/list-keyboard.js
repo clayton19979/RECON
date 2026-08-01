@@ -4,7 +4,7 @@ import { confirmAction } from "./confirm.js";
 import { currentActor } from "./shortcuts.js";
 import { state } from "./state.js";
 import { showView } from "./error-boundary.js";
-import { applyVehicleCursor, bulkTaskTitle, clearGlobalSearch, cssEscape, loadVehiclesView, moveVehicleCursor, renderVehicleStatusOptions, renderVehiclesTable, resetVehicleView, selectVehicleRange, setVehicleSelected, syncPartsFilterChip, syncSearchChrome, vehicleKey, visibleVehicles } from "./vehicles-board.js";
+import { applyVehicleCursor, bulkTaskTitle, clearGlobalSearch, cssEscape, loadSearchElsewhere, loadVehiclesView, moveVehicleCursor, renderVehicleStatusOptions, renderVehiclesTable, resetVehicleView, runSearchReachAction, selectVehicleRange, setVehicleSelected, syncPartsFilterChip, syncSearchChrome, syncSegmentChips, vehicleKey, visibleVehicles } from "./vehicles-board.js";
 import { openVehicleDetail } from "./vehicle-detail.js";
 import { openReconDialog } from "./dialog-new-recon.js";
 import { openWeOweDialog } from "./dialog-new-weowe.js";
@@ -89,10 +89,9 @@ export function wireVehiclesView() {
   const vehicleChips = $$("#view-vehicles .filters .chip[data-filter]");
   vehicleChips.forEach((chip) => {
     chip.addEventListener("click", () => {
-      vehicleChips.forEach((c) => c.classList.remove("active"));
-      chip.classList.add("active");
       const wasHistory = state.filter === "history";
       state.filter = chip.dataset.filter;
+      syncSegmentChips();
       state.vehicleCursor = null;
       if (wasHistory !== (state.filter === "history")) loadVehiclesView();
       else { renderVehicleStatusOptions(); renderVehiclesTable(); }
@@ -132,6 +131,7 @@ export function wireVehiclesView() {
       const which = card.dataset.boardFilter;
       if (which === "parts") state.vehiclePartsOnly = !state.vehiclePartsOnly;
       else if (which === "over") state.vehicleOverOnly = !state.vehicleOverOnly;
+      else if (which === "late") state.vehicleLateOnly = !state.vehicleLateOnly;
       else if (which === "stalled") {
         // Any other bucket selected means the chart owns the idle filter;
         // taking it over is what the advisor asked for by clicking here.
@@ -197,6 +197,10 @@ export function wireVehiclesView() {
     syncSearchChrome();
     if (!$("#view-vehicles").classList.contains("active")) showView("vehicles");
     renderVehiclesTable();
+    // Answering "is this car in History?" needs the half of the board that
+    // isn't loaded. Deliberately not awaited: the rows above are already on
+    // screen, and the reach line fills in when the answer arrives.
+    if (state.search) loadSearchElsewhere();
     // Nothing in the render path may steal the caret mid-word -- if anything
     // did, put it straight back where the user is typing.
     if (document.activeElement !== e.target) e.target.focus();
@@ -218,6 +222,20 @@ export function wireVehiclesView() {
   // buttons, the per-row checkboxes and opening a vehicle. Rows are recycled
   // across renders now, so per-row binding would either double up or be lost
   // depending on which side of the reuse a row landed on.
+  // "Show all matches" / "Open History" appear in two places -- the reach line
+  // above the table and the empty state inside it -- and mean the same thing
+  // in both, so one delegated handler covers both containers.
+  const reachLine = $("#vehicles-search-reach");
+  const wireSearchReach = (el) => {
+    if (!el) return;
+    el.addEventListener("click", (e) => {
+      const button = e.target.closest("[data-search-reach]");
+      if (button) runSearchReachAction(button.dataset.searchReach);
+    });
+  };
+  wireSearchReach(reachLine);
+  wireSearchReach($("#vehicles-table"));
+
   $("#vehicles-table").addEventListener("click", (e) => {
     const trigger = e.target.closest("[data-empty-action]");
     if (trigger) {
@@ -231,6 +249,10 @@ export function wireVehiclesView() {
       }
       if (trigger.dataset.emptyAction === "clear-over") {
         state.vehicleOverOnly = false;
+        renderVehiclesTable();
+      }
+      if (trigger.dataset.emptyAction === "clear-late") {
+        state.vehicleLateOnly = false;
         renderVehiclesTable();
       }
       if (trigger.dataset.emptyAction === "clear-idle") {

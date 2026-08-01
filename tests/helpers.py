@@ -25,13 +25,28 @@ def backdate_activity(db_path, order_id: int, when: str) -> None:
         db.commit()
 
 
+def recon_vin(stock_number):
+    """A VIN of this fixture's own, one per stock number.
+
+    Two different cars have two different VINs, and intake now says so: a VIN
+    already on the board is refused (app.recon.recon_match). A fixture that
+    stamped one VIN on every car it built would collide with itself the moment
+    a test wanted two of them -- and would have been describing something the
+    shop cannot actually have. Derived from the stock number so it is stable
+    across runs; a test that means "the same physical car" still says so by
+    passing vin= explicitly.
+    """
+    key = "".join(ch for ch in stock_number if ch.isalnum()).upper()[-6:]
+    return f"1HGCM82633A{key:0>6}"
+
+
 def make_recon_vehicle(client, stock_number="R-1001", **overrides):
     payload = {
         "stock_number": stock_number,
         "year": 2019,
         "make": "Honda",
         "model": "Civic",
-        "vin": "1HGCM82633A004352",
+        "vin": recon_vin(stock_number),
         "mileage": 60000,
         "purchase_price": 4000,
         "acquisition_source": "auction",

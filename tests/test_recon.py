@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta
+
 from app.db import connect
-from app.recon import age_days, is_stalled
+from app.recon import age_days, is_stalled, lot_age_days
 from tests.helpers import (
     backdate_activity,
     days_ago,
@@ -27,6 +29,141 @@ def test_duplicate_stock_number_rejected(client):
         json={"stock_number": "R-2001", "year": 2020, "make": "Toyota", "model": "Camry"},
     )
     assert res.status_code == 409
+
+
+# --- One car, one record ----------------------------------------------------
+#
+# Intake is the last point where the app can still tell that two records are
+# the same physical car. Past it, the lot count is one too high and "what did
+# we spend on this car" has two partial answers that neither row knows about.
+
+
+def test_stock_number_reused_with_different_punctuation_is_rejected(client):
+    """R-1042 and R1042 are one car with one stock number.
+
+    The exact-match check this replaces let the second one straight through,
+    which is the easiest duplicate to create by accident: the dash is on the
+    lot's sheet and not on the windshield.
+    """
+    make_recon_vehicle(client, stock_number="R-2001")
+    for typed in ("R2001", "r 2001", "r-2001"):
+        res = client.post(
+            "/api/recon/vehicles",
+            json={"stock_number": typed, "year": 2020, "make": "Toyota", "model": "Camry"},
+        )
+        assert res.status_code == 409, f"{typed} was accepted alongside R-2001"
+
+
+def test_refusal_names_the_car_holding_the_stock_number(client):
+    make_recon_vehicle(client, stock_number="R-2001", make="Kia", model="Sorento", year=2018)
+    res = client.post(
+        "/api/recon/vehicles",
+        json={"stock_number": "R-2001", "year": 2020, "make": "Toyota", "model": "Camry"},
+    )
+    detail = res.json()["detail"]
+    assert "R-2001" in detail and "2018 Kia Sorento" in detail
+    assert "already on the board" in detail
+
+
+def test_archived_stock_number_says_to_reopen_rather_than_re_add(client):
+    """A car in History is invisible on the board, so "already in use" sent
+    the advisor looking down a list it was never going to be on."""
+    vehicle = make_recon_vehicle(client, stock_number="R-2001")
+    assert client.post(f"/api/recon/vehicles/{vehicle['id']}/archive", json={}).status_code == 200
+    res = client.post(
+        "/api/recon/vehicles",
+        json={"stock_number": "R-2001", "year": 2020, "make": "Toyota", "model": "Camry"},
+    )
+    assert res.status_code == 409
+    detail = res.json()["detail"]
+    assert "History" in detail and "Reopen" in detail
+
+
+def test_same_vin_under_a_new_stock_number_is_rejected(client):
+    """The duplicate the stock-number check can never catch: the same car
+    written down again with a stock number that really is new."""
+    make_recon_vehicle(client, stock_number="R-2001", vin="1HGCM82633A004352")
+    res = client.post(
+        "/api/recon/vehicles",
+        json={
+            "stock_number": "R-2002",
+            "year": 2019,
+            "make": "Honda",
+            "model": "Civic",
+            "vin": "1hgcm82633a-004352",  # same car, typed off the title
+        },
+    )
+    assert res.status_code == 409
+    assert "R-2001" in res.json()["detail"]
+
+
+def test_vin_of_an_archived_car_is_allowed_back_in(client):
+    """Walt buys cars back. A second recon episode on one VIN is a real thing
+    the app adds up on purpose (unit_lifetime), not a duplicate."""
+    first = make_recon_vehicle(client, stock_number="R-2001", vin="1HGCM82633A004352")
+    assert client.post(f"/api/recon/vehicles/{first['id']}/archive", json={}).status_code == 200
+    res = client.post(
+        "/api/recon/vehicles",
+        json={
+            "stock_number": "R-2002",
+            "year": 2019,
+            "make": "Honda",
+            "model": "Civic",
+            "vin": "1HGCM82633A004352",
+        },
+    )
+    assert res.status_code == 201, res.text
+    # Both episodes still land on the one physical car.
+    assert res.json()["lifetime"]["recon_count"] == 2
+
+
+def test_blank_vins_never_collide(client):
+    """A car entered in a hurry with no VIN must not block the next one."""
+    make_recon_vehicle(client, stock_number="R-2001", vin="")
+    res = client.post(
+        "/api/recon/vehicles",
+        json={"stock_number": "R-2002", "year": 2020, "make": "Toyota", "model": "Camry", "vin": ""},
+    )
+    assert res.status_code == 201, res.text
+
+
+def test_lookup_answers_before_the_form_is_filled_in(client):
+    make_recon_vehicle(client, stock_number="R-2001", vin="1HGCM82633A004352", make="Kia", model="Sorento")
+
+    clear = client.get("/api/recon/vehicles/lookup", params={"stock_number": "R-9999", "vin": ""}).json()
+    assert clear == {"stock_number": None, "vin": None}
+
+    by_stock = client.get("/api/recon/vehicles/lookup", params={"stock_number": "r2001"}).json()
+    assert by_stock["stock_number"]["stock_number"] == "R-2001"
+    assert by_stock["stock_number"]["vehicle"] == "2019 Kia Sorento"
+    assert by_stock["stock_number"]["archived"] is False
+    assert by_stock["vin"] is None
+
+    by_vin = client.get("/api/recon/vehicles/lookup", params={"vin": "1hgcm82633a004352"}).json()
+    assert by_vin["vin"]["stock_number"] == "R-2001"
+    assert by_vin["stock_number"] is None
+
+
+def test_lookup_prefers_the_car_still_on_the_lot(client):
+    """One VIN, two episodes: the live one is the useful answer."""
+    first = make_recon_vehicle(client, stock_number="R-2001", vin="1HGCM82633A004352")
+    assert client.post(f"/api/recon/vehicles/{first['id']}/archive", json={}).status_code == 200
+    assert (
+        client.post(
+            "/api/recon/vehicles",
+            json={
+                "stock_number": "R-2002",
+                "year": 2019,
+                "make": "Honda",
+                "model": "Civic",
+                "vin": "1HGCM82633A004352",
+            },
+        ).status_code
+        == 201
+    )
+    match = client.get("/api/recon/vehicles/lookup", params={"vin": "1HGCM82633A004352"}).json()["vin"]
+    assert match["stock_number"] == "R-2002"
+    assert match["archived"] is False
 
 
 def test_recon_patch_status_and_sale(client):
@@ -56,6 +193,55 @@ def test_recon_patch_sale_without_purchase_price_leaves_profit_unknown(client):
     body = res.json()
     assert body["status"] == "sold"
     assert body["profit"] is None
+
+
+def test_recon_patch_corrects_the_arrival_date(client, db_path):
+    """The arrival date drives the board's Age column, so a wrong one has to be
+    fixable from the car's own page -- it used to be write-once at the
+    write-up and stuck there for the life of the record."""
+    vehicle = make_recon_vehicle(client, stock_number="R-2301", acquisition_date="2026-01-01")
+    corrected = (datetime.now() - timedelta(days=3)).date().isoformat()
+    res = client.patch(f"/api/recon/vehicles/{vehicle['id']}", json={"acquisition_date": corrected})
+    assert res.status_code == 200
+    assert res.json()["acquisition_date"] == corrected
+
+    board = client.get("/api/vehicles-board", params={"segment": "recon"}).json()
+    assert board[0]["age_days"] == 3
+
+    # The unit ledger keeps the car's economics for the rest of its life, and
+    # creating the car writes the date to both places -- correcting it has to
+    # do the same or the two disagree forever.
+    with connect(db_path) as db:
+        purchase_date = db.execute(
+            "SELECT u.purchase_date FROM vehicle_units u JOIN vehicles v ON v.unit_id=u.id"
+            " JOIN recon_vehicles rv ON rv.vehicle_id=v.id WHERE rv.id=?",
+            (vehicle["id"],),
+        ).fetchone()[0]
+    assert purchase_date == corrected
+
+
+def test_recon_patch_can_clear_an_unknown_arrival_date(client):
+    """Blank is a real answer -- "nobody knows when this one landed" -- and it
+    falls the Age count back to when the car was written up."""
+    vehicle = make_recon_vehicle(client, stock_number="R-2302", acquisition_date="2026-01-01")
+    res = client.patch(f"/api/recon/vehicles/{vehicle['id']}", json={"acquisition_date": ""})
+    assert res.status_code == 200
+    assert res.json()["acquisition_date"] == ""
+    board = client.get("/api/vehicles-board", params={"segment": "recon"}).json()
+    assert board[0]["age_days"] == 0
+
+
+def test_recon_patch_refuses_an_arrival_date_that_is_not_a_date(client):
+    """This field is read as a date now, not just displayed. Something that
+    isn't one has to be refused rather than quietly falling back and leaving
+    the board reporting an age nobody can account for."""
+    vehicle = make_recon_vehicle(client, stock_number="R-2303")
+    res = client.patch(f"/api/recon/vehicles/{vehicle['id']}", json={"acquisition_date": "last tuesday"})
+    assert res.status_code == 400
+    assert "calendar date" in res.json()["detail"]
+    # and nothing was written
+    detail = client.get(f"/api/recon/vehicles/{vehicle['id']}").json()
+    assert detail["acquisition_date"] == "2026-01-01"
 
 
 def test_recon_patch_edits_core_vehicle_info(client):
@@ -266,10 +452,45 @@ def test_we_owe_payment_requires_positive_amount(client):
     assert res.status_code == 422
 
 
-def test_vehicle_board_rows_include_age_days(client):
-    make_recon_vehicle(client, stock_number="R-6701")
+def test_vehicle_board_age_counts_from_the_day_the_car_arrived(client):
+    """The Age column answers "how long has this car been here", so it counts
+    from the day the car landed on the lot -- not the day somebody got round
+    to typing it in. A car written up today but acquired a fortnight ago is
+    fourteen days old on the board, which is the whole reason the column
+    exists. (This test used to assert age_days == 0 for exactly this car,
+    which was asserting the bug: the fixture acquires it in January.)"""
+    arrived = (datetime.now() - timedelta(days=14)).date().isoformat()
+    make_recon_vehicle(client, stock_number="R-6701", acquisition_date=arrived)
     board = client.get("/api/vehicles-board", params={"segment": "recon"}).json()
-    assert board[0]["age_days"] == 0  # created moments ago
+    assert board[0]["age_days"] == 14
+    assert board[0]["acquired_at"] == arrived
+
+
+def test_vehicle_board_age_falls_back_to_write_up_without_an_arrival_date(client):
+    """The arrival date is optional, and every car written down before it
+    existed has none. Those keep the answer they always had."""
+    make_recon_vehicle(client, stock_number="R-6702", acquisition_date="")
+    board = client.get("/api/vehicles-board", params={"segment": "recon"}).json()
+    assert board[0]["age_days"] == 0  # written up moments ago
+    assert board[0]["acquired_at"] == ""
+
+
+def test_vehicle_board_age_never_goes_negative_on_a_future_arrival_date(client):
+    """A date next year is a typed year, not a car that hasn't shown up. The
+    board must not print a negative age -- it's a number nobody can act on."""
+    ahead = (datetime.now() + timedelta(days=30)).date().isoformat()
+    make_recon_vehicle(client, stock_number="R-6703", acquisition_date=ahead)
+    board = client.get("/api/vehicles-board", params={"segment": "recon"}).json()
+    assert board[0]["age_days"] == 0
+
+
+def test_we_owe_age_still_counts_from_when_the_promise_was_made(client):
+    """A we-owe car was sold weeks before the shop wrote the promise down, so
+    there is no lot arrival to count from and none is claimed."""
+    make_we_owe(client)
+    board = client.get("/api/vehicles-board", params={"segment": "we_owe"}).json()
+    assert board[0]["age_days"] == 0
+    assert board[0]["acquired_at"] == ""
 
 
 def test_age_days_does_not_raise_on_malformed_timestamp(client):
@@ -279,6 +500,15 @@ def test_age_days_does_not_raise_on_malformed_timestamp(client):
     assert age_days("not-a-timestamp") == 0
     assert age_days("") == 0
     assert age_days(None) == 0
+
+
+def test_lot_age_days_falls_back_when_the_arrival_date_is_garbage(client):
+    """Same rule one level up: a hand-edited acquisition_date that isn't a
+    date must not take the board down or silently report the car as new."""
+    written_up = (datetime.now() - timedelta(days=5)).isoformat(timespec="seconds")
+    assert lot_age_days("not-a-date", written_up) == 5
+    assert lot_age_days("", written_up) == 5
+    assert lot_age_days(None, written_up) == 5
 
 
 def test_recon_patch_conflict_when_stale_version(client):
@@ -630,12 +860,18 @@ def test_board_row_reports_idle_time_from_ticket_activity(client, db_path):
     assert board_row(client, vehicle["id"])["idle_days"] == 0, "working the ticket didn't reset the idle clock"
 
 
-def test_a_car_with_no_ticket_is_idle_since_it_landed_on_the_lot(client, db_path):
+def test_a_car_with_no_ticket_is_idle_since_it_was_written_down(client, db_path):
     """The worst case, and the one that used to report as freshly worked on: a
     car that's been sitting for weeks with no repair order ever written. Its
     only timestamps are its own, and updated_at moves on any record edit -- so
     reading that made every never-started car look touched today, hiding
-    exactly the cars this column exists to surface."""
+    exactly the cars this column exists to surface.
+
+    Idle counts from when the shop wrote the car down, which is the first
+    moment it could have been worked on. That is deliberately not the same
+    clock as Age, which counts from the day the car arrived on the lot -- a
+    car can have been on the lot since January and only have been written up
+    in June, and both of those are true at once."""
     vehicle = make_recon_vehicle(client, stock_number="R-IDLE-6")
     with connect(db_path) as db:
         db.execute(
@@ -646,9 +882,9 @@ def test_a_car_with_no_ticket_is_idle_since_it_landed_on_the_lot(client, db_path
 
     row = board_row(client, vehicle["id"])
     assert row["last_activity_at"] == "2026-06-01T09:00:00", (
-        "a car with no ticket should be idle since it landed on the lot"
+        "a car with no ticket should be idle since it was written down"
     )
-    assert row["idle_days"] == row["age_days"], "with no ticket, idle time is the car's age"
+    assert row["idle_days"] == age_days("2026-06-01T09:00:00")
 
     # ...and tidying up the record must not make it look worked on.
     assert client.patch(f"/api/recon/vehicles/{vehicle['id']}", json={"mileage": 71000}).status_code == 200

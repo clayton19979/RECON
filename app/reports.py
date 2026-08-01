@@ -164,6 +164,34 @@ LOT_GROUP_LABEL = {
 }
 
 
+def open_jobs_text(row: dict) -> str:
+    """The repairs this car is still owed, by name.
+
+    This is the part of "what does it still need" that money cannot answer.
+    Every other clause on the row is a number -- dollars left, parts on order
+    -- and none of them tells Walt whether what's outstanding is a windshield
+    or an oil change. The job titles are what somebody actually typed about
+    this car, so they're repeated verbatim rather than summarised.
+
+    A car whose jobs are all ticked but whose ticket is still open is worth
+    saying out loud too: the work is finished and only the paperwork is
+    holding the car on the lot, which is a one-click fix rather than a job
+    for a technician.
+    """
+    open_titles = [t.strip() for t in (row.get("jobs_open") or []) if t and t.strip()]
+    total = row.get("jobs_total") or 0
+    if not total:
+        return ""
+    if not open_titles:
+        return f"all {total} job{'' if total == 1 else 's'} ticked off — close the ticket"
+    named = ", ".join(open_titles[:NEEDS_JOB_LIMIT])
+    hidden = len(open_titles) - NEEDS_JOB_LIMIT
+    if hidden > 0:
+        named += f" +{hidden} more"
+    done = total - len(open_titles)
+    return f"{named} ({done} of {total} done)" if done else named
+
+
 def lot_needs_text(row: dict) -> str:
     """One plain sentence answering "what does this car still need?".
 
@@ -219,6 +247,12 @@ def lot_needs_text(row: dict) -> str:
         # contradiction of the money on the same row.
         bits.append("quoted, work not started")
 
+    # The work itself goes ahead of the money: it is the answer to the
+    # question, and the dollars are the follow-up.
+    jobs = open_jobs_text(row)
+    if jobs:
+        bits.append(jobs)
+
     pending = row.get("parts_pending") or 0
     if pending:
         value = row.get("parts_pending_value") or 0
@@ -243,7 +277,11 @@ def lot_needs_text(row: dict) -> str:
 
     if not bits:
         return "work under way"
-    return " · ".join(bits).capitalize()
+    # Only the first character is touched. str.capitalize() would lowercase
+    # everything after it, and the job titles in here are somebody's own words
+    # -- "Front Brakes / AC" is not ours to rewrite as "front brakes / ac".
+    sentence = " · ".join(bits)
+    return sentence[:1].upper() + sentence[1:]
 
 
 def lot_bucket(row: dict) -> str:

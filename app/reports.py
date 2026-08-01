@@ -7,7 +7,7 @@ from typing import Literal
 from fastapi import APIRouter
 
 from .db import normalize_vin
-from .recon import is_stalled, unit_lifetime, vehicle_board_rows
+from .recon import idle_days, is_stalled, unit_lifetime, vehicle_board_rows
 
 
 def vehicle_profit_rows(
@@ -59,6 +59,26 @@ def vehicle_profit_rows(
 
 
 def technician_productivity_rows(db: sqlite3.Connection, start: str | None, end: str | None) -> list[dict]:
+    """What each technician has worked on, is still holding, and how long.
+
+    Deliberately reports no money. Labor on recon and we-owe is never charged
+    out (see CLAUDE.md), so every labor line carries a zero cost and a
+    "labor cost per technician" figure is a column of $0.00 dressed up as a
+    result -- it sorted the table by a number that was always zero and put a
+    chart of three empty bars on the screen. Hours worked, tickets touched,
+    tickets finished and what is still sitting with each tech are the parts of
+    this that are true and that somebody acts on.
+
+    A ticket belongs to a technician if they are its assignee *or* they own a
+    job on it, which is the same attribution the hours use -- counting hours
+    one way and tickets another meant a tech pulled in for a single brake job
+    showed three hours against zero repair orders.
+
+    Voided tickets count for nothing, exactly as they do everywhere else in
+    the app. Voiding means the work never happened, and a voided ticket is
+    stored as complete (see workflow.void), so leaving them in credited
+    whoever was assigned with a finished repair order for a mistake.
+    """
     end_bound = f"{end}T23:59:59" if end else None
     technicians = db.execute("SELECT * FROM staff WHERE role='technician' ORDER BY name").fetchall()
     result = []
@@ -81,7 +101,7 @@ def technician_productivity_rows(db: sqlite3.Connection, start: str | None, end:
         # tech picks up just the brake job) shows up here instead of every
         # labor line on the RO being credited to whoever the ticket default is.
         totals = db.execute(
-            """SELECT coalesce(sum(ei.quantity),0), coalesce(sum(ei.quantity*ei.unit_cost),0)
+            """SELECT coalesce(sum(ei.quantity),0)
                FROM estimate_items ei
                JOIN estimates e ON e.id=ei.estimate_id
                JOIN orders o ON o.id=e.order_id
@@ -91,14 +111,20 @@ def technician_productivity_rows(db: sqlite3.Connection, start: str | None, end:
                  AND (:start IS NULL OR o.created_at>=:start) AND (:end IS NULL OR o.created_at<=:end)""",
             {"tech_id": tech["id"], "start": start, "end": end_bound},
         ).fetchone()
-        labor_hours, labor_cost = totals[0], totals[1]
+        # Still open: what this tech is holding right now. The worst idle
+        # figure is measured the same way the board's Idle column is, off
+        # last_activity_at, so "sitting 9 days" means the same thing on both
+        # screens.
+        open_orders = [row for row in orders if row["status"] != "complete"]
+        idles = [idle_days(row["last_activity_at"] or row["created_at"]) for row in open_orders]
         result.append(
             {
                 "technician": tech["name"],
                 "ro_count": len(orders),
                 "completed_count": sum(1 for row in orders if row["status"] == "complete"),
-                "labor_hours": round(labor_hours, 2),
-                "labor_cost": round(labor_cost, 2),
+                "open_count": len(open_orders),
+                "worst_idle_days": max(idles) if idles else 0,
+                "labor_hours": round(totals[0], 2),
             }
         )
     return result

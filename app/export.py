@@ -263,14 +263,15 @@ def build_export_router(connect: Callable[[], sqlite3.Connection], now_fn: Calla
         with connect() as db:
             rows = technician_productivity_rows(db, start, end)
         return _csv_response(
-            ["Technician", "Repair Orders", "Completed", "Labor Hours", "Labor Cost"],
+            ["Technician", "Repair Orders", "Completed", "Still Open", "Longest Sitting (days)", "Labor Hours"],
             [
                 [
                     row["technician"],
                     row["ro_count"],
                     row["completed_count"],
+                    row["open_count"],
+                    row["worst_idle_days"] if row["open_count"] else "",
                     f"{row['labor_hours']:.2f}",
-                    f"{row['labor_cost']:.2f}",
                 ]
                 for row in rows
             ],

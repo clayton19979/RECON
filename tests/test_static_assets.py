@@ -401,17 +401,36 @@ def test_every_report_sort_key_in_the_markup_has_a_spec(js: str) -> None:
     assert used <= specced, f"report columns sorted by an undefined key: {sorted(used - specced)}"
 
 
-def test_report_sort_specs_are_partitioned_by_shape(js: str) -> None:
-    """The two report shapes have different columns, so a key from one is
-    meaningless in the other -- generateReport() resets the sort on a shape
-    change and needs both tables keyed independently."""
+def test_every_report_shape_opens_on_a_sort_it_actually_has(js: str) -> None:
+    """Each report shape has its own columns, so a key from one is meaningless
+    in the other -- generateReport() resets the sort on a shape change and
+    falls back to that shape's DEFAULT_SORT. A default naming a column the
+    shape doesn't define sorts by nothing at all, silently.
+
+    This used to assert instead that every shape offered a "cost" key, from
+    when a single shared fallback was how the reset worked. It isn't any more:
+    defaultSortFor() is per shape, and the technician report has no money
+    column to fall back to (labor here is never charged out).
+    """
     block = js[js.index("const REPORT_SORTS") : js.index("function sortReportRows")]
-    shapes = re.split(r'^  (?:"vehicle-spend"|technicians): \{$', block, flags=re.MULTILINE)[1:]
-    assert len(shapes) == 2, f"expected 2 report shapes in REPORT_SORTS, found {len(shapes)}"
-    # Both must offer "cost" -- that's what generateReport falls back to when
-    # the saved sort key belongs to the other shape.
-    for body in shapes:
-        assert re.search(r"^\s{4}cost:", body, re.MULTILINE), "a report shape has no cost sort to fall back to"
+    names = [a or b for a, b in re.findall(r'^  (?:"([\w-]+)"|(\w+)): \{$', block, flags=re.MULTILINE)]
+    bodies = re.split(r'^  (?:"[\w-]+"|\w+): \{$', block, flags=re.MULTILINE)[1:]
+    keys_by_shape = {
+        name: set(re.findall(r"^\s{4}(\w+):\s*\{", body, re.MULTILINE))
+        for name, body in zip(names, bodies, strict=True)
+    }
+    assert len(keys_by_shape) >= 2, f"expected several report shapes in REPORT_SORTS, found {sorted(keys_by_shape)}"
+
+    defaults = js[js.index("const DEFAULT_SORT") : js.index("function defaultSortFor")]
+    chosen = {
+        (name or bare): key
+        for name, bare, key in re.findall(r'^  (?:"([\w-]+)"|(\w+)): \{ key: "(\w+)"', defaults, re.MULTILINE)
+    }
+    assert set(chosen) == set(keys_by_shape), (
+        f"DEFAULT_SORT and REPORT_SORTS disagree about the report shapes: {sorted(set(chosen) ^ set(keys_by_shape))}"
+    )
+    for shape, key in chosen.items():
+        assert key in keys_by_shape[shape], f"{shape} opens sorted by {key!r}, which it has no column spec for"
 
 
 def test_report_controls_refetch_rather_than_waiting_for_a_button(html: str, js: str) -> None:

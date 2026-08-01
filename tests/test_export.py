@@ -198,10 +198,13 @@ def test_export_technician_report_csv(client):
     res = client.get("/api/export/report/technicians.csv")
     assert res.status_code == 200
     header, body = _rows(res)
-    assert header == ["Technician", "Repair Orders", "Completed", "Labor Hours", "Labor Cost"]
+    assert header == ["Technician", "Repair Orders", "Completed", "Still Open", "Longest Sitting (days)", "Labor Hours"]
     wes = next(r for r in body if r[0] == "Wes")
     assert wes[1] == "1" and wes[2] == "0"
-    assert wes[3] == "3.00" and wes[4] == "150.00"
+    assert wes[3] == "1" and wes[4] == "0", "one open ticket, touched today"
+    assert wes[5] == "3.00"
+    # No money column at all -- recon and we-owe labor is never charged out.
+    assert not any("Cost" in column or "Rate" in column for column in header)
 
 
 def test_report_csv_rejects_an_unknown_segment(client):

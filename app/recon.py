@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Callable, Iterable, Mapping, Sequence
-from datetime import datetime
+from collections.abc import Callable, Mapping
+from datetime import date, datetime
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException
@@ -11,65 +11,59 @@ from pydantic import BaseModel, Field
 from .db import RECON_SHOP_CUSTOMER_ID, inserted_id, normalize_vin
 
 
-def age_days(created_at: str | None) -> int:
-    """Whole days since created_at (an ISO timestamp) -- how long a car has
-    actually been sitting, the natural companion to "what we have in it".
-    One malformed value (a hand-edited row, an old backup with a different
-    format) must never 500 the entire vehicle board -- every other row's
-    age is computed in the same loop, so a single bad timestamp would take
-    the whole list down with it rather than just looking wrong on one row."""
+def parse_stamp(value: str | None) -> datetime | None:
+    """An ISO timestamp or plain date as shop-local naive time, or None if it
+    isn't one.
+
+    None rather than an exception because every caller here runs in a loop over
+    the whole vehicle board: one malformed value (a hand-edited row, an old
+    backup with a different format) must make one row look wrong, not take the
+    entire list down with it.
+    """
     try:
-        created = datetime.fromisoformat(created_at or "")
+        parsed = datetime.fromisoformat(value or "")
     except (TypeError, ValueError):
-        return 0
+        return None
     # Timestamps are shop-local and naive now (see db.now). Rows written before
     # that change carry a UTC offset, so convert those to local rather than
     # reading them five hours off.
-    if created.tzinfo is not None:
-        created = created.astimezone().replace(tzinfo=None)
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone().replace(tzinfo=None)
+    return parsed
+
+
+def age_days(created_at: str | None) -> int:
+    """Whole days since created_at (an ISO timestamp) -- how long a car has
+    actually been sitting, the natural companion to "what we have in it"."""
+    created = parse_stamp(created_at)
+    if created is None:
+        return 0
     return (datetime.now() - created).days
 
 
-# How many ids to put in one `IN (...)` list. SQLite's own limit is far higher
-# than this on any build the app ships with; the point of chunking is to keep a
-# single statement's parameter list bounded no matter how many cars pile up in
-# History, not to squeeze under a specific ceiling.
-_ID_CHUNK = 400
+def lot_age_days(acquisition_date: str | None, created_at: str | None) -> int:
+    """How long the car has been on the lot -- counted from the day it arrived,
+    not the day somebody got round to typing it into RECON.
 
+    Those are the same day when the write-up happens at the drop-off, and they
+    are not remotely the same day when three cars come off a Friday auction run
+    and get written up on Monday. Counting from the record's created_at put
+    every one of them on the board reading 0d while they sat, and "how long has
+    this been here" is half of what the Age column is for -- it is the number
+    Walt reads to ask why a car hasn't moved.
 
-def _chunked(values: Sequence[int], size: int = _ID_CHUNK) -> Iterable[Sequence[int]]:
-    for start in range(0, len(values), size):
-        yield values[start : start + size]
+    Falls back to created_at when there's no acquisition date on file: it is an
+    optional field on the write-up form, and every car written down before this
+    existed has none. The answer then is exactly what it always was.
 
-
-def _unique_ids(ref_ids: Iterable[int]) -> list[int]:
-    """Input order, duplicates dropped -- dict preserves insertion order."""
-    return list(dict.fromkeys(ref_ids))
-
-
-def last_activity_map(
-    db: sqlite3.Connection, column: str, ref_ids: Sequence[int], segment: str | None = None
-) -> dict[int, str]:
-    """last_activity for a whole list of vehicles in one query per chunk.
-
-    Only vehicles that actually have a qualifying ticket appear in the result;
-    a vehicle with none is absent, which is the caller's cue to fall back to
-    when the car landed (see last_activity).
+    An arrival date in the future is a typed year, not a car that hasn't shown
+    up yet, so it floors at 0 -- a negative age on the board would be a number
+    the app can't stand behind.
     """
-    found: dict[int, str] = {}
-    for chunk in _chunked(_unique_ids(ref_ids)):
-        placeholders = ",".join("?" for _ in chunk)
-        rows = db.execute(
-            f"""SELECT {column} ref_id, max(last_activity_at) at FROM orders
-                 WHERE {column} IN ({placeholders}) AND voided=0 AND last_activity_at!=''"""
-            + (" AND segment=?" if segment else "")
-            + f" GROUP BY {column}",
-            (*chunk, segment) if segment else tuple(chunk),
-        ).fetchall()
-        for row in rows:
-            if row["at"]:
-                found[row["ref_id"]] = row["at"]
-    return found
+    arrived = parse_stamp(acquisition_date)
+    if arrived is None:
+        return age_days(created_at)
+    return max(0, (datetime.now() - arrived).days)
 
 
 def last_activity(db: sqlite3.Connection, column: str, ref_id: int, fallback: str, segment: str | None = None) -> str:
@@ -126,6 +120,19 @@ def is_stalled(row: Mapping[str, Any]) -> bool:
     return max(0, int(row.get("idle_days") or 0)) >= STALLED_AFTER_DAYS
 
 
+def live_orders(orders: list[dict]) -> list[dict]:
+    """The tickets that actually count, in the order cost_rollup returned them.
+
+    Voiding a ticket writes `status='complete', voided=1` (see workflow.void_order):
+    the flag is the meaning, the status is only how the row leaves the open-orders
+    count. Reading the status without the flag therefore reports a mistake as
+    finished work, so everything that judges what a car is doing filters here
+    first -- the same rule cost_rollup applies to the money and last_activity
+    applies to the clock.
+    """
+    return [o for o in orders if not o.get("voided")]
+
+
 def order_status_bucket(orders: list[dict]) -> str:
     """Finished or still in progress, judged by the repair tickets themselves.
 
@@ -133,9 +140,17 @@ def order_status_bucket(orders: list[dict]) -> str:
     so the ticket is what the answer has to come from: finished means every
     ticket that exists is closed, and at least one exists. A car with no
     ticket at all has not finished anything -- it has not started.
+
+    Voided tickets are not tickets. A car whose only one had been voided read
+    as finished here, which showed a green Complete pill on the board, filed
+    the car under "Ready to sell" on Walt's Lot Report, and -- because
+    is_stalled deliberately never flags a finished car -- took it out of the
+    Stalled count for good. One mis-click made a car invisible in the three
+    places that exist to stop cars going missing.
     """
-    active = next((o for o in reversed(orders) if o["status"] != "complete"), None)
-    has_closed = any(o["status"] == "complete" for o in orders)
+    live = live_orders(orders)
+    active = next((o for o in reversed(live) if o["status"] != "complete"), None)
+    has_closed = any(o["status"] == "complete" for o in live)
     return "finished" if (active is None and has_closed) else "in_progress"
 
 
@@ -212,6 +227,12 @@ class RecondVehiclePatch(BaseModel):
     # Core vehicle info -- correcting a typo (wrong purchase price, VIN, etc.)
     # shouldn't require touching the database directly.
     purchase_price: float | None = Field(default=None, ge=0)
+    # The day the car actually landed on the lot. It drives the board's Age
+    # column and the lot sheet's Days On Lot, so a wrong one has to be
+    # fixable -- until now it was write-once at the write-up and stuck.
+    # "" is allowed and means "we don't know", which falls the age count back
+    # to when the record was written down.
+    acquisition_date: str | None = None
     vin: str | None = None
     year: int | None = Field(default=None, ge=1900, le=2100)
     make: str | None = Field(default=None, min_length=1)
@@ -301,32 +322,31 @@ def cost_rollups(
     again once sent back to the vendor (part_returned). quoted_cost (full
     quantity regardless of receipt) is returned alongside for comparison.
 
+    A core deposit is money out of the shop's pocket that comes back only when
+    the old unit does, so an outstanding one counts as part of what the car
+    cost -- quoted and actual alike, so a deposit can never make a car read as
+    over its own quote. It stops counting the moment the vendor's credit is
+    recorded (core_return_invoice_number), which is the same "outstanding"
+    line the Cores board draws. A car whose alternator core never went back
+    really did cost that $45, and leaving it out understated every such car
+    forever while the only place the money appeared was a board nobody had a
+    money reason to work. A returned part takes its deposit with it: there is
+    no old unit owed to anyone once the new part goes back.
+
     parts_pending counts part lines that have been ordered from a vendor but
     haven't shown up yet (status='ordered'; 'received' means it landed,
     'quoted' means nobody has actually ordered it). That's the single most
     common reason a car sits on the lot doing nothing, and until now it was
     only visible by opening the ticket -- see the board's Parts column.
     Returned parts are excluded: a line sent back to the vendor isn't
-    something the shop is still waiting on.
-
-    Answers for many vehicles at once because the vehicle board and every
-    report built on it need exactly this for every car on the list. Asking one
-    car at a time turned a screen the shop opens all day into one query per
-    car, which is fine on a lot of twelve and is not fine on two years of
-    History. Every id passed in comes back, including cars with no ticket at
-    all -- those get the same all-zero shape an empty query produced.
-    """
-    result = {ref_id: _rollup_from_orders([]) for ref_id in ref_ids}
-    ids = _unique_ids(ref_ids)
-    if not ids:
-        return result
-
-    per_ref: dict[int, list[dict]] = {ref_id: [] for ref_id in ids}
-    for chunk in _chunked(ids):
-        placeholders = ",".join("?" for _ in chunk)
-        rows = db.execute(
-            f"""SELECT o.{column} ref_id, o.id, o.number, o.status, o.voided,
-               coalesce(sum(CASE WHEN ei.kind='part' AND ei.part_returned=0 THEN ei.received_quantity*ei.unit_cost ELSE 0 END),0) parts_cost,
+    something the shop is still waiting on."""
+    # An outstanding deposit: charged per unit, so it scales with quantity the
+    # same way the part's own cost does.
+    core_owing = "ei.kind='part' AND ei.part_returned=0 AND ei.core_return_invoice_number='' AND ei.core_charge>0"
+    rows = db.execute(
+        f"""SELECT o.id, o.number, o.status, o.voided,
+               coalesce(sum(CASE WHEN ei.kind='part' AND ei.part_returned=0 THEN ei.received_quantity*ei.unit_cost ELSE 0 END),0)
+                 + coalesce(sum(CASE WHEN {core_owing} THEN ei.received_quantity*ei.core_charge ELSE 0 END),0) parts_cost,
                coalesce(sum(CASE WHEN ei.kind='labor' THEN ei.quantity*ei.unit_cost ELSE 0 END),0) labor_cost,
                -- Hours in their own right, not just as an input to cost. On
                -- recon and we-owe the labor rate is always 0 (in-house time
@@ -341,9 +361,25 @@ def cost_rollups(
                -- -- parts_cost above already drops a returned line via
                -- part_returned, and subtracting the credit as well would count
                -- the same money back twice.
-               coalesce(sum(CASE WHEN ei.kind='credit' THEN -ei.quantity*ei.unit_cost ELSE ei.quantity*ei.unit_cost END),0) quoted_cost,
+               --
+               -- A part sent back to the vendor drops out of the quote as well
+               -- as out of the actual. It is not money the shop is going to
+               -- spend, and leaving it in made the comparison the board and
+               -- the Lot Report exist to draw meaningless: order a $500
+               -- alternator, get the wrong one, send it back and buy the right
+               -- $520 one, and the car read "quoted $1,020, spent $520" --
+               -- $500 under estimate on a job that came in $20 over. The two
+               -- exclusions cannot double-subtract, because the credit line a
+               -- vendor invoice writes is a line of its own and never sets
+               -- part_returned on the line it refunds.
+               coalesce(sum(CASE WHEN ei.kind='part' AND ei.part_returned=1 THEN 0
+                                 WHEN ei.kind='credit' THEN -ei.quantity*ei.unit_cost
+                                 ELSE ei.quantity*ei.unit_cost END),0) quoted_cost,
                coalesce(sum(CASE WHEN ei.kind='part' AND ei.status='ordered' AND ei.part_returned=0 THEN 1 ELSE 0 END),0) parts_pending,
-               coalesce(sum(CASE WHEN ei.kind='part' AND ei.status='ordered' AND ei.part_returned=0 THEN ei.quantity*ei.unit_cost ELSE 0 END),0) parts_pending_value
+               -- Core deposits ride in here too: they land on the same vendor
+               -- invoice as the part, so this is what that bill will say.
+               coalesce(sum(CASE WHEN ei.kind='part' AND ei.status='ordered' AND ei.part_returned=0 THEN ei.quantity*ei.unit_cost ELSE 0 END),0)
+                 + coalesce(sum(CASE WHEN {core_owing} AND ei.status='ordered' THEN ei.quantity*ei.core_charge ELSE 0 END),0) parts_pending_value
            FROM orders o
            LEFT JOIN estimates e ON e.order_id=o.id
            LEFT JOIN estimate_items ei ON ei.estimate_id=e.id
@@ -352,41 +388,32 @@ def cost_rollups(
             + """
            GROUP BY o.id
            ORDER BY o.id""",
-            (*chunk, segment) if segment else tuple(chunk),
-        ).fetchall()
-        for row in rows:
-            value = dict(row)
-            ref_id = value.pop("ref_id")
-            value["total_cost"] = round(value["parts_cost"] + value["labor_cost"] + value["fee_cost"], 2)
-            per_ref[ref_id].append(value)
-
-    for ref_id, orders in per_ref.items():
-        result[ref_id] = _rollup_from_orders(orders)
-    return result
-
-
-def cost_rollup(db: sqlite3.Connection, column: str, ref_id: int, segment: str | None = None) -> dict:
-    """One vehicle's cost rollup. See cost_rollups, which does the work."""
-    return cost_rollups(db, column, [ref_id], segment)[ref_id]
-
-
-def we_owe_payment_totals(db: sqlite3.Connection, we_owe_ids: Sequence[int]) -> dict[int, float]:
-    """What the customer has chipped in on each promise. Zero when nothing
-    has been taken, so every id asked about has an answer."""
-    result: dict[int, float] = dict.fromkeys(we_owe_ids, 0)
-    ids = _unique_ids(we_owe_ids)
-    if not ids:
-        return result
-    for chunk in _chunked(ids):
-        placeholders = ",".join("?" for _ in chunk)
-        rows = db.execute(
-            f"""SELECT we_owe_id, coalesce(sum(amount),0) paid FROM we_owe_payments
-                 WHERE we_owe_id IN ({placeholders}) GROUP BY we_owe_id""",
-            tuple(chunk),
-        ).fetchall()
-        for row in rows:
-            result[row["we_owe_id"]] = row["paid"]
-    return result
+        (ref_id, segment) if segment else (ref_id,),
+    ).fetchall()
+    orders = []
+    for row in rows:
+        value = dict(row)
+        value["total_cost"] = round(value["parts_cost"] + value["labor_cost"] + value["fee_cost"], 2)
+        orders.append(value)
+    # Voided ROs (started by mistake) are kept in the order history
+    # (traceability) but never count toward the vehicle's cost -- that work
+    # was never actually done.
+    countable = [o for o in orders if not o["voided"]]
+    # Tickets the shop considers done. Only these turn an unreceived part into
+    # a problem: on an open ticket the same line is simply work still ahead.
+    closed = [o for o in countable if o["status"] == "complete"]
+    return {
+        "orders": orders,
+        "total_cost": round(sum(o["total_cost"] for o in countable), 2),
+        "quoted_cost": round(sum(o["quoted_cost"] for o in countable), 2),
+        "open_cost": round(sum(o["open_cost"] for o in countable), 2),
+        "labor_hours": round(sum(o["labor_hours"] for o in countable), 2),
+        "parts_pending": int(sum(o["parts_pending"] for o in countable)),
+        "parts_pending_value": round(sum(o["parts_pending_value"] for o in countable), 2),
+        "unreceived_cost": round(sum(o["unreceived_cost"] for o in countable), 2),
+        "unreceived_closed_cost": round(sum(o["unreceived_cost"] for o in closed), 2),
+        "unreceived_closed_parts": int(sum(o["unreceived_parts"] for o in closed)),
+    }
 
 
 def resolve_unit(db: sqlite3.Connection, vehicle_id: int, vin: str | None, ts: str) -> int:
@@ -679,12 +706,18 @@ def vehicle_board_rows(
         activity = last_activity_map(db, "recon_vehicle_id", recon_ids)
         techs = technician_names_map(db, "recon_vehicle_id", recon_ids)
         for row in rows:
-            rollup = rollups[row["id"]]
+            rollup = cost_rollup(db, "recon_vehicle_id", row["id"])
+            # Voided tickets are excluded from everything the row says the car
+            # is doing, the same way they're already excluded from what it
+            # cost -- see live_orders.
+            live = live_orders(rollup["orders"])
+            voided_count = len(rollup["orders"]) - len(live)
+            order_ids = [o["id"] for o in live]
             # Recon status/sale tracking isn't used here -- the repair order's
             # own status is what the advisor actually maintains, so that's
             # what drives the displayed status and in-progress/finished bucket.
-            active_order = next((o for o in reversed(rollup["orders"]) if o["status"] != "complete"), None)
-            latest_order = rollup["orders"][-1] if rollup["orders"] else None
+            active_order = next((o for o in reversed(live) if o["status"] != "complete"), None)
+            latest_order = live[-1] if live else None
             current_order = active_order or latest_order
             display_status = current_order["status"] if current_order else "acquired"
             activity_at = activity.get(row["id"]) or row["created_at"]
@@ -706,18 +739,31 @@ def vehicle_board_rows(
                     "unit_id": row["unit_id"],
                     "actual_cost": rollup["total_cost"],
                     "quoted_cost": rollup["quoted_cost"],
+                    "open_cost": rollup["open_cost"],
                     "labor_hours": rollup["labor_hours"],
                     "parts_pending": rollup["parts_pending"],
                     "parts_pending_value": rollup["parts_pending_value"],
-                    "technicians": techs[row["id"]],
+                    "unreceived_cost": rollup["unreceived_cost"],
+                    "unreceived_closed_cost": rollup["unreceived_closed_cost"],
+                    "unreceived_closed_parts": rollup["unreceived_closed_parts"],
+                    "technicians": technician_names(db, order_ids),
                     # The ticket a board-level action should attach itself to:
                     # the open one if there is one, else the most recent, else
                     # nothing (a car with no ticket yet). Tasks created off the
                     # board link through this, so "follow up on that stalled car"
                     # lands on the RO rather than floating unattached.
                     "order_id": current_order["id"] if current_order else None,
+                    # How many tickets on this car were taken back. Only used
+                    # to tell "nobody has written one" apart from "the one
+                    # somebody wrote was voided" -- two rows that otherwise
+                    # read identically and need different things done to them.
+                    "voided_order_count": voided_count,
                     "updated_at": row["updated_at"],
-                    "age_days": age_days(row["created_at"]),
+                    # Carried alongside the count so the board can say what it
+                    # is counting from -- "34d" is worth arguing with, "on the
+                    # lot since June 27" is worth acting on.
+                    "acquired_at": row["acquisition_date"] or "",
+                    "age_days": lot_age_days(row["acquisition_date"], row["created_at"]),
                     "last_activity_at": activity_at,
                     "idle_days": idle_days(activity_at),
                 }
@@ -740,9 +786,14 @@ def vehicle_board_rows(
         techs = technician_names_map(db, "we_owe_id", we_owe_ids)
         paid = we_owe_payment_totals(db, we_owe_ids)
         for row in rows:
-            rollup = rollups[row["id"]]
-            active_order = next((o for o in reversed(rollup["orders"]) if o["status"] != "complete"), None)
-            latest_order = rollup["orders"][-1] if rollup["orders"] else None
+            rollup = cost_rollup(db, "we_owe_id", row["id"])
+            # Same rule as recon above: a voided ticket says nothing about the
+            # promise, and voiding one is certainly not keeping it.
+            live = live_orders(rollup["orders"])
+            voided_count = len(rollup["orders"]) - len(live)
+            order_ids = [o["id"] for o in live]
+            active_order = next((o for o in reversed(live) if o["status"] != "complete"), None)
+            latest_order = live[-1] if live else None
             current_order = active_order or latest_order
             # fulfilled/waived is the authoritative "is this promise resolved"
             # signal (set explicitly by the advisor, separate from any
@@ -752,8 +803,14 @@ def vehicle_board_rows(
             display_status = (
                 row["status"] if row["status"] != "open" else (current_order["status"] if current_order else "open")
             )
-            customer_paid = round(paid[row["id"]], 2)
-            activity_at = activity.get(row["id"]) or row["created_at"]
+            customer_paid = round(
+                db.execute(
+                    "SELECT coalesce(sum(amount),0) FROM we_owe_payments WHERE we_owe_id=?", (row["id"],)
+                ).fetchone()[0],
+                2,
+            )
+            activity_at = last_activity(db, "we_owe_id", row["id"], row["created_at"])
+            status_bucket = we_owe_status_bucket(row["status"])
             result.append(
                 {
                     "segment": "we_owe",
@@ -765,7 +822,14 @@ def vehicle_board_rows(
                     "customer_name": row["customer_name"],
                     "description": row["description"],
                     "status": display_status,
-                    "status_bucket": we_owe_status_bucket(row["status"]),
+                    "status_bucket": status_bucket,
+                    # What the salesman told the customer they'd get their car
+                    # back by. It was captured at intake and then shown nowhere
+                    # anybody makes decisions -- the board, the summary cards
+                    # and the lot sheet all read these two fields now, so a
+                    # promise going past due is visible without opening the car.
+                    "target_date": row["target_date"],
+                    "promise_days_late": promise_days_late(row["target_date"], status_bucket),
                     # A we-owe car has a purchase price too -- it's just usually
                     # entered here, because the shop bought and recon'd it long
                     # before RECON ever saw it.
@@ -774,9 +838,13 @@ def vehicle_board_rows(
                     "unit_id": row["unit_id"],
                     "actual_cost": rollup["total_cost"],
                     "quoted_cost": rollup["quoted_cost"],
+                    "open_cost": rollup["open_cost"],
                     "labor_hours": rollup["labor_hours"],
                     "parts_pending": rollup["parts_pending"],
                     "parts_pending_value": rollup["parts_pending_value"],
+                    "unreceived_cost": rollup["unreceived_cost"],
+                    "unreceived_closed_cost": rollup["unreceived_closed_cost"],
+                    "unreceived_closed_parts": rollup["unreceived_closed_parts"],
                     "customer_paid": customer_paid,
                     "net_cost": round(rollup["total_cost"] - customer_paid, 2),
                     "technicians": techs[row["id"]],
@@ -786,7 +854,12 @@ def vehicle_board_rows(
                     # board link through this, so "follow up on that stalled car"
                     # lands on the RO rather than floating unattached.
                     "order_id": current_order["id"] if current_order else None,
+                    "voided_order_count": voided_count,
                     "updated_at": row["updated_at"],
+                    # No arrival date on this side, and none wanted: a we-owe's
+                    # clock starts when the promise was made, which is what
+                    # created_at already is. The car itself was sold weeks ago.
+                    "acquired_at": "",
                     "age_days": age_days(row["created_at"]),
                     "last_activity_at": activity_at,
                     "idle_days": idle_days(activity_at),
@@ -844,6 +917,7 @@ def build_recon_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
         detail["orders"] = rollup["orders"]
         detail["total_cost"] = rollup["total_cost"]
         detail["quoted_cost"] = rollup["quoted_cost"]
+        detail["open_cost"] = rollup["open_cost"]
         detail["labor_hours"] = rollup["labor_hours"]
         # The same finished/in-progress answer the board gives, so the detail
         # page can tell a car that has gone quiet from one that is simply done
@@ -894,6 +968,7 @@ def build_recon_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
         detail["orders"] = rollup["orders"]
         detail["total_cost"] = rollup["total_cost"]
         detail["quoted_cost"] = rollup["quoted_cost"]
+        detail["open_cost"] = rollup["open_cost"]
         detail["labor_hours"] = rollup["labor_hours"]
         # Same reason as recon_detail: a waived promise is closed, not stalled.
         detail["status_bucket"] = we_owe_status_bucket(row["status"])
@@ -1032,6 +1107,16 @@ def build_recon_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
             if item.purchase_price is not None:
                 fields.append("purchase_price=?")
                 params.append(item.purchase_price)
+            acquisition_date = item.acquisition_date.strip() if item.acquisition_date is not None else None
+            if acquisition_date is not None:
+                # This one is read as a date, not just displayed, so a value
+                # that isn't one has to be refused here rather than quietly
+                # falling back and leaving the board reporting an age nobody
+                # can account for.
+                if acquisition_date and parse_stamp(acquisition_date) is None:
+                    raise HTTPException(400, "Acquired date must be a calendar date, e.g. 2026-07-31")
+                fields.append("acquisition_date=?")
+                params.append(acquisition_date)
             # Core vehicle info (VIN, make/model, etc.) lives on the shared
             # vehicles table, not recon_vehicles -- correcting a typo here
             # shouldn't require touching the database directly.
@@ -1068,6 +1153,10 @@ def build_recon_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
                 ("purchase_price", item.purchase_price),
                 ("sale_price", item.sale_price),
                 ("sale_date", item.sale_date.strip() if item.sale_date is not None else None),
+                # Creating the car writes the arrival date to both places;
+                # correcting it has to do the same, or the unit ledger keeps
+                # the wrong one for the rest of the car's life.
+                ("purchase_date", acquisition_date),
             ):
                 if value is not None:
                     unit_fields.append(f"{name}=?")

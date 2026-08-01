@@ -198,14 +198,34 @@ export function saveTaskPrefs() {
   } catch {}
 }
 
-// All three segments have a vehicle-detail page now (retail's arrived last),
-// so every order is fair game to link.
+/* The options for every vehicle picker on this screen -- the quick-add box and
+   the per-row "+ vehicle" slot -- built once here.
+
+   Rows come from /api/tasks/linkable-orders already labelled, already in
+   display order, and already stripped of the two kinds of ticket nobody wants
+   offered: voided ones, and cars sold and archived to History. The screen used
+   to build this out of the whole of /api/orders and filter it by segment in
+   the browser, which meant a dropdown that grew forever and two hand-written
+   copies of the same label formatting.
+
+   Headings come off the row rather than a map here, so Recon / We-Owe / Retail
+   are named in exactly one place. */
+export function taskOrderOptionsHtml(orders, placeholder) {
+  let html = `<option value="">${esc(placeholder)}</option>`;
+  let group = null;
+  for (const o of orders || []) {
+    if (o.group !== group) {
+      if (group !== null) html += `</optgroup>`;
+      group = o.group;
+      html += `<optgroup label="${esc(group || "Other")}">`;
+    }
+    html += `<option value="${o.id}">${esc(o.label)}</option>`;
+  }
+  return group === null ? html : `${html}</optgroup>`;
+}
+
 function renderTaskOrderSelect(orders) {
-  const linkable = orders.filter((o) => o.segment === "recon" || o.segment === "we_owe" || o.segment === "retail");
-  $("#task-order-input").innerHTML = `<option value="">No vehicle</option>` + linkable.map((o) => {
-    const label = o.stock_number ? `${o.stock_number} — ${o.year} ${o.make} ${o.model}` : `${o.customer_name} — ${o.year} ${o.make} ${o.model}`;
-    return `<option value="${o.id}">${esc(label)}</option>`;
-  }).join("");
+  $("#task-order-input").innerHTML = taskOrderOptionsHtml(orders, "No vehicle");
 }
 
 // Tasks only -- what a checkbox tick, a rename or a bulk edit needs.
@@ -228,7 +248,7 @@ export async function loadTasksView() {
       state.newTaskAssignees = names;
     });
     renderTaskAssigneeFilter();
-    const [tasks, orders] = await Promise.all([get("/api/tasks"), get("/api/orders")]);
+    const [tasks, orders] = await Promise.all([get("/api/tasks"), get("/api/tasks/linkable-orders")]);
     state.tasks = tasks;
     // Kept for the per-row "+ vehicle" picker, which builds its select from
     // this list on demand rather than refetching orders on every row edit.

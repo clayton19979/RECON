@@ -1,5 +1,5 @@
 import { $, $$, fmtHours, get } from "./core.js";
-import { esc, money } from "./shortcuts.js";
+import { esc, money, todayLocal } from "./shortcuts.js";
 import { emptyState } from "./empty-states.js";
 import { skeletonCards, skeletonRows } from "./skeletons.js";
 import { STATUS_LABEL, state } from "./state.js";
@@ -15,10 +15,10 @@ import { openVehicleDetail } from "./vehicle-detail.js";
 // same thing everywhere in the app.
 export function computeQuickRange(kind) {
   const now = new Date();
-  // Local date, not toISOString(): that converts to UTC first, so any click
+  // todayLocal, never toISOString(): that converts to UTC first, so any click
   // after ~7 PM in Merrillville computed *tomorrow's* date and "Today"
   // reported on a day that hadn't started.
-  const iso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  const iso = todayLocal;
   let start, end = iso(now);
   if (kind === "today") start = iso(now);
   else if (kind === "yesterday") { const d = new Date(now); d.setDate(d.getDate() - 1); start = iso(d); end = iso(d); }
@@ -27,6 +27,36 @@ export function computeQuickRange(kind) {
   else if (kind === "year" || kind === "ytd") start = iso(new Date(now.getFullYear(), 0, 1));
   else { start = ""; end = ""; }
   return { start, end };
+}
+
+/* The quick ranges the Reports toolbar offers, by name.
+   Also the list readReportDateInputs matches hand-typed dates against, so a
+   chip can't exist in the toolbar and be unrecognised a few lines later. */
+export const QUICK_RANGES = ["today", "week", "month", "year", "all"];
+
+/* Re-resolve the active quick range against today.
+
+   A named range has to be carried as a *name*, never as the two dates it
+   happened to mean when it was clicked, because what it means changes every
+   day. Both ways of forgetting that shipped:
+
+   - Reopening the app replayed the saved dates, so "This Month" could sit lit
+     over July 1-29 on July 31 -- two days of work missing from every number on
+     the screen, from the printed sheet and from the CSV, with the chip above
+     them insisting the month was covered.
+   - The shop works evenings and leaves this open; past midnight "Today" still
+     meant yesterday.
+
+   Called on every fetch (see generateReport), so simply opening Reports is
+   enough to correct it. Returns true when the dates actually moved, so the
+   toolbar can be re-synced only when there's something to re-sync. */
+export function refreshQuickRange() {
+  if (!QUICK_RANGES.includes(state.reportRange)) return false;
+  const { start, end } = computeQuickRange(state.reportRange);
+  if (start === state.reportStart && end === state.reportEnd) return false;
+  state.reportStart = start;
+  state.reportEnd = end;
+  return true;
 }
 
 /* ---------- what the four reports are ----------
@@ -123,6 +153,19 @@ function sittingText(days) {
   return `${n} day${n === 1 ? "" : "s"}`;
 }
 
+/* How long this tech's quietest open ticket has sat, coloured on the same
+   week boundary the board's Idle column uses so the two screens agree about
+   which work has been forgotten. A tech holding nothing gets a dash rather
+   than "today", which would read as "touched today" on an empty hand. */
+function technicianIdleCell(row) {
+  if (!row.open_count) return `<td class="num-col"><span class="muted-dash">—</span></td>`;
+  const stalled = row.worst_idle_days >= STALLED_AFTER_DAYS;
+  const title = stalled
+    ? "Nothing has happened on this technician's quietest open ticket in over a week"
+    : "Days since anything happened on this technician's quietest open ticket";
+  return `<td class="num-col${stalled ? " money-bad" : ""}" title="${title}">${esc(sittingText(row.worst_idle_days))}</td>`;
+}
+
 /* Which car this row is, in one cell: the vehicle, then whether it's one of
    Walt's lot cars or a promise made to a customer (and to whom). Type used to
    be a column of its own, which cost a column's width to say one word. */
@@ -143,31 +186,47 @@ const REPORT_STAT_CARDS = {
 const REPORT_PREFS_KEY = "dao-report-view";
 
 export function loadReportPrefs() {
-  let saved;
+  let saved = null;
   try {
     saved = JSON.parse(localStorage.getItem(REPORT_PREFS_KEY) || "{}");
   } catch {
-    return; // a corrupt entry shouldn't stop the screen from opening
+    saved = null; // a corrupt entry shouldn't stop the screen from opening
   }
-  if (!saved || typeof saved !== "object") return;
-  if (REPORT_TITLES[saved.type]) state.reportType = saved.type;
-  if (typeof saved.range === "string") state.reportRange = saved.range;
-  if (typeof saved.start === "string") state.reportStart = saved.start;
-  if (typeof saved.end === "string") state.reportEnd = saved.end;
-  // Only restore a sort that was chosen for the report we're reopening --
-  // sortShape is what says so. An older saved entry has no sortShape, so it
-  // is treated as nobody's choice and the report opens in its own order.
-  if (saved.sort && saved.sortShape === reportShape(state.reportType) && REPORT_SORTS[saved.sortShape][saved.sort.key]) {
-    state.reportSort = { key: saved.sort.key, dir: saved.sort.dir === "asc" ? "asc" : "desc" };
-    state.reportSortShape = saved.sortShape;
+  if (saved && typeof saved === "object") {
+    if (REPORT_TITLES[saved.type]) state.reportType = saved.type;
+    if (typeof saved.range === "string") state.reportRange = saved.range;
+    // Hand-typed dates are the only ones worth restoring literally: they name
+    // a specific window somebody asked for, and it means the same thing next
+    // week. A named range's dates are resolved below instead -- an older saved
+    // entry still has them written down, and they are deliberately ignored.
+    if (!QUICK_RANGES.includes(state.reportRange)) {
+      if (typeof saved.start === "string") state.reportStart = saved.start;
+      if (typeof saved.end === "string") state.reportEnd = saved.end;
+    }
+    // Only restore a sort that was chosen for the report we're reopening --
+    // sortShape is what says so. An older saved entry has no sortShape, so it
+    // is treated as nobody's choice and the report opens in its own order.
+    if (saved.sort && saved.sortShape === reportShape(state.reportType) && REPORT_SORTS[saved.sortShape][saved.sort.key]) {
+      state.reportSort = { key: saved.sort.key, dir: saved.sort.dir === "asc" ? "asc" : "desc" };
+      state.reportSortShape = saved.sortShape;
+    }
   }
+  // Outside the block on purpose: with nothing saved at all -- a fresh browser,
+  // a corrupt entry -- the default range is still a named one, and it still has
+  // to mean today. It used to reach the first fetch as two empty dates, so the
+  // screen opened with This Month lit over every car the shop has ever had.
+  refreshQuickRange();
 }
 
 export function saveReportPrefs() {
+  const named = QUICK_RANGES.includes(state.reportRange);
   try {
     localStorage.setItem(REPORT_PREFS_KEY, JSON.stringify({
       type: state.reportType, range: state.reportRange,
-      start: state.reportStart, end: state.reportEnd,
+      // A named range is stored by name and nothing else. Writing its dates
+      // down is what let a saved "This Month" reopen days later still covering
+      // the days it was saved on -- see refreshQuickRange.
+      ...(named ? {} : { start: state.reportStart, end: state.reportEnd }),
       sort: state.reportSort, sortShape: state.reportSortShape,
     }));
   } catch { /* private mode / quota -- the screen still works, it just forgets */ }
@@ -190,7 +249,7 @@ export function setReportRange(kind) {
 function readReportDateInputs() {
   state.reportStart = $("#report-start").value || "";
   state.reportEnd = $("#report-end").value || "";
-  const match = ["today", "week", "month", "year", "all"].find((kind) => {
+  const match = QUICK_RANGES.find((kind) => {
     const r = computeQuickRange(kind);
     return r.start === state.reportStart && r.end === state.reportEnd;
   });
@@ -283,8 +342,9 @@ const REPORT_SORTS = {
     technician: { label: "Technician",  type: "text",   value: (r) => r.technician || "" },
     ros:        { label: "ROs",         type: "number", value: (r) => r.ro_count },
     completed:  { label: "Completed",   type: "number", value: (r) => r.completed_count },
-    hours:      { label: "Labor Hours", type: "number", value: (r) => r.labor_hours },
-    cost:       { label: "Labor Cost",  type: "number", value: (r) => r.labor_cost },
+    open:       { label: "Still Open",  type: "number", value: (r) => r.open_count },
+    idle:       { label: "Sitting",     type: "number", value: (r) => (r.open_count ? r.worst_idle_days : -1) },
+    hours:      { label: "Hours",       type: "number", value: (r) => r.labor_hours },
   },
 };
 
@@ -301,7 +361,9 @@ const DEFAULT_SORT = {
   lot: { key: "stock", dir: "asc" },
   "vehicle-spend": { key: "cost", dir: "desc" },
   "vehicle-profit": { key: "cost", dir: "desc" },
-  technicians: { key: "cost", dir: "desc" },
+  // No money column to sort on -- labor here is never charged out -- so the
+  // technician report opens on the tech carrying the most hours.
+  technicians: { key: "hours", dir: "desc" },
 };
 
 function defaultSortFor(shape) {
@@ -398,8 +460,17 @@ function vehicleSpendStatCards(rows) {
    lot's purchase price isn't entered here (Walt keeps that figure -- see
    CLAUDE.md). A sold car whose purchase price nobody recorded has no honest
    profit, but it is still sold, and counting it as stock on hand would be a
-   second wrong answer on top of the first. */
+   second wrong answer on top of the first.
+
+   "In stock" means an unsold car of the lot's own. A we-owe car belongs to the
+   customer who already bought it and drove it away -- the shop owes work on
+   it, not a car it can sell -- so it is counted on its own rather than folded
+   into the stock figure. The three counts partition the table exactly, so the
+   sub-line always adds up to the number beside it. */
 function vehicleProfitStatCards(rows) {
+  const lot = rows.filter((r) => (r.recon_count || 0) > 0);
+  const soldLot = lot.filter((r) => r.sale_price !== null && r.sale_price !== undefined);
+  const weOweOnly = rows.length - lot.length;
   const sold = rows.filter((r) => r.sale_price !== null && r.sale_price !== undefined);
   const withProfit = sold.filter((r) => r.profit !== null && r.profit !== undefined);
   const invested = rows.reduce((s, r) => s + (r.total_invested || 0), 0);
@@ -408,7 +479,15 @@ function vehicleProfitStatCards(rows) {
   const weOwe = rows.reduce((s, r) => s + (r.we_owe_net_cost || 0), 0);
   const unpriced = sold.length - withProfit.length;
   return [
-    { label: "Vehicles", value: String(rows.length), sub: `${sold.length} sold · ${rows.length - sold.length} still in stock` },
+    {
+      label: "Vehicles",
+      value: String(rows.length),
+      sub: [
+        `${soldLot.length} sold`,
+        `${lot.length - soldLot.length} still in stock`,
+        ...(weOweOnly ? [`${weOweOnly} we-owe`] : []),
+      ].join(" · "),
+    },
     { label: "Total Invested", value: money(invested), sub: "what the shop spent: recon + we-owe" },
     {
       label: "Profit On Sold",
@@ -432,12 +511,25 @@ function technicianStatCards(rows) {
   const ros = rows.reduce((s, r) => s + r.ro_count, 0);
   const done = rows.reduce((s, r) => s + r.completed_count, 0);
   const hours = rows.reduce((s, r) => s + r.labor_hours, 0);
-  const cost = rows.reduce((s, r) => s + r.labor_cost, 0);
+  const open = rows.reduce((s, r) => s + r.open_count, 0);
+  const worstIdle = rows.reduce((s, r) => Math.max(s, r.open_count ? r.worst_idle_days : 0), 0);
   return [
     { label: "Technicians Working", value: String(active.length), sub: `of ${rows.length} on staff` },
     { label: "Repair Orders", value: String(ros), sub: `${done} completed${ros ? ` · ${Math.round((done / ros) * 100)}%` : ""}` },
     { label: "Labor Hours", value: String(Math.round(hours * 10) / 10), sub: ros ? `${(hours / ros).toFixed(1)} avg per RO` : "no orders in this range" },
-    { label: "Labor Cost", value: money(cost), sub: hours ? `${money(cost / hours)} per hour` : "no hours logged" },
+    // Replaces a labor-cost card that was structurally $0.00 -- labor on
+    // recon and we-owe is never charged out. What somebody acts on is which
+    // tech is still holding a ticket and how long it has sat.
+    {
+      label: "Still Open",
+      value: String(open),
+      // "worst sitting 0 days" is a sentence nobody says. Everything moving is
+      // the good case and should read like one.
+      sub: !open ? "nothing left with a tech"
+        : worstIdle === 0 ? "all touched today"
+        : `worst sitting ${sittingText(worstIdle)}`,
+      tone: worstIdle >= STALLED_AFTER_DAYS ? "warn" : "",
+    },
   ];
 }
 
@@ -485,19 +577,19 @@ const CHART_LIMIT = 12;
 function renderReportChart(rows, shape) {
   const target = $("#report-chart");
   if (shape === "technicians") {
-    // Hours with $0 unit cost are still work -- don't drop the tech from
-    // the chart the table shows.
-    const withLabor = rows.filter((r) => r.labor_cost > 0 || r.labor_hours > 0)
-      .sort((a, b) => b.labor_cost - a.labor_cost);
+    // Hours, not dollars. Labor here is never charged out, so charting labor
+    // cost drew one flat empty bar per technician and called it a result.
+    const withLabor = rows.filter((r) => r.labor_hours > 0)
+      .sort((a, b) => b.labor_hours - a.labor_hours);
     const items = withLabor.slice(0, CHART_LIMIT)
-      .map((r) => ({ label: r.technician, value: r.labor_cost, display: money(r.labor_cost) }));
+      .map((r) => ({ label: r.technician, value: r.labor_hours, display: fmtHours(r.labor_hours) }));
     target.innerHTML = barChart({
-      title: "Labor cost by technician",
+      title: "Hours logged by technician",
       note: withLabor.length > CHART_LIMIT
         ? `Top ${CHART_LIMIT} of ${withLabor.length} technicians with logged labor`
         : (items.length ? `${items.length} technician${items.length === 1 ? "" : "s"} with logged labor` : ""),
       items,
-    }) || chartNothingToPlot(rows.length, "labor cost");
+    }) || chartNothingToPlot(rows.length, "hours");
     return;
   }
   if (shape === "vehicle-profit") {
@@ -555,7 +647,7 @@ function reportEmptyState(shape) {
     return `<div class="panel">${emptyState({
       icon: "staff",
       title: "No technicians on staff",
-      hint: "Add your technicians in Staff and their repair orders, hours and labor cost will roll up here.",
+      hint: "Add your technicians in Staff and their repair orders, hours and open work will roll up here.",
       actions: `<button type="button" class="btn btn-ghost btn-sm" data-nav="staff">Go to Staff</button>`,
     })}</div>`;
   }
@@ -585,7 +677,8 @@ function reportHeaderRow(shape, hasDeposits) {
       + ["cost", "left", "idle"].map((k) => reportSortHeader("lot", k, "num-col")).join("");
   }
   if (shape === "technicians") {
-    return `${reportSortHeader("technicians", "technician")}${reportSortHeader("technicians", "ros", "num-col")}${reportSortHeader("technicians", "completed", "num-col")}${reportSortHeader("technicians", "hours", "num-col")}${reportSortHeader("technicians", "cost", "num-col")}`;
+    return reportSortHeader("technicians", "technician")
+      + ["ros", "completed", "open", "idle", "hours"].map((k) => reportSortHeader("technicians", k, "num-col")).join("");
   }
   if (shape === "vehicle-profit") {
     return ["stock", "vehicle", "vin"].map((k) => reportSortHeader("vehicle-profit", k)).join("")
@@ -647,8 +740,12 @@ function renderLotTable(rows) {
    and until now was invisible on any profit number the shop could produce. */
 function renderProfitTable(rows) {
   const sum = (fn) => rows.reduce((s, r) => s + (fn(r) || 0), 0);
-  const sold = rows.filter((r) => r.profit !== null && r.profit !== undefined);
-  const totalProfit = sold.reduce((s, r) => s + r.profit, 0);
+  // Sold and profitable-on-paper are two different counts, and the footer used
+  // one number for both: a car sold with no purchase price on file has no
+  // knowable profit, so it dropped out of the "N sold" tally and the footer
+  // disagreed with the card above it about how many cars the lot moved.
+  const sold = rows.filter((r) => r.sale_price !== null && r.sale_price !== undefined);
+  const totalProfit = rows.reduce((s, r) => s + (r.profit || 0), 0);
   const cell = (r) => {
     // An unsold car has no profit yet -- a dash, not a zero and not a loss.
     const unsold = r.profit === null || r.profit === undefined;
@@ -695,12 +792,13 @@ function renderReportTable(rows, shape) {
     const totRos = rows.reduce((s, r) => s + r.ro_count, 0);
     const totDone = rows.reduce((s, r) => s + r.completed_count, 0);
     const totHours = Math.round(rows.reduce((s, r) => s + r.labor_hours, 0) * 100) / 100;
-    const totCost = rows.reduce((s, r) => s + r.labor_cost, 0);
+    const totOpen = rows.reduce((s, r) => s + r.open_count, 0);
+    const worstIdle = rows.reduce((s, r) => Math.max(s, r.open_count ? r.worst_idle_days : 0), 0);
     return `<div class="panel"><div class="table-wrap table-scroll"><table class="sticky-head"><thead><tr>
       ${reportHeaderRow("technicians")}
       </tr></thead>
-      <tbody>${rows.map((r) => `<tr${r.ro_count ? "" : ' class="row-muted"'}><td>${esc(r.technician)}</td><td class="num-col">${r.ro_count}</td><td class="num-col">${r.completed_count}</td><td class="num-col">${Math.round(r.labor_hours * 100) / 100}</td><td class="num-col">${money(r.labor_cost)}</td></tr>`).join("")}</tbody>
-      <tfoot><tr><td>Total (${working} working)</td><td class="num-col">${totRos}</td><td class="num-col">${totDone}</td><td class="num-col">${totHours}</td><td class="num-col">${money(totCost)}</td></tr></tfoot>
+      <tbody>${rows.map((r) => `<tr${r.ro_count ? "" : ' class="row-muted"'}><td>${esc(r.technician)}</td><td class="num-col">${r.ro_count}</td><td class="num-col">${r.completed_count}</td><td class="num-col">${r.open_count || "—"}</td>${technicianIdleCell(r)}<td class="num-col">${Math.round(r.labor_hours * 100) / 100}</td></tr>`).join("")}</tbody>
+      <tfoot><tr><td>Total (${working} working)</td><td class="num-col">${totRos}</td><td class="num-col">${totDone}</td><td class="num-col">${totOpen || "—"}</td><td class="num-col">${totOpen ? esc(sittingText(worstIdle)) : "—"}</td><td class="num-col">${totHours}</td></tr></tfoot>
       </table></div></div>`;
   }
   if (shape === "lot") return renderLotTable(rows);
@@ -822,19 +920,22 @@ function renderPrintReport(rows, type, start, end) {
     const totRos = rows.reduce((s, r) => s + r.ro_count, 0);
     const totDone = rows.reduce((s, r) => s + r.completed_count, 0);
     const totalHours = rows.reduce((s, r) => s + r.labor_hours, 0);
-    const totalCost = rows.reduce((s, r) => s + r.labor_cost, 0);
+    const totalOpen = rows.reduce((s, r) => s + r.open_count, 0);
+    const worstIdle = rows.reduce((s, r) => Math.max(s, r.open_count ? r.worst_idle_days : 0), 0);
     body = `
       <table class="print-table report">
-        <thead><tr><th>Technician</th><th class="num-col">ROs</th><th class="num-col">Completed</th><th class="num-col">Labor Hours</th><th class="num-col">Labor Cost</th></tr></thead>
-        <tbody>${rows.map((r) => `<tr${r.ro_count ? "" : ' class="idle"'}><td>${esc(r.technician)}</td><td class="num-col">${r.ro_count}</td><td class="num-col">${r.completed_count}</td><td class="num-col">${Math.round(r.labor_hours * 100) / 100}</td><td class="num-col">${money(r.labor_cost)}</td></tr>`).join("")}</tbody>
+        <thead><tr><th>Technician</th><th class="num-col">ROs</th><th class="num-col">Completed</th><th class="num-col">Still Open</th><th class="num-col">Sitting</th><th class="num-col">Hours</th></tr></thead>
+        <tbody>${rows.map((r) => `<tr${r.ro_count ? "" : ' class="idle"'}><td>${esc(r.technician)}</td><td class="num-col">${r.ro_count}</td><td class="num-col">${r.completed_count}</td><td class="num-col">${r.open_count || "—"}</td><td class="num-col">${r.open_count ? esc(sittingText(r.worst_idle_days)) : "—"}</td><td class="num-col">${Math.round(r.labor_hours * 100) / 100}</td></tr>`).join("")}</tbody>
         <tfoot>
-          <tr><td>Report Total (${working} of ${rows.length} working)</td><td class="num-col">${totRos}</td><td class="num-col">${totDone}</td><td class="num-col">${Math.round(totalHours * 100) / 100}</td><td class="num-col">${money(totalCost)}</td></tr>
-          <tr class="tfoot-space" aria-hidden="true"><td colspan="5"></td></tr>
+          <tr><td>Report Total (${working} of ${rows.length} working)</td><td class="num-col">${totRos}</td><td class="num-col">${totDone}</td><td class="num-col">${totalOpen || "—"}</td><td class="num-col">${totalOpen ? esc(sittingText(worstIdle)) : "—"}</td><td class="num-col">${Math.round(totalHours * 100) / 100}</td></tr>
+          <tr class="tfoot-space" aria-hidden="true"><td colspan="6"></td></tr>
         </tfoot>
       </table>`;
   } else if (shape === "vehicle-profit") {
     const sum = (fn) => rows.reduce((s, r) => s + (fn(r) || 0), 0);
-    const sold = rows.filter((r) => r.profit !== null && r.profit !== undefined);
+    // Same count the screen's footer uses -- paper and screen have to agree
+    // about how many cars the lot sold. See renderProfitTable.
+    const sold = rows.filter((r) => r.sale_price !== null && r.sale_price !== undefined);
     body = `
       <table class="print-table report">
         <thead><tr><th>Stock #</th><th>Vehicle</th><th>VIN</th><th class="num-col">Hours</th><th class="num-col">Purchase</th><th class="num-col">Total In</th><th class="num-col">Sold For</th><th class="num-col">Profit</th><th class="num-col">Margin</th></tr></thead>
@@ -848,7 +949,7 @@ function renderPrintReport(rows, type, start, end) {
           <tr><td colspan="3">Report Total (${rows.length} vehicle${rows.length === 1 ? "" : "s"}, ${sold.length} sold)</td>
             <td class="num-col">${fmtHours(sum((r) => r.labor_hours))}</td>
             <td class="num-col">${money(sum((r) => r.purchase_price))}</td><td class="num-col">${money(sum((r) => r.total_invested))}</td>
-            <td class="num-col">${money(sum((r) => r.sale_price))}</td><td class="num-col">${money(sold.reduce((s, r) => s + r.profit, 0))}</td><td class="num-col"></td></tr>
+            <td class="num-col">${money(sum((r) => r.sale_price))}</td><td class="num-col">${money(sum((r) => r.profit))}</td><td class="num-col"></td></tr>
           <tr class="tfoot-space" aria-hidden="true"><td colspan="9"></td></tr>
         </tfoot>
       </table>`;
@@ -920,7 +1021,7 @@ function showReportPlaceholders() {
   // height or flash the header in once data lands. Rendered at the max
   // column count (deposits included) so the real table only ever narrows.
   const shape = reportShape(state.reportType);
-  const cols = shape === "technicians" ? 5 : 8;
+  const cols = shape === "technicians" ? 6 : 8;
   $("#report-output").innerHTML = `<div class="panel"><div class="table-wrap table-scroll"><table class="sticky-head"><thead><tr>
     ${reportHeaderRow(shape, true)}
     </tr></thead><tbody>${skeletonRows(cols)}</tbody></table></div></div>`;
@@ -961,6 +1062,11 @@ let reportSeq = 0;
 
 async function generateReport() {
   const seq = ++reportSeq;
+  // Every fetch resolves the named range against today first, so an app left
+  // open past midnight or reopened days later corrects itself the moment the
+  // screen asks for anything. syncReportControls only when it moved, so the
+  // From/To fields never sit showing a window the numbers below don't cover.
+  if (refreshQuickRange()) syncReportControls();
   const type = state.reportType;
   const shape = reportShape(type);
   /* Each shape gets its own reading order until somebody chooses otherwise.

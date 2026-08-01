@@ -6,7 +6,7 @@ import { EMPTY_ICONS, emptyState } from "./empty-states.js";
 import { state } from "./state.js";
 import { openVehicleDetail } from "./vehicle-detail.js";
 import { assigneeSummaryLabel, renderAssigneeMenu, wireAssigneeToggle } from "./multi-picker.js";
-import { loadTasks, renderTaskBulkBar, saveTaskPrefs, selectTaskRange, syncTaskSelectAll } from "./task-bulk.js";
+import { loadTasks, renderTaskBulkBar, saveTaskPrefs, selectTaskRange, syncTaskSelectAll, taskOrderOptionsHtml } from "./task-bulk.js";
 
 /* ==================================================================
    TASKS
@@ -69,12 +69,26 @@ const TASK_VEHICLE_SVG = `<svg viewBox="0 0 24 24">${EMPTY_ICONS.vehicle}</svg>`
    row missing its ref id) renders as static text instead of vanishing, because the × needs
    something to sit next to -- unlink is exactly what you want for a task
    pointing at a record you can no longer visit. */
+/* A ticket that's been voided, or a car that's been sold and archived to
+   History, is still the car the task is about -- the link stays. But an open
+   follow-up on a car that left the lot a month ago used to be indistinguishable
+   from one on a car sitting in the bay, and it's the first thing you'd want to
+   know before spending the morning on it. The picker never offers these; this
+   is only for links made before the car moved on. */
+const TASK_ORDER_STATE_NOTE = { voided: "voided", archived: "in History" };
+const TASK_ORDER_STATE_TITLE = {
+  voided: "This ticket was voided — open the vehicle anyway",
+  archived: "This car has been sent to History — open it anyway",
+};
+
 function taskVehicleChip(t, linkable, refId) {
   if (t.order_id) {
     const label = esc(t.order_label || t.order_number || `#${t.order_id}`);
+    const note = TASK_ORDER_STATE_NOTE[t.order_state] || "";
+    const body = `${TASK_VEHICLE_SVG}${label}${note ? `<span class="task-order-state">${note}</span>` : ""}`;
     const jump = linkable
-      ? `<button type="button" class="task-order-link" data-segment="${t.order_segment}" data-ref-id="${refId}" title="Open this vehicle">${TASK_VEHICLE_SVG}${label}</button>`
-      : `<span class="task-order-link is-static">${TASK_VEHICLE_SVG}${label}</span>`;
+      ? `<button type="button" class="task-order-link" data-segment="${t.order_segment}" data-ref-id="${refId}" title="${TASK_ORDER_STATE_TITLE[t.order_state] || "Open this vehicle"}">${body}</button>`
+      : `<span class="task-order-link is-static">${body}</span>`;
     return `<span class="task-order-wrap">${jump}${t.done ? "" : `<button type="button" class="task-link-clear" title="Unlink this vehicle" aria-label="Unlink ${label} from ${esc(t.title)}">×</button>`}</span>`;
   }
   return t.done ? "" : `<button type="button" class="task-link-add" title="Link this task to a vehicle">+ vehicle</button>`;
@@ -265,14 +279,11 @@ function wireTaskRowActions(container) {
   $$(".task-link-add", container).forEach((btn) => {
     btn.addEventListener("click", () => {
       const row = btn.closest(".task-row");
-      const linkables = (state.taskOrders || []).filter((o) => o.segment === "recon" || o.segment === "we_owe" || o.segment === "retail");
+      const linkables = state.taskOrders || [];
       if (!linkables.length) return toast("No recon or customer vehicles to link yet", true);
       const select = document.createElement("select");
       select.className = "task-link-edit";
-      select.innerHTML = `<option value="">Pick a vehicle…</option>` + linkables.map((o) => {
-        const label = o.stock_number ? `${o.stock_number} — ${o.year} ${o.make} ${o.model}` : `${o.customer_name} — ${o.year} ${o.make} ${o.model}`;
-        return `<option value="${o.id}">${esc(label)}</option>`;
-      }).join("");
+      select.innerHTML = taskOrderOptionsHtml(linkables, "Pick a vehicle…");
       btn.replaceWith(select);
       select.focus();
       let saving = false;

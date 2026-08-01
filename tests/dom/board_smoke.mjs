@@ -14,7 +14,10 @@ const veh = (over) => ({
   segment: "recon", recon_id: null, we_owe_id: null, stock_number: "", vehicle: "",
   vin: "", customer_name: "", status: "in_progress", status_bucket: "in_progress",
   purchase_price: 0, actual_cost: 0, quoted_cost: 0, technicians: [], updated_at: "2026-07-01T09:00:00",
-  age_days: 1, parts_pending: 0, parts_pending_value: 0,
+  // Blank is the common case and the awkward one: most cars have no arrival
+  // date on file, and the cell has to say so rather than passing the write-up
+  // date off as one. Rows that do carry one set it explicitly below.
+  acquired_at: "", age_days: 1, parts_pending: 0, parts_pending_value: 0,
   idle_days: 0, last_activity_at: "2026-07-25T08:00:00", order_id: null, ...over,
 });
 
@@ -42,7 +45,7 @@ const veh = (over) => ({
    nearly as long. A column that quietly read age_days would still pass a
    same-order fixture, and fails this one. */
 let board = [
-  veh({ recon_id: 1, stock_number: "B204", vehicle: "2019 Ford F-150", vin: "1FTEW1E5XKF", status: "in_progress", technicians: ["Dana"], age_days: 22, quoted_cost: 900, actual_cost: 1450, parts_pending: 2, parts_pending_value: 340, idle_days: 0, last_activity_at: "2026-07-25T08:15:00" }),
+  veh({ recon_id: 1, stock_number: "B204", vehicle: "2019 Ford F-150", vin: "1FTEW1E5XKF", status: "in_progress", technicians: ["Dana"], acquired_at: "2026-06-09", age_days: 22, quoted_cost: 900, actual_cost: 1450, parts_pending: 2, parts_pending_value: 340, idle_days: 0, last_activity_at: "2026-07-25T08:15:00" }),
   veh({ recon_id: 2, stock_number: "A118", vehicle: "2021 Honda Civic", vin: "2HGFC2F69MH", status: "estimate", technicians: [], age_days: 3, quoted_cost: 600, actual_cost: 0, idle_days: 2, last_activity_at: "2026-07-23T11:00:00" }),
   veh({ segment: "we_owe", we_owe_id: 5, stock_number: "", vehicle: "2017 Toyota Camry", customer_name: "R. Alvarez", status: "pending_approval", status_bucket: "in_progress", technicians: ["Chris", "Dana"], age_days: 41, quoted_cost: 300, actual_cost: 310, parts_pending: 1, parts_pending_value: 85, idle_days: 4, last_activity_at: "2026-07-21T09:30:00" }),
   // The two stalled cars carry real ticket ids: they're what "Make Tasks"
@@ -60,6 +63,11 @@ let board = [
   veh({ segment: "we_owe", we_owe_id: 6, order_id: 72, stock_number: "D451", vehicle: "2020 Subaru Outback", customer_name: "T. Nguyen", status: "open", status_bucket: "in_progress", technicians: [], age_days: 15, quoted_cost: 0, actual_cost: 0, idle_days: 21, last_activity_at: "2026-07-04T10:00:00" }),
 ];
 
+/* What History holds. Empty for most of this file -- the board is the live
+   list -- and filled in by the search-reach section, which is entirely about
+   what happens when the car you're looking for is in the other list. */
+let archived = [];
+
 const bulkCreateBodies = [];
 
 const { w, doc, fetchLog, settle, ok, finish, rejections } = await boot({
@@ -67,9 +75,9 @@ const { w, doc, fetchLog, settle, ok, finish, rejections } = await boot({
            "vehicleKey", "loadVehicleViewPrefs", "renderVehicleStatusOptions", "VEHICLE_SORTS",
            "VEHICLE_PREFS_KEY", "resetVehicleView", "boardStats", "isOverQuote", "BOARD_COLUMNS",
            "IDLE_BUCKETS", "idleBucket", "IDLE_SELECTIONS", "STALLED_AFTER_DAYS", "isStalled",
-           "bulkTaskTitle"],
+           "bulkTaskTitle", "isPromiseLate", "fmtDay"],
   fetch: async (url, opts) => {
-    if (url.startsWith("/api/vehicles-board")) return url.includes("archived=true") ? [] : board;
+    if (url.startsWith("/api/vehicles-board")) return url.includes("archived=true") ? archived : board;
     if (/^\/api\/(recon\/vehicles|we-owe)\/\d+$/.test(url)) return { id: 1, archived_at: "", stock_number: "B204", vehicle: "2019 Ford F-150" };
     if (url === "/api/tasks/bulk-create") {
       const body = JSON.parse(opts.body);
@@ -335,13 +343,35 @@ await settle();
 ok(!w.state.vehiclePartsOnly && !partsChip.classList.contains("active"), "Reset view left the parts toggle on");
 ok(dataRows().length === 5, `after reset the whole board should be back, got ${dataRows().length}`);
 
+/* ---------- Age column ----------
+   Age is "how long has this car been here", counted from the day it arrived
+   on the lot -- which is not always the day somebody typed it in. The cell has
+   to say which date it came off, or a wrong arrival date is invisible and the
+   number is unarguable. A we-owe has no lot arrival: its clock starts at the
+   promise, and the tooltip has to say that rather than claiming a date it
+   doesn't have. */
+// The day count itself is the server's (age_days); the cell only renders it
+// and says what it was counted from, so the fixture sets the two separately.
+const rowByKey = (key) => dataRows().find((tr) => tr.dataset.key === key);
+const ageCell = (key) => rowByKey(key).querySelector("td.age-col .age-cell");
+
+ok(ageCell("recon:1").textContent.trim() === "22d", `Age reads "${ageCell("recon:1").textContent.trim()}", expected 22d`);
+ok(/On the lot since 2026-06-09/.test(ageCell("recon:1").title),
+   `the Age tooltip should name the arrival date, got "${ageCell("recon:1").title}"`);
+ok(/22 days/.test(ageCell("recon:1").title), `the Age tooltip reads "${ageCell("recon:1").title}"`);
+// No arrival date on file: say so rather than implying the write-up date is one.
+ok(/no arrival date on file/.test(ageCell("recon:2").title),
+   `a car with no arrival date reads "${ageCell("recon:2").title}"`);
+ok(/Written up 3 days ago/.test(ageCell("recon:2").title), `got "${ageCell("recon:2").title}"`);
+ok(/^Promised 41 days ago$/.test(ageCell("we_owe:5").title),
+   `a we-owe's Age tooltip should talk about the promise, got "${ageCell("we_owe:5").title}"`);
+
 /* ---------- Idle column ----------
    Idle is "days since anything happened on this car's ticket", which is a
    different number from Age and comes from a different place (the server's
    orders.last_activity_at, not the vehicle row). The fixture's idle values are
    deliberately in a different order from its ages, so a cell or comparator
    reading age_days by mistake shows up here rather than looking right. */
-const rowByKey = (key) => dataRows().find((tr) => tr.dataset.key === key);
 const idleCell = (key) => rowByKey(key).querySelector("td.idle-col .idle-cell");
 
 ok(th("idle"), "the board has no sortable Idle column");
@@ -839,6 +869,105 @@ ok(empty && Number(empty.querySelector("td").getAttribute("colspan")) === headCe
    `the empty row spans ${empty && empty.querySelector("td").getAttribute("colspan")} of ${headCells} columns`);
 body.querySelector('[data-empty-action="clear-search"]').click();
 ok(dataRows().length === 5, "the empty state's Clear search button didn't restore the board");
+
+/* ---------- search reaches past the view it's in ----------
+
+   The search box is how a car gets looked up -- typing in it from any screen
+   lands here -- but it only ever filtered the rows this view had already
+   fetched. So it answered "No vehicles match that search" about cars that are
+   in the app, in two everyday ways: the car had been filed to History, or the
+   board was still narrowed by a segment/status/toggle left on from a previous
+   session. Both told the advisor the car doesn't exist.
+
+   Every assertion below is about a car the app definitely has. */
+archived = [
+  // Shares a model with the live F-150 on purpose: that's the case where the
+  // table has a row to show AND there are more matches somewhere else, which
+  // is the reach line rather than the empty state.
+  veh({ recon_id: 40, stock_number: "H900", vehicle: "2016 Ford F-150", vin: "1FTFW1EF0GF",
+        status: "complete", status_bucket: "finished", age_days: 120, idle_days: 96 }),
+];
+w.resetVehicleView();
+await settle();
+// Reloading the board throws away what it knew about the other half -- that
+// reload is also how archiving and reopening land, which is exactly the
+// operation that moves cars between the two lists.
+ok(w.state.searchElsewhereScope === "" && w.state.searchElsewhere === null,
+   "a board reload kept a cached copy of the other list");
+
+const reachLine = () => doc.querySelector("#vehicles-search-reach");
+const setSearch = (value) => {
+  search.value = value;
+  search.dispatchEvent(new w.Event("input", { bubbles: true }));
+};
+
+setSearch("H900");
+// The archived list hasn't been fetched yet at this point, and until it has,
+// nothing may claim anything about it either way.
+ok(body.textContent.includes("No vehicles match"),
+   "the first render of a search with no local match should say so");
+ok(!body.textContent.includes("History"),
+   "the board claimed something about History before it had looked there");
+await settle();
+ok(fetchLog.some((f) => f.url.includes("archived=true")),
+   "searching never asked the server for the archived list");
+ok(body.textContent.includes("1 match is in History"),
+   `a car in History wasn't reported: ${body.textContent.replace(/\s+/g, " ").trim()}`);
+ok(reachLine().hidden, "the reach line duplicated the empty state with no rows on screen");
+
+body.querySelector('[data-search-reach="search-elsewhere"]').click();
+await settle();
+ok(w.state.filter === "history", `Open History left the board on "${w.state.filter}"`);
+ok(stocks().includes("H900"), `Open History didn't land on the car: ${stocks().join(", ")}`);
+ok(search.value === "H900", "the search was dropped on the way to History");
+ok(chip("history").classList.contains("active"), "the History chip didn't light up");
+
+// ...and the same the other way round, which is the case a one-directional
+// fix would miss: from History, a car on the live board is just as invisible.
+setSearch("D451");
+await settle();
+ok(body.textContent.includes("1 match is on the active board"),
+   `from History, a live car wasn't reported: ${body.textContent.replace(/\s+/g, " ").trim()}`);
+body.querySelector('[data-search-reach="search-elsewhere"]').click();
+await settle();
+ok(w.state.filter === "" && stocks().includes("D451"),
+   `Back to the board didn't land on the car: ${w.state.filter} / ${stocks().join(", ")}`);
+
+// Rows on screen and more elsewhere: the line above the table, not the empty
+// state, and it counts only the matches this view isn't showing.
+setSearch("F-150");
+await settle();
+ok(dataRows().length === 1, `"F-150" should show the one live F-150, got ${dataRows().length}`);
+ok(!reachLine().hidden, "the reach line stayed hidden with a match sitting in History");
+ok(reachLine().textContent.includes("1 more match in History"),
+   `reach line reads "${reachLine().textContent.replace(/\s+/g, " ").trim()}"`);
+
+// The other half of the bug: filters the advisor set weeks ago and forgot.
+chip("recon").click();
+const statusFilter = doc.querySelector("#vehicles-status-filter");
+statusFilter.value = "in_progress";
+statusFilter.dispatchEvent(new w.Event("change", { bubbles: true }));
+setSearch("D451");
+await settle();
+ok(body.textContent.includes("1 match is hidden by the filters on this view"),
+   `a filtered-away match wasn't reported: ${body.textContent.replace(/\s+/g, " ").trim()}`);
+body.querySelector('[data-search-reach="widen-search"]').click();
+ok(w.state.filter === "" && w.state.vehicleStatus === "",
+   `Show all matches left filters on: ${w.state.filter} / ${w.state.vehicleStatus}`);
+ok(stocks().includes("D451"), `Show all matches didn't reveal the car: ${stocks().join(", ")}`);
+
+// A search that genuinely matches nothing still says so -- and now says it
+// having actually looked in both lists.
+setSearch("zzzznothing");
+await settle();
+ok(body.textContent.includes("No vehicles match"), "a search matching nothing lost its empty state");
+ok(body.textContent.includes("or in History"),
+   `the empty state didn't say History had been checked: ${body.textContent.replace(/\s+/g, " ").trim()}`);
+ok(reachLine().hidden, "the reach line showed itself with nothing to report");
+
+setSearch("");
+ok(reachLine().hidden, "the reach line outlived the search that produced it");
+ok(dataRows().length === 5, `clearing the search should restore the board, got ${dataRows().length}`);
 
 /* ---------- escaping ---------- */
 w.state.vehicles = [veh({ recon_id: 9, stock_number: '<img src=x onerror="window.__pwned=1">', vehicle: "X" })];

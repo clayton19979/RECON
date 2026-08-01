@@ -1,6 +1,6 @@
 import { $, post } from "./core.js";
 import { toast } from "./notify.js";
-import { withLoading } from "./shortcuts.js";
+import { todayLocal, withLoading } from "./shortcuts.js";
 import { state } from "./state.js";
 import { loadVehiclesView } from "./vehicles-board.js";
 
@@ -10,7 +10,9 @@ import { loadVehiclesView } from "./vehicles-board.js";
 export function openReconDialog() {
   $("#recon-form").reset();
   $("#recon-year").value = new Date().getFullYear();
-  $("#recon-date").value = new Date().toISOString().slice(0, 10);
+  // The day the car landed, and it is what the board's Age column counts
+  // from -- so this default has to be the shop's today, not UTC's.
+  $("#recon-date").value = todayLocal();
   $("#recon-dialog").showModal();
 }
 export function wireReconDialog() {

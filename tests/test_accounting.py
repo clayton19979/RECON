@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 
-from app.db import init_db
+from app.db import connect, init_db
 from tests.helpers import make_recon_order, make_recon_vehicle, save_estimate
 
 
@@ -369,6 +369,166 @@ def test_void_ap_invoice_twice_rejected(client):
 def test_void_ap_invoice_unknown_404s(client):
     res = client.patch("/api/ap/invoices/99999/void", json={"actor": "Clay"})
     assert res.status_code == 404
+
+
+def receive(client, order_id, item_ids, vendor_id, invoice_number, **extra):
+    res = client.post(
+        f"/api/orders/{order_id}/estimate/receive-parts",
+        json={"item_ids": item_ids, "vendor_id": vendor_id, "invoice_number": invoice_number, **extra},
+    )
+    assert res.status_code == 200, res.text
+    return res.json()
+
+
+def parts_ticket(client, stock_number, items):
+    vehicle = make_recon_vehicle(client, stock_number=stock_number)
+    order = make_recon_order(client, vehicle["id"])
+    estimate = save_estimate(
+        client,
+        order["id"],
+        [
+            {
+                "kind": "part",
+                "description": description,
+                "part_number": part_number,
+                "quantity": 1,
+                "unit_price": cost,
+                "unit_cost": cost,
+            }
+            for description, part_number, cost in items
+        ],
+    )
+    return vehicle, order, [i["id"] for i in estimate["items"]]
+
+
+def test_voiding_a_receipt_takes_its_cost_back_off_the_vehicle(client):
+    """A vendor invoice is how a part's cost lands on a car, so voiding one
+    has to take that cost back off. It used to void the bill and leave the
+    receipt: A/P dropped by $420 and the car's spend didn't move, with nothing
+    on either screen to explain the gap -- and "what did we spend on this car"
+    is the question the app exists to answer."""
+    vendor = client.post("/api/vendors", json={"name": "WorldPac"}).json()
+    vehicle, order, item_ids = parts_ticket(client, "R-7001", [("Windshield", "WS-1", 180), ("Rotors", "RT-1", 240)])
+    invoice_id = receive(client, order["id"], item_ids, vendor["id"], "WP-9911")["ap_invoice_id"]
+    assert client.get(f"/api/recon/vehicles/{vehicle['id']}").json()["total_cost"] == 420
+
+    res = client.patch(f"/api/ap/invoices/{invoice_id}/void", json={"actor": "Clay"})
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["unreceived_items"] == 2
+    assert body["unreceived_value"] == 420
+
+    assert client.get(f"/api/recon/vehicles/{vehicle['id']}").json()["total_cost"] == 0
+    items = client.get(f"/api/orders/{order['id']}").json()["estimate"]["items"]
+    assert [i["status"] for i in items] == ["ordered", "ordered"], "still outstanding, not back to a fresh quote"
+    assert all(i["received_quantity"] == 0 for i in items)
+    assert all(i["received_invoice_number"] == "" for i in items), "a voided number must not stay cited on the line"
+
+
+def test_voiding_a_receipt_lets_the_corrected_invoice_be_posted(client):
+    """The reason voiding had to undo the receipt. Receiving takes the whole
+    outstanding quantity, so a line already marked received refuses a second
+    receipt -- an advisor who voided a mistyped invoice could not then post
+    the right one, and the only way out was to delete the line and retype it."""
+    vendor = client.post("/api/vendors", json={"name": "WorldPac"}).json()
+    _, order, item_ids = parts_ticket(client, "R-7002", [("Windshield", "WS-1", 180)])
+    invoice_id = receive(client, order["id"], item_ids, vendor["id"], "WP-TYPO")["ap_invoice_id"]
+
+    client.patch(f"/api/ap/invoices/{invoice_id}/void", json={"actor": "Clay"})
+
+    res = client.post(
+        f"/api/orders/{order['id']}/estimate/receive-parts",
+        json={"item_ids": item_ids, "vendor_id": vendor["id"], "invoice_number": "WP-9911"},
+    )
+    assert res.status_code == 200, res.text
+    items = client.get(f"/api/orders/{order['id']}").json()["estimate"]["items"]
+    assert items[0]["received_invoice_number"] == "WP-9911"
+
+
+def test_voiding_an_invoice_that_covers_two_cars_clears_both(client):
+    """One vendor invoice routinely covers parts for several cars. The whole
+    bill is what was declared unreal, so every car it touched gets its money
+    back -- including the ones it was extended onto after the first delivery,
+    which is when the invoice stops naming any single ticket of its own."""
+    vendor = client.post("/api/vendors", json={"name": "WorldPac"}).json()
+    first_vehicle, first_order, first_items = parts_ticket(client, "R-7003", [("Axle", "AX-1", 200)])
+    second_vehicle, second_order, second_items = parts_ticket(client, "R-7004", [("Mirror", "MR-1", 90)])
+
+    invoice_id = receive(client, first_order["id"], first_items, vendor["id"], "WP-SHARED")["ap_invoice_id"]
+    receive(client, second_order["id"], second_items, vendor["id"], "WP-SHARED")
+    assert client.get("/api/ap/invoices").json()[0]["order_id"] is None, "a shared invoice names no single ticket"
+
+    body = client.patch(f"/api/ap/invoices/{invoice_id}/void", json={"actor": "Clay"}).json()
+    assert body["unreceived_items"] == 2
+    assert client.get(f"/api/recon/vehicles/{first_vehicle['id']}").json()["total_cost"] == 0
+    assert client.get(f"/api/recon/vehicles/{second_vehicle['id']}").json()["total_cost"] == 0
+    for order in (first_order, second_order):
+        actions = [e["action"] for e in client.get(f"/api/orders/{order['id']}").json()["activity"]]
+        assert "ap_invoice_voided" in actions, "the ticket whose money moved has to say why"
+
+
+def test_voiding_an_invoice_with_no_per_line_links_still_reverses(client):
+    """ap_invoice_items only started recording which estimate line each billed
+    line paid for once receiving on a ticket existed. Invoices posted through
+    the agent endpoint -- and every invoice already in the shop's database
+    from before that column -- carry no links, so the reversal falls back to
+    the invoice number the receipt itself recorded."""
+    client.post("/api/vendors", json={"name": "WorldPac"})
+    vehicle, order, _ = parts_ticket(client, "R-7005", [("Brake pads", "BP-100", 45)])
+    post_invoice(client, po_number=order["number"])
+    invoice_id = client.get("/api/ap/invoices").json()[0]["id"]
+    assert client.get(f"/api/recon/vehicles/{vehicle['id']}").json()["total_cost"] == 45
+
+    body = client.patch(f"/api/ap/invoices/{invoice_id}/void", json={"actor": "Clay"}).json()
+    assert body["unreceived_items"] == 1
+    assert client.get(f"/api/recon/vehicles/{vehicle['id']}").json()["total_cost"] == 0
+
+
+def test_voiding_leaves_a_receipt_posted_under_another_invoice_alone(client, db_path):
+    """Voiding undoes what *this* bill did, and nothing else. A line whose
+    receipt now cites a different invoice belongs to that one, and stripping
+    it would take real money off a car on the strength of a stale link.
+
+    Receiving always takes the whole outstanding quantity, so the API cannot
+    line this up on its own -- the receipt is repointed directly, the way a
+    corrected re-post leaves it."""
+    vendor = client.post("/api/vendors", json={"name": "WorldPac"}).json()
+    vehicle, order, item_ids = parts_ticket(client, "R-7006", [("Windshield", "WS-1", 180)])
+    invoice_id = receive(client, order["id"], item_ids, vendor["id"], "WP-TYPO")["ap_invoice_id"]
+    with connect(db_path) as db:
+        db.execute("UPDATE estimate_items SET received_invoice_number='WP-9911' WHERE id=?", (item_ids[0],))
+        db.commit()
+
+    body = client.patch(f"/api/ap/invoices/{invoice_id}/void", json={"actor": "Clay"}).json()
+    assert body["unreceived_items"] == 0
+    assert client.get(f"/api/recon/vehicles/{vehicle['id']}").json()["total_cost"] == 180
+
+
+def test_voiding_a_return_credit_puts_the_part_back_in_the_credit_queue(client):
+    """The credit for a returned part is an A/P row like any other. Voiding it
+    says the vendor never issued it, so the return goes back to Awaiting
+    Credit where the real one can be posted against it."""
+    vendor = client.post("/api/vendors", json={"name": "WorldPac"}).json()
+    _, order, item_ids = parts_ticket(client, "R-7007", [("Alternator", "ALT-1", 150)])
+    receive(client, order["id"], item_ids, vendor["id"], "WP-9911")
+    client.patch(f"/api/orders/{order['id']}/estimate/items/{item_ids[0]}/part-return", json={"actor": "Clay"})
+    res = client.post(
+        f"/api/orders/{order['id']}/estimate/items/{item_ids[0]}/post-return-credit",
+        json={"vendor_id": vendor["id"], "credit_number": "CM-TYPO", "actor": "Clay"},
+    )
+    assert res.status_code == 200, res.text
+    credit_id = res.json()["ap_invoice_id"]
+    assert client.get("/api/returns").json()[0]["return_invoice_number"] == "CM-TYPO"
+
+    body = client.patch(f"/api/ap/invoices/{credit_id}/void", json={"actor": "Clay"}).json()
+    assert body["credits_cleared"] == 1
+    assert client.get("/api/returns").json()[0]["return_invoice_number"] == ""
+
+    res = client.post(
+        f"/api/orders/{order['id']}/estimate/items/{item_ids[0]}/post-return-credit",
+        json={"vendor_id": vendor["id"], "credit_number": "CM-4402", "actor": "Clay"},
+    )
+    assert res.status_code == 200, res.text
 
 
 def test_process_invoice_matches_po_by_stock_number(client):

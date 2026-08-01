@@ -84,6 +84,30 @@ def test_every_imported_name_is_actually_exported() -> None:
     assert not problems, "imports that would fail at load time:\n" + "\n".join(problems)
 
 
+def test_no_two_modules_declare_the_same_top_level_name() -> None:
+    """One name, one function.
+
+    Module scope makes two same-named helpers in two files legal, and the app
+    itself runs them correctly -- but the DOM smoke tests concatenate every
+    module into one scope, where the last declaration silently wins for
+    everybody. So a screen can be tested against a namesake it never calls,
+    which is exactly what happened: customers.js kept a private fmtDay, the
+    printer got a shared one, and the board's tests were exercising the
+    customers copy while the real page used the other.
+
+    The fix is always the same -- put it in one module and import it -- so the
+    rule is simply that the collision may not exist.
+    """
+    owners: dict[str, list[str]] = {}
+    for path in module_paths():
+        for decl in declared_identifiers(path.read_text(encoding="utf-8"), top_level_only=True):
+            owners.setdefault(decl, []).append(path.name)
+    clashes = {name: files for name, files in owners.items() if len(files) > 1}
+    assert not clashes, "names declared at module scope in more than one file:\n" + "\n".join(
+        f"{name}: {', '.join(sorted(files))}" for name, files in sorted(clashes.items())
+    )
+
+
 def test_no_module_imports_a_name_it_never_uses() -> None:
     """An import that nothing reads is a stale dependency -- it survives the
     deletion of its last call site and makes the module graph read as more

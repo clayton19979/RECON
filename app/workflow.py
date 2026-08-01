@@ -24,12 +24,39 @@ class StaffPatch(BaseModel):
     active: bool | None = None
 
 
+#: "Take this person off the ticket." None already means "field not sent" on
+#: this model, so clearing an assignment needs a value of its own -- the same
+#: unlink sentinel TaskPatch.order_id uses.
+UNASSIGN = -1
+
+
 class AssignmentIn(BaseModel):
+    """A partial save of the ticket's Assigned / Timing card.
+
+    Every field defaults to None meaning *not sent -- leave it alone*, which
+    is what makes the card's two Save buttons safe to press. They write
+    different halves of one row: the Assign popover owns who is on the
+    ticket, the Timing card owns the dates and the odometer. When this was a
+    blind full overwrite, pressing either one wrote all five fields from
+    whatever the page happened to be showing -- so typing a mileage and
+    saving silently stamped the pre-selected advisor onto a ticket nobody
+    had assigned, and a stale second workstation wiped the technician the
+    first one had just put on.
+
+    expected_version is the version of order_workflow the page loaded. The
+    column has been incremented on every save since it was added but never
+    once checked, so two people editing one ticket lost each other's work
+    with no error. Same optimistic-concurrency contract as the estimate
+    grid and the recon vehicle record: send it and a stale save is refused,
+    omit it and you take the old last-write-wins behaviour.
+    """
+
     advisor_id: int | None = None
     technician_id: int | None = None
-    date_in: str = ""
-    odometer_in: int = Field(default=0, ge=0)
-    promised_at: str = ""
+    date_in: str | None = None
+    odometer_in: int | None = Field(default=None, ge=0)
+    promised_at: str | None = None
+    expected_version: int | None = None
     actor: str = "ui"
 
 
@@ -117,6 +144,10 @@ STATUS_LABEL = {
 }
 
 SEGMENT_LABEL = {"recon": "recon", "we_owe": "we-owe", "retail": "retail"}
+
+# Worded like the estimate's and the recon vehicle's, because to whoever is
+# reading it these are the same event: the page in front of them is out of date.
+ASSIGNMENT_CONFLICT = "Someone else changed this ticket since you loaded it -- reload to see their update"
 
 
 def cents(value: float | str | Decimal) -> int:
@@ -368,17 +399,67 @@ def build_workflow_router(connect: Callable[[], sqlite3.Connection], now_fn: Cal
                 (item.advisor_id, {"advisor", "manager"}, "Advisor"),
                 (item.technician_id, {"technician"}, "Technician"),
             ):
-                if staff_id is None:
+                if staff_id is None or staff_id == UNASSIGN:
                     continue
                 staff = db.execute("SELECT role,active FROM staff WHERE id=?", (staff_id,)).fetchone()
                 if not staff or not staff["active"] or staff["role"] not in roles:
                     raise HTTPException(400, f"{label} is not an active {label.lower()}")
             db.execute("INSERT OR IGNORE INTO order_workflow(order_id) VALUES(?)", (order_id,))
-            db.execute(
-                "UPDATE order_workflow SET advisor_id=?,technician_id=?,date_in=?,odometer_in=?,promised_at=?,version=version+1 WHERE order_id=?",
-                (item.advisor_id, item.technician_id, item.date_in, item.odometer_in, item.promised_at, order_id),
+
+            # (column, was it sent, what to write). Sent and value have to be
+            # tracked separately: UNASSIGN means "sent, and it clears the
+            # slot", so it writes NULL -- which is indistinguishable from
+            # "not sent" if you only look at the value.
+            fields: list[str] = []
+            params: list[object] = []
+            for name, sent, value in (
+                ("advisor_id", item.advisor_id is not None, None if item.advisor_id == UNASSIGN else item.advisor_id),
+                (
+                    "technician_id",
+                    item.technician_id is not None,
+                    None if item.technician_id == UNASSIGN else item.technician_id,
+                ),
+                ("date_in", item.date_in is not None, (item.date_in or "").strip()),
+                ("odometer_in", item.odometer_in is not None, item.odometer_in),
+                ("promised_at", item.promised_at is not None, (item.promised_at or "").strip()),
+            ):
+                if sent:
+                    fields.append(f"{name}=?")
+                    params.append(value)
+
+            if not fields:
+                # Nothing was sent, so nothing happened -- returning early
+                # keeps a no-op save off the activity log and, more usefully,
+                # stops it resetting the board's Idle clock on a car nobody
+                # actually touched.
+                return workflow_detail(db, order_id)["assignment"]
+
+            # Courtesy check first, so a stale page gets the clear message
+            # before any work happens; the guard in the WHERE clause below is
+            # what actually makes it safe (see save_estimate for the same
+            # check-then-act reasoning).
+            current = db.execute("SELECT version FROM order_workflow WHERE order_id=?", (order_id,)).fetchone()
+            if item.expected_version is not None and item.expected_version != current["version"]:
+                raise HTTPException(409, ASSIGNMENT_CONFLICT)
+            guard = " AND version=?" if item.expected_version is not None else ""
+            guard_params = (item.expected_version,) if item.expected_version is not None else ()
+            cur = db.execute(
+                f"UPDATE order_workflow SET {','.join(fields)},version=version+1 WHERE order_id=?{guard}",
+                (*params, order_id, *guard_params),
             )
-            record_activity(db, order_id, "assignment_updated", item.actor, item.model_dump(exclude={"actor"}), now_fn)
+            if cur.rowcount == 0:
+                raise HTTPException(409, ASSIGNMENT_CONFLICT)
+            record_activity(
+                db,
+                order_id,
+                "assignment_updated",
+                item.actor,
+                # Only what this save actually changed -- the log used to
+                # print all five fields every time, including the blanks the
+                # old full overwrite invented.
+                item.model_dump(exclude={"actor", "expected_version"}, exclude_none=True),
+                now_fn,
+            )
             return workflow_detail(db, order_id)["assignment"]
 
     @router.post("/orders/{order_id}/notes", status_code=201)
@@ -455,7 +536,7 @@ def build_workflow_router(connect: Callable[[], sqlite3.Connection], now_fn: Cal
             )
             for line in item.items:
                 db.execute(
-                    "INSERT INTO estimate_items(estimate_id,kind,description,part_number,quantity,unit_price,unit_cost,received_quantity,line_total,source,review_required) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                    "INSERT INTO estimate_items(estimate_id,kind,description,part_number,quantity,unit_price,unit_cost,quoted_unit_cost,received_quantity,line_total,source,review_required) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
                     (
                         estimate["id"],
                         line.kind,
@@ -463,6 +544,9 @@ def build_workflow_router(connect: Callable[[], sqlite3.Connection], now_fn: Cal
                         line.part_number.strip().upper(),
                         line.quantity,
                         line.unit_price,
+                        line.unit_cost,
+                        # A technician's proposed line is a quote like any
+                        # other -- what it lands at is the invoice's business.
                         line.unit_cost,
                         0,
                         round(line.quantity * line.unit_price, 2),

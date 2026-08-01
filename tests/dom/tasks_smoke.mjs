@@ -55,12 +55,14 @@ let tasks = [
     order_recon_vehicle_id: null, order_we_owe_id: null, order_number: null },
 ];
 
-// What the vehicle picker gets from /api/orders. All three segments are
-// offered now that retail ROs have a vehicle page of their own.
+// What the vehicle picker gets from /api/tasks/linkable-orders: already
+// labelled, already grouped, already in display order, and already stripped of
+// voided tickets and cars sold off to History. All three segments are offered
+// now that retail ROs have a vehicle page of their own.
 const ORDERS = [
-  { id: 42, segment: "recon", stock_number: "R-0981", year: 2019, make: "Ford", model: "Edge", customer_name: null, number: "RO-1042" },
-  { id: 55, segment: "we_owe", stock_number: null, year: 2021, make: "Kia", model: "Sorento", customer_name: "Maria Soto", number: "RO-1077" },
-  { id: 60, segment: "retail", stock_number: null, year: 2020, make: "Ford", model: "F-150", customer_name: "Bob Lang", number: "RO-1080" },
+  { id: 42, segment: "recon", group: "Recon", label: "R-0981 — 2019 Ford Edge" },
+  { id: 55, segment: "we_owe", group: "We-Owe", label: "We-Owe: Maria Soto — 2021 Kia Sorento" },
+  { id: 60, segment: "retail", group: "Retail", label: "Retail: Bob Lang — 2020 Ford F-150" },
 ];
 
 // The JOIN fields /api/tasks carries for each linkable order, so the PATCH
@@ -78,6 +80,9 @@ const { w, doc, fetchLog, settle, ok, finish, rejections } = await boot({
   expose: ["state", "loadTasksView", "renderTasksList", "visibleTasks", "taskBucket", "taskScopeLabel", "showView"],
   fetch: async (url, opts) => {
     if (url === "/api/tasks") return tasks;
+    // Ahead of the /api/tasks/ prefix handlers below, which would otherwise
+    // swallow it and hand the picker a single task row.
+    if (url === "/api/tasks/linkable-orders") return ORDERS;
     if (url === "/api/tasks/bulk" || url === "/api/tasks/bulk-delete") {
       const body = JSON.parse(opts.body);
       bulkCalls.push({ url, body });
@@ -128,7 +133,6 @@ const { w, doc, fetchLog, settle, ok, finish, rejections } = await boot({
       return tasks.find((t) => t.id === id);
     }
     if (url.startsWith("/api/tasks/")) return tasks.find((t) => t.id === Number(url.split("/").pop())) || tasks[0];
-    if (url === "/api/orders" || url.startsWith("/api/orders?")) return ORDERS;
     if (url.startsWith("/api/staff")) return STAFF;
     if (url.startsWith("/api/vehicles-board")) return [];
     return [];
@@ -487,6 +491,41 @@ ok(linkedRow.querySelector(".task-order-link"), "a linked row lost its jump chip
 ok(linkedRow.querySelector(".task-link-clear"), "a linked row offers no way to unlink");
 ok(!linkedRow.querySelector(".task-link-add"), "a linked row still offers the + vehicle slot");
 ok(rowFor(3).querySelector(".task-link-add"), "an unlinked row offers no + vehicle slot");
+
+/* The picker is fed by /api/tasks/linkable-orders, which leaves out voided
+   tickets and cars sent to History. Fetching plain /api/orders -- every ticket
+   the shop has ever written -- is the thing this screen stopped doing. */
+ok(!fetchLog.some((f) => f.url === "/api/orders" || f.url.startsWith("/api/orders?")),
+   "the Tasks screen is still pulling the whole orders list to build a dropdown");
+ok(fetchLog.some((f) => f.url === "/api/tasks/linkable-orders"), "the vehicle picker never asked for its options");
+
+const quickAdd = doc.querySelector("#task-order-input");
+ok(quickAdd.options[0].value === "" && /No vehicle/.test(quickAdd.options[0].textContent),
+   "the quick-add picker lost its no-vehicle option");
+ok([...quickAdd.querySelectorAll("optgroup")].map((g) => g.label).join("|") === "Recon|We-Owe|Retail",
+   `quick-add picker headings are "${[...quickAdd.querySelectorAll("optgroup")].map((g) => g.label).join("|")}"`);
+
+/* A chip whose ticket has been voided, or whose car has been sold and archived,
+   keeps its link -- it is still the car that was meant -- but says so, because
+   an open follow-up on a car that left the lot a month ago otherwise reads
+   exactly like one on a car sitting in the bay. */
+ok(!linkedRow.querySelector(".task-order-state"), "a live ticket's chip is carrying a state note");
+const setOrderState = async (value) => {
+  tasks = tasks.map((t) => (t.id === 2 ? { ...t, order_state: value } : t));
+  w.state.tasks = tasks;
+  w.renderTasksList();
+  await settle();
+};
+await setOrderState("archived");
+const staleChip = rowFor(2).querySelector(".task-order-link");
+ok(/in History/.test(staleChip.textContent), `an archived car's chip reads "${staleChip.textContent.trim()}"`);
+ok(/R-0981/.test(staleChip.textContent), "the state note replaced the label instead of qualifying it");
+ok(staleChip.dataset.refId === "7", "an archived car's chip stopped being a jump");
+await setOrderState("voided");
+ok(/voided/.test(rowFor(2).querySelector(".task-order-link").textContent),
+   `a voided ticket's chip reads "${rowFor(2).querySelector(".task-order-link").textContent.trim()}"`);
+await setOrderState("");
+ok(!rowFor(2).querySelector(".task-order-state"), "the state note outlived the state");
 // A done task's link is history, not a decision anyone should still be making.
 const doneRow2 = doc.querySelector('#tasks-completed-list .task-row[data-id="6"]');
 ok(doneRow2 && !doneRow2.querySelector(".task-link-add") && !doneRow2.querySelector(".task-link-clear"),
@@ -502,6 +541,11 @@ ok([...linkSelect.options].some((o) => /R-0981/.test(o.textContent)), "the picke
 ok([...linkSelect.options].some((o) => /Maria Soto/.test(o.textContent)), "the picker is missing the we-owe vehicle");
 // Retail ROs have a vehicle page now -- the picker offers them too.
 ok([...linkSelect.options].some((o) => /Bob Lang/.test(o.textContent)), "the picker is missing the retail vehicle");
+// Grouped, so a we-owe and a retail ticket for the same person are two
+// distinguishable lines rather than one ambiguous pick.
+ok([...linkSelect.querySelectorAll("optgroup")].map((g) => g.label).join("|") === "Recon|We-Owe|Retail",
+   `row picker headings are "${[...linkSelect.querySelectorAll("optgroup")].map((g) => g.label).join("|")}"`);
+ok(/Pick a vehicle/.test(linkSelect.options[0].textContent), "the row picker lost its placeholder option");
 linkSelect.value = "55";
 linkSelect.dispatchEvent(new w.Event("change", { bubbles: true }));
 await settle();

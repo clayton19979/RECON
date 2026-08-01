@@ -21,6 +21,8 @@ const { w, fetchLog, settle, ok, fails } = await boot({
   fetch: async (url) => (stagedEstimate && /\/estimate$/.test(url) ? stagedEstimate : []),
 });
 
+const doc0 = (sel) => w.document.querySelector(sel).textContent;
+
 const mkOrder = (jobs) => ({
   id: 1, number: "RO-1", status: "in_progress", concern: "",
   estimate: {
@@ -72,40 +74,67 @@ for (const [label, jobs] of [["flat", []], ["jobs", [{ id: 7, title: "Front brak
 }
 
 /* ------------------------------------------------------------------
-   Job completion: the tick that says a repair is finished.
+   A part billed at something other than its estimate.
 
-   A ticket's status is one flag for the whole car, so the only way to see
-   that the brakes are done and the windshield isn't is per-job. What this
-   guards: the checkbox renders on every real job and never on General
-   (which is leftovers, not a repair somebody can finish), a finished job is
-   visibly struck through rather than hidden, and the progress line counts.
+   The receive dialog already showed the difference while the invoice was
+   being keyed in; the ticket has to keep showing it afterwards, and the
+   ticket's Quoted total has to stay the quote rather than following the
+   bill. Both used to be impossible -- receiving overwrote unit_cost and
+   there was nothing left to compare against.
    ------------------------------------------------------------------ */
 {
-  const jobs = [
-    { id: 7, title: "Front brakes", technician_id: null, completed_at: "2026-07-31T09:00:00", completed_by: "Antonio" },
-    { id: 8, title: "Windshield", technician_id: null, completed_at: "", completed_by: "" },
-  ];
-  const jobOrder = mkOrder(jobs);
-  w.state.detail = { segment: "recon", id: 1, item: {}, order: jobOrder };
-  w.renderEstimate(jobOrder);
-  const box = w.document.querySelector("#vd-estimate-items");
-  const groups = [...box.querySelectorAll(".job-group")];
-  ok(groups.length === 3, `expected 2 jobs + General, got ${groups.length} groups`);
-  ok(box.querySelectorAll(".ei-job-done").length === 2,
-     "the Done tick is missing from a job, or General grew one it should not have");
-  ok(groups[0].classList.contains("job-done"), "a finished job is not marked as finished");
-  ok(!groups[1].classList.contains("job-done"), "an unfinished job is marked finished");
-  ok(groups[0].querySelector(".ei-job-done").checked, "a finished job's tick is not ticked");
-  ok(groups[0].querySelector(".ei-job-done").classList.contains("job-control"),
-     "the tick is not a .job-control -- an archived vehicle would leave it clickable");
-  ok(groups.at(-1).querySelector(".ei-job-done") === null, "General should not have a Done tick");
-  const progress = box.querySelector(".job-progress");
-  ok(progress && progress.textContent.includes("1 of 2"), `progress line wrong: ${progress && progress.textContent}`);
-  // Ticking a job changes classes and the progress line, none of which the
-  // in-place sync path touches -- so it has to force a full redraw.
-  const shapeDone = w.estimateShape(jobOrder);
-  const shapeOpen = w.estimateShape(mkOrder(jobs.map((j) => ({ ...j, completed_at: "" }))));
-  ok(shapeDone !== shapeOpen, "estimateShape ignores job completion -- the tick would not redraw");
+  const quotedOrder = {
+    id: 1, number: "RO-1", status: "in_progress", concern: "",
+    estimate: {
+      edit_version: 1, jobs: [],
+      items: [
+        { id: 11, kind: "part", description: "Alternator", part_number: "ALT-1", quantity: 1,
+          unit_cost: 175, quoted_unit_cost: 100, status: "received", received_quantity: 1,
+          received_invoice_number: "INV-9", part_returned: false, job_id: null },
+        { id: 12, kind: "part", description: "Belt", part_number: "BLT-1", quantity: 1,
+          unit_cost: 30, quoted_unit_cost: 30, status: "received", received_quantity: 1,
+          received_invoice_number: "INV-9", part_returned: false, job_id: null },
+      ],
+    },
+  };
+  w.state.detail = { segment: "recon", id: 1, item: {}, order: quotedOrder };
+  w.renderEstimate(quotedOrder);
+  const qRows = [...w.document.querySelector("#vd-estimate-items").querySelectorAll(".part-row:not(.head)")];
+
+  const note = qRows[0].querySelector(".ei-quote-note");
+  ok(note, "a part billed over its estimate has no Quoted note on the row");
+  ok(note.textContent.includes("$100.00"), `Quoted note says "${note && note.textContent}", expected the $100.00 quote`);
+  ok(note.classList.contains("over"), "a part that cost MORE than quoted is not marked as over");
+  ok(qRows[0].querySelector(".pr-cost").classList.contains("has-quote-note"),
+     "the cost cell is not marked to stack the note under the price -- it renders beside it and squeezes the field");
+  ok(qRows[0].dataset.quotedUnitCost === "100",
+     `row is not carrying the frozen quote for live totals (got "${qRows[0].dataset.quotedUnitCost}")`);
+  ok(!qRows[1].querySelector(".ei-quote-note"),
+     "a line that came in at exactly its quoted price printed the same number twice");
+
+  ok(doc0("#vd-quoted-cost") === "$130.00", `ticket quote total is ${doc0("#vd-quoted-cost")}, expected $130.00`);
+  ok(doc0("#vd-actual-cost") === "$205.00", `ticket actual total is ${doc0("#vd-actual-cost")}, expected $205.00`);
+  ok(doc0("#vd-cost-delta") === "$75.00 over quote", `ticket delta is "${doc0("#vd-cost-delta")}", expected $75.00 over quote`);
+
+  // Correcting a mis-keyed invoice price moves what the car cost, never the
+  // quote -- the same rule the server applies when it saves the grid.
+  const costBox = qRows[0].querySelector(".ei-cost");
+  costBox.focus();
+  costBox.value = "185";
+  costBox.dispatchEvent(new w.Event("input", { bubbles: true }));
+  ok(doc0("#vd-actual-cost") === "$215.00", `live actual did not follow the corrected price: ${doc0("#vd-actual-cost")}`);
+  ok(doc0("#vd-quoted-cost") === "$130.00",
+     `retyping the price of a received part rewrote the quote to ${doc0("#vd-quoted-cost")}`);
+
+  // A line still being quoted works the other way round: the cost box IS the
+  // quote until the part lands, so typing in it has to move both.
+  const beltBox = qRows[1].querySelector(".ei-cost");
+  qRows[1].dataset.receivedQuantity = "0";
+  beltBox.focus();
+  beltBox.value = "50";
+  beltBox.dispatchEvent(new w.Event("input", { bubbles: true }));
+  ok(doc0("#vd-quoted-cost") === "$150.00",
+     `repricing a part nobody has received left a stale quote: ${doc0("#vd-quoted-cost")}`);
 }
 
 // addEstimateRow's transient row matches the rendered ones

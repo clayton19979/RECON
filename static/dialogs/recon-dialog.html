@@ -6,10 +6,17 @@
       <button class="icon-btn" value="cancel" formnovalidate type="button" id="recon-cancel">×</button>
     </div>
     <div class="modal-body">
-      <label>Stock number<input id="recon-stock" required placeholder="R-1042"></label>
+      <label>Stock number<input id="recon-stock" required placeholder="R-1042" autocapitalize="characters" autocomplete="off" spellcheck="false"></label>
       <div class="form-row">
-        <label>VIN<input id="recon-vin" placeholder="17-character VIN"></label>
+        <label>VIN<input id="recon-vin" maxlength="17" placeholder="17-character VIN" autocapitalize="characters" autocomplete="off" spellcheck="false"></label>
         <button type="button" class="btn btn-ghost" id="recon-decode-vin">Decode VIN</button>
+      </div>
+      <!-- Filled in as soon as the stock number or VIN matches a car the shop
+           already has, so a car that is already here is caught before the
+           rest of the form is typed rather than by a refusal at Save. -->
+      <div class="field-note" id="recon-match-note" hidden>
+        <span id="recon-match-text"></span>
+        <button type="button" class="btn btn-ghost btn-xs" id="recon-match-open">Open It</button>
       </div>
       <div class="form-row">
         <label>Plate<input id="recon-plate" maxlength="12" placeholder="Optional"></label>

@@ -186,7 +186,18 @@ def test_append_lines_does_not_delete_lines_it_was_not_shown(client):
 
     response = client.post(
         f"/api/orders/{order['id']}/estimate/items",
-        json={"items": [{"kind": "part", "description": "Left outer tie rod", "quantity": 1, "unit_cost": 34.0, "unit_price": 34.0}], "actor": "ai:hermes"},
+        json={
+            "items": [
+                {
+                    "kind": "part",
+                    "description": "Left outer tie rod",
+                    "quantity": 1,
+                    "unit_cost": 34.0,
+                    "unit_price": 34.0,
+                }
+            ],
+            "actor": "ai:hermes",
+        },
     )
 
     assert response.status_code == 201, response.text
@@ -203,7 +214,9 @@ def test_append_lines_marks_provenance_that_survives_a_grid_resave(client):
     order = make_recon_order(client, vehicle["id"])
     client.post(
         f"/api/orders/{order['id']}/estimate/items",
-        json={"items": [{"kind": "part", "description": "Tie rod", "quantity": 1, "unit_cost": 34.0, "unit_price": 34.0}]},
+        json={
+            "items": [{"kind": "part", "description": "Tie rod", "quantity": 1, "unit_cost": 34.0, "unit_price": 34.0}]
+        },
     )
 
     items = client.get(f"/api/orders/{order['id']}").json()["estimate"]["items"]

@@ -220,8 +220,21 @@ async function addTaskForThisVehicle({ prefill = "" } = {}) {
   if (title.value) title.setSelectionRange(title.value.length, title.value.length);
 }
 
+/* VIN, mileage and trim/description as individual spec tags under the title,
+   instead of one dot-joined grey line. Markup only -- the values are exactly
+   what the joined line carried. */
+function specTagsHtml(parts) {
+  return parts.filter(Boolean).map((p) => `<span class="spec">${esc(p)}</span>`).join("");
+}
+
 function renderDetailHead() {
   const { segment, item } = state.detail;
+  // The band's left edge names the side, same colour rule as the board's
+  // cards, so it has to follow the vehicle being shown -- the element is
+  // reused across every vehicle opened this session.
+  const head = document.querySelector(".detail-head");
+  head.classList.remove("dh-recon", "dh-weowe", "dh-retail");
+  head.classList.add(segment === "recon" ? "dh-recon" : segment === "we_owe" ? "dh-weowe" : "dh-retail");
   const updatedEl = $("#vd-updated");
   if (item.updated_at) {
     const minutesAgo = (Date.now() - new Date(item.updated_at).getTime()) / 60000;
@@ -253,7 +266,7 @@ function renderDetailHead() {
   $("#vd-recon-acquired").value = segment === "recon" ? item.acquisition_date || "" : "";
   if (segment === "recon") {
     $("#vd-title").textContent = `${item.stock_number} — ${item.year} ${item.make} ${item.model}`;
-    $("#vd-sub").textContent = [item.vin, item.mileage ? `${item.mileage.toLocaleString()} mi` : "", item.trim].filter(Boolean).join(" · ");
+    $("#vd-sub").innerHTML = specTagsHtml([item.vin, item.mileage ? `${item.mileage.toLocaleString()} mi` : "", item.trim]);
     $("#vd-customer-line").hidden = true;
     $("#vd-customer-info-card").style.display = "none";
     $("#vd-other-vehicles-card").style.display = "none";
@@ -263,7 +276,7 @@ function renderDetailHead() {
     // we_owe and retail share the customer-owned-car layout; only we_owe has
     // the promise machinery (status/category/target, dealer-paid deposits).
     $("#vd-title").textContent = `${item.year} ${item.make} ${item.model}`;
-    $("#vd-sub").textContent = [item.vin, item.mileage ? `${item.mileage.toLocaleString()} mi` : "", item.description].filter(Boolean).join(" · ");
+    $("#vd-sub").innerHTML = specTagsHtml([item.vin, item.mileage ? `${item.mileage.toLocaleString()} mi` : "", item.description]);
     // Customer name gets its own prominent line in the header rather than
     // being buried mid-subtitle -- whose car it is is the first thing the
     // advisor needs.

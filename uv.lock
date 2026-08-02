@@ -245,7 +245,7 @@ wheels = [
 
 [[package]]
 name = "discount-auto-ops"
-version = "1.2.0"
+version = "1.2.1"
 source = { virtual = "." }
 dependencies = [
     { name = "fastapi" },

@@ -66,17 +66,23 @@ Built this session:
 - `POST /api/agent/intake` — vehicle + RO + jobs in one transaction.
 - `GET /api/agent/search` — free-text lookup across all three segments.
 
-## Known issue, not yet fixed
+## The cross-instance write bug — fixed
 
-**`RECON_API_BASE` defaults to `127.0.0.1:8787` regardless of which instance
-hosts the MCP mount.** A second RECON instance's tools will write to the first
-one's database. This caught me mid-testing — a dev server on port 8899 was
+**`RECON_API_BASE` used to default to `127.0.0.1:8787` regardless of which
+instance hosted the MCP mount**, so a second RECON instance's tools wrote to the
+first one's database. This caught me mid-testing — a dev server on port 8899 was
 issuing writes against production. It only did no damage because production was
 still running the pre-MCP build and returned 404.
 
-If you run a second instance for development, set `RECON_API_BASE` explicitly.
-The real fix is for the mounted server to call the app directly rather than
-looping back over HTTP.
+A mounted MCP server now calls the app it is mounted in, directly, instead of
+looping back over HTTP. There is no port in the path to get wrong, so running a
+dev instance needs no special care and `RECON_API_BASE` no longer has to be set.
+`tests/test_mcp_server.py` runs two apps in one process and asserts each mount's
+tools reach only their own database.
+
+`RECON_API_BASE` still exists for the standalone `python -m app.mcp_server`
+server, which has no app to call. It is now read per call rather than at import,
+so setting it from a launcher actually takes effect.
 
 ## Environment variables
 
@@ -86,5 +92,5 @@ Set on the shop PC, needed if you run the full stack elsewhere:
 |---|---|
 | `API_DISCOUNT_AUTO_OPS_KEY` | shared secret; enables auth on the MCP mount |
 | `RECON_MCP_ENABLE_WRITES` | `1` to expose the 12 write tools |
-| `RECON_API_BASE` | where MCP tools send their calls |
+| `RECON_API_BASE` | standalone MCP server only; the mounted one calls its own app |
 | `PLATETOVIN_API_KEY` | plate decoding; **not configured** — that tool reports so |

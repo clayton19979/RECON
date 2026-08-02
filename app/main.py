@@ -346,6 +346,12 @@ def create_app(db_path: Path = DEFAULT_DB, backups_dir: Path = DEFAULT_BACKUPS_D
     # tests' tmp_path data root is honoured the same as the real one.
     app.include_router(build_update_router(backups_dir.parent))
     app.mount("/mcp", mcp_mount)
+    # Point the MCP tools at *this* app. Without it they fall back to
+    # RECON_API_BASE, whose default is 127.0.0.1:8787 whoever is hosting the
+    # mount -- which is how a dev instance's tools ended up writing to the
+    # production database. This app owns db_path; the tools now reach that
+    # database and no other.
+    mcp_mount.bind(app)
 
     @app.get("/api/health")
     def health():

@@ -4,11 +4,28 @@ import ast
 import asyncio
 import pathlib
 import re
+import sqlite3
 
 import httpx
+from starlette.routing import Mount
 
 from app import mcp_server
+from app.main import create_app
 from tests.helpers import make_recon_order, make_recon_vehicle, save_estimate
+
+
+def mcp_mount_of(app) -> mcp_server.ReconMCPHTTPApp:
+    """The ReconMCPHTTPApp that `app` mounts at /mcp."""
+    mount = next(route.app for route in app.routes if isinstance(route, Mount) and route.path == "/mcp")
+    assert isinstance(mount, mcp_server.ReconMCPHTTPApp)
+    return mount
+
+
+def stock_numbers(db_path) -> list[str]:
+    """Read the database file directly, so the assertion cannot be satisfied by
+    the same app that might have been written to by mistake."""
+    with sqlite3.connect(db_path) as db:
+        return [row[0] for row in db.execute("SELECT stock_number FROM recon_vehicles ORDER BY stock_number")]
 
 
 def test_recon_search_tool_uses_agent_search_endpoint(client):
@@ -201,3 +218,75 @@ def test_write_tools_appear_only_when_enabled():
     names = set(server._tool_manager._tools)
 
     assert {"recon_intake", "recon_add_lines", "recon_set_status", "recon_order_parts"} <= names
+
+
+def test_mounted_tools_reach_their_own_app_not_recon_api_base(tmp_path, monkeypatch):
+    """RECON_API_BASE is not consulted by a mounted server at all.
+
+    It used to be, and its default was 127.0.0.1:8787 whoever was hosting the
+    mount. Pointing it at a port nothing listens on proves the tool never goes
+    near it: if the loopback path were still live this would come back as a
+    "Could not reach RECON" string instead of a created vehicle.
+    """
+    monkeypatch.setenv("RECON_MCP_ENABLE_WRITES", "1")
+    monkeypatch.setenv("RECON_API_BASE", "http://127.0.0.1:1")
+    app = create_app(tmp_path / "own.db", backups_dir=tmp_path / "backups")
+
+    asyncio.run(
+        mcp_mount_of(app).server.call_tool(
+            "recon_create_recon_vehicle",
+            {"stock_number": "R-9001", "year": 2015, "make": "Ford", "model": "Fusion"},
+        )
+    )
+
+    assert stock_numbers(tmp_path / "own.db") == ["R-9001"]
+
+
+def test_a_second_instances_tools_do_not_write_to_the_first_ones_database(tmp_path, monkeypatch):
+    """The bug this fixes, stated as the shop hit it.
+
+    A dev server on port 8899 issued writes against production, because every
+    mount's tools resolved to the same default base URL regardless of which app
+    they belonged to. It did no damage only because production happened to be
+    running a pre-MCP build that answered 404. Two apps in one process is the
+    honest form of that: each mount must reach its own database and no other.
+    """
+    monkeypatch.setenv("RECON_MCP_ENABLE_WRITES", "1")
+    production_db, dev_db = tmp_path / "production.db", tmp_path / "dev.db"
+    production = create_app(production_db, backups_dir=tmp_path / "production-backups")
+    dev = create_app(dev_db, backups_dir=tmp_path / "dev-backups")
+
+    asyncio.run(
+        mcp_mount_of(dev).server.call_tool(
+            "recon_create_recon_vehicle",
+            {"stock_number": "DEV-1", "year": 2015, "make": "Ford", "model": "Fusion"},
+        )
+    )
+    asyncio.run(
+        mcp_mount_of(production).server.call_tool(
+            "recon_create_recon_vehicle",
+            {"stock_number": "PROD-1", "year": 2016, "make": "Chevrolet", "model": "Malibu"},
+        )
+    )
+
+    assert stock_numbers(dev_db) == ["DEV-1"]
+    assert stock_numbers(production_db) == ["PROD-1"]
+
+
+def test_api_base_is_read_per_call_rather_than_at_import(monkeypatch):
+    """It was a module constant, so a launcher that set RECON_API_BASE after
+    the first import of this module was silently ignored."""
+    monkeypatch.setenv("RECON_API_BASE", "http://192.168.1.50:8787/")
+
+    assert mcp_server._api_base() == "http://192.168.1.50:8787"
+
+
+def test_a_standalone_server_still_falls_back_to_api_base(monkeypatch):
+    """`python -m app.mcp_server` has no app to call, so the URL path has to
+    keep working -- and has to name the address it could not reach."""
+    monkeypatch.setenv("RECON_API_BASE", "http://127.0.0.1:1")
+
+    body = asyncio.run(mcp_server.recon_search("anything"))
+
+    assert isinstance(body, str)
+    assert "Could not reach RECON at http://127.0.0.1:1" in body

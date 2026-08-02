@@ -31,7 +31,7 @@ export async function loadVehiclesView() {
   const columns = state.vehicleLayout === "columns" ? $("#vehicles-columns") : null;
   if (columns) {
     columns.innerHTML = LOT_COLUMNS.map((col) =>
-      `<section class="veh-col"><header class="veh-col-head"><span class="veh-col-title">${esc(col.label)}</span></header>
+      `<section class="veh-col" data-lot-column="${col.key}"><header class="veh-col-head"><span class="veh-col-title">${esc(col.label)}</span></header>
        <div class="veh-col-body">${skeletonCards(2)}</div></section>`).join("");
   }
   try {

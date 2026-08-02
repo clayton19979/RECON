@@ -544,18 +544,39 @@ table.sticky-head thead th {
    thirty cars in the shop doesn't push "Ready to sell" off the bottom of the
    screen -- the whole point is seeing all three at once. */
 .veh-columns { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; align-items: start; }
+
+/* One tone per pile, shared with the Lot Report's group bands so the board
+   and the sheet Walt reads are visibly the same three piles: quiet slate for
+   "not started" (nothing happening is not an alarm -- Stalled is the alarm,
+   and it has its own card), the theme's accent for "in the shop" (work is
+   moving), green for "ready to sell" (the answer he came for). Set as custom
+   properties on the container so the edge, the dot and the count pill can
+   never disagree about a pile's colour. */
+[data-lot-column], [data-lot-group] { --stage: var(--ink-faint); --stage-tint: var(--paper-raise); }
+[data-lot-column="working"], [data-lot-group="working"] { --stage: var(--accent); --stage-tint: var(--accent-tint); }
+[data-lot-column="ready"], [data-lot-group="ready"] { --stage: var(--good); --stage-tint: var(--good-tint); }
+
 .veh-col {
   background: var(--paper-raise); border: 1px solid var(--line); border-radius: var(--radius);
+  border-top: 3px solid var(--stage);
   display: flex; flex-direction: column; min-width: 0; overflow: hidden;
 }
 .veh-col-head {
   display: flex; align-items: baseline; gap: 8px; padding: 11px 14px;
-  border-bottom: 1px solid var(--line); background: var(--surface);
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--stage) 6%, var(--surface));
 }
-.veh-col-title { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--ink); }
+.veh-col-title {
+  display: inline-flex; align-items: center; gap: 8px;
+  font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--ink);
+}
+/* The dot repeats the edge colour at reading distance, so which pile you're
+   in survives the top edge scrolling out of the eye's path. */
+.veh-col-title::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--stage); flex-shrink: 0; }
 .veh-col-count {
   font-family: "IBM Plex Mono", "Cascadia Mono", Consolas, monospace; font-size: 12px; font-weight: 600;
-  color: var(--ink-soft); background: var(--paper-raise); border: 1px solid var(--line);
+  color: var(--stage); background: var(--stage-tint);
+  border: 1px solid color-mix(in srgb, var(--stage) 30%, var(--line));
   border-radius: 999px; padding: 1px 8px;
 }
 /* Pushed to the trailing edge and quiet: the money is the answer to a
@@ -598,8 +619,11 @@ table.sticky-head thead th {
 }
 .veh-card-ref .age-warn { color: var(--warn); font-weight: 700; }
 .veh-card-ref .age-crit { color: var(--crit); font-weight: 700; }
+/* The name is what someone at the counter scans forty cards by; it's the
+   card's headline and sized like one. Still one line -- the height of every
+   card stays uniform so the columns read as tidy piles, not a ragged list. */
 .veh-card-name {
-  font-size: 13.5px; font-weight: 600; color: var(--ink);
+  font-size: 15px; font-weight: 600; color: var(--ink); letter-spacing: -.01em;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .veh-card-sub { font-size: 11.5px; color: var(--ink-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -2454,21 +2478,25 @@ th.sel-col, td.sel-col { width: 32px; padding-right: 0; }
 #report-scope { min-height: 16px; }
 /* Lot report group bands. Walt reads this grouped, so the headings have to
    survive a fast scan -- they sit on a tinted band rather than looking like
-   another data row, and they stick under the header when the list scrolls. */
+   another data row, and they stick under the header when the list scrolls.
+   Each band wears its pile's --stage tone (set with the board's columns, see
+   the vehicles section), so this sheet and the board are recognisably the
+   same three piles in the same three colours. */
 .lot-group-head td {
-  background: var(--accent-tint); border-top: 1px solid var(--line);
+  background: var(--stage-tint); border-top: 1px solid var(--line);
   padding: 7px 10px; position: sticky; top: 30px; z-index: 1;
 }
 .lot-group-head td { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
-.lot-group-name { font-weight: 700; color: var(--accent-strong); letter-spacing: .01em; }
+.lot-group-name { display: inline-flex; align-items: center; gap: 7px; font-weight: 700; color: var(--stage); letter-spacing: .01em; }
+.lot-group-name::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--stage); flex-shrink: 0; }
 .lot-group-note { color: var(--ink-soft); font-size: 11.5px; }
 /* What the group has cost sits at the far end of its own band, so "how much
    is in these cars" is answered per pile without opening anything. */
 .lot-group-money { margin-left: auto; color: var(--ink-soft); font-size: 11.5px; font-variant-numeric: tabular-nums; }
 /* An empty pile still gets its heading -- "no cars are finished right now" is
-   an answer. Muted, because there is nothing under it to read. */
-.lot-group-head.is-empty td { background: var(--paper-raise); }
-.lot-group-head.is-empty .lot-group-name { color: var(--ink-faint); }
+   an answer. Muted back to the neutral tone, because there is nothing under
+   it to read. */
+.lot-group-head.is-empty { --stage: var(--ink-faint); --stage-tint: var(--paper-raise); }
 /* The answer to "what does it still need" is the widest thing on the row and
    the reason the report exists; it gets room rather than being truncated. */
 .lot-needs { color: var(--ink-soft); min-width: 240px; }

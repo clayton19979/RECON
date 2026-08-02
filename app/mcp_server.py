@@ -95,7 +95,9 @@ def _vehicle_line(ticket: Mapping[str, Any]) -> str:
     vehicle = ticket.get("vehicle") or {}
     if not isinstance(vehicle, Mapping):
         return ""
-    return " ".join(str(vehicle.get(field) or "").strip() for field in ("year", "make", "model") if vehicle.get(field)).strip()
+    return " ".join(
+        str(vehicle.get(field) or "").strip() for field in ("year", "make", "model") if vehicle.get(field)
+    ).strip()
 
 
 def _trim_ticket(ticket: Mapping[str, Any]) -> dict[str, Any]:
@@ -136,7 +138,9 @@ async def recon_search(query: str, transport: httpx.AsyncBaseTransport | None = 
     return await _request("GET", "/api/agent/search", params={"q": query}, transport=transport)
 
 
-async def recon_get_vehicle(kind: Literal["recon", "we_owe", "retail"], id: int, transport: httpx.AsyncBaseTransport | None = None) -> Any:
+async def recon_get_vehicle(
+    kind: Literal["recon", "we_owe", "retail"], id: int, transport: httpx.AsyncBaseTransport | None = None
+) -> Any:
     return await _request("GET", _vehicle_path(kind, id), transport=transport)
 
 
@@ -145,7 +149,11 @@ async def recon_get_ticket(order_id: int, transport: httpx.AsyncBaseTransport | 
     return body if isinstance(body, str) else _trim_ticket(body)
 
 
-async def recon_board(segment: Literal["recon", "we_owe"] | None = None, archived: bool = False, transport: httpx.AsyncBaseTransport | None = None) -> Any:
+async def recon_board(
+    segment: Literal["recon", "we_owe"] | None = None,
+    archived: bool = False,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> Any:
     params: dict[str, Any] = {"archived": archived}
     if segment:
         params["segment"] = segment
@@ -168,10 +176,10 @@ async def recon_decode_vin(vin: str, transport: httpx.AsyncBaseTransport | None 
     return await _request("POST", "/api/vehicles/decode-vin", json={"vin": vin}, transport=transport)
 
 
-async def recon_decode_plate(
-    plate: str, state: str, transport: httpx.AsyncBaseTransport | None = None
-) -> Any:
-    body = await _request("POST", "/api/vehicles/decode-plate", json={"plate": plate, "state": state}, transport=transport)
+async def recon_decode_plate(plate: str, state: str, transport: httpx.AsyncBaseTransport | None = None) -> Any:
+    body = await _request(
+        "POST", "/api/vehicles/decode-plate", json={"plate": plate, "state": state}, transport=transport
+    )
     # The plate provider is a paid third party and this shop may simply not
     # have a key. That is a configuration fact, not a failure of the request,
     # and "RECON API error 503" tells the advisor nothing they can act on --
@@ -297,14 +305,18 @@ async def recon_add_jobs(order_id: int, titles: list[str], transport: httpx.Asyn
     return result
 
 
-async def recon_complete_job(order_id: int, job_id: int, done: bool = True, transport: httpx.AsyncBaseTransport | None = None) -> Any:
+async def recon_complete_job(
+    order_id: int, job_id: int, done: bool = True, transport: httpx.AsyncBaseTransport | None = None
+) -> Any:
     return await _request(
         "PATCH", f"/api/orders/{order_id}/jobs/{job_id}/done", json={"done": done, "actor": ACTOR}, transport=transport
     )
 
 
 async def recon_add_note(order_id: int, text: str, transport: httpx.AsyncBaseTransport | None = None) -> Any:
-    return await _request("POST", f"/api/orders/{order_id}/notes", json={"text": text, "actor": ACTOR}, transport=transport)
+    return await _request(
+        "POST", f"/api/orders/{order_id}/notes", json={"text": text, "actor": ACTOR}, transport=transport
+    )
 
 
 async def recon_create_task(
@@ -317,7 +329,13 @@ async def recon_create_task(
     return await _request(
         "POST",
         "/api/tasks",
-        json={"title": title, "order_id": order_id, "assigned_to": assigned_to or [], "due_date": due_date, "actor": ACTOR},
+        json={
+            "title": title,
+            "order_id": order_id,
+            "assigned_to": assigned_to or [],
+            "due_date": due_date,
+            "actor": ACTOR,
+        },
         transport=transport,
     )
 
@@ -330,7 +348,11 @@ async def recon_update_vehicle(
     expected_version: int | None = None,
     transport: httpx.AsyncBaseTransport | None = None,
 ) -> Any:
-    payload = {k: v for k, v in {"vin": vin, "mileage": mileage, "color": color, "expected_version": expected_version}.items() if v is not None}
+    payload = {
+        k: v
+        for k, v in {"vin": vin, "mileage": mileage, "color": color, "expected_version": expected_version}.items()
+        if v is not None
+    }
     return await _request("PATCH", f"/api/recon/vehicles/{id}", json=payload, transport=transport)
 
 
@@ -338,7 +360,6 @@ async def recon_post_vendor_invoice(invoice: dict[str, Any], transport: httpx.As
     invoice = dict(invoice)
     invoice.setdefault("source", ACTOR)
     return await _request("POST", "/api/agent/invoices/process", json=invoice, transport=transport)
-
 
 
 def _writes_enabled() -> bool:
@@ -462,6 +483,7 @@ def build_mcp(
         return await recon_lookup_vehicle(stock_number, vin, transport=_t())
 
     if include_writes:
+
         @server.tool(name="recon_intake")
         async def _tool_recon_intake(
             stock_number: str,
@@ -550,11 +572,16 @@ def build_mcp(
             never invent one. Recon/we-owe are billed at shop cost only: never
             invent prices, part numbers, or labor charges.
             """
-            return await recon_create_recon_vehicle(stock_number, year, make, model, vin, mileage, color, transport=_t())
+            return await recon_create_recon_vehicle(
+                stock_number, year, make, model, vin, mileage, color, transport=_t()
+            )
 
         @server.tool(name="recon_create_ticket")
         async def _tool_recon_create_ticket(
-            segment: Literal["recon", "we_owe"], concern: str, recon_vehicle_id: int | None = None, we_owe_id: int | None = None
+            segment: Literal["recon", "we_owe"],
+            concern: str,
+            recon_vehicle_id: int | None = None,
+            we_owe_id: int | None = None,
         ) -> Any:
             """Create a repair order for an existing recon vehicle or we-owe.
 
@@ -583,13 +610,19 @@ def build_mcp(
             return await recon_add_note(order_id, text, transport=_t())
 
         @server.tool(name="recon_create_task")
-        async def _tool_recon_create_task(title: str, order_id: int | None = None, assigned_to: list[str] | None = None, due_date: str = "") -> Any:
+        async def _tool_recon_create_task(
+            title: str, order_id: int | None = None, assigned_to: list[str] | None = None, due_date: str = ""
+        ) -> Any:
             """Create a reminder/task, optionally tied to an RO."""
             return await recon_create_task(title, order_id, assigned_to, due_date, transport=_t())
 
         @server.tool(name="recon_update_vehicle")
         async def _tool_recon_update_vehicle(
-            id: int, vin: str | None = None, mileage: int | None = None, color: str | None = None, expected_version: int | None = None
+            id: int,
+            vin: str | None = None,
+            mileage: int | None = None,
+            color: str | None = None,
+            expected_version: int | None = None,
         ) -> Any:
             """Patch editable recon vehicle facts with optimistic locking.
 

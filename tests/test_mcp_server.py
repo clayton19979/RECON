@@ -44,7 +44,16 @@ def test_recon_get_ticket_returns_chat_sized_summary(client):
     save_estimate(
         client,
         order["id"],
-        [{"kind": "part", "description": "Battery", "part_number": "BAT-650", "quantity": 1, "unit_price": 120, "unit_cost": 120}],
+        [
+            {
+                "kind": "part",
+                "description": "Battery",
+                "part_number": "BAT-650",
+                "quantity": 1,
+                "unit_price": 120,
+                "unit_cost": 120,
+            }
+        ],
     )
     transport = httpx.ASGITransport(app=client.app)
 
@@ -55,7 +64,13 @@ def test_recon_get_ticket_returns_chat_sized_summary(client):
     assert body["concern"] == "Battery light on"
     assert body["jobs"] == [{"id": job["id"], "title": "Charging system test", "done": False}]
     assert body["parts"] == [
-        {"id": body["parts"][0]["id"], "description": "Battery", "part_number": "BAT-650", "status": "quoted", "cost": 120.0}
+        {
+            "id": body["parts"][0]["id"],
+            "description": "Battery",
+            "part_number": "BAT-650",
+            "status": "quoted",
+            "cost": 120.0,
+        }
     ]
     assert body["total"] == 120.0
     assert "activity" not in body
@@ -166,7 +181,9 @@ def test_add_jobs_reports_what_landed_when_one_fails(client, monkeypatch):
         return await real(method, path, **kwargs)
 
     monkeypatch.setattr(mcp_server, "_request", flaky)
-    body = asyncio.run(mcp_server.recon_add_jobs(order["id"], ["Front brakes", "Tie rod", "Oil change"], transport=transport))
+    body = asyncio.run(
+        mcp_server.recon_add_jobs(order["id"], ["Front brakes", "Tie rod", "Oil change"], transport=transport)
+    )
 
     assert body["created"] == 2
     assert [job["title"] for job in body["failed"]] == ["Tie rod"]
@@ -176,12 +193,18 @@ def test_add_jobs_reports_what_landed_when_one_fails(client, monkeypatch):
 def test_add_lines_appends_without_replacing(client):
     vehicle = make_recon_vehicle(client, stock_number="R-1042")
     order = make_recon_order(client, vehicle["id"])
-    save_estimate(client, order["id"], [{"kind": "part", "description": "Rotors", "quantity": 2, "unit_price": 41.5, "unit_cost": 41.5}])
+    save_estimate(
+        client,
+        order["id"],
+        [{"kind": "part", "description": "Rotors", "quantity": 2, "unit_price": 41.5, "unit_cost": 41.5}],
+    )
     transport = httpx.ASGITransport(app=client.app)
 
     body = asyncio.run(
         mcp_server.recon_add_lines(
-            order["id"], [{"kind": "part", "description": "Pads", "quantity": 1, "unit_cost": 28.0, "unit_price": 28.0}], transport=transport
+            order["id"],
+            [{"kind": "part", "description": "Pads", "quantity": 1, "unit_cost": 28.0, "unit_price": 28.0}],
+            transport=transport,
         )
     )
 

@@ -2164,10 +2164,60 @@ td.actions-col { text-align: right; white-space: nowrap; }
 .stats-customers .stat:has(.stat-value.warn) { border-top-color: var(--warn); }
 
 .cust-sub { font-size: 11.5px; color: var(--ink-faint); font-weight: 400; }
-.cust-open-badge { color: var(--accent-strong); font-weight: 600; font-size: 12px; }
+
+/* The rolodex row: avatar + name as one identity block. The disc's four
+   color pairs are theme tokens (accent / good / we-owe / recon), so every
+   theme keeps its own idea of them; which pair a customer gets is a stable
+   hash of their name (see custAvatarHtml), so people keep their color. */
+.customers-table tbody td { padding: 13px 16px; }
+.cust-ident { display: flex; align-items: center; gap: 12px; }
+.cust-ident-name { min-width: 0; }
+.cust-ident strong { font-size: 13.5px; letter-spacing: -.005em; }
+.cust-avatar {
+  width: 34px; height: 34px; border-radius: 50%; flex-shrink: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 12px; font-weight: 700; letter-spacing: .03em;
+  font-family: "Space Grotesk", "Segoe UI Semibold", system-ui, sans-serif;
+}
+.cust-avatar-0 { background: var(--accent-tint); color: var(--accent-strong); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 40%, transparent); }
+.cust-avatar-1 { background: var(--good-tint); color: var(--good); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--good) 40%, transparent); }
+.cust-avatar-2 { background: var(--weowe-tint); color: var(--weowe); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--weowe) 40%, transparent); }
+.cust-avatar-3 { background: var(--recon-tint); color: var(--recon); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--recon) 40%, transparent); }
+
+/* Phone first and loudest -- this screen is opened mid-phone-call, and the
+   number is what the advisor reaches for. Digits in the mono the money uses,
+   so numbers line up down the column. */
+.cust-phone {
+  display: flex; align-items: center; gap: 7px; font-weight: 600; font-size: 12.5px;
+  font-family: "IBM Plex Mono", "Cascadia Mono", Consolas, monospace; font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.cust-email { display: flex; align-items: center; gap: 7px; font-size: 11.5px; color: var(--ink-faint); margin-top: 3px; min-width: 0; }
+.cust-email span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 24ch; }
+.cust-phone svg, .cust-email svg {
+  width: 13px; height: 13px; flex-shrink: 0; opacity: .6;
+  fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round;
+}
+/* Same warn tone as the Missing Contact card that counts these rows. */
+.cust-no-contact {
+  display: inline-block; padding: 2px 9px; border-radius: 999px;
+  background: var(--warn-tint); color: var(--warn); font-size: 11px; font-weight: 700;
+}
+
+/* Count badges: real pills, not colored words -- "2 open" has to survive a
+   glance from across the counter. */
+.cust-open-badge {
+  display: inline-block; padding: 2px 8px; border-radius: 999px; margin-left: 4px;
+  background: var(--accent-tint); color: var(--accent-strong); font-weight: 700; font-size: 11px;
+  font-family: "Manrope", "Segoe UI", system-ui, sans-serif; white-space: nowrap;
+}
 /* An unkept promise is a debt, not a status -- the warn colour is the same
    one the board uses for a car that's past due. */
-.cust-owed-badge { color: var(--warn); font-weight: 600; font-size: 12px; }
+.cust-owed-badge {
+  display: inline-block; padding: 2px 8px; border-radius: 999px;
+  background: var(--warn-tint); color: var(--warn); font-weight: 700; font-size: 11px;
+  font-family: "Manrope", "Segoe UI", system-ui, sans-serif; white-space: nowrap;
+}
 
 /* Keyboard cursor -- same inset ring the board rows get. */
 .customers-table tbody tr.cursor td { box-shadow: inset 0 1px 0 var(--accent-strong), inset 0 -1px 0 var(--accent-strong); }
@@ -2182,15 +2232,30 @@ td.actions-col { text-align: right; white-space: nowrap; }
 .cust-loading { padding: 14px 0 2px; color: var(--ink-faint); font-size: 12.5px; }
 
 .cust-expand-grid {
-  display: grid; grid-template-columns: minmax(200px, 260px) 1fr; gap: 20px;
+  display: grid; grid-template-columns: minmax(200px, 260px) 1fr; gap: 24px;
   padding-top: 14px; border-top: 1px solid var(--line-soft);
 }
-.cust-contact-block { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; align-items: flex-start; }
+.cust-contact-block { display: flex; flex-direction: column; gap: 7px; font-size: 12.5px; align-items: flex-start; }
 .cust-contact-block a { color: var(--accent-strong); text-decoration: none; font-weight: 600; }
 .cust-contact-block a:hover { text-decoration: underline; }
 .cust-contact-block .btn { margin-top: 8px; }
+/* Contact lines share the row icons' grammar; the address pin tops out so a
+   two-line address hangs off one pin. */
+.cust-line { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.cust-line svg {
+  width: 13px; height: 13px; flex-shrink: 0; opacity: .6;
+  fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round;
+}
+.cust-line-addr { align-items: flex-start; color: var(--ink-soft); line-height: 1.45; }
+.cust-line-addr svg { margin-top: 2px; }
 
 .cust-vehicles { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+/* Each car is its own little card on the raised band, so a two-car household
+   reads as two things rather than one run-on list of chips. */
+.cust-vehicle {
+  background: var(--surface); border: 1px solid var(--line-soft); border-radius: 8px;
+  padding: 10px 12px;
+}
 .cust-vehicle-name { font-weight: 600; font-size: 13px; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
 /* Quiet until the row is looked at -- a ghost button per vehicle would
    otherwise dominate a rolodex that's mostly read, not written. */
@@ -2198,7 +2263,7 @@ td.actions-col { text-align: right; white-space: nowrap; }
 .cust-ro-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 5px; }
 .cust-ro-chip {
   display: inline-flex; align-items: center; gap: 7px; padding: 4px 10px;
-  border: 1px solid var(--line); border-radius: 999px; background: var(--surface);
+  border: 1px solid var(--line); border-radius: 999px; background: var(--paper-raise);
   font: inherit; font-size: 12px; font-weight: 600; color: var(--ink);
 }
 button.cust-ro-chip { cursor: pointer; }
@@ -2210,7 +2275,7 @@ button.cust-ro-chip:hover { border-color: var(--accent-strong); color: var(--acc
 .cust-owe-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 5px; }
 .cust-owe-chip {
   display: inline-flex; align-items: center; gap: 7px; padding: 4px 10px;
-  border: 1px solid var(--weowe); border-radius: 999px; background: var(--surface);
+  border: 1px solid var(--weowe); border-radius: 999px; background: var(--paper-raise);
   font: inherit; font-size: 12px; font-weight: 600; color: var(--ink); cursor: pointer;
   text-align: left;
 }

@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import re
 import sqlite3
+from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
@@ -16,11 +17,13 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from . import paths
 from .accounting import build_accounting_router
+from .agent_routes import build_agent_router
 from .backup_routes import build_backup_router
-from .db import RECON_SHOP_CUSTOMER_ID, init_db, inserted_id, now
+from .db import RECON_SHOP_CUSTOMER_ID, init_db, inserted_id, now, vin_check_digit_ok
 from .db import connect as db_connect
 from .export import build_export_router
 from .jobs import build_jobs_router
+from .mcp_server import mcp_http_app
 from .pages import render_index
 from .parts import build_parts_router
 from .recon import (
@@ -225,7 +228,14 @@ class EstimateItem(BaseModel):
     unit_price: float = Field(ge=0)
     part_number: str = ""
     unit_cost: float = Field(default=0, ge=0)
-    source: Literal["manual", "technician_finding"] = "manual"
+    # "ai" marks a line the Hermes advisor added over MCP. It has to be
+    # accepted here even though nothing in the UI ever *sets* it, for the same
+    # reason "credit" does above: the grid resends every row it is showing on
+    # each autosave, so a source this Literal rejects makes the whole estimate
+    # unsaveable with a 422 naming a field the advisor never touched. The
+    # value is the only durable record of where the line came from --
+    # review_required is cleared by the next autosave, source survives it.
+    source: Literal["manual", "technician_finding", "ai"] = "manual"
     job_id: int | None = None
     # A vendor's core deposit for this specific part (calipers, alternators,
     # engines) -- tracked per line, not as a free-floating invoice line item,
@@ -286,7 +296,14 @@ NETWORK_FLAG = DATA_ROOT / "network_mode.flag"
 
 def create_app(db_path: Path = DEFAULT_DB, backups_dir: Path = DEFAULT_BACKUPS_DIR) -> FastAPI:
     init_db(db_path)
-    app = FastAPI(title="RECON", version="0.1.0")
+    mcp_mount = mcp_http_app()
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        async with mcp_mount.lifespan():
+            yield
+
+    app = FastAPI(title="RECON", version="0.1.0", lifespan=lifespan)
     # Single-PC mode only trusts localhost. Network mode (toggled from the
     # tray icon so other PCs can reach this one) needs to accept requests
     # addressed to this machine's LAN IP/hostname instead -- there's no way
@@ -315,6 +332,7 @@ def create_app(db_path: Path = DEFAULT_DB, backups_dir: Path = DEFAULT_BACKUPS_D
         return db_connect(db_path)
 
     app.include_router(build_accounting_router(connect, now))
+    app.include_router(build_agent_router(connect, now))
     app.include_router(build_workflow_router(connect, now))
     app.include_router(build_recon_router(connect, now))
     app.include_router(build_parts_router(connect, now))
@@ -327,6 +345,7 @@ def create_app(db_path: Path = DEFAULT_DB, backups_dir: Path = DEFAULT_BACKUPS_D
     # and the updates folder live -- derived rather than re-resolved, so the
     # tests' tmp_path data root is honoured the same as the real one.
     app.include_router(build_update_router(backups_dir.parent))
+    app.mount("/mcp", mcp_mount)
 
     @app.get("/api/health")
     def health():
@@ -622,6 +641,19 @@ def create_app(db_path: Path = DEFAULT_DB, backups_dir: Path = DEFAULT_BACKUPS_D
     @app.post("/api/vehicles/decode-vin")
     def decode_vin(item: VinDecodeIn):
         vin = "".join(item.vin.split()).upper()
+        # A full VIN has to pass its own check digit before we spend a network
+        # round trip on it -- and, more to the point, before a mistyped or
+        # misread character becomes a vehicle_units key that quietly splits one
+        # car's history in two. Only 17-character VINs are checked: this field
+        # deliberately accepts as few as 5 characters (a partial VIN off a
+        # windshield is a legitimate search), and a short VIN isn't wrong, it
+        # just can't be verified this way.
+        #
+        # 400 rather than 404: "that isn't a VIN" is a different answer from
+        # "no vehicle matched", and an advisor who mistyped one character needs
+        # to be told to look again, not told the car doesn't exist.
+        if len(vin) == 17 and not vin_check_digit_ok(vin):
+            raise HTTPException(400, "That VIN fails its check digit -- one character is probably misread")
         try:
             response = httpx.get(
                 f"https://vpic.nhtsa.dot.gov/api/vehicles/decodevinvalues/{vin}",

@@ -1,12 +1,13 @@
 [project]
 name = "discount-auto-ops"
-version = "1.1.0"
+version = "1.2.0"
 description = "Discount Auto Ops -- vehicle-centric shop, recon, and we-owe management"
 requires-python = ">=3.12"
 dependencies = [
   "fastapi>=0.116,<1",
   "uvicorn>=0.35,<1",
   "httpx>=0.28,<1",
+  "mcp>=1.21,<2",
   "pystray>=0.19,<1",
   "pillow>=10.0,<12",
   "pywebview>=6.2.1",

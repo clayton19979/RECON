@@ -40,6 +40,27 @@ def recon_vin(stock_number):
     return f"1HGCM82633A{key:0>6}"
 
 
+def valid_vin(stock_number):
+    """A VIN that passes its own ISO 3779 check digit.
+
+    Separate from recon_vin() on purpose. The plain fixture builds VINs that
+    are unique and shaped right but do NOT satisfy the check digit, and that is
+    fine for /api/recon/vehicles -- a human copying a VIN off a dash plate is
+    the authority there, and pre-1981 cars legitimately fail the arithmetic.
+
+    The agent doors (decode-vin, /api/agent/intake) do enforce it, because
+    those VINs arrive from OCR rather than from someone holding the car. Tests
+    that go through those need a VIN that is actually valid, so this fixes up
+    position 9 rather than leaving the test to hand-pick real VINs.
+    """
+    from app.db import _VIN_TRANSLITERATION, _VIN_WEIGHTS
+
+    base = recon_vin(stock_number)
+    total = sum(_VIN_TRANSLITERATION[ch] * _VIN_WEIGHTS[i] for i, ch in enumerate(base))
+    remainder = total % 11
+    return base[:8] + ("X" if remainder == 10 else str(remainder)) + base[9:]
+
+
 def make_recon_vehicle(client, stock_number="R-1001", **overrides):
     payload = {
         "stock_number": stock_number,

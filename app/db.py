@@ -22,6 +22,57 @@ def normalize_vin(vin: str | None) -> str | None:
     return cleaned or None
 
 
+_VIN_TRANSLITERATION = {
+    **{str(d): d for d in range(10)},
+    "A": 1, "B": 2, "C": 3, "D": 4, "E": 5, "F": 6, "G": 7, "H": 8,
+    "J": 1, "K": 2, "L": 3, "M": 4, "N": 5, "P": 7, "R": 9,
+    "S": 2, "T": 3, "U": 4, "V": 5, "W": 6, "X": 7, "Y": 8, "Z": 9,
+}  # fmt: skip
+# Position 9 is the check digit itself, so it contributes nothing to its own sum.
+_VIN_WEIGHTS = (8, 7, 6, 5, 4, 3, 2, 10, 0, 9, 8, 7, 6, 5, 4, 3, 2)
+
+
+def vin_check_digit_ok(vin: str | None) -> bool:
+    """Does this 17-character VIN pass its own ISO 3779 check digit?
+
+    The one arithmetic defence against a misread VIN, and worth having because
+    of what a misread VIN does here specifically: `vehicle_units` keys on
+    `vin_key`, so one wrong character silently splits a car's history in two --
+    or, worse, collides it with a different car that happens to match. Neither
+    shows up as an error; both just quietly report the wrong money later.
+
+    That matters more now that VINs arrive by photo. A human typing off a dash
+    plate makes few errors and usually notices; OCR confidently returns an 8
+    for a B. Roughly 90% of single-character errors fail this check, so it
+    turns most of them into a question instead of a corrupted record.
+
+    Returns False for anything that isn't a well-formed 17-character VIN --
+    wrong length, or containing I/O/Q, which the standard excludes precisely
+    because they look like 1/0. Callers that accept partial VINs (the decode
+    endpoint takes as few as 5 characters) must only apply this to full ones;
+    a short VIN is not invalid, it just cannot be checked this way.
+
+    Pre-1981 VINs predate the standard and legitimately fail. Those cars are
+    long out of scope for a lot that sells drivable used inventory, but the
+    caller should be reporting "I could not verify this, please confirm"
+    rather than "this is wrong".
+    """
+    cleaned = normalize_vin(vin)
+    if cleaned is None or len(cleaned) != 17:
+        return False
+    if any(ch in "IOQ" for ch in cleaned):
+        return False
+    total = 0
+    for position, char in enumerate(cleaned):
+        value = _VIN_TRANSLITERATION.get(char)
+        if value is None:
+            return False
+        total += value * _VIN_WEIGHTS[position]
+    remainder = total % 11
+    expected = "X" if remainder == 10 else str(remainder)
+    return cleaned[8] == expected
+
+
 def normalize_stock_number(stock_number: str | None) -> str | None:
     """The key two records of the same *stock number* have to agree on.
 

@@ -13,7 +13,7 @@ cosmetic and starts meaning "never updates" or "updates forever".
 
 from __future__ import annotations
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 
 
 def parse(value: str | None) -> tuple[int, ...] | None:

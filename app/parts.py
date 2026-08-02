@@ -8,10 +8,44 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from .accounting import InvoiceItemIn, create_ap_invoice_record, invoice_line_reach, receive_onto_invoice
+from .db import inserted_id
 from .recon import age_days, assert_vehicle_editable
-from .workflow import assert_estimate_editable, get_or_create_estimate, record_activity
+from .workflow import assert_estimate_editable, estimate_line_total, get_or_create_estimate, record_activity
 
 PART_STATUSES = {"quoted", "ordered", "received"}
+
+
+class AppendItemIn(BaseModel):
+    """One line being added to a ticket that already exists.
+
+    No "credit" kind: a credit is written by vendor invoice ingest when a part
+    or core actually goes back, never typed in as a new line, and letting a
+    caller create one by hand would put money back on a car with no paperwork
+    behind it.
+    """
+
+    kind: Literal["part", "labor", "fee"] = "part"
+    description: str = Field(min_length=1, max_length=300)
+    quantity: float = Field(default=1, gt=0)
+    # Recon and we-owe are billed at cost with no markup, so unit_price and
+    # unit_cost are the same number on nearly every line here. Both are kept
+    # because the schema is shared with retail, and both default to zero: a
+    # line whose price nobody has yet is a normal, honest state -- it gets its
+    # cost when the vendor's invoice is received.
+    unit_price: float = Field(default=0, ge=0)
+    unit_cost: float = Field(default=0, ge=0)
+    part_number: str = ""
+    core_charge: float = Field(default=0, ge=0)
+    job_id: int | None = None
+
+
+class AppendItemsIn(BaseModel):
+    # Capped for the same reason EstimateIn caps its list: the writes below run
+    # one statement per line, and an unbounded list is an easy way to hold a
+    # transaction open on the shop's only database.
+    items: list[AppendItemIn] = Field(min_length=1, max_length=100)
+    actor: str = Field(default="ui", min_length=1, max_length=120)
+    source: Literal["manual", "ai"] = "ai"
 
 
 class ItemStatusIn(BaseModel):
@@ -121,6 +155,95 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
             "UPDATE estimates SET subtotal=?,tax=?,total=? WHERE id=?",
             (subtotal, tax, round(subtotal + tax, 2), estimate_id),
         )
+
+    @router.post("/orders/{order_id}/estimate/items", status_code=201)
+    def append_estimate_items(order_id: int, payload: AppendItemsIn):
+        """Add line items to a ticket without touching the ones already on it.
+
+        This exists because POST /api/orders/{id}/estimate -- the route the
+        estimate grid uses -- replaces the entire line-item set: anything not
+        in the payload that hasn't been received is deleted. That is correct
+        for a grid that always holds every row on screen, and catastrophic for
+        any caller working from a partial picture. An agent adding "one tie
+        rod" would send one line and silently delete the other six.
+
+        So this is the additive door, and the only one a non-grid client should
+        use. It appends, recomputes the totals from what is actually on the
+        estimate afterwards, and cannot remove anything.
+
+        Lines land with source='ai' so where they came from survives. That
+        matters because review_required -- the other candidate marker -- is
+        reset to 0 by the grid's next autosave, which happens simply by opening
+        the ticket. Nobody has to act on the flag for it to disappear.
+
+        Unlike POST /orders/{id}/findings, a part number is not required here.
+        That rule is right for a technician's proposed repair (it names a part
+        somebody has to be able to order) and wrong for this shop's ordinary
+        case: used and junkyard parts routinely have no number until the part
+        is physically in hand. The advisor's own grid has always allowed a
+        blank part number, and this is the same act.
+        """
+        with connect() as db:
+            order = db.execute("SELECT * FROM orders WHERE id=?", (order_id,)).fetchone()
+            if not order:
+                raise HTTPException(404, "Repair order not found")
+            assert_vehicle_editable(db, order)
+            assert_estimate_editable(db, order_id)
+            estimate = get_or_create_estimate(db, order_id, now_fn)
+            estimate_id = estimate["id"]
+            valid_job_ids = {
+                row[0] for row in db.execute("SELECT id FROM estimate_jobs WHERE estimate_id=?", (estimate_id,))
+            }
+            next_sort = db.execute(
+                "SELECT coalesce(max(sort_order),-1)+1 FROM estimate_items WHERE estimate_id=?", (estimate_id,)
+            ).fetchone()[0]
+            created: list[int] = []
+            for offset, line in enumerate(payload.items):
+                if line.job_id is not None and line.job_id not in valid_job_ids:
+                    raise HTTPException(422, "Job does not belong to this repair order's estimate")
+                cur = db.execute(
+                    "INSERT INTO estimate_items(estimate_id,kind,description,part_number,quantity,unit_price,unit_cost,"
+                    "quoted_unit_cost,received_quantity,line_total,status,source,review_required,sort_order,job_id,core_charge)"
+                    " VALUES(?,?,?,?,?,?,?,?,0,?,'quoted',?,0,?,?,?)",
+                    (
+                        estimate_id,
+                        line.kind,
+                        line.description.strip(),
+                        line.part_number.strip().upper(),
+                        line.quantity,
+                        line.unit_price,
+                        line.unit_cost,
+                        # What it was written down at, same as any other quote.
+                        # Receiving the part overwrites unit_cost with what the
+                        # vendor actually billed; this keeps the quote alive so
+                        # cost-against-quote stays answerable.
+                        line.unit_cost,
+                        estimate_line_total(line.kind, line.quantity, line.unit_price),
+                        payload.source,
+                        next_sort + offset,
+                        line.job_id,
+                        line.core_charge,
+                    ),
+                )
+                created.append(inserted_id(cur))
+            recompute_estimate_totals(db, estimate_id)
+            record_activity(
+                db,
+                order_id,
+                "estimate_items_appended",
+                payload.actor,
+                {"item_ids": created, "count": len(created)},
+                now_fn,
+            )
+            totals = db.execute("SELECT subtotal, tax, total FROM estimates WHERE id=?", (estimate_id,)).fetchone()
+            return {
+                "order_id": order_id,
+                "estimate_id": estimate_id,
+                "created_item_ids": created,
+                "subtotal": totals["subtotal"],
+                "tax": totals["tax"],
+                "total": totals["total"],
+            }
 
     @router.patch("/orders/{order_id}/estimate/order-parts")
     def order_parts(order_id: int, item: OrderPartsIn = OrderPartsIn()):

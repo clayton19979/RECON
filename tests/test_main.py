@@ -438,7 +438,7 @@ def test_decode_vin_folds_series_into_model(client):
         "Results": [{"ModelYear": "2021", "Make": "Chevrolet", "Model": "Silverado", "Series": "1500", "Trim": "LT"}]
     }
     with patch("app.main.httpx.get", return_value=fake_response):
-        res = client.post("/api/vehicles/decode-vin", json={"vin": "3GCPWCED5KG123456"})
+        res = client.post("/api/vehicles/decode-vin", json={"vin": "3GCPWCED8KG123456"})
     assert res.status_code == 200
     assert res.json()["model"] == "Silverado 1500"
 
@@ -450,7 +450,7 @@ def test_decode_vin_does_not_duplicate_series_already_in_model(client):
         "Results": [{"ModelYear": "2021", "Make": "Ford", "Model": "F-150", "Series": "F-150", "Trim": "XLT"}]
     }
     with patch("app.main.httpx.get", return_value=fake_response):
-        res = client.post("/api/vehicles/decode-vin", json={"vin": "1FTEW1EP7KFA00000"})
+        res = client.post("/api/vehicles/decode-vin", json={"vin": "1FTEW1EP9KFA00000"})
     assert res.json()["model"] == "F-150"
 
 

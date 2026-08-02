@@ -1868,6 +1868,8 @@ const ACTIVITY_LABEL = {
   inspection_saved: "Inspection saved",
   technician_findings_recorded: "Findings recorded",
   job_created: "Job added",
+  jobs_created: "Jobs added",
+  estimate_items_appended: "Lines added",
   job_updated: "Job updated",
   job_deleted: "Job removed",
   job_completed: "Repair finished",

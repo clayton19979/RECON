@@ -27,6 +27,14 @@ $tuple = ($Version.Split('.') + '0') -join ', '
 
 $edits = @(
     @{ Path = "app\version.py"; Pattern = '(VERSION = ")[^"]+(")'; Replace = "`${1}$Version`${2}" }
+    # pyproject.toml is the FOURTH file, and it was missing here until 1.2.0.
+    # tests/test_updates.py::test_pyproject_matches_version_module asserts it
+    # agrees with app\version.py, so leaving it behind turned every bump into
+    # an immediately red test suite -- discovered the only way it can be, by
+    # bumping and watching it fail. Anchored to the line start so it hits the
+    # [project] version and not ruff's target-version or pyright's
+    # pythonVersion further down the file.
+    @{ Path = "pyproject.toml"; Pattern = '(?m)(^version = ")[^"]+(")'; Replace = "`${1}$Version`${2}" }
     @{ Path = "installers\RECON.iss"; Pattern = '(#define\s+AppVersion\s+")[^"]+(")'; Replace = "`${1}$Version`${2}" }
     @{ Path = "version_info.txt"; Pattern = '(filevers=\()[\d, ]+(\))'; Replace = "`${1}$tuple`${2}" }
     @{ Path = "version_info.txt"; Pattern = '(prodvers=\()[\d, ]+(\))'; Replace = "`${1}$tuple`${2}" }

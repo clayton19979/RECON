@@ -1,4 +1,8 @@
-<!-- New Recon Vehicle Dialog -->
+<!-- New Recon Vehicle Dialog.
+     The fields are grouped into three named steps -- identity, what the car
+     is, where it came from. Nothing is hidden or collapsed: a car gets written
+     up standing at the counter, so every box stays on screen and the tab order
+     runs straight down the form. -->
 <dialog id="recon-dialog">
   <form class="modal" id="recon-form">
     <div class="modal-head">
@@ -6,45 +10,59 @@
       <button class="icon-btn" value="cancel" formnovalidate type="button" id="recon-cancel">×</button>
     </div>
     <div class="modal-body">
-      <label>Stock number<input id="recon-stock" required placeholder="R-1042" autocapitalize="characters" autocomplete="off" spellcheck="false"></label>
-      <div class="form-row">
-        <label>VIN<input id="recon-vin" maxlength="17" placeholder="17-character VIN" autocapitalize="characters" autocomplete="off" spellcheck="false"></label>
-        <button type="button" class="btn btn-ghost" id="recon-decode-vin">Decode VIN</button>
-      </div>
-      <!-- Filled in as soon as the stock number or VIN matches a car the shop
-           already has, so a car that is already here is caught before the
-           rest of the form is typed rather than by a refusal at Save. -->
-      <div class="field-note" id="recon-match-note" hidden>
-        <span id="recon-match-text"></span>
-        <button type="button" class="btn btn-ghost btn-xs" id="recon-match-open">Open It</button>
-      </div>
-      <div class="form-row">
-        <label>Plate<input id="recon-plate" maxlength="12" placeholder="Optional"></label>
-        <label>State<input id="recon-plate-state" maxlength="2" placeholder="IL"></label>
-        <button type="button" class="btn btn-ghost" id="recon-decode-plate">Decode Plate</button>
-      </div>
-      <div class="form-row">
-        <label>Year<input id="recon-year" type="number" value="2020" required></label>
-        <label>Make<input id="recon-make" required placeholder="Honda"></label>
-        <label>Model<input id="recon-model" required placeholder="Civic"></label>
-      </div>
-      <div class="form-row">
-        <label>Trim<input id="recon-trim" placeholder="Optional"></label>
-        <label>Engine<input id="recon-engine" placeholder="Optional"></label>
-        <label>Color<input id="recon-color" placeholder="Optional"></label>
-      </div>
-      <div class="form-row">
-        <label>Mileage<input id="recon-mileage" type="number" value="0"></label>
-        <label class="checkbox-inline" style="align-self:flex-end;margin-bottom:12px">
-          <input type="checkbox" id="recon-odo-broken">
-          Odometer broken
-        </label>
-      </div>
-      <div class="form-row">
-        <label>Source<input id="recon-source" placeholder="Auction / trade-in"></label>
-        <label>Acquired<input id="recon-date" type="date"></label>
-      </div>
-      <label>Notes<input id="recon-notes" placeholder="Optional"></label>
+      <fieldset class="form-group">
+        <legend>Which car is it</legend>
+        <!-- Stock number rides the VIN row rather than taking a line of its
+             own: it is half a dozen characters and the extra dialog width is
+             there, so the whole step fits on one screen. -->
+        <div class="form-row">
+          <label>Stock number<input id="recon-stock" required placeholder="R-1042" autocapitalize="characters" autocomplete="off" spellcheck="false"></label>
+          <label style="flex:1.6">VIN<input id="recon-vin" maxlength="17" placeholder="17-character VIN" autocapitalize="characters" autocomplete="off" spellcheck="false"></label>
+          <button type="button" class="btn btn-ghost form-row-btn-end" id="recon-decode-vin">Decode VIN</button>
+        </div>
+        <!-- Filled in as soon as the stock number or VIN matches a car the shop
+             already has, so a car that is already here is caught before the
+             rest of the form is typed rather than by a refusal at Save. -->
+        <div class="field-note" id="recon-match-note" hidden>
+          <span id="recon-match-text"></span>
+          <button type="button" class="btn btn-ghost btn-xs" id="recon-match-open">Open It</button>
+        </div>
+        <div class="form-row">
+          <label>Plate<input id="recon-plate" maxlength="12" placeholder="Optional"></label>
+          <label>State<input id="recon-plate-state" maxlength="2" placeholder="IL"></label>
+          <button type="button" class="btn btn-ghost form-row-btn-end" id="recon-decode-plate">Decode Plate</button>
+        </div>
+      </fieldset>
+
+      <fieldset class="form-group">
+        <legend>Year, make and model</legend>
+        <div class="form-row">
+          <label>Year<input id="recon-year" type="number" value="2020" required></label>
+          <label>Make<input id="recon-make" required placeholder="Honda"></label>
+          <label>Model<input id="recon-model" required placeholder="Civic"></label>
+        </div>
+        <div class="form-row">
+          <label>Trim<input id="recon-trim" placeholder="Optional"></label>
+          <label>Engine<input id="recon-engine" placeholder="Optional"></label>
+          <label>Color<input id="recon-color" placeholder="Optional"></label>
+        </div>
+      </fieldset>
+
+      <fieldset class="form-group">
+        <legend>Where it came from</legend>
+        <div class="form-row">
+          <label>Mileage<input id="recon-mileage" type="number" value="0"></label>
+          <label class="checkbox-inline form-row-btn-end">
+            <input type="checkbox" id="recon-odo-broken">
+            Odometer broken
+          </label>
+          <label>Acquired<input id="recon-date" type="date"></label>
+        </div>
+        <div class="form-row">
+          <label>Source<input id="recon-source" placeholder="Auction / trade-in"></label>
+          <label style="flex:1.6">Notes<input id="recon-notes" placeholder="Optional"></label>
+        </div>
+      </fieldset>
     </div>
     <div class="modal-actions">
       <button value="cancel" class="btn btn-ghost" formnovalidate type="button" id="recon-cancel-2">Cancel</button>

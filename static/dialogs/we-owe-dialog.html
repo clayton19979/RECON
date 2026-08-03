@@ -1,4 +1,7 @@
-<!-- New We-Owe Dialog -->
+<!-- New We-Owe Dialog. Grouped into three named steps the same way the recon
+     write-up is: who the promise is for, what was promised, and the deal it
+     came off. Everything stays on screen -- the two "new customer" / "new
+     vehicle" blocks still open in place inside step one. -->
 <dialog id="we-owe-dialog">
   <form class="modal" id="we-owe-form">
     <div class="modal-head">
@@ -6,53 +9,62 @@
       <button class="icon-btn" formnovalidate type="button" id="we-owe-cancel">×</button>
     </div>
     <div class="modal-body">
-      <label>Customer<select id="we-owe-customer"><option value="__new__">＋ New customer…</option></select></label>
-      <div id="we-owe-new-customer" style="display:none">
-        <div class="form-row">
-          <label>Name<input id="we-owe-new-customer-name" placeholder="Jordan Whitfield"></label>
-          <label>Phone<input id="we-owe-new-customer-phone" type="tel" inputmode="tel" placeholder="(313) 555-0142 — optional"></label>
+      <fieldset class="form-group">
+        <legend>Who we owe, and which car</legend>
+        <label>Customer<select id="we-owe-customer"><option value="__new__">＋ New customer…</option></select></label>
+        <div id="we-owe-new-customer" style="display:none">
+          <div class="form-row">
+            <label>Name<input id="we-owe-new-customer-name" placeholder="Jordan Whitfield"></label>
+            <label>Phone<input id="we-owe-new-customer-phone" type="tel" inputmode="tel" placeholder="(313) 555-0142 — optional"></label>
+          </div>
         </div>
-      </div>
-      <label>Vehicle<select id="we-owe-vehicle"><option value="__new__">＋ New vehicle…</option></select></label>
-      <div id="we-owe-new-vehicle" style="display:none">
-        <div class="form-row">
-          <label>Year<input id="we-owe-new-year" type="number" value="2020"></label>
-          <label>Make<input id="we-owe-new-make" placeholder="Kia"></label>
-          <label>Model<input id="we-owe-new-model" placeholder="Soul"></label>
+        <label>Vehicle<select id="we-owe-vehicle"><option value="__new__">＋ New vehicle…</option></select></label>
+        <div id="we-owe-new-vehicle" style="display:none">
+          <div class="form-row">
+            <label>Year<input id="we-owe-new-year" type="number" value="2020"></label>
+            <label>Make<input id="we-owe-new-make" placeholder="Kia"></label>
+            <label>Model<input id="we-owe-new-model" placeholder="Soul"></label>
+          </div>
+          <div class="form-row">
+            <!-- The VIN is what joins this car to the rest of its life in the
+                 shop -- an earlier recon record, its purchase price, everything
+                 already spent on it. Without one the car is stranded on a
+                 record of its own and its profit can never be worked out, so
+                 it's asked for properly rather than marked "optional". -->
+            <label style="flex:2">VIN<input id="we-owe-new-vin" placeholder="17-character VIN"></label>
+            <button type="button" class="btn btn-ghost form-row-btn-end" id="we-owe-decode-vin">Decode VIN</button>
+          </div>
+          <div class="form-row">
+            <label style="flex:1">Mileage<input id="we-owe-new-mileage" type="number" min="0" placeholder="e.g. 84500"></label>
+            <label class="checkbox-inline form-row-btn-end">
+              <input type="checkbox" id="we-owe-new-odo-broken">
+              Odometer broken
+            </label>
+            <!-- What the lot paid for the car isn't tracked here: Walt does that
+                 math on his end, and this app's job is what the shop spends
+                 fixing it. See CLAUDE.md. -->
+            <label style="flex:1">Sale price<input id="we-owe-new-sale-price" type="number" min="0" step="0.01" placeholder="Optional"></label>
+          </div>
+          <p class="field-note" id="we-owe-vin-match" hidden></p>
         </div>
+      </fieldset>
+
+      <fieldset class="form-group">
+        <legend>What was promised</legend>
+        <label>Description<input id="we-owe-description" required placeholder="e.g. Replace missing passenger mirror"></label>
         <div class="form-row">
-          <!-- The VIN is what joins this car to the rest of its life in the
-               shop -- an earlier recon record, its purchase price, everything
-               already spent on it. Without one the car is stranded on a
-               record of its own and its profit can never be worked out, so
-               it's asked for properly rather than marked "optional". -->
-          <label style="flex:2">VIN<input id="we-owe-new-vin" placeholder="17-character VIN"></label>
-          <button type="button" class="btn btn-ghost" id="we-owe-decode-vin" style="align-self:flex-end;margin-bottom:12px">Decode VIN</button>
+          <label>Category<input id="we-owe-category" placeholder="emissions / mirror / seat belt / other"></label>
+          <label>Target date<input id="we-owe-target" type="date"></label>
         </div>
+      </fieldset>
+
+      <fieldset class="form-group">
+        <legend>The deal it came off</legend>
         <div class="form-row">
-          <label style="flex:1">Mileage<input id="we-owe-new-mileage" type="number" min="0" placeholder="e.g. 84500"></label>
-          <label class="checkbox-inline" style="align-self:flex-end;margin-bottom:12px">
-            <input type="checkbox" id="we-owe-new-odo-broken">
-            Odometer broken
-          </label>
+          <label>Sale reference<input id="we-owe-sale-ref" placeholder="Deal # (optional)"></label>
+          <label>Lot stock number<input id="we-owe-lot-stock" placeholder="Optional"></label>
         </div>
-        <div class="form-row">
-          <!-- What the lot paid for the car isn't tracked here: Walt does that
-               math on his end, and this app's job is what the shop spends
-               fixing it. See CLAUDE.md. -->
-          <label style="flex:1">Sale price<input id="we-owe-new-sale-price" type="number" min="0" step="0.01" placeholder="Optional"></label>
-        </div>
-        <p class="field-note" id="we-owe-vin-match" hidden></p>
-      </div>
-      <label>Description<input id="we-owe-description" required placeholder="e.g. Replace missing passenger mirror"></label>
-      <div class="form-row">
-        <label>Category<input id="we-owe-category" placeholder="emissions / mirror / seat belt / other"></label>
-        <label>Target date<input id="we-owe-target" type="date"></label>
-      </div>
-      <div class="form-row">
-        <label>Sale reference<input id="we-owe-sale-ref" placeholder="Deal # (optional)"></label>
-        <label>Lot stock number<input id="we-owe-lot-stock" placeholder="Optional"></label>
-      </div>
+      </fieldset>
     </div>
     <div class="modal-actions">
       <button class="btn btn-ghost" formnovalidate type="button" id="we-owe-cancel-2">Cancel</button>

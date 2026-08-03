@@ -8,12 +8,15 @@ exe still calling itself 1.0.0 -- and once workstations start deciding whether
 they are out of date by comparing version numbers, a stale one stops being
 cosmetic and starts meaning "never updates" or "updates forever".
 
-`tests/test_version.py` asserts all three still agree.
+`tests/test_updates.py` asserts this file, `version_info.txt`,
+`installers/RECON.iss` and `pyproject.toml` still agree. Note that
+`installers/publish_update.ps1` checks only the first three before building --
+pyproject is caught by the test suite, not by the publish script.
 """
 
 from __future__ import annotations
 
-VERSION = "1.2.1"
+VERSION = "1.3.0"
 
 
 def parse(value: str | None) -> tuple[int, ...] | None:

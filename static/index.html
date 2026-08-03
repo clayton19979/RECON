@@ -17,7 +17,19 @@
 <body>
 <div class="app">
   <nav class="rail">
-    <div class="rail-mark">DA<span class="rail-mark-label">RECON</span></div>
+    <!-- The one place the shop's name is printed on screen. It used to be said
+         twice in the same corner -- the mark here, and a second name/city block
+         at the left of the topbar -- which spent the first 300px of every page
+         telling you where you already are. One identity block, and the topbar
+         gets that space back for the search field. -->
+    <div class="rail-brand">
+      <div class="rail-brand-top">
+        <span class="rail-mark">DA</span>
+        <span class="rail-wordmark">RECON</span>
+      </div>
+      <div class="rail-shop">Discount Auto Repair</div>
+      <div class="rail-city">Merrillville, IN</div>
+    </div>
     <div class="rail-group-label">Workflow</div>
     <button class="rail-item active" data-view="vehicles">
       <svg viewBox="0 0 24 24"><path d="M3 12l2-8h14l2 8M3 12v7a1 1 0 001 1h2a1 1 0 001-1v-2h10v2a1 1 0 001 1h2a1 1 0 001-1v-7M3 12h18M7 16h.01M17 16h.01"/></svg>
@@ -83,10 +95,10 @@
       <button type="button" class="btn btn-ghost btn-sm" id="update-dismiss" title="Hide until the next time RECON starts">Later</button>
     </div>
     <header class="topbar">
-      <div class="topbar-shop">
-        <div class="shop-name">Discount Auto Repair</div>
-        <div class="shop-sub">Merrillville, IN</div>
-      </div>
+      <!-- Search leads the bar now. Typing a stock number is the shortest route
+           to a car there is, and the field it goes in was a small pill floating
+           in the middle of the bar with a hand's width of empty space either
+           side of it. -->
       <!-- A div, not a <label>: a label may only own one labelable control,
            and this bar carries a clear button beside the input. Clicking any
            dead space in the pill still focuses the field (wired in app.js),
@@ -117,8 +129,12 @@
           <div class="notif-list" id="notif-list"></div>
         </div>
       </div>
+      <!-- Whose name lands on every note, status change and finished repair.
+           It reads as one control now rather than a stray word beside a bare
+           dropdown, so it stops competing with the search field. -->
       <label class="whoami">
-        Working as
+        <svg class="whoami-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="3.4"/><path d="M4.5 20c1-3.6 4-5.6 7.5-5.6s6.5 2 7.5 5.6"/></svg>
+        <span class="whoami-label">Working as</span>
         <select id="current-user"><option value="">Unspecified</option></select>
       </label>
     </header>

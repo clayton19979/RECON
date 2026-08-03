@@ -1,5 +1,7 @@
 :root {
-  --rail-w: 236px;
+  /* 24px narrower than it was: the nav is nine short words and the pages
+     beside it are wide tables of cars. */
+  --rail-w: 212px;
   --radius: 10px;
   /* Both are read back by the sticky details drawer, which has to work out how
      much screen is left below them. Kept here rather than inline so the two
@@ -141,27 +143,51 @@ button { font-family: inherit; }
 .rail {
   background: var(--surface); border-right: 1px solid var(--line);
   display: flex; flex-direction: column;
-  padding: 20px 14px; gap: 2px;
+  padding: 16px 12px; gap: 2px;
 }
+
+/* ---------- the one identity block ----------
+   Mark and wordmark on one line, the shop's name and town underneath, ruled
+   off from the nav below it. The old version positioned the wordmark
+   absolutely off the side of the mark, which is why nothing could ever sit
+   under it. */
+.rail-brand {
+  padding: 2px 8px 10px; margin-bottom: 2px;
+  border-bottom: 1px solid var(--line-soft); flex-shrink: 0;
+}
+.rail-brand-top { display: flex; align-items: center; gap: 10px; }
 .rail-mark {
   font-family: "Space Grotesk", sans-serif;
   color: #fff; background: var(--accent);
-  width: 34px; height: 34px; border-radius: 8px;
+  width: 32px; height: 32px; border-radius: 8px;
   display: flex; align-items: center; justify-content: center;
-  font-weight: 700; font-size: 13px; margin-bottom: 22px; flex-shrink: 0;
-  position: relative;
+  font-weight: 700; font-size: 12.5px; flex-shrink: 0;
 }
-.rail-mark-label {
-  position: absolute; left: 44px; top: 50%; transform: translateY(-50%);
-  font-size: 15px; font-weight: 700; color: var(--ink); white-space: nowrap; letter-spacing: .01em;
+.rail-wordmark {
+  font-family: "Space Grotesk", sans-serif;
+  font-size: 16px; font-weight: 700; color: var(--ink);
+  letter-spacing: .02em; white-space: nowrap;
 }
+.rail-shop {
+  font-size: 11.5px; font-weight: 600; color: var(--ink-soft);
+  margin-top: 7px; line-height: 1.3; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis;
+}
+/* Same size and token the town line carried in the topbar it moved from. */
+.rail-city { font-size: 11px; color: var(--ink-faint); line-height: 1.3; white-space: nowrap; }
+
+/* The three group headings are what turn nine buttons into a short list you
+   can aim at. They get a hairline of their own so the groups read as bands.
+   (The old `:first-of-type` reset never matched -- the mark above it was also
+   a div, so the first heading was never the first div in the rail.) */
 .rail-group-label {
   font-size: 9.5px; text-transform: uppercase; letter-spacing: .08em; font-weight: 700;
-  color: var(--ink-faint); padding: 14px 10px 7px;
+  color: var(--ink-faint); padding: 11px 10px 5px; margin-top: 2px;
+  border-top: 1px solid var(--line-soft);
 }
-.rail-group-label:first-of-type { padding-top: 0; }
+.rail-brand + .rail-group-label { border-top: none; padding-top: 4px; margin-top: 0; }
 .rail-item {
-  width: 100%; padding: 9px 10px;
+  width: 100%; padding: 8px 10px;
   display: flex; align-items: center; gap: 11px;
   background: none; border: none; border-left: 3px solid transparent; color: var(--ink-soft);
   cursor: pointer; border-radius: 0 8px 8px 0; font-size: 13px; font-weight: 600;
@@ -169,7 +195,9 @@ button { font-family: inherit; }
 }
 .rail-item svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; flex-shrink: 0; }
 .rail-item:hover { background: var(--paper-raise); color: var(--ink); }
-.rail-item.active { background: var(--accent-tint); color: var(--accent); border-left-color: var(--accent); }
+/* The page you're on: accent edge, accent tint, accent icon, and a heavier
+   word. One of those four alone is a guess from across the counter. */
+.rail-item.active { background: var(--accent-tint); color: var(--accent); border-left-color: var(--accent); font-weight: 700; }
 .rail-spacer { flex: 1; }
 .theme-picker { position: relative; margin-top: 10px; padding: 10px 6px 4px; border-top: 1px solid var(--line); }
 .rail-theme {
@@ -202,26 +230,30 @@ button { font-family: inherit; }
 
 .main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 
+/* The bar carries three things and no decoration: the search field, the
+   message bell, and whose name the day's work is being written under. The
+   shop's own name moved to the rail's identity block, which is where it was
+   already being said once. */
 .topbar {
   height: var(--topbar-h); flex-shrink: 0;
   background: var(--paper-raise); border-bottom: 1px solid var(--line);
-  display: flex; align-items: center; gap: 24px; padding: 0 24px;
+  display: flex; align-items: center; gap: 16px; padding: 0 24px;
 }
-.topbar-shop { flex-shrink: 0; min-width: 0; }
-.shop-name { font-family: Bahnschrift, sans-serif; font-size: 15px; font-weight: 600; line-height: 1.25; white-space: nowrap; }
-.shop-sub { font-size: 11px; color: var(--ink-faint); line-height: 1.25; white-space: nowrap; }
 /* ---------- global search ----------
    flex-direction and margin are declared explicitly, not left to inherit:
    the global `label { display:flex; flex-direction:column; margin-bottom:12px }`
    rule for form fields also matched this bar, which set it to a *column* --
    stacking the icon above the field and pushing the input clean out the
-   bottom of the 32px pill. .whoami beside it guards the same way. */
+   bottom of the pill. .whoami beside it guards the same way.
+
+   It leads the topbar and takes the width the shop's name used to hold: a
+   stock number typed here is the shortest path to a car in the whole app. */
 .search {
-  flex: 1 1 300px; max-width: 420px; min-width: 170px; height: 34px;
-  display: flex; flex-direction: row; align-items: center; gap: 8px;
+  flex: 1 1 380px; max-width: 560px; min-width: 170px; height: 38px;
+  display: flex; flex-direction: row; align-items: center; gap: 9px;
   margin: 0;
   background: var(--surface); border: 1px solid var(--line); border-radius: 999px;
-  padding: 0 6px 0 14px; color: var(--ink-faint);
+  padding: 0 7px 0 15px; color: var(--ink-faint);
   transition: border-color .12s, box-shadow .12s, background .12s;
 }
 .search:hover { border-color: var(--ink-faint); }
@@ -231,11 +263,11 @@ button { font-family: inherit; }
   box-shadow: 0 0 0 3px var(--accent-tint);
 }
 .search:focus-within .search-icon { color: var(--accent); }
-.search-icon { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2; flex-shrink: 0; }
+.search-icon { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; flex-shrink: 0; }
 .search input {
   flex: 1; min-width: 0; align-self: stretch;
   border: none; background: none; outline: none;
-  color: var(--ink); font-family: inherit; font-size: 13px; padding: 0; margin: 0;
+  color: var(--ink); font-family: inherit; font-size: 14px; padding: 0; margin: 0;
 }
 /* Beats the global `input:focus` ring -- the pill draws it instead. */
 .search input:focus { border: none; box-shadow: none; outline: none; }
@@ -263,14 +295,25 @@ button { font-family: inherit; }
 .search-clear svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 2.4; stroke-linecap: round; }
 .search-clear:hover { background: var(--line-soft); color: var(--ink); }
 .search-clear:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* One bounded control instead of a loose word beside a bare dropdown: the
+   pill is the border, so the select inside it carries none of its own. */
 .whoami {
   display: flex; flex-direction: row; align-items: center; gap: 8px;
-  font-size: 11.5px; font-weight: 600; color: var(--ink-faint);
-  margin: 0; white-space: nowrap;
+  font-size: 11px; font-weight: 700; color: var(--ink-faint);
+  text-transform: uppercase; letter-spacing: .06em;
+  margin: 0; white-space: nowrap; flex-shrink: 0;
+  height: 38px; padding: 0 6px 0 12px;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 999px;
+  transition: border-color .12s, box-shadow .12s;
 }
+.whoami:hover { border-color: var(--ink-faint); }
+.whoami:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-tint); }
+.whoami-icon { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; flex-shrink: 0; }
 .whoami select {
-  width: auto; padding: 6px 9px; font-size: 12.5px; font-weight: 600; color: var(--ink);
+  width: auto; padding: 5px 8px; font-size: 12.5px; font-weight: 600; color: var(--ink);
+  background: var(--paper-raise); border-color: var(--line-soft);
 }
+.whoami select:focus { box-shadow: none; outline: none; }
 
 .content { flex: 1; overflow-y: auto; padding: var(--content-pad-top) 28px 60px; }
 
@@ -1823,12 +1866,14 @@ dialog::backdrop { background: var(--backdrop); backdrop-filter: blur(3px); }
    without this the right-hand controls floated in the middle of a wide
    topbar with dead space beside them. */
 .notif { position: relative; flex-shrink: 0; margin-left: auto; }
+/* Sized and rounded to sit level with the search field and the Working-as
+   pill either side of it, so the bar reads as one row of controls. */
 .notif-toggle {
-  position: relative; width: 32px; height: 32px; border-radius: 8px;
+  position: relative; width: 38px; height: 38px; border-radius: 999px;
   background: var(--surface); border: 1px solid var(--line); color: var(--ink-soft);
   display: flex; align-items: center; justify-content: center; cursor: pointer;
 }
-.notif-toggle svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.notif-toggle svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 .notif-toggle:hover { border-color: var(--accent); color: var(--accent); }
 .notif-dot {
   position: absolute; top: -5px; right: -5px; min-width: 15px; height: 15px; padding: 0 3px;
@@ -2528,7 +2573,7 @@ input:focus-visible, select:focus-visible, textarea:focus-visible { outline: non
   .stats-backup { grid-template-columns: repeat(2, 1fr); }
 }
 @media (max-width: 1100px) {
-  :root { --rail-w: 208px; }
+  :root { --rail-w: 192px; }
   .content { padding: 20px 20px 52px; }
   .detail-shell { flex-wrap: wrap; }
   /* Once it wraps under the ticket it is a full-width block at the bottom of
@@ -2552,11 +2597,16 @@ input:focus-visible, select:focus-visible, textarea:focus-visible { outline: non
   .rail { padding: 18px 8px; align-items: center; }
   .rail-item { justify-content: center; padding: 10px 0; border-radius: 8px; border-left-width: 0; }
   .rail-item.active { border-left-width: 0; }
-  .rail-item span, .rail-mark-label, .rail-group-label { display: none; }
-  .rail-mark { margin-bottom: 16px; }
+  .rail-item span, .rail-wordmark, .rail-shop, .rail-city, .rail-group-label { display: none; }
+  /* Only the mark is left, so the block shrinks to it and keeps its rule. */
+  .rail-brand { padding: 0 0 14px; margin-bottom: 8px; width: 100%; }
+  .rail-brand-top { justify-content: center; }
   .theme-picker { padding: 10px 0 4px; }
   .theme-menu { left: calc(100% + 6px); }
   .search { max-width: none; }
+  /* Nothing but the picker itself is worth the width down here. */
+  .whoami-label { display: none; }
+  .whoami { padding: 0 6px 0 10px; }
   .page-head { padding: 16px 18px; }
   .page-head h1 { font-size: 20px; }
 }

@@ -1249,6 +1249,83 @@ textarea { min-height: 70px; resize: vertical; font-family: inherit; }
 .mini-item .mi-title { display: flex; align-items: center; gap: 7px; justify-content: space-between; font-weight: 600; }
 .mini-item .mi-concern { color: var(--ink-soft); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+/* ---------- a vehicle's notes ----------
+   The note is the content; who wrote it and whether the customer may be shown
+   it are footnotes to it. So the text leads at reading size and the rest goes
+   underneath in one quiet line, instead of a badge sitting mid-sentence in the
+   middle of the note the way it used to. Which of the two kinds a note is gets
+   said by the edge as well as the badge -- a customer-facing note is the one
+   worth catching on the way past, so it takes the accent and an internal one
+   keeps the neutral hairline every other list item has. */
+.note-log { gap: 9px; padding: 10px 16px 14px; }
+.note-item { border-left: 2px solid var(--line); padding: 3px 0 3px 11px; }
+.note-item.for-customer { border-left-color: var(--accent); }
+.note-text { font-size: 12.5px; color: var(--ink); line-height: 1.45; overflow-wrap: anywhere; }
+.note-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; margin-top: 4px; }
+.note-tag {
+  flex-shrink: 0; border: 1px solid var(--line); border-radius: 999px;
+  padding: 0 7px; font-size: 9.5px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .05em; color: var(--ink-faint); background: var(--paper-raise);
+}
+.note-item.for-customer .note-tag {
+  color: var(--accent); background: var(--accent-tint);
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--line));
+}
+.note-by { font-size: 11px; color: var(--ink-faint); }
+
+/* ---------- a vehicle's activity log ----------
+   The tallest thing on a ticket, and it used to be forty interchangeable grey
+   rows each carrying a full "Aug 2, 2026, 6:27 PM" -- so working out whether a
+   car had moved this week meant reading the date off every line and comparing
+   them by eye.
+
+   It reads as a timeline instead: newest first, cut into the days it happened
+   on, with the date said once at the head of a day and only the time of day
+   left on the rows beneath it. The rail and its dots are what make a day's
+   worth of events read as one run, and the dot's colour is the only thing
+   here that isn't monochrome, so the events worth spotting -- money landing,
+   work finishing, something being undone -- can be found without reading.
+   Wording, order and the actor on every row are all unchanged. */
+.activity-log { gap: 0; padding: 0 0 12px; }
+.tl-day {
+  padding: 13px 16px 5px; font-size: 10px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: .07em; color: var(--ink-faint);
+}
+/* First heading sits right under the section head, which has its own padding. */
+.tl-day:first-child { padding-top: 9px; }
+.tl-item {
+  position: relative; display: grid; column-gap: 9px;
+  grid-template-columns: 13px minmax(0, 1fr) auto;
+  padding: 4px 16px 5px;
+}
+/* The rail is drawn per row rather than once down the list, so it breaks of
+   its own accord wherever a day heading comes between two rows. */
+.tl-item::before {
+  content: ""; position: absolute; left: 22px; top: 0; bottom: 0;
+  width: 1px; background: var(--line-soft);
+}
+.tl-dot {
+  grid-column: 1; grid-row: 1; align-self: start; justify-self: center;
+  position: relative; z-index: 1; margin-top: 6px;
+  width: 7px; height: 7px; border-radius: 50%; background: var(--ink-faint);
+  /* Punches a hole in the rail so the dot reads as a bead on it, not a blob
+     over it. Matches the panel it sits in -- see .details-drawer. */
+  box-shadow: 0 0 0 2.5px var(--surface);
+}
+.tl-what { grid-column: 2; grid-row: 1; font-size: 12.5px; color: var(--ink-soft); }
+.tl-when {
+  grid-column: 3; grid-row: 1; font-size: 11px; color: var(--ink-faint);
+  font-variant-numeric: tabular-nums; white-space: nowrap; padding-left: 6px;
+}
+.tl-who { grid-column: 2 / 4; grid-row: 2; font-size: 11px; color: var(--ink-faint); }
+/* The three that are worth finding in a scroll. Money and finished work also
+   take the full ink weight -- colour alone shouldn't be the only difference. */
+.tl-item.money .tl-dot { background: var(--good); }
+.tl-item.work .tl-dot { background: var(--accent); }
+.tl-item.undone .tl-dot { background: var(--crit); }
+.tl-item.money .tl-what, .tl-item.work .tl-what { color: var(--ink); font-weight: 600; }
+.tl-item.undone .tl-what { color: var(--ink); }
+
 /* ---------- vendor chips ---------- */
 /* Top padding because the chips now sit directly under the card head when
    the add/edit form above them is folded away. */

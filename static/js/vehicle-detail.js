@@ -1,7 +1,7 @@
 import { $, $$, api, fmtHours, get, patch, post, put } from "./core.js";
 import { toast } from "./notify.js";
 import { confirmAction } from "./confirm.js";
-import { currentActor, esc, fmtDate, fmtDay, money, relativeTime, withLoading } from "./shortcuts.js";
+import { currentActor, esc, fmtDate, fmtDay, money, relativeTime, todayLocal, withLoading } from "./shortcuts.js";
 import { emptyState } from "./empty-states.js";
 import { actualTotal, isReturnedPart, lineTotal, ticketTotal } from "./estimate-money.js";
 import { AUTH_METHOD_LABEL, ITEM_STATUS_LABEL, KIND_GROUP_LABEL, KIND_GROUP_ORDER, PAY_METHOD_LABEL, STATUS_LABEL, STATUS_OPTIONS, STATUS_PILL_CLASS, fieldLabels, state } from "./state.js";
@@ -1891,8 +1891,19 @@ export function wireMoveItemDialog() {
 /* ---------- notes / activity ---------- */
 function renderNotes(order) {
   const box = $("#vd-note-list");
+  /* The note itself is the point, so it leads at reading size and everything
+     about it -- who, when, who's allowed to see it -- drops to one quiet line
+     underneath. The two visibilities are told apart by the edge rather than by
+     a word in the middle of the sentence: a note the customer can be shown is
+     the one worth spotting while scrolling, and it carries the accent. */
   box.innerHTML = order.notes.length ? order.notes.map((n) => `
-    <div class="mini-item"><div>${esc(n.text)} <span class="pill" style="background:var(--line-soft);color:var(--ink-faint);text-transform:none;font-weight:600">${n.visibility}</span></div><div class="mi-meta">${esc(n.actor)} · ${fmtDate(n.created_at)}</div></div>
+    <div class="note-item${n.visibility === "customer" ? " for-customer" : ""}">
+      <div class="note-text">${esc(n.text)}</div>
+      <div class="note-meta">
+        <span class="note-tag">${n.visibility === "customer" ? "Customer" : "Internal"}</span>
+        <span class="note-by">${esc(n.actor)} · ${fmtDate(n.created_at)}</span>
+      </div>
+    </div>
   `).join("") : emptyState({ icon: "idea", title: "No notes yet", hint: "Anything worth remembering about this vehicle -- what the customer said, what you found.", compact: true });
 }
 /* The activity log's actions are database verbs, and the log used to print
@@ -1947,11 +1958,83 @@ function activityLabel(action) {
   return ACTIVITY_LABEL[action] || String(action || "").replace(/_/g, " ");
 }
 
+/* Three families of event get a colour on the log; everything else stays grey.
+   Forty rows of identical type is a wall, and scrolling it to answer "has this
+   car actually moved this week?" meant reading every line. Money landing on
+   the car and work actually finishing are the two things worth picking out of
+   that wall, and something being taken back is worth picking out because
+   somebody undid it on purpose. Retyping the concern or changing who's
+   assigned is the background hum and stays quiet.
+
+   Anything not listed falls through to grey, so a new server-side action is
+   dull rather than mis-coloured. */
+const ACTIVITY_MONEY = new Set([
+  "parts_received", "ap_invoice_posted", "invoice_created", "payment_recorded",
+  "part_return_credited", "core_credit_recorded", "estimate_approved",
+]);
+const ACTIVITY_WORK = new Set([
+  "order_created", "status_changed", "job_completed", "parts_ordered",
+  "job_created", "jobs_created", "estimate_items_appended", "inspection_saved",
+  "technician_findings_recorded", "part_returned", "core_returned", "part_picked_up",
+  "estimate_item_moved_in",
+]);
+const ACTIVITY_UNDONE = new Set([
+  "order_voided", "ap_invoice_voided", "estimate_declined", "job_deleted",
+  "job_reopened", "parts_order_undone", "part_return_undone", "core_return_undone",
+  "part_pickup_undone", "estimate_item_moved_out", "segment_changed",
+]);
+function activityTone(action) {
+  if (ACTIVITY_MONEY.has(action)) return " money";
+  if (ACTIVITY_UNDONE.has(action)) return " undone";
+  if (ACTIVITY_WORK.has(action)) return " work";
+  return "";
+}
+
+/* Which day an event belongs to. The stamps are shop-local naive time on
+   purpose (app/db.py::now), so the day printed on one is the day it happened
+   and reading it locally is right -- todayLocal is the same arithmetic the
+   board's date filters already use, rather than a second way to get a
+   calendar day out of a Date. */
+function activityDayKey(value) {
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? "" : todayLocal(d);
+}
+function activityDayLabel(key) {
+  if (!key) return "Undated";
+  if (key === todayLocal()) return "Today";
+  const yesterday = new Date();
+  yesterday.setDate(yesterday.getDate() - 1);
+  return key === todayLocal(yesterday) ? "Yesterday" : fmtDay(key);
+}
+function activityTime(value) {
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? "" : d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+}
+
+/* The log is the car's story, so it's told as one: newest first, broken into
+   the days it happened on, with the date said once at the head of each day
+   instead of re-stamped on all nine of that afternoon's rows. What's left on
+   the row is the event and the time of day, which is the pair anyone is
+   actually reading for. */
 function renderActivity(order) {
   const box = $("#vd-activity-list");
-  box.innerHTML = order.activity.length ? order.activity.slice().reverse().map((a) => `
-    <div class="mini-item"><div>${esc(activityLabel(a.action))}</div><div class="mi-meta">${esc(a.actor)} · ${fmtDate(a.created_at)}</div></div>
-  `).join("") : emptyState({ icon: "check", title: "No activity yet", hint: "Status changes, assignments, and receipts on this ticket get logged here.", compact: true });
+  if (!order.activity.length) {
+    box.innerHTML = emptyState({ icon: "check", title: "No activity yet", hint: "Status changes, assignments, and receipts on this ticket get logged here.", compact: true });
+    return;
+  }
+  let day = null;
+  box.innerHTML = order.activity.slice().reverse().map((a) => {
+    const key = activityDayKey(a.created_at);
+    const heading = key === day ? "" : `<div class="tl-day">${esc(activityDayLabel(key))}</div>`;
+    day = key;
+    return `${heading}
+      <div class="tl-item${activityTone(a.action)}">
+        <span class="tl-dot" aria-hidden="true"></span>
+        <span class="tl-what">${esc(activityLabel(a.action))}</span>
+        <span class="tl-when">${esc(activityTime(a.created_at))}</span>
+        <span class="tl-who">${esc(a.actor)}</span>
+      </div>`;
+  }).join("");
 }
 
 /* ---------- assignment ---------- */

@@ -304,13 +304,18 @@
             <div class="detail-customer" id="vd-customer-line" hidden></div>
             <!-- Closes the loop from the board's Idle column: the board says
                  which cars are sitting, this says what the last thing that
-                 happened to *this* one was. Above the record-updated line
-                 because "someone edited the VIN 3 minutes ago" and "nobody
-                 has worked on this car in 9 days" are both true at once, and
-                 only the second one is why you opened the page. -->
-            <div class="detail-worked" id="vd-last-worked" hidden></div>
-            <div class="detail-updated" id="vd-updated"></div>
-            <div class="detail-concern" id="vd-concern-preview" style="display:none"><span class="detail-concern-label">Concern</span><span id="vd-concern-preview-text"></span></div>
+                 happened to *this* one was. It leads the row because "someone
+                 edited the VIN 3 minutes ago" and "nobody has worked on this
+                 car in 9 days" are both true at once, and only the second one
+                 is why you opened the page.
+
+                 Both are timestamps about the same car, so they share one
+                 line instead of stacking two -- the band's whole job is to be
+                 read in a glance and then scrolled past. -->
+            <div class="detail-meta">
+              <div class="detail-worked" id="vd-last-worked" hidden></div>
+              <div class="detail-updated" id="vd-updated"></div>
+            </div>
           </div>
           <div class="detail-head-right">
             <!-- The same rollup the drawer's cost card reads — surfaced on the
@@ -363,17 +368,19 @@
             </div>
 
             <div id="vd-order-content" style="display:none">
-              <div class="card">
-                <div class="card-head">
-                  <div>
-                    <p class="section-eyebrow" id="vd-ro-number">Repair Order</p>
-                    <h3 class="section-title">Concern</h3>
-                  </div>
+              <!-- The ticket's subject line, not a card. What a repair order is
+                   for is one sentence that gets typed once and read for weeks,
+                   and a full card's worth of chrome around it pushed the repair
+                   list itself off the bottom of a laptop screen. Same field,
+                   same Save, same autosave on blur -- one row instead of five.
+                   The box grows to fit a longer concern (sizeConcernBox). -->
+              <div class="concern-strip">
+                <div class="concern-strip-label">
+                  <p class="section-eyebrow" id="vd-ro-number">Repair Order</p>
+                  <label class="concern-strip-title" for="vd-concern">Concern</label>
                 </div>
-                <div class="card-body">
-                  <label>Concern / What's being done<textarea id="vd-concern" placeholder="e.g. Front end recon prep, or: replace missing passenger mirror"></textarea></label>
-                  <button class="btn btn-ghost btn-sm" id="vd-concern-save" style="margin-top:8px">Save</button>
-                </div>
+                <textarea id="vd-concern" rows="1" placeholder="What's being done — e.g. Front end recon prep, or: replace missing passenger mirror"></textarea>
+                <button class="btn btn-ghost btn-sm" id="vd-concern-save">Save</button>
               </div>
 
               <div class="card parts-labor-shell">

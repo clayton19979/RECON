@@ -1353,10 +1353,17 @@ td.ap-coverage { padding-top: 6px; padding-bottom: 6px; }
 .task-quick-add {
   display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
   background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
-  padding: 14px; margin-bottom: 16px; box-shadow: var(--shadow);
+  padding: 12px 14px; margin-bottom: 14px; box-shadow: var(--shadow);
 }
 .task-quick-add #task-title-input { flex: 1; min-width: 240px; }
 .task-quick-add select, .task-quick-add input[type="date"] { width: auto; }
+/* A <select> sizes itself to its longest option, and this one's options are
+   "Retail: Tyrell Banks -- 2020 Chevrolet Equinox". Unpinned it took 335px of
+   a 948px row, which was exactly enough to shove Add Task onto a second line
+   and cost the row fifty pixels to say nothing new. Capped, the whole
+   add-a-task line fits across at a laptop width; the closed field truncates,
+   the open menu still shows every option in full. */
+.task-quick-add #task-order-input { max-width: 190px; }
 .task-urgent-toggle {
   display: flex; flex-direction: row; align-items: center; gap: 6px;
   font-size: 12.5px; font-weight: 600; color: var(--ink-soft); margin: 0; white-space: nowrap;
@@ -1371,6 +1378,25 @@ td.ap-coverage { padding-top: 6px; padding-bottom: 6px; }
 .stats-tasks .stat:nth-child(1) { border-top-color: var(--accent); }
 .stats-tasks .stat:has(.stat-value.warn) { border-top-color: var(--warn); }
 .stats-tasks .stat:has(.stat-value.crit) { border-top-color: var(--crit); }
+
+/* ...and at the board's compact size, for the board's reason. This is a
+   working list that gets a dozen visits a day, and everything above the first
+   task is chrome you scroll past to reach it. Same four numbers, same
+   colours, same click targets, in a strip two thirds the height -- and small
+   enough to hold four across much further down than a full-size card row can
+   (see the strip's own breakpoints at the foot of this file). */
+.stats-tasks { gap: 10px; margin-bottom: 16px; }
+.stats-tasks .stat { padding: 9px 13px 10px; }
+.stats-tasks .stat-label { font-size: 10px; }
+.stats-tasks .stat-value { font-size: 21px; margin-top: 1px; line-height: 1.2; }
+.stats-tasks .stat-sub { font-size: 11px; margin-top: 1px; }
+
+/* The filter bar's "Assignee" dropdown is a <label>, so it picks up the form
+   stack -- column direction and a 12px bottom margin -- from the generic rule
+   and stands its caption on top of its select. That made one 56px control in
+   a row of 31px chips and set the height of the whole bar. Laid back on its
+   side, as the class's own align-items:center always intended. */
+#view-tasks .filters-select-wrap { flex-direction: row; margin-bottom: 0; }
 
 .tasks-select-all-wrap {
   display: flex; flex-direction: row; align-items: center; gap: 6px; margin: 0;
@@ -2359,6 +2385,7 @@ input:focus-visible, select:focus-visible, textarea:focus-visible { outline: non
 @media (max-width: 1240px) {
   .stats { grid-template-columns: repeat(2, 1fr); }
   .stats-board { grid-template-columns: repeat(5, 1fr); }
+  .stats-tasks { grid-template-columns: repeat(4, 1fr); }
   .stats-backup { grid-template-columns: repeat(2, 1fr); }
 }
 @media (max-width: 1100px) {
@@ -2373,10 +2400,11 @@ input:focus-visible, select:focus-visible, textarea:focus-visible { outline: non
   }
   .details-handle { position: static; height: auto; align-self: stretch; }
 }
-/* The board strip's own step down, long after the four-card rows have taken
-   theirs: below this the sub-lines start wrapping inside a 150px card. */
+/* The compact strips' own step downs, long after the full-size card rows have
+   taken theirs: below this their sub-lines start wrapping inside the card. */
 @media (max-width: 1000px) {
   .stats-board { grid-template-columns: repeat(3, 1fr); }
+  .stats-tasks { grid-template-columns: repeat(2, 1fr); }
 }
 /* Below this the labelled rail costs more than it gives -- collapse it to an
    icon strip. Titles move to the tooltip so nothing becomes unreachable. */
@@ -2421,11 +2449,12 @@ input:focus-visible, select:focus-visible, textarea:focus-visible { outline: non
 }
 @media (max-width: 700px) {
   .stats, .stats-board { grid-template-columns: 1fr; }
-  /* Four stacked full-height cards is a full phone screen of chrome --
-     halve them and drop the sub-lines. */
+  /* The strip is already compact by here (see .stats-tasks above), so it can
+     still hold two across where the full-size rows have gone to one --
+     restated because .stats-tasks is also a .stats and the single-column rule
+     above it would otherwise win on source order. The sub-lines are the last
+     thing left that can't hold its line on a phone, so they go. */
   .stats-tasks { grid-template-columns: 1fr 1fr; }
-  .stats-tasks .stat { padding: 11px 12px; }
-  .stats-tasks .stat-value { font-size: 20px; }
   .stats-tasks .stat-sub { display: none; }
   /* Under a phone width the label can't share a line with the bar and stay
      readable, so it moves above its own full-width track. */

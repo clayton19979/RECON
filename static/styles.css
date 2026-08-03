@@ -983,11 +983,19 @@ textarea { min-height: 70px; resize: vertical; font-family: inherit; }
 .part-row .ei-receive-check { width: auto; margin: 0; cursor: pointer; }
 .row-drag-handle { cursor: grab; color: var(--ink-faint); font-size: 12px; letter-spacing: -2px; user-select: none; }
 .part-row.dragging { opacity: .4; }
+/* Inside a job this row is both the column captions and the Parts/Labor
+   section label, and it sits directly under the job's own header -- so it
+   takes the darker ground, one step back from the header above it, and the
+   captions stay faint. Only the section word comes forward. */
 .part-row.head {
   font-size: 10px; text-transform: uppercase; letter-spacing: .05em; color: var(--ink-faint); font-weight: 700;
-  background: var(--paper-raise); padding-top: 7px; padding-bottom: 7px;
+  background: var(--paper); padding-top: 7px; padding-bottom: 7px;
 }
-.part-row.head .pr-kind { color: var(--ink-soft); }
+/* Only inside a job, where this word is the Parts/Labor section label. On the
+   flat list it reads "Kind" -- an ordinary column caption, which would be
+   lying about its own weight set in full ink. */
+.part-row.head:not(.head-flat) .pr-kind { color: var(--ink); font-weight: 800; letter-spacing: .07em; }
+.part-row.head.head-flat .pr-kind { color: var(--ink-soft); }
 .part-row input, .part-row select { padding: 5px 7px; font-size: 12.5px; }
 .part-row .rm-btn { background: none; border: none; color: var(--crit); cursor: pointer; font-size: 15px; padding: 2px 6px; }
 
@@ -1064,13 +1072,22 @@ textarea { min-height: 70px; resize: vertical; font-family: inherit; }
      the edge and this changes nothing; on a narrow one the row's controls
      used to run off the side of the card and become unreachable, which the
      Done tick made more likely by adding one more of them. */
-  display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 9px 16px;
-  background: var(--paper-raise); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line-soft);
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 11px 16px;
+  /* No top border: the job's own card already draws one there, and the two
+     together read as a doubled hairline. */
+  background: var(--paper-raise); border-bottom: 1px solid var(--line);
   font-size: 12px; font-weight: 700;
 }
-.job-group-title { flex: 1; }
+/* The repair's name is the heading of its card, so it is sized like one --
+   everything else in the row is a control and stays small. */
+.job-group-title { flex: 1; font-size: 14px; color: var(--ink); letter-spacing: -.01em; }
+/* The one figure on this row that gets scanned down a ticket, so it is boxed
+   off from the controls beside it and set in the same tabular figures the
+   Cost column uses. */
 .job-group-subtotal {
-  font-family: "IBM Plex Mono", "Cascadia Mono", Consolas, monospace; font-weight: 700; font-size: 12px; color: var(--ink-soft); white-space: nowrap;
+  font-family: "IBM Plex Mono", "Cascadia Mono", Consolas, monospace; font-weight: 700; font-size: 13px;
+  color: var(--ink); white-space: nowrap; font-variant-numeric: tabular-nums;
+  background: var(--paper); border: 1px solid var(--line-soft); border-radius: 6px; padding: 3px 9px;
 }
 .job-group-head select.job-control { width: auto; padding: 4px 8px; font-size: 11.5px; font-weight: 600; }
 
@@ -1082,11 +1099,15 @@ textarea { min-height: 70px; resize: vertical; font-family: inherit; }
 }
 .job-icon-btn:hover { color: var(--accent); }
 .job-icon-btn.job-delete:hover { color: var(--crit); }
+/* Add-a-line reads as a button rather than as more words in the header row.
+   Still one click in the same place -- it just stops being something you have
+   to hunt for among the job's own text. */
 .job-mini-add {
-  background: none; border: none; color: var(--accent); cursor: pointer; font-size: 11px; font-weight: 700;
-  padding: 2px 6px; white-space: nowrap;
+  background: none; border: 1px dashed var(--line); border-radius: 999px;
+  color: var(--accent); cursor: pointer; font-size: 11px; font-weight: 700;
+  padding: 3px 10px; white-space: nowrap;
 }
-.job-mini-add:hover { text-decoration: underline; }
+.job-mini-add:hover { border-color: var(--accent); border-style: solid; background: var(--accent-tint); }
 
 /* ---------- job completion ----------
    A finished repair stays on the ticket -- its parts and its cost are still
@@ -1101,6 +1122,10 @@ textarea { min-height: 70px; resize: vertical; font-family: inherit; }
   cursor: pointer; user-select: none;
   font-size: 11px; font-weight: 700; color: var(--ink-faint); white-space: nowrap;
   text-transform: uppercase; letter-spacing: 0.03em;
+  /* Bounded like a control, so the whole pill is an obvious hit target for a
+     tick that gets pressed with a part in the other hand. */
+  border: 1px solid var(--line); border-radius: 999px; padding: 3px 10px 3px 8px;
+  background: var(--paper);
   /* The header is a nowrap flex row and this is the narrowest thing in it, so
      without this it is the first item squeezed when a job title runs long. */
   flex: none;
@@ -1111,17 +1136,34 @@ textarea { min-height: 70px; resize: vertical; font-family: inherit; }
 .job-group-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .job-done-toggle input { cursor: pointer; margin: 0; }
 .job-done-toggle input:disabled { cursor: default; }
-.job-group.job-done .job-done-toggle { color: var(--good); }
+.job-group.job-done .job-done-toggle { color: var(--good); border-color: var(--good); background: var(--good-tint); }
 .job-group.job-done .job-group-title { text-decoration: line-through; color: var(--ink-faint); }
 .job-group.job-done .job-group-head { background: var(--paper); }
 
 /* One line above the grid: how far through this car we are. The ticket's own
-   status is a single flag for the whole car and cannot say this. */
+   status is a single flag for the whole car and cannot say this.
+   It is its own card rather than a rule above the first job, so it reads as a
+   summary of all of them instead of a caption on the top one. */
 .job-progress {
-  padding: 8px 16px; font-size: 11.5px; font-weight: 700; color: var(--ink-soft);
-  text-transform: uppercase; letter-spacing: 0.04em; border-bottom: 1px solid var(--line-soft);
+  display: flex; align-items: center; gap: 14px;
+  padding: 11px 16px; font-size: 11.5px; font-weight: 700; color: var(--ink-soft);
+  text-transform: uppercase; letter-spacing: 0.04em;
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+}
+.job-progress-text { flex: none; }
+/* The bar takes the leftover width rather than a fixed one: on a narrow
+   container (details drawer open) it shrinks instead of pushing the count
+   onto a second line. */
+.job-progress-track {
+  flex: 1 1 auto; min-width: 60px; height: 8px; border-radius: 999px; overflow: hidden;
+  background: var(--paper); border: 1px solid var(--line-soft);
+}
+.job-progress-fill {
+  display: block; height: 100%; border-radius: 999px; background: var(--accent);
+  transition: width .25s ease;
 }
 .job-progress.all-done { color: var(--good); }
+.job-progress.all-done .job-progress-fill { background: var(--good); }
 
 /* ---------- cost summary ---------- */
 .cost-summary { padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; }
@@ -1803,7 +1845,17 @@ dialog::backdrop { background: var(--backdrop); backdrop-filter: blur(3px); }
 .job-group {
   background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
   overflow: hidden; border-bottom: 1px solid var(--line) !important;
+  /* A stripe down the card's edge: still-to-do in the accent, finished in
+     green. Which repairs are left on a car becomes a colour you can pick out
+     scrolling past, rather than three tick boxes you have to stop and read.
+     Inset rather than a real border so it can't shift the header's alignment
+     with the rows underneath it. */
+  box-shadow: inset 3px 0 0 var(--accent);
 }
+.job-group.job-done { box-shadow: inset 3px 0 0 var(--good); }
+/* "General" is the ungrouped leftovers, not a repair anyone finishes -- it
+   gets a plain edge so it doesn't read as outstanding work. */
+.job-group[data-job-id=""] { box-shadow: inset 3px 0 0 var(--line); }
 
 /* Status picker: a plain select styled as a pill -- directly changes status
    on selection, no extra popover step. Assign picker (technician/advisor)

@@ -880,11 +880,20 @@ function renderEstimate(order) {
     // say this; without it a ticket with four repairs looked identical
     // whether three were finished or none were.
     const doneCount = jobs.filter((j) => j.completed_at).length;
-    const progress = `<div class="job-progress${doneCount === jobs.length ? " all-done" : ""}">${
-      doneCount === jobs.length
-        ? `All ${jobs.length} repair${jobs.length === 1 ? "" : "s"} finished`
-        : `${doneCount} of ${jobs.length} repair${jobs.length === 1 ? "" : "s"} finished`
-    }</div>`;
+    // The same count, plus a bar of it. The sentence has to be read; the bar
+    // is answerable from across the desk, which is how this line actually
+    // gets used when somebody asks how far along a car is.
+    const donePct = Math.round((doneCount / jobs.length) * 100);
+    const progress = `<div class="job-progress${doneCount === jobs.length ? " all-done" : ""}">
+      <span class="job-progress-text">${
+        doneCount === jobs.length
+          ? `All ${jobs.length} repair${jobs.length === 1 ? "" : "s"} finished`
+          : `${doneCount} of ${jobs.length} repair${jobs.length === 1 ? "" : "s"} finished`
+      }</span>
+      ${/* Decoration for the sentence beside it, so it is hidden from screen
+           readers rather than read out as a second, wordless progress bar. */""}
+      <span class="job-progress-track" aria-hidden="true"><span class="job-progress-fill" style="width: ${donePct}%"></span></span>
+    </div>`;
     box.innerHTML = progress + buckets.map((bucket) => {
       const bucketItems = items.filter((i) => (i.job_id ?? null) === bucket.id);
       const isGeneral = bucket.id === null;

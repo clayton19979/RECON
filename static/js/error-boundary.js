@@ -54,10 +54,24 @@ export function wireViewRetry() {
 // Anything that escapes every other handler -- a typo in a render function,
 // a promise nobody caught -- at least tells the user the app is in a bad
 // state rather than looking merely slow.
+/* Browser noise that is not a fault in this app and must not be shown as one.
+
+   "ResizeObserver loop completed with undelivered notifications" is the whole
+   list, and it is a notice rather than an error: it means a resize callback
+   changed layout and the browser is going round again next frame, which is
+   normal and self-correcting. It reaches window.onerror anyway, so without
+   this the shop got a red "Something went wrong" toast for nothing -- and a
+   warning that cries wolf is worse than no warning, because the next one is
+   the one that gets ignored. The cause is fixed where it happens (see the
+   concern strip's observer in vehicle-detail.js); this is the net under it. */
+const BENIGN_ERRORS = [/^ResizeObserver loop/i];
+
 export function wireGlobalErrorReporting() {
   const report = (label, detail) => {
+    const message = String(detail && detail.message ? detail.message : detail);
+    if (BENIGN_ERRORS.some((pattern) => pattern.test(message))) return;
     console.error(label, detail);
-    if ($("#toast")) toast(`${label}: ${String(detail && detail.message ? detail.message : detail)}`, true);
+    if ($("#toast")) toast(`${label}: ${message}`, true);
   };
   window.addEventListener("error", (e) => report("Something went wrong", e.error || e.message));
   window.addEventListener("unhandledrejection", (e) => report("Something went wrong", e.reason));

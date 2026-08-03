@@ -9,7 +9,7 @@
 ; deployment.json where the app reads it.
 
 #define AppName        "RECON"
-#define AppVersion     "1.4.0"
+#define AppVersion     "1.5.0"
 #define AppPublisher   "Discount Auto Repair"
 #define AppExe         "RECON.exe"
 #define AppPort        "8787"
@@ -36,6 +36,23 @@ PrivilegesRequired=admin
 ArchitecturesInstallIn64BitMode=x64compatible
 DisableProgramGroupPage=yes
 SetupIconFile=..\static\favicon.ico
+; Updating over a running RECON is the normal case, not the exception, and it
+; used to be the thing that broke. Setup's default is to ask the Restart
+; Manager politely to close the app -- and RECON politely refuses, because on
+; the shop PC closing the window hides to the tray so workstations keep
+; working. Setup then hit a RECON.exe it could not replace and stopped, and the
+; only way through was ending the tasks by hand.
+;
+; `force` terminates whatever is still holding the file instead of asking.
+; RECON now also shuts itself down when it starts the installer (see
+; window.Api.install_update), so this is the backstop rather than the plan --
+; but it is the half that works on a copy of RECON old enough not to know how
+; to bow out on its own.
+CloseApplications=force
+; Setup's own restart uses the Restart Manager, which brings the app back with
+; whatever privileges Setup had -- an elevated RECON, which is not how it
+; should run all day. The [Run] entry below does it properly instead.
+RestartApplications=no
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
@@ -63,7 +80,17 @@ Filename: "{tmp}\MicrosoftEdgeWebview2Setup.exe"; Parameters: "/silent /install"
   StatusMsg: "Installing the Microsoft WebView2 runtime..."; \
   Check: NeedsWebView2; Flags: waituntilterminated
 
-Filename: "{app}\{#AppExe}"; Description: "Start {#AppName} now"; Flags: nowait postinstall skipifsilent
+; RECON comes back up by itself after an update. It used to carry `skipifsilent`
+; and nothing else, so an update installed from inside the app -- which runs
+; Setup silently -- finished and left the shop with no RECON running and no
+; sign of what to do next; somebody had to go and find the icon.
+;
+; runasoriginaluser matters as much as the relaunch: Setup runs elevated, and
+; anything it starts inherits that. RECON running as administrator all day is
+; not what a shop tool should be doing, and it would leave files behind that
+; the ordinary login cannot rewrite.
+Filename: "{app}\{#AppExe}"; Description: "Start {#AppName} now"; \
+  Flags: nowait postinstall runasoriginaluser
 
 [UninstallRun]
 ; Take the firewall holes back out. Without this an uninstalled app leaves
@@ -117,21 +144,71 @@ begin
   HostPage.Add('Shop PC name or IP address (optional):', False);
 end;
 
-function ShouldSkipPage(PageID: Integer): Boolean;
+function ConfigPath: String;
 begin
-  { The host box only makes sense for a workstation. }
-  Result := (PageID = HostPage.ID) and (RolePage.SelectedValueIndex = 0);
+  Result := ExpandConstant('{commonappdata}\RECON\deployment.json');
+end;
+
+function IsUpgrade: Boolean;
+begin
+  { This PC has been told what it is already. That answer is the shop's, not
+    something an update gets to revisit. }
+  Result := FileExists(ConfigPath);
 end;
 
 function IsMaster: Boolean;
+var
+  Existing: AnsiString;
 begin
+  { On an upgrade the wizard pages never ran, so RolePage holds its default --
+    index 0, "main shop PC". Trusting it would quietly promote every
+    workstation to a second master the moment it updated, which is the exact
+    two-sets-of-records disaster this page exists to prevent, arriving silently
+    and with nobody having clicked anything. So an upgrade reads the answer
+    already on disk and the wizard is only believed on a fresh install.
+
+    Matched as text rather than parsed: the file is written by
+    WriteDeploymentConfig below and by app/deployment.py, both of which spell
+    it exactly this way, and Inno Setup has no JSON parser worth carrying for
+    one field. }
+  if IsUpgrade then
+  begin
+    if LoadStringFromFile(ConfigPath, Existing) then
+    begin
+      Result := Pos('"master"', String(Existing)) > 0;
+      Exit;
+    end;
+    { Unreadable but present -- assume the safer of the two. A workstation
+      wrongly left alone still works; a master wrongly demoted does not. }
+    Result := True;
+    Exit;
+  end;
   Result := RolePage.SelectedValueIndex = 0;
+end;
+
+function ShouldSkipPage(PageID: Integer): Boolean;
+begin
+  { Nothing to ask on an upgrade -- the role is already settled, and asking
+    again is one more chance to answer it wrong. }
+  if IsUpgrade and ((PageID = RolePage.ID) or (PageID = HostPage.ID)) then
+  begin
+    Result := True;
+    Exit;
+  end;
+  { The host box only makes sense for a workstation. }
+  Result := (PageID = HostPage.ID) and (RolePage.SelectedValueIndex = 0);
 end;
 
 procedure WriteDeploymentConfig;
 var
   Dir, Host, Json: String;
 begin
+  { Never rewritten by an update. The role, and a workstation's hand-typed
+    shop-PC address, are settings this machine already has -- an update that
+    reset them would send the PC looking for its records in the wrong place. }
+  if IsUpgrade then
+    Exit;
+
   Dir := ExpandConstant('{commonappdata}\RECON');
   ForceDirectories(Dir);
 

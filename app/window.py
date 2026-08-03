@@ -29,6 +29,11 @@ log = logging.getLogger("tray")
 # means the server is wedged, not that the file is big.
 DOWNLOAD_TIMEOUT_SECONDS = 60
 
+# How long to leave RECON up after starting the installer. Long enough for
+# Setup to raise its UAC prompt and for the page to show what happened, short
+# enough that nobody is left looking at an app that said it was closing.
+QUIT_DELAY_SECONDS = 3.0
+
 MIN_WIDTH = 980
 MIN_HEIGHT = 640
 DEFAULT_WIDTH = 1400
@@ -103,9 +108,19 @@ class Api:
     window rather than a browser tab.
     """
 
-    def __init__(self, on_retry: Callable[[], str | None], current_url: Callable[[], str | None]) -> None:
+    def __init__(
+        self,
+        on_retry: Callable[[], str | None],
+        current_url: Callable[[], str | None],
+        on_quit: Callable[[], None] | None = None,
+    ) -> None:
         self._on_retry = on_retry
         self._current_url = current_url
+        # How install_update gets RECON to actually exit. It has to be the
+        # tray's own full shutdown rather than closing the window, because
+        # closing the window on the shop PC deliberately does not quit -- see
+        # TrayApp._on_window_closing.
+        self._on_quit = on_quit
         self._window = None
 
     def bind(self, window) -> None:
@@ -188,7 +203,8 @@ class Api:
         return {"ok": True, "path": str(chosen), "bytes": len(payload)}
 
     def install_update(self, path: str, filename: str) -> dict:
-        """Fetch the installer the shop PC is offering and run it.
+        """Fetch the installer the shop PC is offering, run it, and get out of
+        its way.
 
         Deliberately a separate method from `save_file` even though both
         download: this one hands the result to the operating system to
@@ -200,9 +216,18 @@ class Api:
         The installer needs elevation, so Windows raises its own UAC prompt.
         Declining it leaves the running app untouched -- the update simply
         doesn't happen, which is the right failure.
+
+        Quitting afterwards is the fix for the update that never worked. RECON
+        used to start the installer and keep running, so Setup arrived at a
+        RECON.exe still locked by this very process and stopped dead; the only
+        way out was ending the tasks by hand and starting again. Closing the
+        window would not have helped either -- on the shop PC that hides to the
+        tray on purpose. So the app shuts itself down properly, and the
+        installer puts it back up when it is done.
         """
         import subprocess
         import tempfile
+        import threading
 
         try:
             url = self._absolute(path)
@@ -223,13 +248,35 @@ class Api:
             return {"ok": False, "error": f"Could not download the update: {exc}"}
 
         try:
-            # Inno Setup's own /SILENT would skip the prompts, but this shop
-            # updates rarely and a visible installer is the clearer thing to
-            # hand someone -- they see what is happening and can back out.
-            subprocess.Popen([str(target)], close_fds=True)
+            # /SILENT still shows a progress window, which is worth keeping --
+            # something visibly happens after the click. The rest is what makes
+            # it finish on its own: close anything holding a file open, don't
+            # reboot, and don't stop to ask about either.
+            #
+            # The installer relaunches RECON itself (see RECON.iss [Run]), so
+            # nobody has to go and find the icon afterwards.
+            subprocess.Popen(
+                [str(target), "/SILENT", "/SUPPRESSMSGBOXES", "/FORCECLOSEAPPLICATIONS", "/NORESTART"],
+                close_fds=True,
+            )
         except OSError as exc:
             log.exception("Could not launch the installer at %s", target)
             return {"ok": False, "error": f"Could not start the installer: {exc}"}
+
+        quit_app = self._on_quit
+        if quit_app is not None:
+            # On a timer, and off this thread: the call has to return so the
+            # page can say the update has started, and Setup needs a moment to
+            # get past its own elevation prompt before this process disappears
+            # from under it. Failing to quit is not worth reporting back -- the
+            # installer's force-close will take care of it either way.
+            def bow_out() -> None:
+                try:
+                    quit_app()
+                except Exception:
+                    log.exception("Could not shut down for the update; the installer will force it")
+
+            threading.Timer(QUIT_DELAY_SECONDS, bow_out).start()
         return {"ok": True, "path": str(target)}
 
 
@@ -240,13 +287,20 @@ class AppWindow:
     icon runs detached and this takes over the main thread in `start()`.
     """
 
-    def __init__(self, *, on_retry: Callable[[], str | None], on_closing: Callable[[], bool]) -> None:
+    def __init__(
+        self,
+        *,
+        on_retry: Callable[[], str | None],
+        on_closing: Callable[[], bool],
+        on_quit: Callable[[], None] | None = None,
+    ) -> None:
         self._on_retry = on_retry
         self._on_closing = on_closing
+        self._on_quit = on_quit
         self._window = None
         self._started = False
         self._url: str | None = None
-        self._api = Api(self._on_retry, lambda: self._url)
+        self._api = Api(self._on_retry, lambda: self._url, on_quit)
 
     def _create(self, url: str | None):
         import webview

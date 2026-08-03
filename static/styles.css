@@ -524,14 +524,82 @@ table.sticky-head thead th {
   box-shadow: inset 0 -1px 0 var(--line), 0 6px 10px -10px rgba(0,0,0,.45);
   background-clip: padding-box;
 }
+
+/* The eleven columns were sized by the browser's spare-width arithmetic, and
+   it spent the width in the wrong places: Cost took 171px to print $0.00
+   because one row carried a "not received" note under it, Type took 90px for
+   a six-letter tag, and the car -- the thing anyone actually scans a board by
+   -- got 169px. The whole table came to 1135px inside a 1052px panel, so on a
+   1366-wide laptop the Cost column, which is the number this app exists to
+   report, sat off the right edge behind a sideways scrollbar.
+
+   Same fix the report sheets got: fixed layout, every column set on purpose.
+   Codes, tags, day counts and money take what they need and no more, and what
+   they stop spending goes to the car. Narrower gutters are part of it --
+   eleven columns want back the width that sixteen pixels a side was spending
+   on air, and a right-aligned figure has no use for padding on its left.
+
+   The car's column is set too, so the table has one natural width -- 1052px
+   -- and holds it. Below that it is dragged sideways rather than crushing the
+   name to nothing; above it the spare width is shared out in proportion, and
+   the widest column takes the largest share of it. A 1366 laptop clears the
+   table exactly, where it used to hide 83px of the Cost column; a 1280 one is
+   86px short, against 169px short before this. */
+.board-table { table-layout: fixed; }
+.board-table thead th, .board-table tbody td { padding-left: 10px; padding-right: 10px; }
+.board-table thead th.num-col, .board-table tbody td.num-col { padding-left: 4px; padding-right: 8px; }
 .board-table th.col-select, .board-table td.col-select { width: 34px; padding-right: 0; }
+/* Every input in the app is width:100%, which stretched this checkbox into a
+   34px-wide box with a 13px control sitting at the left of it -- and made the
+   column claim width it never used. Same exemption the task list's checkbox
+   already carries. */
+.board-table .col-select input { width: auto; margin: 0; }
+.board-table .col-stock { width: 84px; }
+.board-table .col-vehicle { width: 182px; }
+.board-table .col-type { width: 90px; }
+/* Sized for the statuses in daily use rather than for the longest one:
+   "Waiting on parts" is the only label that doesn't fit on a line, and it
+   wraps inside its pill instead of making every row on the board 30px wider.
+   The rows are two lines tall already, so a two-line pill costs nothing. */
+.board-table .col-status { width: 116px; }
+.board-table td.col-status .pill { white-space: normal; text-align: center; }
+.board-table .col-tech { width: 104px; }
+/* Parts, Age, Idle and Promised are sized by their own headings rather than
+   by what's under them -- a badge, two day counts and a date are all shorter
+   than the words above them. */
+.board-table .col-parts { width: 68px; }
+.board-table .age-col { width: 52px; }
+.board-table .idle-col { width: 58px; }
+.board-table .promised-col { width: 112px; }
+/* Cost is set to the widest thing that can appear in it, which is not the
+   money: it's the "not received" note that rides under the figure on a car
+   whose closed ticket still has parts nobody booked in. */
+.board-table .col-cost { width: 152px; }
+/* Nothing in a code, tag or name column wraps: the column is a known width
+   now, and a value that quietly doubled the height of its row would be worse
+   than one that trails off -- even rows are the thing this is fixing. */
+.board-table td.col-stock, .board-table td.col-type, .board-table td.col-tech {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* The technician cell is a flex row (dot, then names), and a flex item won't
+   shrink below its content unless told to, so two names on one car pushed
+   straight through the column edge instead of trailing off. */
+.board-table .tech { max-width: 100%; }
+.board-table .tech-names { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .board-table .veh-name {
   font-weight: 600; max-width: 320px; overflow: hidden; text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* min-height keeps a row with no VIN the same height as its neighbors. */
-.board-table .veh-sub { font-size: 11.5px; color: var(--ink-faint); min-height: 16px; }
-.board-table .veh-customer { display: inline-flex; align-items: center; gap: 4px; color: var(--ink-soft); font-weight: 500; }
+/* A fixed line rather than a minimum one: the we-owe rows put a customer in
+   here behind a little person icon, and an inline-flex box on this line stood
+   two pixels taller than the plain VIN text on the recon rows -- which is why
+   half the board came out 62px tall and the other half 59px. */
+.board-table .veh-sub {
+  font-size: 11.5px; color: var(--ink-faint);
+  height: 17px; line-height: 17px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.board-table .veh-customer { display: inline-flex; vertical-align: top; align-items: center; gap: 4px; color: var(--ink-soft); font-weight: 500; }
 .board-table .veh-customer svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 2; opacity: .8; }
 .board-table tbody tr.selected { background: var(--accent-tint); }
 .board-table tbody tr.selected td { border-bottom-color: var(--accent); }
@@ -731,8 +799,8 @@ table.sticky-head thead th {
    Only rendered on rows that are actually waiting on something, so the
    column is blank down most of a full board and the badges are the only
    thing in it -- which is the point. Warn rather than crit: a part on order
-   is normal, it's just the answer to "why is this car still here". */
-.col-parts { width: 76px; }
+   is normal, it's just the answer to "why is this car still here". The
+   column's width is set with the rest of the board's columns, above. */
 .parts-badge {
   display: inline-flex; align-items: center; gap: 5px;
   padding: 2px 8px 2px 6px; border-radius: 999px;
@@ -754,7 +822,7 @@ table.sticky-head thead th {
    them means a promise that is merely due soon doesn't shout. A settled
    promise fades out rather than keeping a colour it has earned its way out
    of -- same rule the Idle column follows for finished cars. */
-.promised-col { width: 112px; white-space: nowrap; }
+.promised-col { white-space: nowrap; }
 .promise-cell { display: inline-flex; align-items: baseline; gap: 6px; color: var(--ink-soft); cursor: default; }
 .promise-settled { color: var(--ink-faint); }
 .promise-tag {
@@ -2393,18 +2461,12 @@ input:focus-visible, select:focus-visible, textarea:focus-visible { outline: non
   .page-head { padding: 16px 18px; }
   .page-head h1 { font-size: 20px; }
 }
-@media (max-width: 1000px) {
-  /* Quoted is the first column to go: it's context for Cost, not the number
-     anyone scans for, and dropping it keeps Technician readable.
-     Targeted by class, not by nth-child(8): inserting the Parts column ahead
-     of it silently moved position 8 onto Quoted's neighbour, and a
-     position-based rule breaks again on the next column anyone adds. */
-}
 @media (max-width: 900px) {
-  /* Age goes next, and Idle stays: both are day counts, but "how long since
-     anyone touched it" is the one you act on, and Age is still on the
-     vehicle's own page. Same class-based targeting as Quoted above, for the
-     same reason. */
+  /* Age is the column to go on a small screen, and Idle stays: both are day
+     counts, but "how long since anyone touched it" is the one you act on, and
+     Age is still on the vehicle's own page. Targeted by class, not by
+     nth-child(8): a position-based rule breaks again on the next column
+     anyone adds. */
   .board-table th.age-col, .board-table td.age-col { display: none; }
 }
 @media (max-width: 1100px) {

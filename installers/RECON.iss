@@ -9,7 +9,7 @@
 ; deployment.json where the app reads it.
 
 #define AppName        "RECON"
-#define AppVersion     "1.3.0"
+#define AppVersion     "1.4.0"
 #define AppPublisher   "Discount Auto Repair"
 #define AppExe         "RECON.exe"
 #define AppPort        "8787"

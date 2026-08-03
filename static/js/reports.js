@@ -670,8 +670,14 @@ function reportHeaderRow(shape, hasDeposits) {
     // it contradicted the heading as often as it agreed ("Not started" next
     // to a pill reading ESTIMATE, "In the shop" next to ACQUIRED). Type moved
     // into the Vehicle cell, where it costs a line instead of a column.
-    return ["stock", "vehicle", "needs"].map((k) => reportSortHeader("lot", k)).join("")
-      + ["cost", "left", "idle"].map((k) => reportSortHeader("lot", k, "num-col")).join("");
+    // The classes are widths, not decoration -- see .lot-table in the stylesheet.
+    // Everything that has a knowable size says so, and Still Needs is left
+    // unsized on purpose so it collects whatever width is left over.
+    return reportSortHeader("lot", "stock", "col-stock")
+      + reportSortHeader("lot", "vehicle", "col-vehicle")
+      + reportSortHeader("lot", "needs")
+      + ["cost", "left"].map((k) => reportSortHeader("lot", k, "num-col col-money")).join("")
+      + reportSortHeader("lot", "idle", "num-col col-sitting");
   }
   if (shape === "technicians") {
     return reportSortHeader("technicians", "technician")
@@ -714,10 +720,16 @@ function renderLotTable(rows) {
     const cash = inGroup.length
       ? `<span class="lot-group-money">${money(spent)} spent${left ? ` · ${money(left)} still to spend` : ""}</span>`
       : "";
+    // The band is laid out by a div inside the cell rather than by the cell
+    // itself: a <td> with display:flex leaves table layout, and colspan goes
+    // with it -- the heading, its note and its money were stacking three high
+    // inside the width of the Stock # column and spilling over the rows.
     return `<tr class="lot-group-head${inGroup.length ? "" : " is-empty"}" data-lot-group="${group.key}"><td colspan="6">
-        <span class="lot-group-name">${esc(group.label)}</span>
-        <span class="lot-group-note">${note}</span>
-        ${cash}
+        <div class="lot-group-band">
+          <span class="lot-group-name">${esc(group.label)}</span>
+          <span class="lot-group-note">${note}</span>
+          ${cash}
+        </div>
       </td></tr>${inGroup.map(line).join("")}`;
   }).join("");
   const totalSpent = rows.reduce((s, r) => s + (r.actual_cost || 0), 0);

@@ -66,11 +66,23 @@
       <span>Ideas</span>
     </button>
     <div class="rail-group-label">Data</div>
+    <!-- Updating used to live only in the tray icon, which meant right-
+         clicking a thing in the corner of the taskbar to answer "what am I
+         running" and "is there anything newer". Both are a page now. -->
+    <button class="rail-item" data-view="updates">
+      <svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 11-2.6-6.4M21 3.5V9h-5.5"/></svg>
+      <span>Updates</span>
+    </button>
     <button class="rail-item" data-view="backup">
       <svg viewBox="0 0 24 24"><path d="M12 4v12m0 0l-4-4m4 4l4-4M4 20h16"/></svg>
       <span>Backup</span>
     </button>
     <div class="rail-spacer"></div>
+    <!-- The rail's footer row. The version label rides beside the theme
+         button rather than under the shop's name: that space was empty, and
+         a tenth nav button had already pushed the rail to within 24px of not
+         fitting a 720px-tall screen. -->
+    <div class="rail-foot">
     <div class="theme-picker">
       <button class="rail-theme" id="theme-toggle" aria-label="Choose theme" title="Choose theme">
         <svg viewBox="0 0 24 24"><path d="M12 3a6 6 0 009 9 9 9 0 11-9-9z"/></svg>
@@ -83,6 +95,13 @@
         <button type="button" class="theme-option" data-theme="cobalt"><span class="theme-swatch" style="background:#2149c9"></span>Cobalt</button>
         <button type="button" class="theme-option" data-theme="verdigris"><span class="theme-swatch" style="background:#0c6b57"></span>Verdigris</button>
       </div>
+    </div>
+    <!-- "What version am I on" needed the tray icon to answer before this.
+         Filled by the same /api/version call the update bar already makes, so
+         it costs no extra request, and clicking it opens the Updates page
+         rather than being a dead label. -->
+    <button type="button" class="rail-version" id="rail-version" hidden
+            title="What this computer is running — click to open Updates"></button>
     </div>
   </nav>
 
@@ -1088,6 +1107,58 @@
         <button type="button" class="btn btn-ghost btn-sm list-tail-toggle" id="suggestions-toggle-resolved"
                 aria-expanded="false" aria-controls="suggestions-resolved-list">Show done (0)</button>
         <div id="suggestions-resolved-list" class="suggestion-list list-tail" hidden></div>
+      </section>
+
+      <!-- UPDATES -->
+      <!-- Everything here was previously only reachable by right-clicking the
+           tray icon. The rule the tray enforced is unchanged and stated on the
+           page: RECON fetches a new build on its own, and waits to be asked
+           before installing it. -->
+      <section class="view" id="view-updates">
+        <div class="page-head">
+          <div>
+            <h1>Updates</h1>
+            <p class="page-desc">What this computer is running, and whether a newer version is ready. Nothing installs on its own — a new version waits here until you ask for it.</p>
+          </div>
+          <div class="page-head-actions">
+            <button class="btn btn-primary" id="updates-check">
+              <svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 11-2.6-6.4M21 3.5V9h-5.5"/></svg>
+              Check for Updates
+            </button>
+          </div>
+        </div>
+
+        <div class="stats stats-updates" id="updates-stats">
+          <div class="stat">
+            <div class="stat-label">Running Now</div>
+            <div class="stat-value num" id="updates-current">—</div>
+            <div class="stat-sub" id="updates-current-sub">this computer</div>
+          </div>
+          <div class="stat">
+            <div class="stat-label">Ready To Install</div>
+            <div class="stat-value num" id="updates-offered">—</div>
+            <div class="stat-sub" id="updates-offered-sub">nothing waiting</div>
+          </div>
+          <div class="stat">
+            <div class="stat-label">This PC Is</div>
+            <div class="stat-value" id="updates-role">—</div>
+            <div class="stat-sub" id="updates-role-sub">&nbsp;</div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <p class="section-eyebrow">Available</p>
+          </div>
+          <div class="card-body">
+            <div id="updates-available"></div>
+          </div>
+          <div class="card-body-bottom">
+            <button class="btn btn-primary" id="updates-install" hidden>Update Now</button>
+          </div>
+        </div>
+
+        <p class="page-hint" id="updates-note"></p>
       </section>
 
       <!-- BACKUP / RESTORE -->

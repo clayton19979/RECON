@@ -19,6 +19,7 @@ import { wireAddVehicleDialog, wireCustomerEditor, wireCustomersView, wireRetail
 import { wireStaffView } from "./staff.js";
 import { wireTasksView } from "./task-bulk.js";
 import { wireSuggestionsView } from "./ideas.js";
+import { wireUpdatesView } from "./updates-page.js";
 import { wireBackupView } from "./drawer.js";
 
 /* ==================================================================
@@ -62,6 +63,7 @@ export function startApp() {
     wireStaffView();
     wireTasksView();
     wireSuggestionsView();
+    wireUpdatesView();
     wireBackupView();
 
     $$(".rail-item").forEach((btn) => btn.addEventListener("click", () => showView(btn.dataset.view)));

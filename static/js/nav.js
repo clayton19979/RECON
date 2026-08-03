@@ -6,6 +6,7 @@ import { loadCustomersView } from "./customers.js";
 import { loadStaffView } from "./staff.js";
 import { loadTasksView } from "./task-bulk.js";
 import { loadSuggestionsView } from "./ideas.js";
+import { loadUpdatesView } from "./updates-page.js";
 import { loadBackupView } from "./drawer.js";
 
 /* ---------- nav / shell ---------- */
@@ -20,5 +21,6 @@ export const VIEW_LOADERS = {
   staff: () => loadStaffView(),
   tasks: () => loadTasksView(),
   suggestions: () => loadSuggestionsView(),
+  updates: () => loadUpdatesView(),
   backup: () => loadBackupView(),
 };

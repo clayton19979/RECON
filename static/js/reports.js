@@ -183,6 +183,16 @@ const REPORT_STAT_CARDS = {
   technicians: (rows) => technicianStatCards(rows),
 };
 
+/* Which set of column widths each shape's table wears. Shared by the real
+   table and its loading skeleton so the two always agree -- see .report-sheet
+   in the stylesheet. */
+const SHEET_CLASS = {
+  lot: "lot-table",
+  "vehicle-spend": "spend-table",
+  "vehicle-profit": "profit-table",
+  technicians: "tech-table",
+};
+
 const REPORT_PREFS_KEY = "dao-report-view";
 
 export function loadReportPrefs() {
@@ -679,15 +689,45 @@ function reportHeaderRow(shape, hasDeposits) {
       + ["cost", "left"].map((k) => reportSortHeader("lot", k, "num-col col-money")).join("")
       + reportSortHeader("lot", "idle", "num-col col-sitting");
   }
+  // Every other sheet is sized the same way the lot one is: everything with a
+  // knowable size says so, and the one column holding a car's name is left
+  // unsized so it collects whatever width is left over. See .report-sheet in
+  // the stylesheet -- the classes are widths, not decoration.
+  // Technicians is the one sheet where the name is the short column and the
+  // numbers are the many: the name is sized and the five count columns are
+  // left alone, so they split what's left evenly and stay evenly spaced at
+  // any window width instead of the name soaking up all the growth.
   if (shape === "technicians") {
-    return reportSortHeader("technicians", "technician")
+    return reportSortHeader("technicians", "technician", "col-name")
       + ["ros", "completed", "open", "idle", "hours"].map((k) => reportSortHeader("technicians", k, "num-col")).join("");
   }
   if (shape === "vehicle-profit") {
-    return ["stock", "vehicle", "vin"].map((k) => reportSortHeader("vehicle-profit", k)).join("")
-      + ["hours", "purchase", "cost", "sale", "profit", "margin"].map((k) => reportSortHeader("vehicle-profit", k, "num-col")).join("");
+    return reportSortHeader("vehicle-profit", "stock", "col-stock")
+      + reportSortHeader("vehicle-profit", "vehicle")
+      + reportSortHeader("vehicle-profit", "vin", "col-vin")
+      + reportSortHeader("vehicle-profit", "hours", "num-col col-hours")
+      + ["purchase", "cost", "sale", "profit"].map((k) => reportSortHeader("vehicle-profit", k, "num-col col-money")).join("")
+      + reportSortHeader("vehicle-profit", "margin", "num-col col-hours");
   }
-  return `${reportSortHeader("vehicle-spend", "stock")}${reportSortHeader("vehicle-spend", "vehicle")}${reportSortHeader("vehicle-spend", "segment")}${reportSortHeader("vehicle-spend", "status")}${reportSortHeader("vehicle-spend", "tech")}${reportSortHeader("vehicle-spend", "cost", "num-col")}${hasDeposits ? reportSortHeader("vehicle-spend", "paid", "num-col") + reportSortHeader("vehicle-spend", "net", "num-col") : ""}`;
+  return reportSortHeader("vehicle-spend", "stock", "col-stock")
+    + reportSortHeader("vehicle-spend", "vehicle")
+    + reportSortHeader("vehicle-spend", "segment", "col-type")
+    + reportSortHeader("vehicle-spend", "status", "col-status")
+    + reportSortHeader("vehicle-spend", "tech", "col-tech")
+    + reportSortHeader("vehicle-spend", "cost", "num-col col-money")
+    + (hasDeposits
+      ? reportSortHeader("vehicle-spend", "paid", "num-col col-paid") + reportSortHeader("vehicle-spend", "net", "num-col col-paid")
+      : "");
+}
+
+/* Recon or we-owe, as the same quiet tinted tag the rest of the app uses for
+   a category (see .role-badge on Staff). Deliberately not a filled .pill: it
+   sits directly beside a filled Status pill, and two filled badges in
+   neighbouring columns read as one badge printed twice. */
+function segmentTag(segment) {
+  return segment === "recon"
+    ? `<span class="seg-tag seg-recon">Recon</span>`
+    : `<span class="seg-tag seg-weowe">We-Owe</span>`;
 }
 
 /* The lot, grouped the way Walt asks about it rather than as one flat list.
@@ -734,7 +774,7 @@ function renderLotTable(rows) {
   }).join("");
   const totalSpent = rows.reduce((s, r) => s + (r.actual_cost || 0), 0);
   const totalLeft = rows.reduce((s, r) => s + (r.remaining_cost || 0), 0);
-  return `<div class="panel"><div class="table-wrap table-scroll"><table class="sticky-head lot-table"><thead><tr>
+  return `<div class="panel"><div class="table-wrap table-scroll"><table class="sticky-head report-sheet lot-table"><thead><tr>
     ${reportHeaderRow("lot")}
     </tr></thead>
     <tbody>${sections}</tbody>
@@ -767,8 +807,8 @@ function renderProfitTable(rows) {
       `${money(r.recon_cost)} recon`,
       r.we_owe_count ? `${r.we_owe_count} we-owe promise${r.we_owe_count === 1 ? "" : "s"} costing ${money(r.we_owe_net_cost)} net` : "no we-owe work",
     ].join(" · "))}">
-      <td class="num">${esc(r.stock_number || "—")}</td>
-      <td>${esc(r.vehicle || "—")}</td>
+      <td class="num cell-code">${esc(r.stock_number || "—")}</td>
+      <td class="cell-name">${esc(r.vehicle || "—")}</td>
       <td class="num cell-vin">${r.vin ? `${esc(r.vin)} <button type="button" class="copy-btn" data-copy="${esc(r.vin)}" data-copy-label="VIN" title="Copy VIN" aria-label="Copy VIN">⧉</button>` : "—"}</td>
       <td class="num-col" title="Hours flagged by techs on this car">${r.labor_hours ? fmtHours(r.labor_hours) : "—"}</td>
       <td class="num-col">${money(r.purchase_price)}</td>
@@ -778,7 +818,7 @@ function renderProfitTable(rows) {
       <td class="num-col">${r.margin_pct != null ? `${r.margin_pct}%` : "—"}</td>
     </tr>`;
   };
-  return `<div class="panel"><div class="table-wrap table-scroll"><table class="sticky-head"><thead><tr>
+  return `<div class="panel"><div class="table-wrap table-scroll"><table class="sticky-head report-sheet profit-table"><thead><tr>
     ${reportHeaderRow("vehicle-profit")}
     </tr></thead>
     <tbody>${rows.map(cell).join("")}</tbody>
@@ -803,10 +843,10 @@ function renderReportTable(rows, shape) {
     const totHours = Math.round(rows.reduce((s, r) => s + r.labor_hours, 0) * 100) / 100;
     const totOpen = rows.reduce((s, r) => s + r.open_count, 0);
     const worstIdle = rows.reduce((s, r) => Math.max(s, r.open_count ? r.worst_idle_days : 0), 0);
-    return `<div class="panel"><div class="table-wrap table-scroll"><table class="sticky-head"><thead><tr>
+    return `<div class="panel"><div class="table-wrap table-scroll"><table class="sticky-head report-sheet tech-table"><thead><tr>
       ${reportHeaderRow("technicians")}
       </tr></thead>
-      <tbody>${rows.map((r) => `<tr${r.ro_count ? "" : ' class="row-muted"'}><td>${esc(r.technician)}</td><td class="num-col">${r.ro_count}</td><td class="num-col">${r.completed_count}</td><td class="num-col">${r.open_count || "—"}</td>${technicianIdleCell(r)}<td class="num-col">${Math.round(r.labor_hours * 100) / 100}</td></tr>`).join("")}</tbody>
+      <tbody>${rows.map((r) => `<tr${r.ro_count ? "" : ' class="row-muted"'}><td class="cell-name">${esc(r.technician)}</td><td class="num-col">${r.ro_count}</td><td class="num-col">${r.completed_count}</td><td class="num-col">${r.open_count || "—"}</td>${technicianIdleCell(r)}<td class="num-col">${Math.round(r.labor_hours * 100) / 100}</td></tr>`).join("")}</tbody>
       <tfoot><tr><td>Total (${working} working)</td><td class="num-col">${totRos}</td><td class="num-col">${totDone}</td><td class="num-col">${totOpen || "—"}</td><td class="num-col">${totOpen ? esc(sittingText(worstIdle)) : "—"}</td><td class="num-col">${totHours}</td></tr></tfoot>
       </table></div></div>`;
   }
@@ -817,15 +857,20 @@ function renderReportTable(rows, shape) {
   const hasDeposits = totalPaid > 0;
   // Rows navigate to the vehicle -- Reports is where you find the problem
   // car, so it shouldn't make you memorize a stock number to go act on it.
-  return `<div class="panel"><div class="table-wrap table-scroll"><table class="sticky-head"><thead><tr>
+  return `<div class="panel"><div class="table-wrap table-scroll"><table class="sticky-head report-sheet spend-table"><thead><tr>
     ${reportHeaderRow("vehicle-spend", hasDeposits)}
     </tr></thead>
     <tbody>${rows.map((r) => {
       const refId = r.segment === "recon" ? r.recon_id : r.we_owe_id;
       const clickable = refId != null;
-      return `<tr${clickable ? ` class="clickable" data-seg="${esc(r.segment)}" data-ref-id="${refId}" tabindex="0" title="Open this vehicle"` : ""}><td class="num">${esc(r.stock_number || "—")}</td><td>${esc(r.vehicle)}${r.customer_name ? ` <span class="cell-sub">(${esc(r.customer_name)})</span>` : ""}</td>
-    <td>${r.segment === "recon" ? "Recon" : "We-Owe"}</td><td><span class="pill ${vehicleStatusPillClass(r)}">${esc(STATUS_LABEL[r.status] || r.status)}</span></td>
-    <td>${esc((r.technicians || []).join(", ")) || "—"}</td><td class="num-col">${money(r.actual_cost)}</td>${hasDeposits ? `<td class="num-col">${r.customer_paid ? money(r.customer_paid) : "—"}</td><td class="num-col">${r.customer_paid ? money(r.net_cost) : "—"}</td>` : ""}</tr>`;
+      // The customer drops onto a line of its own under the car rather than
+      // trailing after it in brackets. In brackets it was what pushed every
+      // we-owe row onto a second line while the recon rows stayed on one, so
+      // the sheet came out ragged; underneath, it costs the same height on
+      // every row and reads as whose car it is.
+      return `<tr${clickable ? ` class="clickable" data-seg="${esc(r.segment)}" data-ref-id="${refId}" tabindex="0" title="Open this vehicle"` : ""}><td class="num cell-code">${esc(r.stock_number || "—")}</td><td class="cell-name">${esc(r.vehicle)}${r.customer_name ? `<span class="cell-sub">${esc(r.customer_name)}</span>` : ""}</td>
+    <td>${segmentTag(r.segment)}</td><td><span class="pill ${vehicleStatusPillClass(r)}">${esc(STATUS_LABEL[r.status] || r.status)}</span></td>
+    <td class="cell-tech">${esc((r.technicians || []).join(", ")) || "—"}</td><td class="num-col">${money(r.actual_cost)}</td>${hasDeposits ? `<td class="num-col">${r.customer_paid ? money(r.customer_paid) : "—"}</td><td class="num-col">${r.customer_paid ? money(r.net_cost) : "—"}</td>` : ""}</tr>`;
     }).join("")}</tbody>
     <tfoot><tr><td colspan="5">Total (${rows.length} vehicle${rows.length === 1 ? "" : "s"})</td><td class="num-col">${money(totalActual)}</td>${hasDeposits ? `<td class="num-col">${money(totalPaid)}</td><td class="num-col">${money(totalActual - totalPaid)}</td>` : ""}</tr></tfoot>
     </table></div></div>`;
@@ -1031,7 +1076,10 @@ function showReportPlaceholders() {
   // column count (deposits included) so the real table only ever narrows.
   const shape = reportShape(state.reportType);
   const cols = shape === "technicians" ? 6 : 8;
-  $("#report-output").innerHTML = `<div class="panel"><div class="table-wrap table-scroll"><table class="sticky-head"><thead><tr>
+  // Carries the same sheet class as the real table, so the columns are already
+  // sitting where the data will land instead of shuffling under it.
+  const sheet = SHEET_CLASS[shape] || SHEET_CLASS["vehicle-spend"];
+  $("#report-output").innerHTML = `<div class="panel"><div class="table-wrap table-scroll"><table class="sticky-head report-sheet ${sheet}"><thead><tr>
     ${reportHeaderRow(shape, true)}
     </tr></thead><tbody>${skeletonRows(cols)}</tbody></table></div></div>`;
 }

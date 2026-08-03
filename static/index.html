@@ -263,18 +263,18 @@
               <thead>
                 <tr>
                   <th class="col-select" scope="col"><input type="checkbox" id="vehicles-select-all" title="Select all" aria-label="Select all vehicles in view"></th>
-                  <th class="sortable" data-sort-key="stock" aria-sort="none">Stock # <span class="sort-arrow"></span></th>
-                  <th class="sortable" data-sort-key="vehicle" aria-sort="none">Vehicle <span class="sort-arrow"></span></th>
-                  <th class="sortable" data-sort-key="segment" aria-sort="none">Type <span class="sort-arrow"></span></th>
-                  <th class="sortable" data-sort-key="status" aria-sort="none">Status <span class="sort-arrow"></span></th>
-                  <th class="sortable" data-sort-key="tech" aria-sort="none">Technician <span class="sort-arrow"></span></th>
+                  <th class="sortable col-stock" data-sort-key="stock" aria-sort="none">Stock # <span class="sort-arrow"></span></th>
+                  <th class="sortable col-vehicle" data-sort-key="vehicle" aria-sort="none">Vehicle <span class="sort-arrow"></span></th>
+                  <th class="sortable col-type" data-sort-key="segment" aria-sort="none">Type <span class="sort-arrow"></span></th>
+                  <th class="sortable col-status" data-sort-key="status" aria-sort="none">Status <span class="sort-arrow"></span></th>
+                  <th class="sortable col-tech" data-sort-key="tech" aria-sort="none">Technician <span class="sort-arrow"></span></th>
                   <th class="sortable col-parts" data-sort-key="parts" aria-sort="none">Parts <span class="sort-arrow"></span></th>
                   <th class="num-col age-col sortable" data-sort-key="age" aria-sort="none">Age <span class="sort-arrow"></span></th>
                   <th class="num-col idle-col sortable" data-sort-key="idle" aria-sort="none"
                       title="Time since anything last happened on this vehicle's repair order">Idle <span class="sort-arrow"></span></th>
                   <th class="promised-col sortable" data-sort-key="promised" aria-sort="none"
                       title="The date a we-owe was promised to the customer. Recon cars have no promise, so the cell is blank.">Promised <span class="sort-arrow"></span></th>
-                  <th class="num-col sortable" data-sort-key="cost" aria-sort="none">Cost <span class="sort-arrow"></span></th>
+                  <th class="num-col col-cost sortable" data-sort-key="cost" aria-sort="none">Cost <span class="sort-arrow"></span></th>
                 </tr>
               </thead>
               <tbody id="vehicles-table"></tbody>

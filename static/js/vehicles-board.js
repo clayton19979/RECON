@@ -1037,8 +1037,8 @@ function vehicleRowHtml(v) {
   const key = vehicleKey(v);
   return `
       <td class="col-select"><input type="checkbox" class="veh-select" data-key="${key}" aria-label="Select ${esc(v.stock_number || v.vehicle)}" ${state.vehicleSelection.has(key) ? "checked" : ""}></td>
-      <td class="num">${esc(v.stock_number || "—")}</td>
-      <td>
+      <td class="num col-stock">${esc(v.stock_number || "—")}</td>
+      <td class="col-vehicle">
         <div class="veh-name" title="${esc(v.vehicle)}">${esc(v.vehicle)}</div>
         <div class="veh-sub">${v.segment === "we_owe"
           ? `<span class="veh-customer"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-7 8-7s8 3 8 7"/></svg>${esc(v.customer_name || "—")}</span>`
@@ -1048,14 +1048,14 @@ function vehicleRowHtml(v) {
             ? `<span title="${esc(v.vin)}">VIN …${esc(String(v.vin).slice(-8))}</span>`
             : `<span class="muted-dash">—</span>`)}</div>
       </td>
-      <td><span class="pill ${v.segment === "recon" ? "pill-recon" : "pill-weowe"}">${v.segment === "recon" ? "Recon" : "We-Owe"}</span></td>
-      <td><span class="pill ${vehicleStatusPillClass(v)}">${esc(STATUS_LABEL[v.status] || v.status)}</span></td>
-      <td>${v.technicians.length ? `<span class="tech"><span class="tech-dot"></span>${esc(v.technicians.join(", "))}</span>` : `<span class="muted-dash">—</span>`}</td>
+      <td class="col-type"><span class="pill ${v.segment === "recon" ? "pill-recon" : "pill-weowe"}">${v.segment === "recon" ? "Recon" : "We-Owe"}</span></td>
+      <td class="col-status"><span class="pill ${vehicleStatusPillClass(v)}">${esc(STATUS_LABEL[v.status] || v.status)}</span></td>
+      <td class="col-tech">${v.technicians.length ? `<span class="tech"><span class="tech-dot"></span><span class="tech-names">${esc(v.technicians.join(", "))}</span></span>` : `<span class="muted-dash">—</span>`}</td>
       <td class="col-parts">${partsCellHtml(v)}</td>
       <td class="num-col age-col ${ageClass(v.age_days)}">${ageCellHtml(v)}</td>
       <td class="num-col idle-col">${idleCellHtml(v)}</td>
       <td class="promised-col">${promisedCellHtml(v)}</td>
-      <td class="num-col">${money(v.actual_cost)}${costMissingHtml(v)}</td>`;
+      <td class="num-col col-cost">${money(v.actual_cost)}${costMissingHtml(v)}</td>`;
 }
 
 // A signature of everything vehicleRowHtml() reads. Two renders with the same

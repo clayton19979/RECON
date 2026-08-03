@@ -82,12 +82,11 @@ export async function loadVehicleDetail() {
     // The order-scoped header chrome is otherwise only reset by the wrapped
     // renderStatusCard, which never runs on this branch -- navigating from a
     // ticketed vehicle to one with no RO left the previous car's status
-    // pill, assign picker, concern preview and save-state on screen.
-    ["#vd-status-picker", "#vd-assign-picker", "#vd-status-pill", "#vd-concern-preview"].forEach((sel) => {
+    // pill, assign picker and save-state on screen.
+    ["#vd-status-picker", "#vd-assign-picker", "#vd-status-pill"].forEach((sel) => {
       const el = $(sel);
       if (el) el.style.display = "none";
     });
-    $("#vd-concern-preview-text").textContent = "";
     const saveState = $("#vd-estimate-save-state");
     if (saveState) { saveState.className = "save-state"; saveState.textContent = ""; }
     $("#vd-no-order").style.display = "";
@@ -680,6 +679,22 @@ function renderStatusCardBase(order) {
   const select = $("#vd-status-select");
   select.innerHTML = STATUS_OPTIONS.map((s) => `<option value="${s}" ${s === order.status ? "selected" : ""}>${STATUS_LABEL[s]}</option>`).join("");
   $("#vd-concern").value = order.concern || "";
+  sizeConcernBox();
+}
+
+/* The concern strip is one line tall and grows to fit what's actually in it.
+   Most concerns are a single sentence, and giving that sentence a five-line
+   box was what pushed the repair list off the bottom of the screen -- but a
+   long write-up still has to be readable without scrolling inside a box the
+   size of a stamp. Capped so a pasted paragraph can't take the page over.
+   scrollHeight is 0 in the jsdom harness (no layout), which leaves the
+   CSS height alone rather than collapsing the field to nothing. */
+function sizeConcernBox() {
+  const box = $("#vd-concern");
+  if (!box) return;
+  box.style.height = "auto";
+  if (!box.scrollHeight) return;
+  box.style.height = `${Math.min(box.scrollHeight + 2, 180)}px`;
 }
 
 /* "Where did this part come from?" -- the question the parts grid could not
@@ -2208,6 +2223,21 @@ export function wireVehicleDetail() {
       }
     });
   });
+  $("#vd-concern").addEventListener("input", sizeConcernBox);
+  // The strip gets wider and narrower as the details drawer swings and the
+  // window resizes, and a box measured in the narrow layout keeps a stale
+  // second line in the wide one. Only a width change re-measures -- reacting
+  // to the height this very function sets would chase its own tail.
+  const concernStrip = $("#vd-concern").closest(".concern-strip");
+  if (concernStrip && typeof ResizeObserver === "function") {
+    let lastWidth = 0;
+    new ResizeObserver(() => {
+      const width = Math.round(concernStrip.getBoundingClientRect().width);
+      if (width === lastWidth) return;
+      lastWidth = width;
+      sizeConcernBox();
+    }).observe(concernStrip);
+  }
   // Everything else on this page autosaves; the concern shouldn't silently
   // lose an edit because the Save button never got clicked before navigating
   // away. Blur commits quietly when the text actually changed.

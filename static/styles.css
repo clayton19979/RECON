@@ -789,10 +789,10 @@ table.sticky-head thead th {
    was clicked and the page it lands on read as the same object. */
 .detail-head {
   display: flex; justify-content: space-between; align-items: flex-start; gap: 24px;
-  margin-bottom: 20px;
+  margin-bottom: 16px;
   background: var(--surface); border: 1px solid var(--line);
   border-left: 4px solid var(--recon);
-  border-radius: var(--radius); padding: 18px 20px;
+  border-radius: var(--radius); padding: 14px 18px;
   box-shadow: var(--shadow);
 }
 .detail-head.dh-weowe { border-left-color: var(--weowe); }
@@ -812,15 +812,28 @@ table.sticky-head thead th {
   color: var(--ink-soft); background: var(--paper-raise);
   border: 1px solid var(--line-soft); border-radius: 6px; padding: 3px 9px;
 }
-.detail-customer { display: inline-flex; align-items: center; gap: 6px; font-size: 13.5px; font-weight: 600; color: var(--accent-strong); margin-top: 10px; }
+.detail-customer { display: inline-flex; align-items: center; gap: 6px; font-size: 13.5px; font-weight: 600; color: var(--accent-strong); margin-top: 9px; }
 .detail-customer[hidden] { display: none; }
-/* "Last worked on" sits above "Record updated" and outranks it: bigger, in
-   body ink rather than faint, because it's the fact the board sent you here
-   with. A stalled car turns the whole line red and grows a button. */
+/* The two timestamps share one line under a dashed rule. They used to be two
+   stacked blocks with their own margins, which cost the band nearly forty
+   pixels to say two short things about the same car. */
+.detail-meta {
+  display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px;
+  margin-top: 11px; padding-top: 9px; border-top: 1px dashed var(--line-soft);
+}
+/* Keeps the two facts from reading as one sentence now they share a line. */
+.detail-worked:not([hidden]) + .detail-updated:not(:empty)::before {
+  content: "·"; margin-right: 10px; color: var(--line);
+}
+/* No rule floating over nothing: a brand-new car has no activity yet and an
+   unsaved one has no "record updated" either. */
+.detail-meta:not(:has(> :not([hidden]):not(:empty))) { display: none; }
+/* "Last worked on" leads and outranks "Record updated": bigger, in body ink
+   rather than faint, because it's the fact the board sent you here with. A
+   stalled car turns the whole line red and grows a button. */
 .detail-worked {
   display: flex; align-items: center; flex-wrap: wrap; gap: 6px;
   font-size: 12.5px; color: var(--ink);
-  margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--line-soft);
 }
 .detail-worked-label { color: var(--ink-faint); font-weight: 600; }
 .detail-worked-what { color: var(--ink-soft); }
@@ -836,7 +849,7 @@ table.sticky-head thead th {
 .detail-worked-nudge:hover { background: var(--crit); color: #fff; }
 .detail-worked-nudge:focus-visible { outline: 2px solid var(--crit); outline-offset: 2px; }
 
-.detail-updated { font-size: 11px; color: var(--ink-faint); margin-top: 6px; }
+.detail-updated { font-size: 11px; color: var(--ink-faint); }
 .detail-updated.recent { color: var(--warn); font-weight: 600; }
 /* Was an inline style on #vd-actions. Capped so the button set wraps into a
    compact block on the band's right instead of one long strip that shoves
@@ -1856,12 +1869,35 @@ dialog::backdrop { background: var(--backdrop); backdrop-filter: blur(3px); }
 }
 .detail-shell > .detail-main { flex: 1; min-width: 0; }
 
-.detail-concern {
-  font-size: 13px; color: var(--ink-soft); margin-top: 12px;
-  background: var(--paper-raise); border: 1px solid var(--line-soft);
-  border-radius: 8px; padding: 8px 12px;
+/* The ticket's subject line. One row: which repair order this is, what it's
+   for, and Save -- rather than a card whose head, label, five-line box and
+   button between them stood between the advisor and the repair list every
+   single time a ticket was opened. */
+.concern-strip {
+  display: flex; align-items: flex-start; gap: 14px;
+  background: var(--surface); border: 1px solid var(--line);
+  border-radius: var(--radius); padding: 11px 14px; margin-bottom: 16px;
 }
-.detail-concern-label { color: var(--ink-faint); font-weight: 700; text-transform: uppercase; font-size: 10px; letter-spacing: .05em; margin-right: 7px; }
+/* Which ticket, then what it's for, then the field -- one baseline, reading
+   left to right, so the strip is a sentence rather than a stack. */
+.concern-strip-label { display: flex; align-items: baseline; gap: 9px; flex-shrink: 0; padding-top: 8px; }
+.concern-strip-label .section-eyebrow { margin: 0; white-space: nowrap; }
+.concern-strip-title {
+  display: block; margin: 0;
+  font-size: 14px; font-weight: 700; color: var(--ink); line-height: 1.2;
+}
+/* Sized by sizeConcernBox, so it opens one line tall and grows with the text.
+   No resize grip: the box already fits what's in it. */
+.concern-strip textarea {
+  flex: 1; min-width: 0;
+  min-height: 0; height: 34px; resize: none; overflow: hidden;
+  padding: 7px 11px; line-height: 1.35;
+}
+.concern-strip .btn { flex-shrink: 0; margin-top: 1px; }
+@media (max-width: 700px) {
+  .concern-strip { flex-wrap: wrap; }
+  .concern-strip textarea { flex-basis: 100%; }
+}
 
 /* Parts & Labor: the shell itself goes transparent so each job (or the flat
    list, when there are no jobs yet) reads as its own separate card. */

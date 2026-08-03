@@ -8,10 +8,10 @@ import { renderViewFailure } from "./error-boundary.js";
 import { overrideRenderStatusCard } from "./vehicle-detail.js";
 
 /* ==================================================================
-   REDESIGN ADDITIONS -- details drawer, status picker, concern preview,
-   backup/restore modal. Purely additive: wraps/observes the existing
-   render functions above rather than changing them, so none of the real
-   data flow above this line needs to change.
+   REDESIGN ADDITIONS -- details drawer, status picker, backup/restore modal.
+   Purely additive: wraps/observes the existing render functions above rather
+   than changing them, so none of the real data flow above this line needs to
+   change.
    ================================================================== */
 // Class-driven dot color: reading getComputedStyle off the display:none pill
 // forced a style recalc on every render and broke the moment the pill's
@@ -32,14 +32,6 @@ export function wireDrawer() {
       picker.style.display = text ? "" : "none";
       if (assignPicker) assignPicker.style.display = text ? "" : "none";
       if (dot) dot.style.background = STATUS_DOT_COLOR[STATUS_PILL_CLASS[order.status]] || "var(--accent)";
-    }
-    const concernBox = $("#vd-concern");
-    const previewWrap = $("#vd-concern-preview");
-    const previewText = $("#vd-concern-preview-text");
-    if (concernBox && previewWrap && previewText) {
-      const val = concernBox.value.trim();
-      previewWrap.style.display = val ? "" : "none";
-      previewText.textContent = val;
     }
   });
 

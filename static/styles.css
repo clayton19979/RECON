@@ -273,13 +273,18 @@ button { font-family: inherit; }
 .view { display: none; }
 .view.active { display: block; }
 
+/* The title block is read once and then scrolled past every day, so it costs
+   as little height as it can get away with. The narrower measure on the
+   description is what keeps the page's buttons up on the title's line at a
+   laptop width -- at 640px they were shoved onto a second row, which spent
+   nearly sixty pixels to say nothing new. */
 .page-head {
-  display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-start; gap: 20px;
+  display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 16px;
   background: var(--paper-raise); border-left: 4px solid var(--accent); border-radius: 0 10px 10px 0;
-  padding: 20px 24px; margin-bottom: 24px;
+  padding: 15px 22px; margin-bottom: 18px;
 }
 .page-head h1 { font-size: 24px; }
-.page-desc { color: var(--ink-soft); font-size: 13.5px; max-width: 640px; margin: 7px 0 0; line-height: 1.5; }
+.page-desc { color: var(--ink-soft); font-size: 13.5px; max-width: 600px; margin: 6px 0 0; line-height: 1.45; }
 
 /* ---------- buttons ---------- */
 .btn {
@@ -327,6 +332,20 @@ button { font-family: inherit; }
 .stats-board .stat:nth-child(1) { border-top-color: var(--accent); }
 .stats-board .stat:has(.stat-value.warn) { border-top-color: var(--warn); }
 .stats-board .stat:has(.stat-value.crit) { border-top-color: var(--crit); }
+
+/* The board is the app's home screen, and everything above the cars is chrome
+   you scroll past to reach them. At full card size the five numbers couldn't
+   hold one line below 1440px, so on a laptop they broke into two rows of tall
+   cards and pushed every vehicle off the bottom of the screen -- the page
+   opened on a summary of cars you couldn't see. Same five numbers, same
+   colours, same click targets, in a strip about a third of the height that
+   keeps all five side by side down to a much narrower window (see the board's
+   own breakpoints at the foot of this file). */
+.stats-board { gap: 10px; }
+.stats-board .stat { padding: 9px 13px 10px; }
+.stats-board .stat-label { font-size: 10px; }
+.stats-board .stat-value { font-size: 21px; margin-top: 1px; line-height: 1.2; }
+.stats-board .stat-sub { font-size: 11px; margin-top: 1px; }
 
 /* Three of the board's cards are buttons that filter to what they count.
    They have to sit in the same grid as the two that aren't and look
@@ -2099,16 +2118,21 @@ input:focus-visible, select:focus-visible, textarea:focus-visible { outline: non
 .filters { flex-wrap: wrap; row-gap: 10px; }
 .topbar { flex-wrap: wrap; row-gap: 8px; }
 
-/* Five-card rows need stops the four-card rows don't: the board's and
-   Backup's rows squeeze their 26px numbers well before Reports' does, so
-   they step down earlier (3 + 2, then 2 + 2 + 1). */
+/* Five-card rows need stops the four-card rows don't: Backup's row squeezes
+   its 26px numbers well before Reports' four-card row does, so it steps down
+   earlier (3, then 2, then 1).
+
+   The board's row is the compact strip (see .stats-board above) and its
+   numbers are small enough to hold five across the whole way down to a
+   tablet, so it keeps its own, much later stops -- restated inside each
+   generic block because .stats-board is also a .stats and would otherwise
+   inherit the four-card row's breakpoints. */
 @media (max-width: 1440px) {
-  .stats-board { grid-template-columns: repeat(3, 1fr); }
   .stats-backup { grid-template-columns: repeat(3, 1fr); }
 }
 @media (max-width: 1240px) {
   .stats { grid-template-columns: repeat(2, 1fr); }
-  .stats-board { grid-template-columns: repeat(2, 1fr); }
+  .stats-board { grid-template-columns: repeat(5, 1fr); }
   .stats-backup { grid-template-columns: repeat(2, 1fr); }
 }
 @media (max-width: 1100px) {
@@ -2116,6 +2140,11 @@ input:focus-visible, select:focus-visible, textarea:focus-visible { outline: non
   .content { padding: 20px 20px 52px; }
   .detail-shell { flex-wrap: wrap; }
   .details-drawer { width: 100%; }
+}
+/* The board strip's own step down, long after the four-card rows have taken
+   theirs: below this the sub-lines start wrapping inside a 150px card. */
+@media (max-width: 1000px) {
+  .stats-board { grid-template-columns: repeat(3, 1fr); }
 }
 /* Below this the labelled rail costs more than it gives -- collapse it to an
    icon strip. Titles move to the tooltip so nothing becomes unreachable. */

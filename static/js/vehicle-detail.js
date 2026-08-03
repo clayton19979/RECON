@@ -11,6 +11,7 @@ import { openMoveSegmentDialog } from "./move-ticket.js";
 import { openReceiveDialog } from "./dialog-receive-parts.js";
 import { openAddVehicleDialog, openCustomerEditor } from "./customers.js";
 import { loadTasksView } from "./task-bulk.js";
+import { copyText } from "./clipboard.js";
 
 /* ==================================================================
    VEHICLE DETAIL
@@ -263,6 +264,9 @@ function renderDetailHead() {
   // before this shop wrote it down, so there is no lot arrival to record.
   $("#vd-acquired-row").hidden = segment !== "recon";
   $("#vd-recon-acquired").value = segment === "recon" ? item.acquisition_date || "" : "";
+  // Same rule as the arrival date: only a car the lot owns has a stock number.
+  $("#vd-stock-row").hidden = segment !== "recon";
+  $("#vd-recon-stock").value = segment === "recon" ? item.stock_number || "" : "";
   if (segment === "recon") {
     $("#vd-title").textContent = `${item.stock_number} — ${item.year} ${item.make} ${item.model}`;
     $("#vd-sub").innerHTML = specTagsHtml([item.vin, item.mileage ? `${item.mileage.toLocaleString()} mi` : "", item.trim]);
@@ -655,10 +659,50 @@ function applyArchivedLockUI(archived) {
   $$(".part-row:not(.head)", $("#vd-estimate-items")).forEach((row) => row.setAttribute("draggable", String(!archived)));
 }
 
+/* The ticket's PO numbers, above the parts they cover.
+   Two jobs, and the second is the one that gets used most: it shows the
+   batches already out with a vendor (so a delivery can be matched to one at a
+   glance), and it says what the *next* number will be -- because the moment an
+   advisor needs a PO number is before the call, not after it. */
+function renderPoStrip(order) {
+  const box = $("#vd-po-strip");
+  const pos = order.purchase_orders || [];
+  const nextNumber = `R${order.ro_number}-${(pos.length ? pos[pos.length - 1].sequence : 0) + 1}`;
+  if (!pos.length) {
+    box.innerHTML = `<span class="po-strip-empty">No parts ordered yet. Next PO will be <strong>${esc(nextNumber)}</strong>.</span>`;
+    return;
+  }
+  box.innerHTML = `<span class="po-strip-label">Purchase orders</span>` + pos.map((po) => {
+    // Three states worth telling apart at a glance: a number taken but not
+    // ordered against yet, parts still out at a vendor, and a batch fully
+    // turned up.
+    const done = po.line_count > 0 && po.received_count >= po.line_count;
+    const spare = !po.line_count && !po.closed_at;
+    const cls = spare ? "po-chip-unused" : done ? "po-chip-done" : "po-chip-open";
+    const detail = !po.line_count
+      ? "not used yet"
+      : done
+        ? `${po.line_count} part${po.line_count === 1 ? "" : "s"} · all in`
+        : `${po.received_count} of ${po.line_count} in`;
+    // The × only on a number nothing has been ordered against. Once a batch is
+    // closed it is a vendor's paperwork, whatever happened to its lines since.
+    return `<button type="button" class="po-chip ${cls}" data-po="${esc(po.number)}" data-po-id="${po.id}" title="Click to highlight this batch's parts below${po.vendor_name ? ` — ${esc(po.vendor_name)}` : ""}">
+      <span class="po-chip-number">${esc(po.number)}</span>
+      <span class="po-chip-detail">${esc(detail)}</span>
+      ${spare ? `<span class="po-chip-drop" data-drop-po="${po.id}" title="Remove this unused PO number">×</span>` : ""}
+    </button>`;
+  }).join("") + `<span class="po-strip-next">Next: <strong>${esc(nextNumber)}</strong></span>`;
+}
+
 function renderOrderPanel() {
   const order = state.detail.order;
-  $("#vd-ro-number").textContent = `Repair Order ${order.number}`;
+  // The short number is what gets said out loud and written on a vendor's
+  // paperwork; the long one stays reachable on hover for anything filed under
+  // it before this existed.
+  $("#vd-ro-number").textContent = `Repair Order ${order.ro_number ?? order.number}`;
+  $("#vd-ro-number").title = order.number;
   renderStatusCard(order);
+  renderPoStrip(order);
   renderEstimate(order);
   renderNotes(order);
   renderActivity(order);
@@ -710,6 +754,16 @@ function sizeConcernBox() {
    about the wrong caliper); the invoice number is the paperwork behind it and
    goes second. Older lines received before the supplier was recorded still
    have their invoice number, so they show that rather than nothing. */
+/* The PO number a part went out on, on the part's own row.
+   The batch strip above the grid answers "what's outstanding"; this answers
+   the question asked at the receiving bench with a box in one hand and a
+   vendor's packing slip in the other -- which of these lines is this delivery?
+   Without it that question could only be answered by reading part numbers. */
+function poBadgeHtml(item) {
+  if (!item.po_number) return "";
+  return `<span class="po-badge" title="Ordered on purchase order ${esc(item.po_number)}">${esc(item.po_number)}</span>`;
+}
+
 function receivedSourceHtml(item) {
   const vendor = item.received_vendor_name;
   const invoice = item.received_invoice_number;
@@ -819,7 +873,7 @@ function renderEstimate(order) {
     const isPart = item.kind === "part";
     const L = fieldLabels(item.kind);
     return `
-    <div class="part-row" draggable="true" data-index="${i}" data-id="${item.id || ""}" data-source="${item.source || "manual"}" data-received-quantity="${item.received_quantity ?? 0}" data-quoted-unit-cost="${item.quoted_unit_cost ?? ""}" data-part-returned="${isReturnedPart(item) ? "1" : "0"}">
+    <div class="part-row" draggable="true" data-index="${i}" data-id="${item.id || ""}" data-source="${item.source || "manual"}" data-received-quantity="${item.received_quantity ?? 0}" data-quoted-unit-cost="${item.quoted_unit_cost ?? ""}" data-part-returned="${isReturnedPart(item) ? "1" : "0"}" data-po="${esc(item.po_number || "")}">
       ${cell("handle", "", `<span class="row-drag-handle" title="Drag to reorder">⋮⋮</span>`)}
       ${cell("check", "", receivable ? `<input type="checkbox" class="ei-receive-check" data-id="${item.id}" title="Select to receive against a vendor invoice">` : "")}
       ${cell("kind", "Kind", `<select class="ei-kind">
@@ -877,13 +931,17 @@ function renderEstimate(order) {
         ? (item.status === "received"
             ? `<span class="status-cell">
                  <span class="status-pill ${item.part_returned ? "sp-returned" : "sp-received"}" title="${esc(receivedFromTitle(item))}">${item.part_returned ? "Returned" : "Received"}</span>
+                 ${poBadgeHtml(item)}
                  ${receivedSourceHtml(item)}
                  ${item.kind === "part" ? `<button type="button" class="btn btn-ghost btn-xs part-return-btn" data-id="${item.id}" data-returned="${item.part_returned ? 1 : 0}" title="${item.part_returned ? "Undo -- this part was not actually sent back" : "Send this part back to the vendor"}">${item.part_returned ? "Undo" : "Mark Returned"}</button>` : ""}
                </span>`
-            : `<select class="ei-status status-pill sp-${item.status || "quoted"}" data-prev="${item.status || "quoted"}">
-                 <option value="quoted" ${item.status === "quoted" ? "selected" : ""}>Quoted</option>
-                 <option value="ordered" ${item.status === "ordered" ? "selected" : ""}>Ordered</option>
-               </select>`)
+            : `<span class="status-cell">
+                 <select class="ei-status status-pill sp-${item.status || "quoted"}" data-prev="${item.status || "quoted"}">
+                   <option value="quoted" ${item.status === "quoted" ? "selected" : ""}>Quoted</option>
+                   <option value="ordered" ${item.status === "ordered" ? "selected" : ""}>Ordered</option>
+                 </select>
+                 ${poBadgeHtml(item)}
+               </span>`)
         : `<span class="status-pill sp-quoted">Saving…</span>`)}
       ${cell("move", "", item.id ? `<button type="button" class="row-move-btn" title="Move to a different ticket" data-id="${item.id}" data-desc="${esc(item.description || "")}">⇄</button>` : "")}
       ${cell("remove", "", `<button type="button" class="rm-btn" title="Remove line">×</button>`)}
@@ -1986,6 +2044,7 @@ const ACTIVITY_LABEL = {
   estimate_declined: "Estimate declined",
   estimate_item_moved_in: "Line moved onto this ticket",
   estimate_item_moved_out: "Line moved to another ticket",
+  purchase_order_created: "PO number taken",
   parts_ordered: "Parts marked ordered",
   parts_order_undone: "Part put back to quoted",
   parts_received: "Parts received",
@@ -2457,16 +2516,64 @@ export function wireVehicleDetail() {
     if (!(await confirmAction({
       eyebrow: "ORDER PARTS",
       title: `Mark ${quoted} quoted part line${quoted === 1 ? "" : "s"} as ordered?`,
-      body: "This only changes their status on this ticket — it does not place a purchase order with any vendor.",
+      body: "They all go on one PO number, which you'll get back to give the vendor.",
       confirmLabel: "Mark Ordered",
     }))) return;
     try {
       const res = await patch(`/api/orders/${state.detail.order.id}/estimate/order-parts`, { actor: currentActor() });
-      toast(res.updated ? `${res.updated} part line(s) marked ordered` : "No quoted parts to order");
+      // The PO number is the thing needed next, so it goes in the toast and
+      // onto the clipboard rather than making the advisor hunt for it.
+      if (res.updated && res.purchase_order) {
+        await copyText(res.purchase_order.number, `${res.updated} line(s) on PO ${res.purchase_order.number} —`);
+      } else {
+        toast("No quoted parts to order");
+      }
       await loadVehicleDetail();
     } catch (err) {
       toast(err.message, true);
     }
+  });
+
+  /* Pull a PO number before the call, which is when it is actually needed.
+     One click: it takes the next number, copies it, and says what it is. No
+     dialog and no vendor picker -- an advisor doing this has a phone in the
+     other hand, and anything more would simply not get used on a busy
+     morning. */
+  $("#vd-new-po").addEventListener("click", async () => {
+    try {
+      const po = await post(`/api/orders/${state.detail.order.id}/purchase-orders`, { actor: currentActor() });
+      await copyText(po.number, `PO ${po.number} —`);
+      await loadVehicleDetail();
+    } catch (err) {
+      toast(err.message, true);
+    }
+  });
+
+  /* Clicking a batch lights up its own parts in the grid below -- "which of
+     these lines is this delivery?", answered without reading a single part
+     number. Clicking it again clears it. */
+  $("#vd-po-strip").addEventListener("click", async (e) => {
+    const t = e.target;
+    if (!(t instanceof Element)) return;
+    const drop = t.closest("[data-drop-po]");
+    if (drop) {
+      try {
+        await api(`/api/orders/${state.detail.order.id}/purchase-orders/${drop.dataset.dropPo}`, { method: "DELETE" });
+        toast("PO number removed");
+        await loadVehicleDetail();
+      } catch (err) {
+        toast(err.message, true);
+      }
+      return;
+    }
+    const chip = t.closest(".po-chip");
+    if (!chip) return;
+    const wasActive = chip.classList.contains("po-chip-active");
+    $$(".po-chip", $("#vd-po-strip")).forEach((c) => c.classList.remove("po-chip-active"));
+    $$(".part-row", $("#vd-estimate-items")).forEach((r) => r.classList.remove("po-highlight"));
+    if (wasActive) return;
+    chip.classList.add("po-chip-active");
+    $$(`.part-row[data-po="${chip.dataset.po}"]`, $("#vd-estimate-items")).forEach((r) => r.classList.add("po-highlight"));
   });
 
   $("#vd-receive-parts").addEventListener("click", () => openReceiveDialog());
@@ -2632,9 +2739,14 @@ export function wireVehicleDetail() {
           expected_version: item.edit_version,
         };
         if (segment === "recon") {
-          // Only recon carries an arrival date, and only recon's endpoint
-          // knows the field -- see the row's hidden state above.
+          // Only recon carries an arrival date and a stock number, and only
+          // recon's endpoint knows those fields -- see the rows' hidden state
+          // above. The stock number is left out entirely when the box is
+          // blank, so an empty field is "no change" rather than a request to
+          // erase the number the whole board finds this car by.
           payload.acquisition_date = $("#vd-recon-acquired").value;
+          const stock = $("#vd-recon-stock").value.trim();
+          if (stock) payload.stock_number = stock;
           await patch(`/api/recon/vehicles/${id}`, payload);
         } else if (segment === "retail") {
           await patch(`/api/retail/vehicles/${id}`, payload);

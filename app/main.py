@@ -19,7 +19,7 @@ from . import paths
 from .accounting import build_accounting_router
 from .agent_routes import build_agent_router
 from .backup_routes import build_backup_router
-from .db import RECON_SHOP_CUSTOMER_ID, init_db, inserted_id, now, vin_check_digit_ok
+from .db import RECON_SHOP_CUSTOMER_ID, init_db, inserted_id, next_ro_number, now, vin_check_digit_ok
 from .db import connect as db_connect
 from .export import build_export_router
 from .jobs import build_jobs_router
@@ -43,6 +43,7 @@ from .workflow import (
     estimate_line_total,
     get_or_create_estimate,
     initialize_order_workflow,
+    purchase_orders_list,
     touch_order,
     workflow_detail,
 )
@@ -267,12 +268,18 @@ def estimate_items_list(db: sqlite3.Connection, estimate_id: int) -> list[dict]:
     carries the technician's: the grid needs to *say* where a part came from,
     and an advisor holding a part in one hand should not have to cross-check
     an invoice number against the Accounting screen to find out.
+
+    The batch's PO number rides along for the same reason. A part on the
+    receiving bench is found by the number on the vendor's paperwork, so the
+    row has to be able to say which PO it went out on without the screen
+    having to look it up separately.
     """
     return [
         dict(row)
         for row in db.execute(
-            """SELECT ei.*, v.name received_vendor_name FROM estimate_items ei
+            """SELECT ei.*, v.name received_vendor_name, po.number po_number FROM estimate_items ei
            LEFT JOIN vendors v ON v.id=ei.received_vendor_id
+           LEFT JOIN purchase_orders po ON po.id=ei.purchase_order_id
            WHERE ei.estimate_id=? ORDER BY ei.sort_order, ei.id""",
             (estimate_id,),
         )
@@ -820,6 +827,10 @@ def create_app(db_path: Path = DEFAULT_DB, backups_dir: Path = DEFAULT_BACKUPS_D
                 detail["estimate"] = dict(estimate)
                 detail["estimate"]["items"] = estimate_items_list(db, estimate["id"])
                 detail["estimate"]["jobs"] = estimate_jobs_list(db, estimate["id"])
+            # The ticket screen shows these above the parts grid, so they ride
+            # along with the ticket rather than costing a second request every
+            # time a car is opened.
+            detail["purchase_orders"] = purchase_orders_list(db, order_id)
             detail.update(workflow_detail(db, order_id))
             recon_vehicle = (
                 db.execute("SELECT * FROM recon_vehicles WHERE id=?", (order["recon_vehicle_id"],)).fetchone()
@@ -880,9 +891,10 @@ def create_app(db_path: Path = DEFAULT_DB, backups_dir: Path = DEFAULT_BACKUPS_D
             sequence = db.execute("SELECT coalesce(max(id),0)+1 FROM orders").fetchone()[0]
             number = f"RO-{datetime.now():%y%m}-{sequence:04d}"
             cur = db.execute(
-                "INSERT INTO orders(number,customer_id,vehicle_id,concern,segment,recon_vehicle_id,we_owe_id,status,voided,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO orders(number,ro_number,customer_id,vehicle_id,concern,segment,recon_vehicle_id,we_owe_id,status,voided,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     number,
+                    next_ro_number(db),
                     customer_id,
                     vehicle_id,
                     item.concern.strip(),

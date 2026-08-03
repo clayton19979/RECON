@@ -199,7 +199,14 @@ button { font-family: inherit; }
    word. One of those four alone is a guess from across the counter. */
 .rail-item.active { background: var(--accent-tint); color: var(--accent); border-left-color: var(--accent); font-weight: 700; }
 .rail-spacer { flex: 1; }
-.theme-picker { position: relative; margin-top: 10px; padding: 10px 6px 4px; border-top: 1px solid var(--line); }
+/* The footer row: theme button on the left, version label in the space that
+   was already empty beside it. The rule and padding moved here off
+   .theme-picker so both sit inside one band. */
+.rail-foot {
+  display: flex; align-items: center; gap: 10px; flex-shrink: 0;
+  margin-top: 10px; padding: 10px 6px 4px; border-top: 1px solid var(--line);
+}
+.theme-picker { position: relative; }
 .rail-theme {
   width: 36px; height: 36px; border-radius: 8px; border: 1px solid var(--line);
   background: var(--paper-raise); color: var(--ink-faint);
@@ -2639,7 +2646,10 @@ input:focus-visible, select:focus-visible, textarea:focus-visible { outline: non
   /* Only the mark is left, so the block shrinks to it and keeps its rule. */
   .rail-brand { padding: 0 0 14px; margin-bottom: 8px; width: 100%; }
   .rail-brand-top { justify-content: center; }
-  .theme-picker { padding: 10px 0 4px; }
+  /* 46px of usable width, and the theme button takes 36 of it -- the version
+     label has nowhere to go. The Updates screen still states it. */
+  .rail-foot { padding: 10px 0 4px; justify-content: center; }
+  .rail-version { display: none; }
   .theme-menu { left: calc(100% + 6px); }
   .search { max-width: none; }
   /* Nothing but the picker itself is worth the width down here. */
@@ -3124,13 +3134,70 @@ th.sel-col, td.sel-col { width: 32px; padding-right: 0; }
 .stats-backup .stat:has(.stat-value.crit) { border-top-color: var(--crit); }
 
 /* Update notice. Accent rather than warn: a new version is good news, not a
-   fault, and the shop's warning colour is spent on things that are wrong. */
+   fault, and the shop's warning colour is spent on things that are wrong.
+
+   Solid accent with white on it, not the tinted version it used to be. The
+   tint is the same family as every panel on every screen, so the one strip
+   that needs to be noticed from across the counter was the one strip that
+   read as part of the furniture -- it went unseen for a full evening. Filled
+   accent is the only surface in the app painted this way, which is the whole
+   point: nothing else can be mistaken for it, in any of the six themes.
+
+   The ink is --paper, not white. White on a filled accent measures 3.2:1 on
+   the four dark themes -- their accents are bright, and brass at 3.18 was the
+   worst of them. --paper inverts with the theme for free: near-black under a
+   bright accent, near-white under a dark one. Measured 4.96-6.18:1 on all
+   six, where a flat white sat under AA on four. (Primary buttons elsewhere
+   still use white on accent; that is long-standing and untouched here.) */
 .update-bar {
-  display: flex; align-items: center; gap: 10px;
-  background: var(--accent-tint); border-bottom: 1px solid var(--accent);
-  padding: 8px 18px; font-size: 13px; font-weight: 600; color: var(--accent-strong);
+  display: flex; align-items: center; gap: 12px;
+  background: var(--accent); border-bottom: 1px solid var(--accent-strong);
+  padding: 10px 18px; font-size: 13.5px; font-weight: 700; color: var(--paper);
+  box-shadow: 0 2px 12px -5px rgba(0, 0, 0, .55);
 }
 .update-bar-text { flex: 1; }
+/* The band is already accent, so an accent-filled button on it would vanish.
+   The two invert: the one to press takes the band's ink as its fill, the one
+   that dismisses it stays an outline. */
+.update-bar .btn-primary {
+  background: var(--paper); color: var(--accent); border-color: var(--paper);
+}
+.update-bar .btn-primary:hover { background: var(--paper-raise); color: var(--accent); }
+.update-bar .btn-ghost {
+  background: transparent; color: var(--paper);
+  border-color: color-mix(in srgb, var(--paper) 55%, transparent);
+}
+.update-bar .btn-ghost:hover {
+  background: color-mix(in srgb, var(--paper) 16%, transparent);
+  border-color: var(--paper); color: var(--paper);
+}
+.update-bar .btn:focus-visible { outline: 2px solid var(--paper); outline-offset: 2px; }
+
+/* ---------- the running version, in the rail ----------
+   Small, quiet, and always there. It is a button because it goes somewhere,
+   but it must not read as one -- the rail already has ten of those. */
+.rail-version {
+  padding: 2px 0; border: none; background: none; min-width: 0;
+  font-family: "IBM Plex Mono", "Cascadia Mono", Consolas, monospace;
+  font-size: 10.5px; font-weight: 600; letter-spacing: .02em;
+  color: var(--ink-faint); cursor: pointer; text-align: left;
+}
+.rail-version:hover { color: var(--accent); text-decoration: underline; }
+.rail-version[hidden] { display: none; }
+
+/* ---------- updates screen ---------- */
+.stats-updates { grid-template-columns: repeat(3, 1fr); }
+.update-offer-version {
+  font-family: "Space Grotesk", sans-serif; font-size: 20px; font-weight: 700;
+  color: var(--ink); line-height: 1.2;
+}
+.update-offer-meta {
+  font-family: "IBM Plex Mono", "Cascadia Mono", Consolas, monospace;
+  font-size: 12px; color: var(--ink-faint); margin-top: 4px;
+}
+.update-offer-note {
+  margin: 10px 0 0; font-size: 12.5px; line-height: 1.5; color: var(--ink-soft); max-width: 62ch;
+}
 
 .backup-warning {
   background: var(--warn-tint); border: 1px solid var(--warn); border-left-width: 3px;

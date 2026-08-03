@@ -12,6 +12,10 @@ cosmetic and starts meaning "never updates" or "updates forever".
 `installers/RECON.iss` and `pyproject.toml` still agree. Note that
 `installers/publish_update.ps1` checks only the first three before building --
 pyproject is caught by the test suite, not by the publish script.
+
+`uv.lock` carries the number too, but nothing needs to edit it by hand: the
+next `uv sync` rewrites it from pyproject. It only shows up as a stray diff if
+the version was bumped without one having been run since.
 """
 
 from __future__ import annotations

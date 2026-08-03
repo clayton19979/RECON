@@ -61,6 +61,7 @@ export const VIEW_PLACEHOLDERS = {
   backup:      [["#backup-table", 4]],
   tasks:       [["#tasks-list", 0]],
   suggestions: [["#suggestions-list", 0]],
+  updates:     [["#updates-available", 0]],
 };
 
 /* The summary strip above a view's table, and how many cards it holds.

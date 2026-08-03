@@ -36,6 +36,7 @@ import { wireAssigneeMenuDismiss } from "./multi-picker.js";
 import "./tasks.js";
 import "./task-bulk.js";
 import "./ideas.js";
+import "./updates-page.js";
 import { startApp } from "./init.js";
 import { wireDrawer } from "./drawer.js";
 

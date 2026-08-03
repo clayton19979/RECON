@@ -766,6 +766,28 @@ function kindGroupsOf(items) {
     .filter((group) => group.kindItems.length);
 }
 
+/* Three readings of one number, so a column of line totals can be scanned
+   rather than read: real money in full ink, a line that costs nothing dimmed
+   out of the way, and a vendor credit in the same green the rest of the app
+   uses for money coming back. */
+function lineTotalClass(total) {
+  return `ei-line-total${total < 0 ? " credit" : total ? "" : " zero"}`;
+}
+
+/* Rewrite every row's line total from what is currently in its boxes. Shares
+   rowAsEstimateItem with the ticket and job-subtotal figures, so the column
+   and the numbers it adds up to always move together -- including mid-keystroke,
+   before anything has been saved. */
+function writeLineTotals(box) {
+  for (const row of $$(".part-row:not(.head)", box)) {
+    const el = $(".ei-line-total", row);
+    if (!el) continue;
+    const total = lineTotal(rowAsEstimateItem(row));
+    el.textContent = money(total);
+    el.className = lineTotalClass(total);
+  }
+}
+
 function renderEstimate(order) {
   const items = order.estimate ? order.estimate.items : [];
   const jobs = order.estimate?.jobs ?? [];
@@ -835,6 +857,16 @@ function renderEstimate(order) {
            </label>
            <input class="ei-core" type="number" min="0" step="0.01" placeholder="0.00" title="Core deposit owed back from the vendor" value="${item.core_charge ?? 0}" ${(item.core_charge ?? 0) > 0 ? "" : "hidden"}>`
         : "")}
+      ${/* Quantity times cost, worked out on the row instead of in somebody's
+            head. The printed ticket has carried this column all along; the
+            screen it gets printed from did not, so the one place the shop
+            actually reads a ticket -- on a monitor, all day -- was the one
+            place that made you do the arithmetic. Read-only on purpose:
+            everything else on the row is typed, this is the row's answer.
+            lineTotal() is the same definition the job subtotals and the
+            ticket's own total use, so a column of these adds up to the
+            figure underneath it. */""}
+      ${cell("total", "Line total", `<span class="${lineTotalClass(lineTotal(item))}">${money(lineTotal(item))}</span>`)}
       ${jobs.length ? cell("job", "Job", `<select class="ei-job">${jobOptionsHtml(item.job_id ?? null)}</select>`) : ""}
       ${/* Where the part came from, on the ticket itself. It used to show the
             invoice number alone -- "Received (WP-55123)" -- which is the one
@@ -879,6 +911,7 @@ function renderEstimate(order) {
     <span class="pr-cell pr-qty">${esc(L.qty)}</span>
     <span class="pr-cell pr-cost">${esc(L.cost)}</span>
     <span class="pr-cell pr-core">${esc(L.core)}</span>
+    <span class="pr-cell pr-total">Line total</span>
     ${jobs.length ? `<span class="pr-cell pr-job">Job</span>` : ""}
     <span class="pr-cell pr-status">Status</span>
     <span class="pr-cell pr-move"></span>
@@ -1060,6 +1093,7 @@ function updateEstimateTotalsFromDom() {
   if (!box) return;
   const rows = $$(".part-row:not(.head)", box).map(rowAsEstimateItem);
   applyTicketTotals(ticketTotal(rows), actualTotal(rows));
+  writeLineTotals(box);
   // Job subtotals live in each group's header; keep them moving too.
   for (const group of $$(".job-group", box)) {
     const label = group.querySelector(".job-group-subtotal");
@@ -1171,6 +1205,10 @@ function syncEstimateInPlace(order) {
     const jobId = groupEl.dataset.jobId === "" ? null : Number(groupEl.dataset.jobId);
     sub.textContent = money(ticketTotal(items.filter((i) => (i.job_id ?? null) === jobId)));
   });
+  // Same reason as the subtotals above: a line's own total is quantity x cost,
+  // which the shape signature deliberately ignores, so this path has to
+  // rewrite the column itself or it keeps showing pre-save numbers.
+  writeLineTotals(box);
   renderEstimateTotals(order);
   updateReceiveButtonState();
   return true;
@@ -1770,6 +1808,10 @@ function addEstimateRow(kind, defaults = {}, jobId = null) {
     <div class="pr-cell pr-qty" data-label="${fieldLabels(kind).qty}"><input class="ei-qty" type="number" min="0.01" step="0.01" value="${defaults.quantity ?? 1}"></div>
     <div class="pr-cell pr-cost" data-label="${fieldLabels(kind).cost}"><input class="ei-cost" type="number" min="0" step="0.01" value="${defaults.unit_cost ?? 0}"></div>
     <div class="pr-cell pr-core pr-spacer"></div>
+    ${/* Live from the moment the row lands: the delegated input handler on the
+         grid recomputes this the first time anything is typed, and the row is
+         seeded here with what the defaults already come to. */ ""}
+    <div class="pr-cell pr-total" data-label="Line total"><span class="${lineTotalClass((defaults.quantity ?? 1) * (defaults.unit_cost ?? 0))}">${money((defaults.quantity ?? 1) * (defaults.unit_cost ?? 0))}</span></div>
     ${box.classList.contains("has-jobs") ? `<div class="pr-cell pr-job pr-spacer"></div>` : ""}
     <div class="pr-cell pr-status" data-label="Status"><span class="status-pill sp-quoted">Saving…</span></div>
     <div class="pr-cell pr-move pr-spacer"></div>

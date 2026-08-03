@@ -1106,10 +1106,22 @@ textarea { min-height: 70px; resize: vertical; font-family: inherit; }
   display: grid; grid-template-columns: var(--pr-cols);
   gap: 8px; align-items: center; padding: 9px 16px; border-bottom: 1px solid var(--line-soft); font-size: 12.5px;
 }
-#vd-estimate-items { --pr-cols: 16px 20px .8fr 2.1fr 1fr .6fr .9fr .7fr 1.6fr 22px 26px; }
+/* Track order: handle, check, Kind, Description, Part #, Qty, Cost, Core,
+   Line total, [Job], Status, move, remove. The typed columns each gave up a
+   little to make room for the total -- Description still takes more than
+   twice any of them, because it is the column being read rather than
+   scanned. */
+/* Line total is the one track with a floor under it. Every other column here
+   holds an input, which scrolls its own contents when it runs out of room;
+   this one holds printed text that would simply be cut off, and "$1,4" is
+   worse than no column at all. 92px clears a five-figure line in the mono
+   face the column is set in.
+   No space inside minmax(): test_estimate_grid_tracks_match_the_number_of_cells
+   counts tracks by splitting this list on whitespace. */
+#vd-estimate-items { --pr-cols: 16px 20px .75fr 2fr .95fr .55fr .85fr .6fr minmax(92px,.9fr) 1.5fr 22px 26px; }
 /* One extra column (Job) only appears once a ticket actually has jobs --
    the plain flat list (the common case) keeps its original column count. */
-#vd-estimate-items.has-jobs { --pr-cols: 16px 20px .8fr 2.1fr 1fr .6fr .9fr .7fr .9fr 1.6fr 22px 26px; }
+#vd-estimate-items.has-jobs { --pr-cols: 16px 20px .75fr 2fr .95fr .55fr .85fr .6fr minmax(92px,.9fr) .85fr 1.5fr 22px 26px; }
 .part-row:last-child { border-bottom: none; }
 /* The densest surface in the app gets row affordances: hover for the mouse,
    a leading accent rule for whichever line owns the keyboard focus. */
@@ -1132,7 +1144,35 @@ textarea { min-height: 70px; resize: vertical; font-family: inherit; }
   font-variant-numeric: tabular-nums;
 }
 .pr-qty > input, .pr-cost > input, .pr-core > input { text-align: right; }
-.part-row.head .pr-qty, .part-row.head .pr-cost, .part-row.head .pr-core { justify-content: flex-end; }
+.part-row.head .pr-qty, .part-row.head .pr-cost, .part-row.head .pr-core,
+.part-row.head .pr-total { justify-content: flex-end; }
+
+/* Line total: the only figure on the row nobody types. It closes the money
+   block (Qty x Cost, plus any core deposit) and is the column an advisor runs
+   a finger down when checking what a car has cost, so it reads a step louder
+   than the boxes feeding it -- full ink, bold, and the same tabular figures,
+   so the decimal points stack all the way down the ticket.
+   The rule to its left divides typed columns from worked-out ones; it lands
+   in the grid gap, which is why it's a border on the cell rather than a
+   separator element of its own. */
+.pr-total { justify-content: flex-end; }
+/* Header and data rows together, at one specificity the stacked layout below
+   can actually override -- as .part-row:not(.head) .pr-total it outranked the
+   narrow-layout rule that turns the divider off, and the rule silently did
+   nothing. */
+.part-row .pr-total { border-left: 1px solid var(--line-soft); padding-left: 8px; }
+.ei-line-total {
+  width: 100%; text-align: right; white-space: nowrap;
+  font-family: "IBM Plex Mono", "Cascadia Mono", Consolas, monospace;
+  font-variant-numeric: tabular-nums; font-weight: 700; font-size: 13px; color: var(--ink);
+}
+/* A line that costs nothing is the common resting state of a fresh row and of
+   every labour line in this shop (labour is never charged out). Dimmed, so a
+   column of them doesn't compete with the parts that actually cost money. */
+.ei-line-total.zero { color: var(--ink-faint); font-weight: 500; }
+/* A credit subtracts, the same green the app uses everywhere else for money
+   coming back to the shop. */
+.ei-line-total.credit { color: var(--good); }
 .pr-job > select { color: var(--ink-soft); }
 .pr-cost > input:disabled { text-decoration: line-through; }
 /* "Quoted $100.00" under a line the vendor billed at something else. Only
@@ -1210,6 +1250,11 @@ textarea { min-height: 70px; resize: vertical; font-family: inherit; }
   }
   .part-row .pr-desc { flex: 1 1 100%; order: -1; }
   .part-row .pr-status { flex: 1 1 160px; }
+  /* Stacked, the total sits under its own caption like every other field, so
+     the divider rule and the right alignment that placed it against the Cost
+     column above both stop meaning anything. */
+  .part-row .pr-total { border-left: none; padding-left: 0; }
+  .part-row .pr-total > .ei-line-total { text-align: left; }
   /* An action cell (drag handle, receive checkbox, move, remove) has no
      caption -- don't reserve caption space for it. */
   .part-row .pr-cell:not([data-label])::before { display: none; }
@@ -1233,6 +1278,8 @@ textarea { min-height: 70px; resize: vertical; font-family: inherit; }
     .part-row .pr-cell { flex: 1 1 120px; flex-direction: column; align-items: stretch; gap: 3px; }
     .part-row .pr-cell::before { display: block; font-size: 9.5px; text-transform: uppercase; letter-spacing: .05em; color: var(--ink-faint); font-weight: 700; }
     .part-row .pr-desc { flex: 1 1 100%; order: -1; }
+    .part-row .pr-total { border-left: none; padding-left: 0; }
+    .part-row .pr-total > .ei-line-total { text-align: left; }
     .part-row .pr-spacer { display: none; }
   }
 }

@@ -3,7 +3,6 @@ import { toast } from "./notify.js";
 import { confirmAction } from "./confirm.js";
 import { esc, fmtDate, relativeTime, withLoading } from "./shortcuts.js";
 import { emptyRow } from "./empty-states.js";
-import { STATUS_PILL_CLASS } from "./state.js";
 import { renderViewFailure } from "./error-boundary.js";
 import { overrideRenderStatusCard } from "./vehicle-detail.js";
 
@@ -13,25 +12,20 @@ import { overrideRenderStatusCard } from "./vehicle-detail.js";
    than changing them, so none of the real data flow above this line needs to
    change.
    ================================================================== */
-// Class-driven dot color: reading getComputedStyle off the display:none pill
-// forced a style recalc on every render and broke the moment the pill's
-// classes changed.
-const STATUS_DOT_COLOR = {
-  "pill-status-estimate": "var(--ink-faint)", "pill-status-pending": "var(--warn)",
-  "pill-status-progress": "var(--accent)", "pill-status-complete": "var(--good)",
-};
+// The dot used to be painted from a colour map here, in an inline style. It
+// is now the stylesheet's job: renderStatusCardBase puts the status on the
+// picker as a class and the dot, the field and its edge all take their colour
+// from that one place, so they cannot drift apart.
 export function wireDrawer() {
   overrideRenderStatusCard((orig) => function (order) {
     orig(order);
     const pillEl = $("#vd-status-pill");
     const picker = $("#vd-status-picker");
     const assignPicker = $("#vd-assign-picker");
-    const dot = $(".status-picker-dot", picker || document);
     if (pillEl && picker) {
       const text = pillEl.textContent.trim();
       picker.style.display = text ? "" : "none";
       if (assignPicker) assignPicker.style.display = text ? "" : "none";
-      if (dot) dot.style.background = STATUS_DOT_COLOR[STATUS_PILL_CLASS[order.status]] || "var(--accent)";
     }
   });
 

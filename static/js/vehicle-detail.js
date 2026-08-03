@@ -676,6 +676,14 @@ function renderStatusCardBase(order) {
   const pill = $("#vd-status-pill");
   pill.className = `pill ${STATUS_PILL_CLASS[order.status] || ""}`;
   pill.textContent = order.voided ? "Voided" : (STATUS_LABEL[order.status] || order.status);
+  /* The board paints each status its own colour and this control did not --
+     it was accent-blue on every ticket, so the one word that says where the
+     car stands was the same colour whether the car was waiting on a customer
+     or finished. The class carries the status through to the stylesheet; a
+     status nobody has styled falls through to the plain control rather than
+     to some other status's colour. */
+  const picker = $("#vd-status-picker");
+  if (picker) picker.className = `status-picker st-${order.voided ? "voided" : (order.status || "")}`;
   const select = $("#vd-status-select");
   select.innerHTML = STATUS_OPTIONS.map((s) => `<option value="${s}" ${s === order.status ? "selected" : ""}>${STATUS_LABEL[s]}</option>`).join("");
   $("#vd-concern").value = order.concern || "";

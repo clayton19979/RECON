@@ -798,9 +798,32 @@ table.sticky-head thead th {
   justify-content: flex-end; align-items: center;
   max-width: 480px;
 }
+/* The band's right column: the money on top, the button set beneath it.
+   The figure leads because it's the answer; the buttons are just what you
+   might do about it. */
+.detail-head-right {
+  display: flex; flex-direction: column; align-items: flex-end; gap: 12px;
+  flex-shrink: 0;
+}
+.detail-cost { display: flex; flex-direction: column; align-items: flex-end; }
+/* display:flex would otherwise beat the hidden attribute. */
+.detail-cost[hidden] { display: none; }
+.detail-cost-label {
+  font-size: 10px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .06em; color: var(--ink-faint);
+}
+.detail-cost-value {
+  font-family: "IBM Plex Mono", "Cascadia Mono", Consolas, monospace;
+  font-size: 26px; font-weight: 700; line-height: 1.1;
+  font-variant-numeric: tabular-nums; letter-spacing: -.01em;
+  margin-top: 2px;
+}
+.detail-cost-sub { font-size: 11px; color: var(--ink-faint); margin-top: 3px; white-space: nowrap; }
 /* Matches the phone breakpoint where .detail-head stacks to a column. */
 @media (max-width: 700px) {
   .detail-actions { justify-content: flex-start; max-width: none; }
+  .detail-head-right { align-items: flex-start; }
+  .detail-cost { align-items: flex-start; }
 }
 
 .grid-2 { display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr); gap: 18px; align-items: start; }

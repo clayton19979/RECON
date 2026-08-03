@@ -327,6 +327,16 @@ function renderCostSummary() {
     lines += `<div class="cost-line total"><span>Net to shop</span><span class="num">${money(item.net_cost)}</span></div>`;
   }
   box.innerHTML = lines;
+  // The identity band's money readout -- same numbers as the lines above, so
+  // the band can never disagree with the drawer's cost card. The written-up
+  // subline only appears while it differs from actual, i.e. while something
+  // on the ticket hasn't landed yet.
+  $("#vd-head-cost-value").textContent = money(item.total_cost);
+  const headSub = $("#vd-head-cost-sub");
+  const differs = Math.abs((item.quoted_cost || 0) - (item.total_cost || 0)) >= 0.005;
+  headSub.textContent = differs ? `${money(item.quoted_cost)} written up` : "";
+  headSub.hidden = !differs;
+  $("#vd-head-cost").hidden = false;
 }
 
 // Compact read-only summary replacing the old always-open inline edit form --

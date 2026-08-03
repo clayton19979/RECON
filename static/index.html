@@ -312,7 +312,16 @@
             <div class="detail-updated" id="vd-updated"></div>
             <div class="detail-concern" id="vd-concern-preview" style="display:none"><span class="detail-concern-label">Concern</span><span id="vd-concern-preview-text"></span></div>
           </div>
-          <div class="detail-actions" id="vd-actions">
+          <div class="detail-head-right">
+            <!-- The same rollup the drawer's cost card reads — surfaced on the
+                 band because "what have we spent on this car" is the question
+                 the page is usually opened to answer. -->
+            <div class="detail-cost" id="vd-head-cost" hidden>
+              <span class="detail-cost-label">Spent so far</span>
+              <span class="detail-cost-value" id="vd-head-cost-value"></span>
+              <span class="detail-cost-sub" id="vd-head-cost-sub" hidden></span>
+            </div>
+            <div class="detail-actions" id="vd-actions">
             <span class="pill" id="vd-status-pill" style="display:none"></span>
             <div class="status-picker" id="vd-status-picker" style="display:none">
               <span class="status-picker-dot"></span>
@@ -338,6 +347,7 @@
             <button class="btn btn-ghost btn-sm" id="vd-move-segment" style="display:none" title="Move this ticket to the other side — recon or we-owe">Move Ticket</button>
             <button class="btn btn-ghost btn-sm btn-danger-ghost" id="vd-void-order" style="display:none">Void Ticket</button>
             <button class="btn btn-ghost btn-sm btn-danger-ghost" id="vd-delete" style="display:none">Delete</button>
+          </div>
           </div>
         </div>
 

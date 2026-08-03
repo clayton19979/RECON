@@ -2873,40 +2873,135 @@ th.sel-col, td.sel-col { width: 32px; padding-right: 0; }
    an answer. Muted back to the neutral tone, because there is nothing under
    it to read. */
 .lot-group-head.is-empty { --stage: var(--ink-faint); --stage-tint: var(--paper-raise); }
-/* The lot sheet sets its own column widths. Left to itself a table hands the
-   spare width out across every column, so "Stock #" took 182px to print six
-   characters while the car -- the thing you actually scan for -- got 111 and
-   wrapped on every row, and Still Needs, the answer the report exists for,
-   was left reading three lines deep. Fixed layout instead: the codes and the
-   money take what they need, Still Needs collects everything left over, and
-   the rows come out one height, which is what makes a sheet scannable. */
-.lot-table { table-layout: fixed; }
-.lot-table .col-stock { width: 96px; }
+/* Every report is a sheet, and a sheet sets its own column widths. The lot
+   report was given them; the other four were still letting the browser hand
+   the spare width out across every column, and each caught the same disease
+   in its own way. On Technicians "Completed" took 176px to print one digit
+   while the name got 219. On Profit the car got 97px and wrapped, so the rows
+   came out 60px and 80px alternating. On All Vehicles "Customer Paid" took
+   140px to print $50.00 and the we-owe rows ran a third taller than the recon
+   ones, because the customer was in brackets after the car.
+
+   Fixed layout instead. Everything with a knowable size says so -- codes,
+   money, counts -- and the one column holding a name collects whatever is
+   left over, so the numbers sit under their own headings and every row comes
+   out the same height. That is what makes a sheet scannable rather than
+   something you have to read across.
+
+   The narrower gutters are part of it: nine columns of data want the width
+   back that sixteen pixels a side was spending on air. */
+.report-sheet { table-layout: fixed; }
+/* A floor under the name column. Fixed widths take what they are given
+   first, so on a window too narrow to hold the whole sheet the leftover the
+   car's name lives on goes to nothing -- at 1024px the spend sheet handed it
+   28px and the profit sheet handed it none at all. Below these widths the
+   sheet is dragged sideways instead, which is worse than fitting and far
+   better than a column of blank. Everything from a 1280 laptop up clears
+   them with room to spare, so no scrollbar ever appears on a real screen.
+   The lot sheet is deliberately left out: it has prose in it and was written
+   to wrap rather than scroll, and it still fits. */
+.spend-table { min-width: 900px; }
+.profit-table { min-width: 930px; }
+.tech-table { min-width: 750px; }
+.report-sheet thead th, .report-sheet tbody td, .report-sheet tfoot td { padding-left: 12px; padding-right: 12px; }
+.report-sheet .col-stock { width: 92px; }
+.report-sheet .col-money { width: 104px; }
+
+/* Lot Status: Still Needs is the answer the report exists for, so it is the
+   column left unsized. */
 .lot-table .col-vehicle { width: 220px; }
-.lot-table .col-money { width: 112px; }
+/* Wide enough for "Still To Spend", not for the dollars under it: set to the
+   figures alone, the heading overhung the Sitting column beside it. */
+.lot-table .col-money { width: 128px; }
 .lot-table .col-sitting { width: 98px; }
-/* On a narrow window the fixed columns give ground rather than eating the
-   sentence: six columns, one of which is prose, do not fit a 1000px window,
-   and a sheet that wraps is a better answer than one that scrolls sideways
-   -- nobody at a counter finds a horizontal scrollbar. */
-@media (max-width: 1200px) {
-  .lot-table .col-stock { width: 84px; }
+.lot-table .col-stock { width: 96px; }
+
+/* All Vehicles / Recon / We-Owe: the car (and whose it is) collects the
+   remainder; Type, Status and Technician are all short and known. */
+.spend-table .col-type { width: 96px; }
+.spend-table .col-status { width: 120px; }
+.spend-table .col-tech { width: 144px; }
+/* The two deposit columns are sized by their headings rather than their
+   figures: "Customer Paid" is wider set in small caps than any dollar amount
+   underneath it, and a column narrower than its own heading is what put a
+   sideways scrollbar under this sheet. */
+.spend-table .col-paid { width: 124px; }
+
+/* Profit: nine columns, the most crowded sheet in the app. The VIN is this
+   report's handle -- its rows deliberately don't open a vehicle, because one
+   row can stand for a recon record and several we-owe promises at once -- so
+   it has to fit whole rather than trail off, and it drops a size to do it. */
+.profit-table .col-vin { width: 172px; }
+.profit-table .col-hours { width: 78px; }
+.profit-table .col-money { width: 100px; }
+.profit-table .cell-vin { font-size: 11.5px; white-space: nowrap; }
+
+/* Technicians: the name is the one column with a knowable size here, so it is
+   the one that gets set. The five counts share what's left evenly -- sized
+   instead, they left the name holding a third of a screen of blank between
+   "Priya Nair" and the first number that belongs to her. */
+.tech-table .col-name { width: 260px; }
+
+/* On a narrower window the fixed columns give ground rather than eating the
+   names. Giving up a little money-column padding keeps every sheet whole down
+   to a 1280 laptop, which is the point: nobody at a counter finds a
+   horizontal scrollbar, and below this the min-widths above are the backstop
+   rather than the plan. */
+@media (max-width: 1400px) {
+  .lot-table .col-stock, .report-sheet .col-stock { width: 84px; }
   .lot-table .col-vehicle { width: 168px; }
-  .lot-table .col-money { width: 100px; }
+  .report-sheet .col-money, .profit-table .col-money { width: 92px; }
+  /* Still wide enough for "Still To Spend" -- these two give ground by less
+     than the rest, because their headings are the longest on any sheet. */
+  .lot-table .col-money { width: 128px; }
   .lot-table .col-sitting { width: 84px; }
+  .spend-table .col-type { width: 84px; }
+  .spend-table .col-status { width: 108px; }
+  .spend-table .col-tech { width: 118px; }
+  .spend-table .col-paid { width: 120px; }
+  .profit-table .col-vin { width: 162px; }
+  .profit-table .col-hours { width: 74px; }
+  /* Technicians is the one sheet that doesn't give ground: six columns and a
+     short name fit anywhere, and narrowing the counts here would only strand
+     the name further from the first number that belongs to it. */
 }
-/* The answer to "what does it still need" is the widest thing on the row and
-   the reason the report exists; it gets the leftover width rather than a
-   share of it. */
+
 .lot-needs { color: var(--ink-soft); }
 .cell-sub { color: var(--ink-faint); }
-/* Stock # is how you find a car in this report, so it reads first. Recon vs
-   we-owe drops under the vehicle name rather than taking a column of its own.
-   Neither wraps now that the column is a known width -- a stock number that
-   outgrows its column is a rarity, and one that quietly doubled the height of
-   its row would be worse than one that trails off. */
-.lot-table .lot-stock { font-weight: 700; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.lot-table .cell-sub { display: block; font-size: 11.5px; margin-top: 1px; }
+/* The code column is how you find a row on any of these sheets, so it reads
+   first and never wraps -- a stock number that outgrows its column is a
+   rarity, and one that quietly doubled the height of its row would be worse
+   than one that trails off. */
+.report-sheet .lot-stock, .report-sheet .cell-code { font-weight: 700; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.report-sheet .cell-sub { font-size: 11.5px; }
+/* Nothing in a name column wraps: the column is a known width now, and a name
+   that quietly doubled the height of its row would be worse than one that
+   trails off -- ragged rows are the thing these sheets are fixing. */
+.report-sheet .cell-name, .report-sheet .cell-tech { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Nor does anything in a money or count column. "5.5 hrs" and "$3,100.00"
+   have a space and a comma to break at, and a column sized for the figure
+   rather than the figure-plus-a-word was quietly wrapping them -- which is
+   what left the rows that actually had hours logged standing half a line
+   taller than the rows that didn't. */
+.report-sheet td.num-col, .report-sheet th.num-col, .report-sheet .pill { white-space: nowrap; }
+/* On the lot sheet every row carries a sub-line (recon, or the we-owe
+   customer), so it can have a line of its own and the rows still come out
+   even. On the spend sheets only the we-owe rows have one, so it rides
+   alongside the car instead -- given its own line there, half the sheet stood
+   a third taller than the other half. */
+.lot-table .cell-sub { display: block; margin-top: 1px; }
+.spend-table .cell-sub::before { content: " · "; }
+
+/* Recon or we-owe, in the same tinted-tag language Staff uses for a role.
+   Quiet on purpose: it sits beside a filled Status pill, and two filled
+   badges side by side read as one badge printed twice. */
+.seg-tag {
+  display: inline-flex; align-items: center; padding: 3px 9px; border-radius: 999px;
+  font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
+  white-space: nowrap;
+}
+.seg-tag.seg-recon { background: var(--recon-tint); color: var(--recon); }
+.seg-tag.seg-weowe { background: var(--weowe-tint); color: var(--weowe); }
 #report-csv[aria-disabled="true"] { pointer-events: none; opacity: .5; }
 /* Custom-range state: when no chip is lit, the date inputs carry the "this
    is what's active" accent so the toolbar never looks unselected. */

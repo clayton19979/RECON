@@ -397,6 +397,13 @@ class RecondVehicleIn(BaseModel):
 
 
 class RecondVehiclePatch(BaseModel):
+    # The lot's own number for the car, and one of the few things on a recon
+    # record that gets written down before anybody checks it. It was write-once
+    # at intake, so a mistyped stock number could only be fixed by deleting the
+    # car and re-entering it -- which is impossible the moment it has a repair
+    # order on it, and which is also how the same car ends up on the board
+    # twice. Same uniqueness rules as intake; see update_recon_vehicle.
+    stock_number: str | None = Field(default=None, min_length=1, max_length=40)
     status: Literal["acquired", "in_repair", "ready", "sold", "retained"] | None = None
     sale_price: float | None = Field(default=None, ge=0)
     sale_date: str | None = None
@@ -1497,6 +1504,20 @@ def build_recon_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
                 )
             fields: list[str] = []
             params: list[object] = []
+            if item.stock_number is not None:
+                stock_number = item.stock_number.strip().upper()
+                if not stock_number:
+                    raise HTTPException(422, "Stock number can't be blank")
+                # Only worth checking when the number actually changes: a save
+                # that leaves it alone must not trip over the car's own record,
+                # and re-typing R-1042 as "r 1042" is the same number rather
+                # than a clash with itself.
+                if normalize_stock_number(stock_number) != normalize_stock_number(row["stock_number"]):
+                    match = recon_match(db, stock_number, None)["stock_number"]
+                    if match and match["recon_id"] != recon_id:
+                        raise HTTPException(409, _already_here("Stock number", match))
+                fields.append("stock_number=?")
+                params.append(stock_number)
             if item.status is not None:
                 fields.append("status=?")
                 params.append(item.status)

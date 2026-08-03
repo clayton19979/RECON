@@ -31,5 +31,9 @@ export async function copyText(text, what = "Copied") {
     ok = false;
   }
   scratch.remove();
-  toast(ok ? `${what} copied` : "Could not copy — select the text and use Ctrl+C", !ok);
+  // The value goes in the failure message, not just the apology. What is being
+  // copied is usually the thing the user needs next -- a PO number about to be
+  // read down a phone line -- and a toast that says only "could not copy"
+  // takes that away at the moment it is wanted.
+  toast(ok ? `${what} copied` : `Could not copy — ${value}`, !ok);
 }

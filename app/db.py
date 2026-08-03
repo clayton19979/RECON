@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from contextlib import closing
 from datetime import datetime
@@ -84,6 +85,53 @@ def normalize_stock_number(stock_number: str | None) -> str | None:
     """
     cleaned = "".join(ch for ch in (stock_number or "") if ch.isalnum()).upper()
     return cleaned or None
+
+
+# A vendor's word for "purchase order" written any of the ways they write it,
+# but only when a reference actually follows -- the lookahead is what stops
+# this eating the start of a stock number like ROB-4, which is not one.
+_PO_WORD = re.compile(r"^(?:P\.?O\.?|R\.?O\.?)[#:\-]*(?=R?\d)")
+
+
+def normalize_po_reference(value: str | None) -> str:
+    """A PO or RO reference reduced to the form two spellings of it share.
+
+    Deliberately NOT the same as `accounting.normalize`, and the difference is
+    the whole point: that one strips every non-alphanumeric character, which
+    turns PO R20-2 into "R202" -- indistinguishable from repair order 202. The
+    hyphen in a PO number separates the ticket from the batch, so it carries
+    meaning and has to survive.
+
+    Spaces and a leading PO/RO word go, since "PO R20-2", "po r20-2" and
+    "R20-2" are one reference written three ways on three vendors' paperwork.
+    """
+    cleaned = "".join((value or "").split()).upper()
+    return _PO_WORD.sub("", cleaned)
+
+
+def purchase_order_number(ro_number: int, sequence: int) -> str:
+    """The printed form of a PO: repair order 20's second batch is "R20-2".
+
+    The leading R is there to be read on a vendor's invoice: this shop runs
+    RECON alongside Tekmetric, both send purchase orders to the same suppliers,
+    and a bare "20-2" on a bill gives no clue which system it came from. One
+    character at the front answers that from across the desk.
+
+    One function so the number an advisor reads off the screen, the number
+    stored on the row, and the number A/P matches an arriving invoice against
+    are all built the same way.
+    """
+    return f"R{ro_number}-{sequence}"
+
+
+def next_ro_number(db: sqlite3.Connection) -> int:
+    """The next short repair order number, counted shop-wide.
+
+    Every segment draws from this one counter, so a recon ticket and a we-owe
+    ticket can never both be RO 20. The unique index on the column is what
+    actually enforces that -- this is the ordinary path, not the guarantee.
+    """
+    return int(db.execute("SELECT coalesce(max(ro_number),0)+1 FROM orders").fetchone()[0])
 
 
 SCHEMA = """
@@ -197,6 +245,23 @@ CREATE TABLE IF NOT EXISTS we_owe_payments (
 CREATE TABLE IF NOT EXISTS orders (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   number TEXT NOT NULL UNIQUE,
+  /* The number the shop actually says out loud: 1, 2, 3... one sequence
+   * across recon, we-owe and retail alike, so no two tickets anywhere ever
+   * answer to the same number.
+   *
+   * `number` above (RO-2607-0012) stays exactly as it was and is still what
+   * older records, exports and already-posted vendor invoices refer to. It is
+   * a fine internal handle and an awful thing to read down a phone line, which
+   * is the whole reason this column exists -- and it is also why the two are
+   * kept side by side rather than one replacing the other: every invoice
+   * already sitting in A/P carries the long form as its PO text, and rewriting
+   * history to match a new scheme would break the match on the bills the shop
+   * has not paid yet.
+   *
+   * 0 means "not numbered yet", which only ever exists for the instant between
+   * ALTER TABLE and the backfill below it in _migrate.
+   */
+  ro_number INTEGER NOT NULL DEFAULT 0,
   customer_id INTEGER NOT NULL REFERENCES customers(id),
   vehicle_id INTEGER NOT NULL REFERENCES vehicles(id),
   segment TEXT NOT NULL DEFAULT 'retail',
@@ -208,6 +273,55 @@ CREATE TABLE IF NOT EXISTS orders (
   ai_summary TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL,
   last_activity_at TEXT NOT NULL DEFAULT ''
+);
+
+/* One batch of parts ordered from a vendor, against one ticket.
+ *
+ * The shop orders in batches -- you get on the phone once and order the four
+ * things the car needs from that supplier -- and every batch needs its own
+ * reference or the vendor's paperwork cannot be told apart when it comes back.
+ * Before this table the PO handed to a vendor was simply the repair order
+ * number, so four separate orders against one car all quoted the same PO and
+ * receiving a delivery meant reading part numbers to work out which order it
+ * was. That is the problem this exists to solve.
+ *
+ * `sequence` counts within the ticket and `number` is the printed form of the
+ * pair: RO 20's second batch is PO 20-2. Both are stored rather than the
+ * number being derived on read, because the number is said to a vendor and
+ * written on their paperwork -- once it has been quoted it must never change,
+ * including if the ticket is renumbered underneath it.
+ *
+ * vendor_id is nullable on purpose. The number is very often pulled *before*
+ * anyone knows who is getting the order -- that is the point of pulling it --
+ * and demanding a vendor up front would put a dialog in front of the one
+ * action that has to stay a single click.
+ */
+CREATE TABLE IF NOT EXISTS purchase_orders (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  order_id INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+  sequence INTEGER NOT NULL,
+  number TEXT NOT NULL UNIQUE,
+  vendor_id INTEGER REFERENCES vendors(id),
+  note TEXT NOT NULL DEFAULT '',
+  created_by TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  /* When ordering against this batch finished -- set once and never cleared.
+   *
+   * A batch is open from the moment its number is pulled until the order is
+   * placed, and parts marked ordered while it is open join it. That is what
+   * makes ticking three lines one at a time and pressing Mark Parts Ordered
+   * once give the vendor the same number: they are one phone call.
+   *
+   * Closing is what starts the next batch, and it has to be a stamp rather
+   * than "does it still have lines on it", because a line can be deleted off a
+   * ticket afterwards. That would empty a batch whose number a vendor is
+   * already holding, and the next order would be handed the very same number
+   * -- putting two deliveries under one PO, which is the exact thing this
+   * table exists to stop. A stamp that only ever goes one way cannot be undone
+   * by anything that happens to the lines later.
+   */
+  closed_at TEXT NOT NULL DEFAULT '',
+  UNIQUE(order_id, sequence)
 );
 
 CREATE TABLE IF NOT EXISTS estimates (
@@ -253,6 +367,13 @@ CREATE TABLE IF NOT EXISTS estimate_items (
   -- When this line was marked ordered. Kept after it's received, so how long
   -- a part took to turn up stays answerable; see the migration in _migrate.
   ordered_at TEXT NOT NULL DEFAULT '',
+  -- Which batch this part went out on, and so which PO number the vendor's
+  -- paperwork for it will quote. NULL for a line nobody has ordered yet, and
+  -- for every line ordered before purchase orders existed -- deliberately not
+  -- backfilled, because the batch a part actually went out in is not
+  -- recoverable after the fact and a guess here would be read as fact at the
+  -- receiving bench.
+  purchase_order_id INTEGER REFERENCES purchase_orders(id),
   received_invoice_number TEXT NOT NULL DEFAULT '',
   -- Who the part actually came from. See the migration in _migrate for why
   -- the invoice number above is not enough on its own.
@@ -592,6 +713,33 @@ def _migrate(db: sqlite3.Connection) -> None:
            WHERE last_activity_at = ''"""
     )
 
+    # Short repair order numbers -- 1, 2, 3 -- alongside the long RO-2607-0012
+    # form, which stays put. See the column's comment in SCHEMA.
+    #
+    # The backfill runs oldest ticket first across every segment at once, so
+    # recon, we-owe and retail share one sequence and no two tickets in the
+    # shop can ever be "RO 20". It continues from the highest number already
+    # handed out rather than recounting from 1, which is what makes it safe to
+    # run again: a database restored from an older backup, or a ticket that
+    # somehow arrives unnumbered, gets the next free number instead of one
+    # already sitting on somebody's vendor paperwork.
+    if "ro_number" not in order_columns:
+        db.execute("ALTER TABLE orders ADD COLUMN ro_number INTEGER NOT NULL DEFAULT 0")
+    unnumbered = db.execute("SELECT id FROM orders WHERE ro_number=0 ORDER BY created_at ASC, id ASC").fetchall()
+    if unnumbered:
+        next_ro = (db.execute("SELECT coalesce(max(ro_number),0) FROM orders").fetchone()[0] or 0) + 1
+        for (order_id,) in unnumbered:
+            db.execute("UPDATE orders SET ro_number=? WHERE id=?", (next_ro, order_id))
+            next_ro += 1
+    # Partial, excluding 0, and that exclusion is load-bearing rather than
+    # tidiness: 0 is "not numbered yet", and more than one ticket can honestly
+    # be in that state at once -- every row on an existing database is, for the
+    # moment between the ALTER TABLE above and the backfill under it, and so is
+    # anything written by a path that predates this column. A plain unique
+    # index would make the second such row an IntegrityError instead of a
+    # ticket waiting to be numbered on the next start.
+    db.execute("CREATE UNIQUE INDEX IF NOT EXISTS orders_ro_number ON orders(ro_number) WHERE ro_number != 0")
+
     estimate_item_columns = {row[1] for row in db.execute("PRAGMA table_info(estimate_items)")}
     if "sort_order" not in estimate_item_columns:
         db.execute("ALTER TABLE estimate_items ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0")
@@ -639,6 +787,10 @@ def _migrate(db: sqlite3.Connection) -> None:
         # answer a different question. They report the date as unrecorded and
         # say so on screen, rather than wearing a plausible invention.
         ("ordered_at", "ordered_at TEXT NOT NULL DEFAULT ''"),
+        # Which batch this part was ordered on. Not backfilled -- see the
+        # column's comment in SCHEMA for why inventing one would be worse
+        # than leaving it blank.
+        ("purchase_order_id", "purchase_order_id INTEGER REFERENCES purchase_orders(id)"),
     ):
         if column not in estimate_item_columns:
             db.execute(f"ALTER TABLE estimate_items ADD COLUMN {ddl}")

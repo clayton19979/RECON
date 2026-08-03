@@ -8,9 +8,16 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from .accounting import InvoiceItemIn, create_ap_invoice_record, invoice_line_reach, receive_onto_invoice
-from .db import inserted_id
+from .db import inserted_id, purchase_order_number
 from .recon import age_days, assert_vehicle_editable
-from .workflow import assert_estimate_editable, estimate_line_total, get_or_create_estimate, record_activity
+from .workflow import (
+    assert_estimate_editable,
+    estimate_line_total,
+    get_or_create_estimate,
+    purchase_orders_list,
+    record_activity,
+    touch_order,
+)
 
 PART_STATUSES = {"quoted", "ordered", "received"}
 
@@ -54,6 +61,14 @@ class ItemStatusIn(BaseModel):
 
 
 class OrderPartsIn(BaseModel):
+    actor: str = "ui"
+
+
+class PurchaseOrderIn(BaseModel):
+    # Both optional, because the number is normally pulled before either is
+    # known -- an advisor reaches for a PO number *in order to* place the call.
+    vendor_id: int | None = None
+    note: str = Field(default="", max_length=200)
     actor: str = "ui"
 
 
@@ -155,6 +170,135 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
             "UPDATE estimates SET subtotal=?,tax=?,total=? WHERE id=?",
             (subtotal, tax, round(subtotal + tax, 2), estimate_id),
         )
+
+    # --- Purchase orders (parts batches) ---
+
+    def create_purchase_order(
+        db: sqlite3.Connection, order: sqlite3.Row, vendor_id: int | None, note: str, actor: str
+    ) -> dict:
+        """Hand out the next PO number on this ticket.
+
+        The sequence counts within the ticket, so the numbers a car collects
+        are 20-1, 20-2, 20-3 no matter what any other car is doing. Both halves
+        are written down rather than the printed number being rebuilt on read:
+        once a number has been said to a vendor it has to stay that number
+        forever.
+        """
+        if vendor_id is not None and not db.execute("SELECT 1 FROM vendors WHERE id=?", (vendor_id,)).fetchone():
+            raise HTTPException(404, "Vendor not found")
+        sequence = int(
+            db.execute(
+                "SELECT coalesce(max(sequence),0)+1 FROM purchase_orders WHERE order_id=?", (order["id"],)
+            ).fetchone()[0]
+        )
+        number = purchase_order_number(order["ro_number"], sequence)
+        cur = db.execute(
+            "INSERT INTO purchase_orders(order_id,sequence,number,vendor_id,note,created_by,created_at)"
+            " VALUES(?,?,?,?,?,?,?)",
+            (order["id"], sequence, number, vendor_id, note.strip(), actor.strip(), now_fn()),
+        )
+        po_id = inserted_id(cur)
+        return dict(db.execute("SELECT * FROM purchase_orders WHERE id=?", (po_id,)).fetchone())
+
+    def po_reference(db: sqlite3.Connection, order: sqlite3.Row, item_ids: list[int]) -> str:
+        """What goes in the PO column of the vendor invoice these lines post to.
+
+        The batch the parts actually went out on, which is the number printed
+        on the vendor's paperwork and therefore the one that makes the two
+        documents match. A delivery covering two batches names both, because
+        claiming one of them would be wrong about the other.
+
+        Falls back to the repair order number when no line carries a batch --
+        parts received without ever having been marked ordered, and every line
+        that predates purchase orders. That is exactly what this column held
+        before, so old tickets keep reconciling the way they always did.
+        """
+        if not item_ids:
+            return str(order["number"])
+        placeholders = ",".join("?" * len(item_ids))
+        rows = db.execute(
+            f"""SELECT DISTINCT po.number FROM estimate_items ei
+                  JOIN purchase_orders po ON po.id = ei.purchase_order_id
+                 WHERE ei.id IN ({placeholders})
+                 ORDER BY po.sequence ASC""",
+            item_ids,
+        ).fetchall()
+        return ", ".join(row[0] for row in rows) if rows else str(order["number"])
+
+    def batch_for_ordering(db: sqlite3.Connection, order: sqlite3.Row, actor: str) -> int:
+        """Which batch parts being marked ordered right now belong to.
+
+        The newest batch still open, which is either the number an advisor
+        pulled a moment ago to make the call with or the one the last few lines
+        already joined -- both are the same phone call. Nothing open means this
+        is the start of a new order, so a new number is taken.
+
+        Never a closed batch: that one has been placed with a vendor, and
+        adding to it after the fact would put parts on an order that already
+        shipped. See closed_at in SCHEMA.
+        """
+        newest = db.execute(
+            "SELECT * FROM purchase_orders WHERE order_id=? ORDER BY sequence DESC LIMIT 1", (order["id"],)
+        ).fetchone()
+        if newest is not None and not newest["closed_at"]:
+            return int(newest["id"])
+        return int(create_purchase_order(db, order, None, "", actor)["id"])
+
+    def close_batch(db: sqlite3.Connection, po_id: int) -> None:
+        """Finish ordering against a batch, so the next parts start a new one.
+
+        Only the bulk Mark Parts Ordered click does this: it means "that's
+        everything for this call". Flipping a single line leaves the batch open
+        precisely because more lines from the same call usually follow.
+        """
+        db.execute("UPDATE purchase_orders SET closed_at=? WHERE id=? AND closed_at=''", (now_fn(), po_id))
+
+    @router.get("/orders/{order_id}/purchase-orders")
+    def list_purchase_orders(order_id: int):
+        with connect() as db:
+            order_row(db, order_id)
+            return purchase_orders_list(db, order_id)
+
+    @router.post("/orders/{order_id}/purchase-orders", status_code=201)
+    def add_purchase_order(order_id: int, item: PurchaseOrderIn = PurchaseOrderIn()):
+        """Pull the next PO number for this ticket.
+
+        Always a new number, never a reused one: an advisor asks for this with
+        a vendor on the phone, and handing back a number that was already
+        quoted to somebody else is the one outcome that would put two different
+        deliveries under one reference -- which is the whole thing purchase
+        orders exist here to prevent.
+        """
+        with connect() as db:
+            order = order_row(db, order_id)
+            assert_vehicle_editable(db, order)
+            created = create_purchase_order(db, order, item.vendor_id, item.note, item.actor)
+            record_activity(db, order_id, "purchase_order_created", item.actor, {"number": created["number"]}, now_fn)
+            return created
+
+    @router.delete("/orders/{order_id}/purchase-orders/{po_id}", status_code=204)
+    def delete_purchase_order(order_id: int, po_id: int):
+        """Drop a number pulled by mistake.
+
+        Only while it is still empty. A batch with parts on it is the record of
+        what was ordered under a number a vendor is holding, and deleting that
+        would strand the parts with nothing to receive them against.
+        """
+        with connect() as db:
+            order_row(db, order_id)
+            row = db.execute("SELECT * FROM purchase_orders WHERE id=? AND order_id=?", (po_id, order_id)).fetchone()
+            if not row:
+                raise HTTPException(404, "Purchase order not found on this repair order")
+            if (
+                row["closed_at"]
+                or db.execute("SELECT 1 FROM estimate_items WHERE purchase_order_id=? LIMIT 1", (po_id,)).fetchone()
+            ):
+                raise HTTPException(409, "This PO has already been ordered against -- it can't be removed")
+            db.execute("DELETE FROM purchase_orders WHERE id=?", (po_id,))
+            # touch_order rather than record_activity: taking back a number
+            # nobody used isn't work on the car worth a line in its history,
+            # but it is still somebody at the ticket, so the idle clock moves.
+            touch_order(db, order_id, now_fn)
 
     @router.post("/orders/{order_id}/estimate/items", status_code=201)
     def append_estimate_items(order_id: int, payload: AppendItemsIn):
@@ -263,42 +407,81 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
         earlier. One line of Walt's report contradicting itself.
         """
         with connect() as db:
-            assert_vehicle_editable(db, order_row(db, order_id))
+            order = order_row(db, order_id)
+            assert_vehicle_editable(db, order)
             assert_estimate_editable(db, order_id)
             estimate = estimate_for_order(db, order_id)
+            # Nothing to order means no batch: pulling a PO number for a click
+            # that moves no parts would litter the ticket with empty POs.
+            pending = db.execute(
+                "SELECT count(*) FROM estimate_items WHERE estimate_id=? AND kind='part' AND status='quoted'",
+                (estimate["id"],),
+            ).fetchone()[0]
+            if not pending:
+                return {"updated": 0, "purchase_order": None}
+            po_id = batch_for_ordering(db, order, item.actor)
             cur = db.execute(
-                "UPDATE estimate_items SET status='ordered',ordered_at=? "
+                "UPDATE estimate_items SET status='ordered',ordered_at=?,purchase_order_id=? "
                 "WHERE estimate_id=? AND kind='part' AND status='quoted'",
-                (now_fn(), estimate["id"]),
+                (now_fn(), po_id, estimate["id"]),
             )
+            # That's the whole order placed, so the next parts start a fresh
+            # number rather than joining one the vendor is already shipping.
+            close_batch(db, po_id)
+            purchase_order = dict(db.execute("SELECT * FROM purchase_orders WHERE id=?", (po_id,)).fetchone())
             # Only when something actually moved: a click that ordered nothing
             # is not work on the car, and logging it would reset the idle clock
             # on a car nobody has touched.
             if cur.rowcount:
-                record_activity(db, order_id, "parts_ordered", item.actor, {"count": cur.rowcount}, now_fn)
-            return {"updated": cur.rowcount}
+                record_activity(
+                    db,
+                    order_id,
+                    "parts_ordered",
+                    item.actor,
+                    {"count": cur.rowcount, "po_number": purchase_order["number"]},
+                    now_fn,
+                )
+            return {"updated": cur.rowcount, "purchase_order": purchase_order}
 
     @router.patch("/orders/{order_id}/estimate/items/{item_id}/status")
     def set_item_status(order_id: int, item_id: int, item: ItemStatusIn):
         with connect() as db:
-            assert_vehicle_editable(db, order_row(db, order_id))
+            order = order_row(db, order_id)
+            assert_vehicle_editable(db, order)
             assert_estimate_editable(db, order_id)
             estimate = estimate_for_order(db, order_id)
             row = db.execute(
-                "SELECT id, kind, status FROM estimate_items WHERE id=? AND estimate_id=?", (item_id, estimate["id"])
+                "SELECT id, kind, status, purchase_order_id FROM estimate_items WHERE id=? AND estimate_id=?",
+                (item_id, estimate["id"]),
             ).fetchone()
             if not row:
                 raise HTTPException(404, "Estimate item not found on this repair order")
+            existing_po = row["purchase_order_id"]
             # Parts are only ever marked received through /estimate/receive-parts,
             # which posts a real A/P record -- this endpoint no longer accepts
             # "received" for a part line so there's exactly one receiving path.
             #
             # Putting a line back to quoted clears the order date with it: the
             # part is not on order any more, and a stale stamp would have the
-            # on-order list ageing something nobody is waiting for.
+            # on-order list ageing something nobody is waiting for. The batch
+            # goes with it for the same reason -- a part that is not on order
+            # is not on anybody's purchase order either.
+            #
+            # A line moved one at a time joins the same batch a bulk Order
+            # Parts click would have used, so ticking two parts individually
+            # and pressing the button once give the vendor the same PO number.
+            # A line already sitting on a batch keeps it. Re-sending "ordered"
+            # for a part that is already ordered has to be a no-op, not a quiet
+            # move onto a fresh PO number the vendor has never heard of.
+            if item.status != "ordered":
+                po_id = None
+            elif existing_po:
+                po_id = existing_po
+            else:
+                po_id = batch_for_ordering(db, order, item.actor)
             db.execute(
-                "UPDATE estimate_items SET status=?,ordered_at=? WHERE id=?",
-                (item.status, now_fn() if item.status == "ordered" else "", item_id),
+                "UPDATE estimate_items SET status=?,ordered_at=?,purchase_order_id=? WHERE id=?",
+                (item.status, now_fn() if item.status == "ordered" else "", po_id, item_id),
             )
             # Same rule as the bulk route above: a real change to what the shop
             # is waiting on is work on the car, and a no-op change is not.
@@ -591,7 +774,7 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
                     vendor_id=vendor_id,
                     order_id=order_id,
                     invoice_number=invoice_number,
-                    po_number=current_order["number"],
+                    po_number=po_reference(db, current_order, [int(row["id"])]),
                     items=[
                         InvoiceItemIn(
                             part_number=row["part_number"] or "N/A",
@@ -733,7 +916,7 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
                 vendor_id=item.vendor_id,
                 order_id=order_id,
                 invoice_number=item.credit_number,
-                po_number=current_order["number"],
+                po_number=po_reference(db, current_order, [int(row["id"])]),
                 items=[
                     InvoiceItemIn(
                         part_number=row["part_number"] or "N/A",
@@ -992,7 +1175,7 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
                 vendor_id=item.vendor_id,
                 order_id=order_id,
                 invoice_number=item.invoice_number,
-                po_number=current_order["number"],
+                po_number=po_reference(db, current_order, unique_ids),
                 items=invoice_items,
                 # Same order the invoice lines were built in just above, so
                 # each billed line points back at the part it paid for.

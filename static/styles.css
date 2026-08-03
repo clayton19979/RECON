@@ -3282,6 +3282,60 @@ th.sel-col, td.sel-col { width: 32px; padding-right: 0; }
   font-size: 10px; color: var(--ink-faint);
 }
 
+/* ---------- purchase orders ----------
+   The strip above the parts grid, and the number stamped on each ordered row.
+
+   Monospaced everywhere a PO number appears, and that is not decoration: this
+   number gets read off the screen onto a vendor's paperwork and then read back
+   off that paperwork at the receiving bench, so the digits have to be
+   unambiguous at a glance. */
+.po-strip {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  padding: 0 0 12px;
+}
+.po-strip:empty { display: none; }
+.po-strip-label, .po-strip-next, .po-strip-empty {
+  font-size: 12px; color: var(--ink-faint);
+}
+.po-strip-label { font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+.po-strip-next strong, .po-strip-empty strong {
+  font-family: "IBM Plex Mono", "Cascadia Mono", Consolas, monospace;
+  color: var(--ink-soft);
+}
+.po-chip {
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 4px 9px; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--line); background: var(--surface);
+  font: inherit; line-height: 1.2;
+}
+.po-chip:hover { border-color: var(--accent); }
+.po-chip-number {
+  font-family: "IBM Plex Mono", "Cascadia Mono", Consolas, monospace;
+  font-size: 12.5px; font-weight: 600; color: var(--ink);
+}
+.po-chip-detail { font-size: 11px; color: var(--ink-faint); }
+/* Still out at a vendor is the state worth spotting -- it's the answer to
+   "what am I waiting on". Done recedes; a number nobody has used yet is
+   quieter still, and carries the × to take it back. */
+.po-chip-open { border-color: var(--warn); background: var(--warn-tint); }
+.po-chip-done { opacity: .72; }
+.po-chip-unused { border-style: dashed; }
+.po-chip-active { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-tint); }
+.po-chip-drop {
+  font-size: 13px; color: var(--ink-faint); padding: 0 2px; border-radius: 4px;
+}
+.po-chip-drop:hover { color: var(--crit); background: var(--crit-tint); }
+/* The batch stamp on a part's own row. */
+.po-badge {
+  font-family: "IBM Plex Mono", "Cascadia Mono", Consolas, monospace;
+  font-size: 10.5px; font-weight: 600; color: var(--ink-soft);
+  background: var(--line-soft); border-radius: 4px; padding: 1px 5px;
+}
+/* Picking a batch in the strip dims nothing -- it lifts the rows that belong
+   to it, so the surrounding lines stay readable while the delivery in your
+   hand is obvious. */
+.part-row.po-highlight { background: var(--accent-tint); }
+
 /* ---------- reports ---------- */
 #report-scope { min-height: 16px; }
 /* Lot report group bands. Walt reads this grouped, so the headings have to

@@ -9,7 +9,14 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from .db import RECON_SHOP_CUSTOMER_ID, inserted_id, normalize_stock_number, normalize_vin, vin_check_digit_ok
+from .db import (
+    RECON_SHOP_CUSTOMER_ID,
+    inserted_id,
+    next_ro_number,
+    normalize_stock_number,
+    normalize_vin,
+    vin_check_digit_ok,
+)
 
 # _already_here is private to recon.py but imported deliberately: intake has to
 # refuse a duplicate car in exactly the words the intake *form* uses, or the
@@ -289,9 +296,17 @@ def build_agent_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
                 sequence = db.execute("SELECT coalesce(max(id),0)+1 FROM orders").fetchone()[0]
                 number = f"RO-{datetime.now():%y%m}-{sequence:04d}"
                 order_cur = db.execute(
-                    "INSERT INTO orders(number,customer_id,vehicle_id,concern,segment,recon_vehicle_id,we_owe_id,status,voided,created_at)"
-                    " VALUES(?,?,?,?,'recon',?,NULL,'estimate',0,?)",
-                    (number, RECON_SHOP_CUSTOMER_ID, vehicle_id, payload.concern.strip(), recon_vehicle_id, ts),
+                    "INSERT INTO orders(number,ro_number,customer_id,vehicle_id,concern,segment,recon_vehicle_id,we_owe_id,status,voided,created_at)"
+                    " VALUES(?,?,?,?,?,'recon',?,NULL,'estimate',0,?)",
+                    (
+                        number,
+                        next_ro_number(db),
+                        RECON_SHOP_CUSTOMER_ID,
+                        vehicle_id,
+                        payload.concern.strip(),
+                        recon_vehicle_id,
+                        ts,
+                    ),
                 )
                 order_id = inserted_id(order_cur)
                 initialize_order_workflow(db, order_id, now_fn, payload.actor)

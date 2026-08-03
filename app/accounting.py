@@ -10,7 +10,7 @@ from typing import Any, Literal
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from .db import inserted_id
+from .db import inserted_id, normalize_po_reference
 from .workflow import estimate_line_total, record_activity
 
 
@@ -602,12 +602,30 @@ def build_accounting_router(connect: Callable[[], sqlite3.Connection], now: Call
         return None
 
     def find_order(db: sqlite3.Connection, po_number: str):
-        """Matches a PO# against either an RO number (RO-2607-0012) or a
-        vehicle's stock number (R-1042) -- shops naturally give vendors the
-        stock number as the PO reference since it's what's on the car, so
-        an invoice that comes back referencing the stock number needs to
-        resolve to that vehicle's repair order just as well as the formal
-        RO number would."""
+        """Matches a PO# against a purchase order (20-2), an RO number
+        (RO-2607-0012 or plain 20), or a vehicle's stock number (R-1042) --
+        shops naturally give vendors the stock number as the PO reference since
+        it's what's on the car, so an invoice that comes back referencing the
+        stock number needs to resolve to that vehicle's repair order just as
+        well as the formal RO number would.
+
+        Tried most specific first. A purchase order names one batch on one
+        ticket, so it is the least ambiguous thing a vendor can quote and wins
+        outright; a bare repair order number is tried last, after stock
+        numbers, so nothing that used to resolve one way starts resolving
+        another.
+        """
+        # Kept apart from `normalize` on purpose: that strips the hyphen, and
+        # the hyphen is what separates the ticket from the batch. See
+        # db.normalize_po_reference.
+        reference = normalize_po_reference(po_number)
+        if reference:
+            batch = db.execute("SELECT order_id FROM purchase_orders WHERE upper(number)=?", (reference,)).fetchone()
+            if batch:
+                found = db.execute("SELECT * FROM orders WHERE id=?", (batch["order_id"],)).fetchone()
+                if found:
+                    return found
+
         target = normalize(po_number)
         for row in db.execute("SELECT * FROM orders"):
             if normalize(row["number"]) == target:
@@ -622,6 +640,15 @@ def build_accounting_router(connect: Callable[[], sqlite3.Connection], now: Call
                     return active
                 if orders:
                     return orders[0]
+        # Last resort: the short repair order number on its own, with or
+        # without the R that this shop's purchase orders carry. Digits only
+        # beyond that, so this can never swallow a reference that merely looks
+        # numeric once punctuation is stripped out of it.
+        bare = reference[1:] if reference[:1] == "R" and reference[1:].isdigit() else reference
+        if bare.isdigit():
+            found = db.execute("SELECT * FROM orders WHERE ro_number=?", (int(bare),)).fetchone()
+            if found:
+                return found
         return None
 
     def audit(

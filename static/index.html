@@ -446,10 +446,19 @@
                     <button class="btn btn-ghost btn-sm" id="vd-add-job">＋ Add Job</button>
                     <button class="btn btn-ghost btn-sm" id="vd-add-part">＋ Part</button>
                     <button class="btn btn-ghost btn-sm" id="vd-add-labor">＋ Labor</button>
-                    <button class="btn btn-ghost btn-sm" id="vd-order-parts" title="Marks quoted parts as ordered on this ticket -- doesn't place a purchase order with a vendor">Mark Parts Ordered</button>
+                    <button class="btn btn-ghost btn-sm" id="vd-new-po" title="Take the next PO number for this ticket and copy it, ready to give a vendor">Get PO #</button>
+                    <button class="btn btn-ghost btn-sm" id="vd-order-parts" title="Marks every quoted part as ordered and puts them on one PO number">Mark Parts Ordered</button>
                     <button class="btn btn-primary btn-sm" id="vd-receive-parts" disabled>Receive Selected</button>
                   </div>
                 </div>
+                <!-- The PO numbers on this ticket, above the parts themselves.
+                     A part is found at the receiving bench by the number on the
+                     vendor's paperwork, so the batches have to be readable
+                     before you go looking at part numbers -- and the next
+                     number has to be visible *before* the call is made, which
+                     is the moment an advisor actually needs it. Clicking a
+                     batch lights up its own parts in the grid below. -->
+                <div id="vd-po-strip" class="po-strip"></div>
                 <div id="vd-estimate-items"></div>
               </div>
               <!-- Two figures, no comparison between them. Recon work isn't

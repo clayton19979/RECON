@@ -180,6 +180,31 @@ def estimate_line_total(kind: str, quantity: float, unit_price: float) -> float:
     return -total if kind in CREDIT_KINDS else total
 
 
+def purchase_orders_list(db: sqlite3.Connection, order_id: int) -> list[dict]:
+    """Every parts batch on this ticket, oldest first.
+
+    Carries the counts the ticket screen needs to say what each batch is for
+    without a second round trip -- how many lines are on it and how many have
+    actually turned up, which together answer "is this one still outstanding".
+
+    Lives here rather than beside the purchase order routes because the ticket
+    payload needs it too, and two copies of this query is two chances for the
+    strip above the parts grid to disagree with the list behind it.
+    """
+    rows = db.execute(
+        """SELECT po.*, v.name vendor_name,
+                  (SELECT count(*) FROM estimate_items ei WHERE ei.purchase_order_id=po.id) line_count,
+                  (SELECT count(*) FROM estimate_items ei
+                    WHERE ei.purchase_order_id=po.id AND ei.status='received') received_count
+             FROM purchase_orders po
+             LEFT JOIN vendors v ON v.id = po.vendor_id
+            WHERE po.order_id=?
+            ORDER BY po.sequence ASC""",
+        (order_id,),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
 def touch_order(db: sqlite3.Connection, order_id: int, now_fn: Callable[[], str]) -> None:
     """Mark a ticket as having just been worked on.
 

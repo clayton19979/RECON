@@ -859,6 +859,26 @@ table.sticky-head thead th {
   justify-content: flex-end; align-items: center;
   max-width: 480px;
 }
+/* ---------- the band's buttons, in order of how often they're pressed ----------
+   Seven buttons sat here at the same weight: printing a ticket looked exactly
+   like deleting a car, and the two you press all day were no easier to find
+   than the two you press twice a year. Nothing has moved and nothing is
+   hidden -- they just stop being seven identical grey boxes.
+
+   Print and + Task keep the bounded button and pick up a mark each, so they
+   can be hit by shape. Send to History and Move Ticket drop their edge and go
+   faint: still right there, just no longer competing. */
+.detail-actions .act-do svg { color: var(--ink-faint); }
+.detail-actions .act-do:hover svg { color: inherit; }
+/* Void and Delete carry a red edge at rest, not only on hover. They used to
+   be indistinguishable from Print until the mouse was already on them, which
+   is the wrong moment to find out. The extra air around them is the only
+   spacing on this row that isn't uniform, and it is there on purpose --
+   whichever of the two is showing, it is not up against an everyday button. */
+.detail-actions .btn-danger-ghost {
+  border-color: color-mix(in srgb, var(--crit) 40%, var(--line));
+  margin-left: 8px;
+}
 /* The band's right column: the money on top, the button set beneath it.
    The figure leads because it's the answer; the buttons are just what you
    might do about it. */
@@ -1940,6 +1960,57 @@ dialog::backdrop { background: var(--backdrop); backdrop-filter: blur(3px); }
   border-radius: 8px; padding: 9px 13px; font-size: 12.5px; font-weight: 700; cursor: pointer; font-family: inherit;
 }
 .status-picker-toggle svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 2.4; }
+
+/* ---------- the status takes the status's own colour ----------
+   The board already paints these four -- grey while it's still an estimate,
+   amber while it waits on somebody, accent while it's being worked, green
+   when it's done -- and the ticket page didn't: this control was the same
+   accent blue on every car. So the one word on the page that says where the
+   car stands was the last thing you could read from a distance, and the board
+   you clicked through from and the page you landed on disagreed about colour.
+
+   One class from the render carries the status; the dot, the field and its
+   edge all read it from here, which is also why the dot no longer gets an
+   inline colour of its own from the drawer module. A status with no rule
+   below keeps the plain accent control rather than borrowing another
+   status's colour. */
+.status-picker.st-estimate { --st: var(--recon); --st-tint: var(--recon-tint); }
+.status-picker.st-pending_approval { --st: var(--warn); --st-tint: var(--warn-tint); }
+.status-picker.st-in_progress { --st: var(--accent); --st-tint: var(--accent-tint); }
+.status-picker.st-complete { --st: var(--good); --st-tint: var(--good-tint); }
+/* A voided ticket is not a stage of the work -- it goes flat, not coloured. */
+.status-picker.st-voided { --st: var(--ink-faint); --st-tint: var(--paper-raise); }
+.status-picker.st-estimate .status-picker-select,
+.status-picker.st-pending_approval .status-picker-select,
+.status-picker.st-in_progress .status-picker-select,
+.status-picker.st-complete .status-picker-select,
+.status-picker.st-voided .status-picker-select {
+  background: var(--st-tint); border-color: var(--st); color: var(--st);
+}
+.status-picker.st-estimate .status-picker-dot,
+.status-picker.st-pending_approval .status-picker-dot,
+.status-picker.st-in_progress .status-picker-dot,
+.status-picker.st-complete .status-picker-dot,
+.status-picker.st-voided .status-picker-dot {
+  /* Grown and given a halo of its own colour: this is the thing that answers
+     "where's that car at" from the other side of the counter. */
+  width: 9px; height: 9px; background: var(--st);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--st) 22%, transparent);
+}
+
+/* ---------- who has the car ----------
+   The assignment control was painted in exactly the same accent-tinted style
+   as the status beside it, so two controls shouted at the same volume and
+   neither won. Names are not a status: this one goes quiet and bounded, and
+   carries the same person mark the Staff page uses, so the band reads
+   status first, then who. */
+.assign-picker .status-picker-toggle {
+  background: var(--paper-raise); border-color: var(--line); color: var(--ink);
+  font-weight: 600;
+}
+.assign-picker .status-picker-toggle:hover { border-color: var(--accent); color: var(--accent); }
+.assign-picker .assign-icon { color: var(--ink-faint); }
+.assign-picker .status-picker-toggle:hover .assign-icon { color: inherit; }
 .status-picker-menu {
   display: none; position: absolute; top: calc(100% + 6px); right: 0; z-index: 30;
   background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);

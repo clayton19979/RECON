@@ -326,14 +326,20 @@
               <span class="detail-cost-value" id="vd-head-cost-value"></span>
               <span class="detail-cost-sub" id="vd-head-cost-sub" hidden></span>
             </div>
+            <!-- The band's controls read in one order, loudest first: where the
+                 car stands, who has it, the two buttons pressed all day, then
+                 the rare ones, then the two that destroy something. Nothing is
+                 hidden and nothing moved behind a menu -- every one of these is
+                 still exactly one click in the same place it always was. -->
             <div class="detail-actions" id="vd-actions">
             <span class="pill" id="vd-status-pill" style="display:none"></span>
             <div class="status-picker" id="vd-status-picker" style="display:none">
               <span class="status-picker-dot"></span>
               <select id="vd-status-select" class="status-picker-select"></select>
             </div>
-            <div class="status-picker" id="vd-assign-picker" style="display:none">
+            <div class="status-picker assign-picker" id="vd-assign-picker" style="display:none">
               <button type="button" class="status-picker-toggle" id="vd-assign-picker-toggle">
+                <svg class="assign-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="3.4"/><path d="M4.5 20c1-3.6 4-5.6 7.5-5.6s6.5 2 7.5 5.6"/></svg>
                 <span id="vd-assign-picker-label">Assign</span>
                 <svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
               </button>
@@ -343,13 +349,21 @@
                 <button class="btn btn-primary btn-sm" id="vd-save-assignment">Save</button>
               </div>
             </div>
-            <button class="btn btn-ghost btn-sm" id="vd-print-ticket" style="display:none">Print Ticket</button>
-            <button class="btn btn-ghost btn-sm" id="vd-add-task" style="display:none">+ Task</button>
-            <button class="btn btn-ghost btn-sm" id="vd-archive-vehicle" style="display:none">Send to History</button>
+            <button class="btn btn-ghost btn-sm act-do" id="vd-print-ticket" style="display:none">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 8V3h10v5M7 18H5a2 2 0 01-2-2v-4a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2h-2M7 14h10v7H7z"/></svg>
+              Print Ticket
+            </button>
+            <button class="btn btn-ghost btn-sm act-do" id="vd-add-task" style="display:none">
+              <!-- The same clipboard the rail's Tasks page carries, so the
+                   button and the page it files into read as one thing. -->
+              <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 11l2.5 2.5L16 9"/><path d="M9 16l2.5 2.5L16 14"/></svg>
+              + Task
+            </button>
+            <button class="btn btn-ghost btn-sm btn-quiet" id="vd-archive-vehicle" style="display:none">Send to History</button>
             <button class="btn btn-primary btn-sm" id="vd-reopen-vehicle" style="display:none">Reopen</button>
             <!-- A ticket written up on the wrong side used to be unfixable
                  except by deleting it and losing the estimate with it. -->
-            <button class="btn btn-ghost btn-sm" id="vd-move-segment" style="display:none" title="Move this ticket to the other side — recon or we-owe">Move Ticket</button>
+            <button class="btn btn-ghost btn-sm btn-quiet" id="vd-move-segment" style="display:none" title="Move this ticket to the other side — recon or we-owe">Move Ticket</button>
             <button class="btn btn-ghost btn-sm btn-danger-ghost" id="vd-void-order" style="display:none">Void Ticket</button>
             <button class="btn btn-ghost btn-sm btn-danger-ghost" id="vd-delete" style="display:none">Delete</button>
           </div>

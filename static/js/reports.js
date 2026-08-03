@@ -714,7 +714,7 @@ function renderLotTable(rows) {
     const cash = inGroup.length
       ? `<span class="lot-group-money">${money(spent)} spent${left ? ` · ${money(left)} still to spend` : ""}</span>`
       : "";
-    return `<tr class="lot-group-head${inGroup.length ? "" : " is-empty"}"><td colspan="6">
+    return `<tr class="lot-group-head${inGroup.length ? "" : " is-empty"}" data-lot-group="${group.key}"><td colspan="6">
         <span class="lot-group-name">${esc(group.label)}</span>
         <span class="lot-group-note">${note}</span>
         ${cash}

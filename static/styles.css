@@ -1029,6 +1029,11 @@ table.sticky-head thead th {
 /* ---------- forms ---------- */
 label { display: flex; flex-direction: column; gap: 5px; font-size: 12px; font-weight: 600; color: var(--ink-soft); margin-bottom: 12px; }
 label:last-child { margin-bottom: 0; }
+/* A label parked at the end of a .form-row (the "Odometer broken" tick beside
+   Mileage) keeps its bottom margin, because that margin is what lines it up
+   with the box next to it. Needs the element in the selector to out-specify
+   the `label:last-child` rule directly above. */
+label.form-row-btn-end { margin-bottom: 12px; }
 input, select, textarea {
   font-family: inherit; font-size: 13.5px; color: var(--ink); background: var(--surface);
   border: 1px solid var(--line); border-radius: 6px; padding: 8px 11px; outline: none;
@@ -1736,11 +1741,44 @@ dialog::backdrop { background: var(--backdrop); backdrop-filter: blur(3px); }
   transition: background .12s, color .12s;
 }
 .icon-btn:hover { color: var(--ink); background: var(--line-soft); }
-.modal-body { padding: 18px 20px; overflow-y: auto; }
+.modal-body { padding: 18px 20px; overflow-y: auto; counter-reset: form-step; }
 /* Fields sit a step below the dialog surface, so each box reads as a place
    to type instead of an outline floating on the same ground. */
 .modal-body input, .modal-body select, .modal-body textarea { background: var(--paper-raise); }
 .modal-body input:focus, .modal-body select:focus, .modal-body textarea:focus { background: var(--surface); }
+
+/* ---------- write-up forms: numbered steps ----------
+   The intake forms ask fifteen-odd things about a car. As one flat stack of
+   boxes they read as a wall, and there's no way to tell mid-typing how much is
+   left. Grouping them into a few named steps costs nothing at the keyboard --
+   every field stays visible and the tab order is untouched -- and gives the
+   form a shape that can be read at a glance.
+   min-width:0 because a fieldset defaults to min-inline-size:min-content,
+   which stops the .form-row flex children inside from ever shrinking. */
+.form-group { border: 0; padding: 0; margin: 0 0 11px; min-width: 0; }
+.form-group:last-child { margin-bottom: 0; }
+.form-group + .form-group { border-top: 1px solid var(--line-soft); padding-top: 11px; }
+.form-group > legend {
+  display: flex; align-items: center; gap: 8px; width: 100%; padding: 0; margin-bottom: 8px;
+  font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .07em;
+  color: var(--ink-soft);
+}
+/* The number is what makes the form read as "three short things" instead of
+   "one long thing" -- it is the whole point of the grouping. */
+.form-group > legend::before {
+  counter-increment: form-step; content: counter(form-step);
+  display: grid; place-items: center; width: 18px; height: 18px; border-radius: 50%;
+  background: var(--accent-tint); color: var(--accent-strong);
+  font-size: 10.5px; font-weight: 800; letter-spacing: 0; flex-shrink: 0;
+}
+/* The two write-up forms get more room than the stock 560px: at that width the
+   three-across rows (Year / Make / Model) wrapped, which put the model on a
+   line of its own and undid the grouping above it. The extra height is because
+   these are the longest forms in the app and the step headings cost some.
+   Named by id rather than a class on the <dialog> tag, because
+   test_page_assembly pins that tag to a bare `<dialog id="...">`. */
+#recon-dialog, #we-owe-dialog { max-width: 640px; }
+#recon-dialog .modal, #we-owe-dialog .modal { max-height: 92vh; }
 .modal-actions {
   display: flex; justify-content: flex-end; gap: 10px; padding: 14px 20px;
   border-top: 1px solid var(--line); background: var(--paper-raise);

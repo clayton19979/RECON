@@ -1428,22 +1428,60 @@ td.ap-coverage { padding-top: 6px; padding-bottom: 6px; }
 .suggestion-card:hover .suggestion-meta .rm-btn, .suggestion-meta .rm-btn:focus-visible { opacity: 1; }
 .suggestion-meta .rm-btn:hover { color: var(--crit); background: var(--crit-tint); }
 
-/* ---------- dialogs ---------- */
-dialog { border: none; border-radius: 12px; padding: 0; box-shadow: var(--shadow); background: var(--surface); color: var(--ink); max-width: 560px; width: calc(100vw - 40px); }
+/* ---------- dialogs ----------
+   Every dialog carries a colored top bar naming its kind of work: recon
+   steel for the recon write-up, we-owe amber for the promise write-up, the
+   theme accent for everything else, and red for a destructive confirm (that
+   rule lives with the confirm dialog below). Head and footer sit on the
+   raised ground so the scrollable form reads as one sheet between them. */
+dialog {
+  border: none; border-top: 3px solid var(--accent); border-radius: 14px; padding: 0;
+  box-shadow: var(--shadow); background: var(--surface); color: var(--ink);
+  max-width: 560px; width: calc(100vw - 40px);
+}
 /* Each theme block defines --backdrop from its own ground, so light themes
    get a lighter scrim without a per-theme override here. */
-dialog::backdrop { background: var(--backdrop); backdrop-filter: blur(2px); }
+dialog::backdrop { background: var(--backdrop); backdrop-filter: blur(3px); }
+@media (prefers-reduced-motion: no-preference) {
+  dialog[open] { animation: dialog-in .16s cubic-bezier(.2, .9, .35, 1); }
+  dialog[open]::backdrop { animation: backdrop-in .16s ease-out; }
+}
+@keyframes dialog-in { from { opacity: 0; transform: translateY(10px) scale(.985); } }
+@keyframes backdrop-in { from { opacity: 0; } }
 /* The receive dialog shows a line list plus a cost summary; 560px squashes it. */
 #receive-dialog { max-width: 680px; }
 #move-item-dialog { max-width: 620px; }
 .modal { display: flex; flex-direction: column; max-height: 88vh; }
-.modal-head { display: flex; justify-content: space-between; align-items: flex-start; padding: 18px 20px 14px; border-bottom: 1px solid var(--line); }
-.eyebrow { font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--ink-faint); font-weight: 700; margin: 0 0 3px; }
-.modal-head h2 { font-size: 18px; }
-.icon-btn { background: none; border: none; font-size: 22px; line-height: 1; color: var(--ink-faint); cursor: pointer; padding: 0 4px; }
-.icon-btn:hover { color: var(--ink); }
+.modal-head {
+  display: flex; justify-content: space-between; align-items: flex-start;
+  padding: 16px 20px 13px; border-bottom: 1px solid var(--line);
+  background: var(--paper-raise); border-radius: 11px 11px 0 0;
+}
+.eyebrow { font-size: 10.5px; text-transform: uppercase; letter-spacing: .09em; color: var(--accent); font-weight: 700; margin: 0 0 3px; }
+.modal-head h2 { font-size: 19px; }
+.icon-btn {
+  background: none; border: none; font-size: 20px; line-height: 1; color: var(--ink-faint);
+  cursor: pointer; width: 30px; height: 30px; border-radius: 8px; flex-shrink: 0;
+  display: grid; place-items: center; margin: -4px -6px 0 8px;
+  transition: background .12s, color .12s;
+}
+.icon-btn:hover { color: var(--ink); background: var(--line-soft); }
 .modal-body { padding: 18px 20px; overflow-y: auto; }
-.modal-actions { display: flex; justify-content: flex-end; gap: 10px; padding: 14px 20px; border-top: 1px solid var(--line); }
+/* Fields sit a step below the dialog surface, so each box reads as a place
+   to type instead of an outline floating on the same ground. */
+.modal-body input, .modal-body select, .modal-body textarea { background: var(--paper-raise); }
+.modal-body input:focus, .modal-body select:focus, .modal-body textarea:focus { background: var(--surface); }
+.modal-actions {
+  display: flex; justify-content: flex-end; gap: 10px; padding: 14px 20px;
+  border-top: 1px solid var(--line); background: var(--paper-raise);
+  border-radius: 0 0 14px 14px;
+}
+/* The two topbar write-ups carry the same work-type colors as the rest of
+   the app, so which kind of ticket you're writing is visible at a glance. */
+#recon-dialog { border-top-color: var(--recon); }
+#recon-dialog .eyebrow { color: var(--recon); }
+#we-owe-dialog { border-top-color: var(--weowe); }
+#we-owe-dialog .eyebrow { color: var(--weowe); }
 
 /* ---------- address autocomplete ---------- */
 .addr-autocomplete { position: relative; }
@@ -1466,11 +1504,12 @@ dialog::backdrop { background: var(--backdrop); backdrop-filter: blur(2px); }
    destructive the whole dialog gets a red hairline + red eyebrow so it
    never reads as a routine "click OK to continue". */
 #confirm-dialog { max-width: 440px; }
-.confirm-modal .modal-head { padding-bottom: 12px; border-bottom: none; }
+/* One question, so no head/footer bands — just the colored top bar. */
+.confirm-modal .modal-head { padding-bottom: 12px; border-bottom: none; background: none; border-radius: 0; }
 .confirm-modal .modal-body { padding-top: 0; }
-.confirm-modal .modal-actions { border-top: none; padding-top: 4px; }
+.confirm-modal .modal-actions { border-top: none; padding-top: 4px; background: none; }
 .confirm-body { margin: 0; font-size: 13px; line-height: 1.55; color: var(--ink-soft); }
-#confirm-dialog.danger { border-top: 3px solid var(--crit); }
+#confirm-dialog.danger { border-top-color: var(--crit); }
 #confirm-dialog.danger #confirm-eyebrow { color: var(--crit); }
 
 /* ---------- keyboard shortcuts overlay ("?") ----------

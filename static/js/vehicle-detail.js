@@ -2423,11 +2423,23 @@ export function wireVehicleDetail() {
   const concernStrip = $("#vd-concern").closest(".concern-strip");
   if (concernStrip && typeof ResizeObserver === "function") {
     let lastWidth = 0;
+    let pending = 0;
     new ResizeObserver(() => {
       const width = Math.round(concernStrip.getBoundingClientRect().width);
       if (width === lastWidth) return;
       lastWidth = width;
-      sizeConcernBox();
+      // Resized on the next frame, not inside the callback. sizeConcernBox
+      // sets the textarea's height, and changing layout while the browser is
+      // still delivering resize notifications is what produces "ResizeObserver
+      // loop completed with undelivered notifications" -- which the global
+      // error handler then showed the shop as a red "Something went wrong".
+      // Nothing was ever wrong; the measurement just has to happen after the
+      // browser has finished the pass it is in the middle of.
+      if (pending) cancelAnimationFrame(pending);
+      pending = requestAnimationFrame(() => {
+        pending = 0;
+        sizeConcernBox();
+      });
     }).observe(concernStrip);
   }
   // Everything else on this page autosaves; the concern shouldn't silently

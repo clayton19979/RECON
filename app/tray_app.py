@@ -174,7 +174,15 @@ class TrayApp:
         self._responder_thread: threading.Thread | None = None
         self._guard = guard
         self._quitting = False
-        self.window = AppWindow(on_retry=self._retry_from_window, on_closing=self._on_window_closing)
+        # on_quit is the update path's way out. Installing has to stop this
+        # process entirely -- Setup cannot replace a RECON.exe this very
+        # process is holding open -- and closing the window is not enough,
+        # because on the shop PC that hides to the tray by design.
+        self.window = AppWindow(
+            on_retry=self._retry_from_window,
+            on_closing=self._on_window_closing,
+            on_quit=self._quit_for_update,
+        )
 
     def _retry_from_window(self) -> str | None:
         """Offline screen's Retry: returns the URL to navigate to, or None so
@@ -563,6 +571,18 @@ class TrayApp:
             self.icon.stop()
         # Tears down the GUI loop, which releases main() and ends the process.
         self.window.destroy()
+
+    def _quit_for_update(self) -> None:
+        """Stand down so the installer can replace the exe.
+
+        The same shutdown the tray's Exit does, and it has to be that rather
+        than a window close: the point is to release every handle on
+        RECON.exe and free the port, which only a full exit does. Called from a
+        timer thread inside window.Api, so it is deliberately just the ordinary
+        quit path with nothing thread-specific about it.
+        """
+        log.info("Shutting down so the update can install")
+        self.quit_app()
 
     def _on_window_closing(self) -> bool:
         """The X button. On the shop PC this must not stop the server -- every

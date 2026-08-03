@@ -46,6 +46,26 @@ function customerHasContact(c) {
   return Boolean(String(c.phone || "").trim() || String(c.email || "").trim());
 }
 
+/* ---------- rolodex identity ----------
+   Small stroke icons, same 24-box family as the rail's, so the contact
+   column reads phone-vs-email at a glance without reading either. */
+const CUST_PHONE_ICON = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h4l2 5-2.5 1.5a11 11 0 005 5L15 13l5 2v4a2 2 0 01-2 2A16 16 0 013 6a2 2 0 012-2z"/></svg>`;
+const CUST_MAIL_ICON = `<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/></svg>`;
+const CUST_PIN_ICON = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s-7-6.1-7-11a7 7 0 0114 0c0 4.9-7 11-7 11z"/><circle cx="12" cy="10" r="2.6"/></svg>`;
+
+// Two initials in a tinted disc, so a row can be spotted by shape and color
+// before the name is read. The color is a stable hash of the name -- a
+// customer keeps theirs across visits -- and the four pairs are theme tokens,
+// so every theme recolors them to its own palette.
+function custAvatarHtml(name) {
+  const words = String(name || "").trim().split(/\s+/).filter(Boolean);
+  const initials = ((words[0]?.[0] || "") + (words.length > 1 ? words[words.length - 1][0] : words[0]?.[1] || ""))
+    .toUpperCase() || "?";
+  let hash = 0;
+  for (const ch of String(name || "")) hash = (hash * 31 + ch.charCodeAt(0)) % 997;
+  return `<span class="cust-avatar cust-avatar-${hash % 4}" aria-hidden="true">${esc(initials)}</span>`;
+}
+
 // One reading of "the shop still owes this person work", used by the column,
 // the stat card and the card's filter so the three can never disagree about
 // who is on the hook list. Archived promises are already excluded server-side.
@@ -144,14 +164,18 @@ function fmtCalendarDay(value) {
 function customerRowHtml(c, open) {
   const phone = fmtPhone(c.phone);
   const email = String(c.email || "").trim();
+  // Phone above email, and louder: this list is opened mid-phone-call, and
+  // the number is the thing an advisor actually reaches for. A customer with
+  // no way to reach them at all gets said out loud, in the same warn tone as
+  // the Missing Contact card that counts them.
   const contact = [
-    phone ? `<div>${esc(phone)}</div>` : "",
-    email ? `<div class="cust-sub">${esc(email)}</div>` : "",
-  ].join("") || '<span class="muted-dash">—</span>';
+    phone ? `<div class="cust-phone">${CUST_PHONE_ICON}${esc(phone)}</div>` : "",
+    email ? `<div class="cust-email">${CUST_MAIL_ICON}<span>${esc(email)}</span></div>` : "",
+  ].join("") || '<span class="cust-no-contact">no contact info</span>';
   const place = [c.city, c.state].map((s) => String(s || "").trim()).filter(Boolean).join(", ");
   const since = c.created_at ? String(new Date(c.created_at).getFullYear()) : "";
   const ros = c.order_count
-    ? `${c.order_count}${c.open_orders ? ` <span class="cust-open-badge">· ${c.open_orders} open</span>` : ""}`
+    ? `${c.order_count}${c.open_orders ? ` <span class="cust-open-badge">${c.open_orders} open</span>` : ""}`
     : '<span class="muted-dash">—</span>';
   // The We-Owe cell reads "how many promises are still owed", not "how many
   // were ever made" -- a settled promise is not something anyone needs to
@@ -164,7 +188,7 @@ function customerRowHtml(c, open) {
     : (c.we_owe_count ? `<span class="cust-sub">${c.we_owe_count} settled</span>` : '<span class="muted-dash">—</span>');
   return `
     <tr class="clickable${open ? " cust-open" : ""}" data-id="${c.id}" aria-expanded="${open}">
-      <td><strong>${esc(c.name)}</strong>${since ? `<div class="cust-sub">customer since ${since}</div>` : ""}</td>
+      <td><div class="cust-ident">${custAvatarHtml(c.name)}<div class="cust-ident-name"><strong>${esc(c.name)}</strong>${since ? `<div class="cust-sub">customer since ${since}</div>` : ""}</div></div></td>
       <td>${contact}</td>
       <td>${place ? esc(place) : '<span class="muted-dash">—</span>'}</td>
       <td class="num-col">${c.vehicle_count || '<span class="muted-dash">—</span>'}</td>
@@ -220,9 +244,9 @@ function customerExpandRowHtml(c) {
     const phone = fmtPhone(detail.phone);
     const email = String(detail.email || "").trim();
     const contact = [
-      phone ? `<a href="tel:${esc(phoneDigits(detail.phone))}">${esc(phone)}</a>` : "",
-      email ? `<a href="mailto:${esc(email)}">${esc(email)}</a>` : "",
-      ...addr.map((line) => `<span>${esc(line)}</span>`),
+      phone ? `<a class="cust-line" href="tel:${esc(phoneDigits(detail.phone))}">${CUST_PHONE_ICON}${esc(phone)}</a>` : "",
+      email ? `<a class="cust-line" href="mailto:${esc(email)}">${CUST_MAIL_ICON}<span>${esc(email)}</span></a>` : "",
+      addr.length ? `<span class="cust-line cust-line-addr">${CUST_PIN_ICON}<span>${addr.map((line) => esc(line)).join("<br>")}</span></span>` : "",
     ].filter(Boolean).join("");
     const vehicles = detail.vehicles.length ? detail.vehicles.map((v) => {
       const name = [v.year, v.make, v.model].filter(Boolean).join(" ");
@@ -254,10 +278,13 @@ function customerExpandRowHtml(c) {
     body = `
       <div class="cust-expand-grid">
         <div class="cust-contact-block">
+          <p class="section-eyebrow">Contact</p>
           ${contact || '<span class="cust-sub">No contact info on file.</span>'}
           <button type="button" class="btn btn-ghost btn-sm cust-edit" data-id="${c.id}">Edit Customer</button>
         </div>
-        <div class="cust-vehicles">${vehicles}
+        <div class="cust-vehicles">
+          <p class="section-eyebrow">Vehicles &amp; Tickets</p>
+          ${vehicles}
           <div><button type="button" class="btn btn-ghost btn-sm cust-add-vehicle" data-id="${c.id}" title="Put another of this customer's vehicles on file">+ Add Vehicle</button></div>
         </div>
       </div>`;

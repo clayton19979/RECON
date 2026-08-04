@@ -94,6 +94,28 @@ def idle_days(last_activity_at: str) -> int:
     return age_days(last_activity_at)
 
 
+def days_on_lot(arrived_at: str | None, archived_at: str | None) -> int | None:
+    """How long a car was here start to finish -- the day it arrived to the day
+    it was filed to History.
+
+    Deliberately only answerable once the car has gone. While it is still on
+    the lot the clock is running and age_days is the honest number; a stay
+    printed against a car that is on day four of who knows how many would read
+    as a finished result and isn't one.
+
+    None whenever either end is missing or unreadable -- History shows that as
+    a dash rather than as a car that came and went the same day. Floors at 0
+    for the same reason lot_age_days does: a typed arrival date later than the
+    archive stamp is a typo, and a negative stay is a number the app can't
+    stand behind.
+    """
+    arrived = parse_stamp(arrived_at)
+    left = parse_stamp(archived_at)
+    if arrived is None or left is None:
+        return None
+    return max(0, (left - arrived).days)
+
+
 # Anything this or newer counts as stalled. Named here rather than written as a
 # 7 at each call site because the board's card, the board's row colouring and
 # the API all have to agree about which cars are stalled -- and it's the same
@@ -1225,6 +1247,12 @@ def vehicle_board_rows(
                     # lot since June 27" is worth acting on.
                     "acquired_at": row["acquisition_date"] or "",
                     "age_days": lot_age_days(row["acquisition_date"], row["created_at"]),
+                    # The day the car left. Empty on everything still on the
+                    # lot; History is the only screen where it is set, and it
+                    # is the one fact that screen exists to record -- see
+                    # days_on_lot.
+                    "archived_at": row["archived_at"] or "",
+                    "days_on_lot": days_on_lot(row["acquisition_date"] or row["created_at"], row["archived_at"]),
                     "last_activity_at": activity_at,
                     "idle_days": idle_days(activity_at),
                 }
@@ -1324,6 +1352,10 @@ def vehicle_board_rows(
                     # created_at already is. The car itself was sold weeks ago.
                     "acquired_at": "",
                     "age_days": age_days(row["created_at"]),
+                    # Same as recon above, counted from the day the promise was
+                    # made -- that is when this side's clock starts.
+                    "archived_at": row["archived_at"] or "",
+                    "days_on_lot": days_on_lot(row["created_at"], row["archived_at"]),
                     "last_activity_at": activity_at,
                     "idle_days": idle_days(activity_at),
                 }

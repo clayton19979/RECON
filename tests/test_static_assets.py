@@ -691,17 +691,36 @@ def test_bare_dates_are_never_formatted_as_timestamps(js: str) -> None:
 def test_idle_column_is_wired_end_to_end(js: str, html: str) -> None:
     """The Idle column is a header, a sort comparator and a cell renderer that
     have to agree, and it must read idle_days rather than age_days -- they're
-    different questions and the two columns sit next to each other."""
+    different questions and the two columns sit next to each other.
+
+    The one exception is History, where the same column shows the day the car
+    left instead: an idle clock on a car that has been filed away only counts
+    up forever, and archiving bumps it, so a car sold in the spring read
+    "Active today". So the comparator is asserted in both readings -- idle_days
+    on the live board, the archive stamp in History -- because a column headed
+    "Left" that sorted by idle days would be sorting by a number nobody can
+    see on the screen.
+    """
     header = re.search(r'<th[^>]*data-sort-key="idle"[^>]*>', html)
     assert header, "the board has no Idle column header"
     assert "sortable" in header.group(0), "the Idle column isn't sortable"
-    assert re.search(r"idle:\s*\{[^}]*value:\s*\(v\)\s*=>\s*v\.idle_days", js), (
-        "the Idle sort comparator doesn't read idle_days"
+    comparator = re.search(r"^\s*idle: \{.*$", js, re.MULTILINE)
+    assert comparator, "the Idle sort comparator is gone"
+    assert "v.idle_days" in comparator.group(0), "the Idle sort comparator doesn't read idle_days"
+    assert "historyLeftKey(v)" in comparator.group(0), (
+        "the Idle comparator doesn't sort History by the day the car left"
     )
+    assert "archived_at" in _function_source(js, "historyLeftKey"), "History's Left sort doesn't read the archive stamp"
     assert "idleCellHtml(v)" in _function_source(js, "vehicleRowHtml"), "the Idle cell isn't rendered"
     assert "v.idle_days" in _function_source(js, "idleCellHtml"), "the Idle cell doesn't read idle_days"
+    assert "leftCellHtml(v" in _function_source(js, "idleCellHtml"), (
+        "the Idle cell doesn't hand History over to the Left cell"
+    )
     assert "idle_days" in _function_source(js, "vehicleRowSignature"), (
         "idle_days isn't in the row signature, so a row whose idle time changed won't re-render"
+    )
+    assert "archived_at" in _function_source(js, "vehicleRowSignature"), (
+        "archived_at isn't in the row signature, so a row won't repaint when History changes what it says"
     )
 
 

@@ -31,7 +31,9 @@ def test_resize_observer_notices_are_not_shown_as_faults():
 def test_the_filter_runs_before_anything_is_shown_or_logged():
     """Returning after the toast, or after console.error, would leave the noise
     on screen or in the log it was meant to stay out of."""
-    report = re.search(r"const report = \((.*?)\n  \};", BOUNDARY, re.DOTALL).group(1)
+    match = re.search(r"const report = \((.*?)\n  \};", BOUNDARY, re.DOTALL)
+    assert match, "the report helper is gone"
+    report = match.group(1)
     guard = report.index("BENIGN_ERRORS.some")
     assert guard < report.index("console.error"), "the notice is logged before being filtered"
     assert guard < report.index("toast("), "the notice is toasted before being filtered"

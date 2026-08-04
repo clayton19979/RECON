@@ -21,9 +21,11 @@ import json
 import socket
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
+from collections import deque
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -67,6 +69,35 @@ def wait_for_health(base: str, proc: subprocess.Popen, timeout: float = 45.0) ->
     return False
 
 
+def drain(proc: subprocess.Popen, echo: bool = False) -> deque[str]:
+    """Keep reading the server's output so the pipe can never fill up.
+
+    The server's stdout is a pipe to this script, and a pipe nobody reads has
+    a small OS buffer -- a few KB. Uvicorn logs a line per request, so a server
+    left up with --keep wedged solid after a minute of real use: the buffer
+    filled, uvicorn's next log line blocked, and every request from then on
+    hung with it. The freeze looked exactly like an app bug, on the one tool
+    meant to prove the app works.
+
+    A daemon thread reads lines forever and keeps the recent ones, so startup
+    failures can still be shown. With echo the lines also stream through to
+    this script's own stdout, which is what --keep wants -- the person driving
+    the app sees requests land, same as running uvicorn by hand.
+    """
+    tail: deque[str] = deque(maxlen=200)
+
+    def pump() -> None:
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            tail.append(line)
+            if echo:
+                sys.stdout.write(line)
+                sys.stdout.flush()
+
+    threading.Thread(target=pump, daemon=True).start()
+    return tail
+
+
 def probe(base: str, path: str) -> tuple[bool, str]:
     try:
         with urllib.request.urlopen(f"{base}{path}", timeout=15) as r:
@@ -104,12 +135,16 @@ def main() -> int:
         errors="replace",
     )
 
+    server_output = drain(proc, echo=keep)
+
     try:
         if not wait_for_health(base, proc):
             print(f"FAIL  server never became healthy on {base}")
-            if proc.poll() is not None and proc.stdout:
-                print("\n--- server output ---")
-                print(proc.stdout.read().rstrip())
+            if proc.poll() is not None:
+                time.sleep(0.5)  # let the reader thread finish draining a dead process
+                if server_output:
+                    print("\n--- server output ---")
+                    print("".join(server_output).rstrip())
             return 1
 
         failed = 0

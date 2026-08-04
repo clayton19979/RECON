@@ -374,6 +374,17 @@ ok(/Written up 3 days ago/.test(ageCell("recon:2").title), `got "${ageCell("reco
 ok(/^Promised 41 days ago$/.test(ageCell("we_owe:5").title),
    `a we-owe's Age tooltip should talk about the promise, got "${ageCell("we_owe:5").title}"`);
 
+// Day zero can't take the "N days ago" shape: a promise made this morning was
+// reading "Promised today ago", and a same-day write-up "Written up today ago".
+w.state.vehicles = board.map((v) => ({ ...v, age_days: 0 }));
+w.renderVehiclesTable();
+ok(ageCell("we_owe:5").title === "Promised today",
+   `a promise made this morning reads "${ageCell("we_owe:5").title}", expected "Promised today"`);
+ok(ageCell("recon:2").title === "Written up today — no arrival date on file",
+   `a car written up this morning reads "${ageCell("recon:2").title}"`);
+w.state.vehicles = board;
+w.renderVehiclesTable();
+
 /* ---------- Idle column ----------
    Idle is "days since anything happened on this car's ticket", which is a
    different number from Age and comes from a different place (the server's

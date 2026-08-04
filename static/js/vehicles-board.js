@@ -540,11 +540,13 @@ function ageCellHtml(v) {
   if (v.age_days == null) return `<span class="age-cell" title="No date on file">—</span>`;
   const days = v.age_days;
   const span = days === 0 ? "today" : `${days} day${days === 1 ? "" : "s"}`;
+  // "today", not "today ago" -- a promise made this morning read "Promised today ago"
+  const since = days === 0 ? "today" : `${span} ago`;
   const title = v.acquired_at
     ? `On the lot since ${v.acquired_at} — ${span}`
     : v.segment === "we_owe"
-      ? `Promised ${span} ago`
-      : `Written up ${span} ago — no arrival date on file`;
+      ? `Promised ${since}`
+      : `Written up ${since} — no arrival date on file`;
   return `<span class="age-cell" title="${esc(title)}">${days}d</span>`;
 }
 

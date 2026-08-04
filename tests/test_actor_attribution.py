@@ -56,9 +56,7 @@ def test_the_name_on_the_request_is_the_name_in_the_log(client) -> None:
 
     assert actors_for(client, order_id, "order_created") == [WORKER]
 
-    job = client.post(
-        f"/api/orders/{order_id}/jobs", json={"title": "Front brakes", "actor": WORKER}
-    ).json()
+    job = client.post(f"/api/orders/{order_id}/jobs", json={"title": "Front brakes", "actor": WORKER}).json()
     assert actors_for(client, order_id, "job_created") == [WORKER]
 
     client.patch(f"/api/orders/{order_id}/jobs/{job['id']}/done", json={"done": True, "actor": WORKER})
@@ -106,10 +104,13 @@ def test_an_empty_actor_is_refused_rather_than_stored(client) -> None:
     # Omitted entirely is fine, and so is a real name.
     assert client.post(f"/api/orders/{order_id}/estimate", json=body).status_code == 200
     fresh = client.get(f"/api/orders/{order_id}").json()["estimate"]["edit_version"]
-    assert client.post(
-        f"/api/orders/{order_id}/estimate",
-        json={**body, "expected_version": fresh, "actor": WORKER},
-    ).status_code == 200
+    assert (
+        client.post(
+            f"/api/orders/{order_id}/estimate",
+            json={**body, "expected_version": fresh, "actor": WORKER},
+        ).status_code
+        == 200
+    )
 
 
 @pytest.mark.parametrize("actor", ["", "   "])

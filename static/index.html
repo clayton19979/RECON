@@ -416,6 +416,24 @@
               </div>
             </div>
 
+            <!-- The follow-ups somebody left on this car.
+                 Tasks were a one-way street: the + Task button above files one
+                 onto the Tasks screen, and the car's own page never mentioned
+                 it again. So the note Clayton left for Antonio about this exact
+                 car was invisible on the one screen Antonio opens to work on
+                 it. Hidden entirely when there are none, so a car nobody has
+                 left anything on looks exactly as it always did. -->
+            <div class="card" id="vd-tasks-card" style="display:none">
+              <div class="card-head">
+                <div>
+                  <p class="section-eyebrow">Follow-ups</p>
+                  <h3 class="section-title" id="vd-tasks-title">Follow-ups</h3>
+                </div>
+                <button class="btn btn-ghost btn-sm" id="vd-tasks-open">Open Tasks</button>
+              </div>
+              <div id="vd-tasks-list" class="mini-list"></div>
+            </div>
+
             <div id="vd-order-content" style="display:none">
               <!-- The ticket's subject line, not a card. What a repair order is
                    for is one sentence that gets typed once and read for weeks,

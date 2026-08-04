@@ -54,6 +54,26 @@ const reconPatchBodies = []; // ...and what the Edit Vehicle dialog saved
 const assignmentPuts = [];
 let assignmentStale = false;
 
+/* The shop's shared follow-ups. Two on this car (one of them past its due
+   date), one on a different car, so the page has to filter rather than print
+   whatever the queue happens to contain. */
+const taskPatches = [];
+let openTasks = [
+  { id: 11, title: "Check the trunk struts", notes: "Walt asked", assigned_to: ["Dana Ruiz"],
+    due_date: new Date(NOW - 3 * 86400000).toISOString().slice(0, 10), urgent: 0, done: 0,
+    order_id: 42, recon_vehicle_id: 7, we_owe_id: null, order_vehicle_id: 71, created_by: "Clay",
+    created_at: daysAgo(4), completed_at: "", order_label: "R-0997", order_state: "" },
+  { id: 12, title: "Call Walt about the second key", notes: "", assigned_to: [], due_date: "", urgent: 1, done: 0,
+    order_id: null, recon_vehicle_id: 7, we_owe_id: null, order_vehicle_id: null, created_by: "Clay",
+    created_at: daysAgo(1), completed_at: "", order_label: "R-0997", order_state: "" },
+  { id: 13, title: "Somebody else's car", notes: "", assigned_to: [], due_date: "", urgent: 0, done: 0,
+    order_id: null, recon_vehicle_id: 99, we_owe_id: null, order_vehicle_id: null, created_by: "Clay",
+    created_at: daysAgo(1), completed_at: "", order_label: "R-0000", order_state: "" },
+  { id: 14, title: "Already handled", notes: "", assigned_to: [], due_date: "", urgent: 0, done: 1,
+    order_id: null, recon_vehicle_id: 7, we_owe_id: null, order_vehicle_id: null, created_by: "Clay",
+    created_at: daysAgo(6), completed_at: daysAgo(5), order_label: "R-0997", order_state: "" },
+];
+
 const { w, doc, fetchLog, settle, ok, finish, rejections } = await boot({
   expose: ["state", "openVehicleDetail", "renderLastWorked", "activityLabel", "ACTIVITY_LABEL",
            "STALLED_AFTER_DAYS", "loadTasksView"],
@@ -82,7 +102,8 @@ const { w, doc, fetchLog, settle, ok, finish, rejections } = await boot({
     // an empty dropdown -- and a "+ Task" that doesn't preselect this car --
     // looks like.
     if (url === "/api/tasks/linkable-orders") {
-      return [{ id: 42, segment: "recon", group: "Recon", label: "R-0981 — 2019 Ford Edge" }];
+      return [{ value: "order:42", id: 42, order_id: 42, recon_vehicle_id: 7, we_owe_id: null,
+                segment: "recon", group: "Recon", label: "R-0981 — 2019 Ford Edge" }];
     }
     if (url === "/api/orders/42/assignment" && opts.method === "PUT") {
       assignmentPuts.push(JSON.parse(opts.body));
@@ -98,6 +119,12 @@ const { w, doc, fetchLog, settle, ok, finish, rejections } = await boot({
         { id: 1, name: "Dana Ruiz", role: "technician", active: 1 },
         { id: 9, name: "Pat Nolan", role: "advisor", active: 1 },
       ];
+    }
+    if (url === "/api/tasks") return openTasks;
+    if (url.startsWith("/api/tasks/") && opts.method === "PATCH") {
+      taskPatches.push({ url, body: JSON.parse(opts.body) });
+      openTasks = openTasks.filter((t) => !url.endsWith(`/${t.id}`));
+      return {};
     }
     if (url.startsWith("/api/tasks")) return [];
     return [];
@@ -131,6 +158,34 @@ ok(/^Record updated/.test(updated.textContent.trim()),
 ok(worked.compareDocumentPosition(updated) & w.Node.DOCUMENT_POSITION_FOLLOWING,
    "the record-updated line comes first, burying the fact the board sent you here with");
 
+/* ---------- the follow-ups somebody left on this car ----------
+   Tasks were a one-way street: + Task files one onto the Tasks screen and the
+   car's own page never mentioned it again, so a note left for the other
+   advisor was invisible on the one screen he opens to work on that car. */
+const tasksCard = doc.querySelector("#vd-tasks-card");
+ok(tasksCard && tasksCard.style.display !== "none", "the car's follow-ups aren't shown on its page");
+const taskRows = [...doc.querySelectorAll("#vd-tasks-list .vd-task")];
+ok(taskRows.length === 2, `expected this car's 2 open follow-ups, got ${taskRows.length}`);
+ok(taskRows.map((r) => r.dataset.id).join(",") === "11,12",
+   `follow-ups on screen are ${taskRows.map((r) => r.dataset.id).join(",")} -- another car's, or a finished one, leaked in`);
+ok(/Check the trunk struts/.test(taskRows[0].textContent), "the follow-up's own words aren't on screen");
+ok(/Dana Ruiz/.test(taskRows[0].textContent), "the follow-up doesn't say who it's for");
+ok(/nobody yet/.test(taskRows[1].textContent), "a follow-up nobody has picked up doesn't say so");
+// Past its date is the thing worth catching on the way past, so it is said on
+// the row and again on the card's heading.
+ok(taskRows[0].querySelector(".vd-task-due.overdue"), "a follow-up past its due date isn't flagged");
+ok(/1 PAST DUE/.test(doc.querySelector("#vd-tasks-card .section-eyebrow").textContent),
+   `card heading reads "${doc.querySelector("#vd-tasks-card .section-eyebrow").textContent}"`);
+ok(/2 follow-ups/.test(doc.querySelector("#vd-tasks-title").textContent),
+   `card title reads "${doc.querySelector("#vd-tasks-title").textContent}"`);
+// Ticking one off happens here, not on another screen.
+taskRows[0].querySelector(".vd-task-done").click();
+await settle();
+ok(taskPatches.some((c) => c.url === "/api/tasks/11" && c.body.done === true),
+   "Done on a follow-up didn't mark it done");
+ok([...doc.querySelectorAll("#vd-tasks-list .vd-task")].length === 1,
+   "a ticked-off follow-up is still on the car's page");
+
 /* ---------- stalled tone and the nudge ---------- */
 ok(worked.classList.contains("stalled"), "a car untouched for 9 days isn't flagged as stalled");
 const nudge = doc.querySelector("#vd-worked-nudge");
@@ -142,7 +197,7 @@ ok(nudge && /Stalled 9 days/.test(nudge.textContent), `nudge reads "${nudge && n
 nudge.click();
 await settle();
 ok(doc.querySelector("#view-tasks").classList.contains("active"), "the nudge didn't navigate to Tasks");
-ok(doc.querySelector("#task-order-input").value === "42",
+ok(doc.querySelector("#task-order-input").value === "order:42",
    `the vehicle's ticket wasn't pre-selected (got "${doc.querySelector("#task-order-input").value}")`);
 const titleInput = doc.querySelector("#task-title-input");
 ok(/R-0997 — 2018 Honda Accord — no work in 9 days/.test(titleInput.value),

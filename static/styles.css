@@ -1439,6 +1439,29 @@ textarea { min-height: 70px; resize: vertical; font-family: inherit; }
 .mini-item .mi-title { display: flex; align-items: center; gap: 7px; justify-content: space-between; font-weight: 600; }
 .mini-item .mi-concern { color: var(--ink-soft); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+/* ---------- follow-ups, on the car they're about ----------
+   The same shared to-do rows the Tasks screen shows, rendered on the vehicle
+   page so a note left for the other advisor is visible on the one screen he
+   opens to work on that car. Built on the mini-list shell above so it reads
+   as part of the page rather than as the Tasks screen bolted on.
+
+   The due chip is deliberately NOT .task-due: that one is a button that opens
+   a date editor, and its pointer cursor would promise an edit this card does
+   not offer. Same three colours, no affordance. */
+.vd-task-due {
+  padding: 2px 9px; border-radius: 999px; background: var(--line-soft);
+  color: var(--ink-soft); font-weight: 700; font-size: 11px; white-space: nowrap;
+}
+.vd-task-due.overdue { background: var(--crit-tint); color: var(--crit); }
+.vd-task-due.soon { background: var(--warn-tint); color: var(--warn); }
+.vd-task-urgent {
+  padding: 2px 8px; margin-right: 7px; border-radius: 999px; background: var(--crit-tint);
+  color: var(--crit); font-weight: 800; font-size: 10px; letter-spacing: .05em; text-transform: uppercase;
+}
+/* A card heading that has turned into a warning -- the eyebrow reads
+   "3 PAST DUE" instead of "FOLLOW-UPS", and has to look like it means it. */
+.eyebrow-warn { color: var(--crit); }
+
 /* ---------- a vehicle's notes ----------
    The note is the content; who wrote it and whether the customer may be shown
    it are footnotes to it. So the text leads at reading size and the rest goes

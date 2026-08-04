@@ -396,7 +396,7 @@ export function wireVehiclesView() {
       if (!(await confirmAction({
         eyebrow: "TASKS",
         title: `Create ${plural}?`,
-        body: `One per selected vehicle, linked to its ticket. The first will read “${preview}”.`,
+        body: `One per selected vehicle, linked to that car. The first will read “${preview}”.`,
         confirmLabel: `Create ${plural}`,
       }))) return;
       /* One request, not N. The old version fanned out a POST per vehicle and
@@ -408,7 +408,17 @@ export function wireVehiclesView() {
       let created;
       try {
         const result = await post("/api/tasks/bulk-create", {
-          items: targets.map((v) => ({ title: bulkTaskTitle(v), order_id: v.order_id || null })),
+          /* The car, not just the ticket. A car with no ticket written is the
+             most common reason to want a follow-up on this screen -- it is
+             what "untouched 41 days" means -- and those rows used to arrive in
+             the queue linked to nothing at all, so the one thing the task was
+             about was only in its title. */
+          items: targets.map((v) => ({
+            title: bulkTaskTitle(v),
+            order_id: v.order_id || null,
+            recon_vehicle_id: v.segment === "recon" ? v.recon_id : null,
+            we_owe_id: v.segment === "we_owe" ? v.we_owe_id : null,
+          })),
           actor: currentActor(),
         });
         created = result.created ?? targets.length;

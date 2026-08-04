@@ -10,14 +10,16 @@ import { isStalled } from "./vehicles-board.js";
 import { openMoveSegmentDialog } from "./move-ticket.js";
 import { openReceiveDialog } from "./dialog-receive-parts.js";
 import { openAddVehicleDialog, openCustomerEditor } from "./customers.js";
-import { loadTasksView } from "./task-bulk.js";
+import { loadTasksView, taskLinkFields } from "./task-bulk.js";
+import { taskDueInfo } from "./tasks.js";
+import { assigneeSummaryLabel } from "./multi-picker.js";
 import { copyText } from "./clipboard.js";
 
 /* ==================================================================
    VEHICLE DETAIL
    ================================================================== */
 export async function openVehicleDetail(segment, id) {
-  state.detail = { segment, id, item: null, order: null };
+  state.detail = { segment, id, item: null, order: null, tasks: [] };
   await loadVehicleDetail();
 }
 // showView only knows named views wired to the rail; vehicle-detail is entered directly.
@@ -53,6 +55,17 @@ export async function loadVehicleDetail() {
   }
   state.detail.item = item;
   state.detail.ordersHistory = orders;
+  /* The whole task queue, filtered to this car in the browser. It is a short
+     list -- the shop's open follow-ups, not its history -- and fetching it
+     whole means the card and the Tasks screen can never disagree about what
+     an open follow-up is. A failure here must not take the page down with it:
+     the follow-ups are worth showing, they are not worth losing the ticket
+     over, so the card simply stays empty. */
+  try {
+    state.detail.tasks = await get("/api/tasks");
+  } catch {
+    state.detail.tasks = [];
+  }
   // A vehicle can have more than one RO over its life (recon prep now, a
   // warranty comeback later); the advisor picking an older one from Order
   // History must survive every other action on this page re-loading the
@@ -71,6 +84,7 @@ export async function loadVehicleDetail() {
   enterVehicleDetailView();
   renderDetailHead();
   renderOrderHistory(orders, active ? active.id : null);
+  renderVehicleTasks();
   // Deleting a vehicle with real order history would silently orphan its
   // cost data -- only offer it while there's nothing to lose yet. Retail
   // vehicles are never deletable from here at all: they're the customer's
@@ -79,7 +93,11 @@ export async function loadVehicleDetail() {
   if (!active) {
     $("#vd-void-order").style.display = "none";
     $("#vd-print-ticket").style.display = "none";
-    $("#vd-add-task").style.display = "none";
+    // + Task survives a car with no ticket now: a follow-up can name the car
+    // itself, and a car nobody has written up is the most common thing to
+    // want to leave a note about. Retail is the exception -- a customer's own
+    // car has no lot record, so there is nothing to hang the note on.
+    $("#vd-add-task").style.display = segment === "retail" ? "none" : "";
     // The order-scoped header chrome is otherwise only reset by the wrapped
     // renderStatusCard, which never runs on this branch -- navigating from a
     // ticketed vehicle to one with no RO left the previous car's status
@@ -131,6 +149,60 @@ function renderOrderHistory(orders, activeId) {
   `).join("");
   $$(".mini-item.clickable", $("#vd-order-history")).forEach((row) => {
     row.addEventListener("click", () => selectOrder(Number(row.dataset.id)));
+  });
+}
+
+/* The card that puts the shop's shared to-do list on the car it's about.
+
+   Open follow-ups only. A ticked-off one is history, and this card's whole
+   claim is "here is what is still owed on this car" -- padding it with last
+   month's finished notes is how a panel stops being read. The list arrives
+   already ordered by the API (urgent first, then soonest due), so it is
+   rendered in the order it came in rather than sorted a second time here and
+   risking a different answer from the Tasks screen's. */
+function renderVehicleTasks() {
+  const open = tasksForThisVehicle().filter((t) => !t.done);
+  const card = $("#vd-tasks-card");
+  if (!open.length) {
+    card.style.display = "none";
+    $("#vd-tasks-list").innerHTML = "";
+    return;
+  }
+  card.style.display = "";
+  const overdue = open.filter((t) => (taskDueInfo(t.due_date)?.days ?? 0) < 0).length;
+  $("#vd-tasks-title").textContent = open.length === 1 ? "1 follow-up" : `${open.length} follow-ups`;
+  const head = $("#vd-tasks-card .section-eyebrow");
+  head.textContent = overdue ? `${overdue} PAST DUE` : "FOLLOW-UPS";
+  head.classList.toggle("eyebrow-warn", !!overdue);
+  $("#vd-tasks-list").innerHTML = open.map((t) => {
+    const due = taskDueInfo(t.due_date);
+    const who = (t.assigned_to || []).length ? esc(assigneeSummaryLabel(t.assigned_to)) : "nobody yet";
+    const meta = [
+      who,
+      due ? `<span class="vd-task-due ${due.cls}">Due ${esc(due.label)}</span>` : "",
+      `by ${esc(t.created_by || "Unspecified")} · ${relativeTime(t.created_at)}`,
+    ].filter(Boolean).join(" · ");
+    return `
+      <div class="mini-item vd-task" data-id="${t.id}">
+        <div class="mi-title">
+          <span>${t.urgent ? '<span class="vd-task-urgent">Urgent</span>' : ""}${esc(t.title)}</span>
+          <button type="button" class="btn btn-ghost btn-xs vd-task-done" title="Mark done" aria-label="Mark ${esc(t.title)} done">Done</button>
+        </div>
+        <div class="mi-meta">${meta}</div>
+        ${t.notes ? `<div class="mi-concern">${esc(t.notes)}</div>` : ""}
+      </div>`;
+  }).join("");
+  $$(".vd-task-done", $("#vd-tasks-list")).forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const id = btn.closest(".vd-task").dataset.id;
+      try {
+        await patch(`/api/tasks/${id}`, { done: true });
+        toast("Follow-up marked done");
+        await loadVehicleDetail();
+      } catch (err) {
+        toast(err.message, true);
+      }
+    });
   });
 }
 
@@ -191,7 +263,32 @@ function renderLastWorked() {
   }
 }
 
-/* Jumps to Tasks with this vehicle's ticket pre-selected in the link
+/* Which entry in the Tasks screen's vehicle picker means the car on screen.
+
+   The picker offers cars with a live ticket as "order:<id>" and cars with none
+   as "recon:<id>" / "we_owe:<id>", so this asks for the ticket first and falls
+   back to the car itself -- which is what makes + Task work at all on a car
+   nobody has written up yet. */
+function detailPickerValue() {
+  const { segment, id, order } = state.detail;
+  if (order) return `order:${order.id}`;
+  return segment === "recon" || segment === "we_owe" ? `${segment}:${id}` : "";
+}
+
+/* The follow-ups left on this car, out of the whole queue.
+
+   Matched on the task's own car columns rather than on its ticket, so a note
+   left on a car with no repair order still lands on that car's page. Retail
+   pages have no lot record, so they match through the ticket's vehicle. */
+function tasksForThisVehicle() {
+  const { segment, id } = state.detail;
+  const all = state.detail.tasks || [];
+  if (segment === "recon") return all.filter((t) => t.recon_vehicle_id === id);
+  if (segment === "we_owe") return all.filter((t) => t.we_owe_id === id);
+  return all.filter((t) => t.order_vehicle_id === id);
+}
+
+/* Jumps to Tasks with this vehicle pre-selected in the link
    dropdown, rather than making the advisor reopen the picker and hunt for the
    RO they were just looking at.
 
@@ -206,11 +303,11 @@ function renderLastWorked() {
    auto-generated "follow up" rows, and the assignee and due date are the
    parts that make a task worth having. */
 async function addTaskForThisVehicle({ prefill = "" } = {}) {
-  const order = state.detail.order;
+  const wanted = detailPickerValue();
   showView("tasks");
   await loadTasksView();
-  if (order && $$("#task-order-input option").some((o) => o.value === String(order.id))) {
-    $("#task-order-input").value = String(order.id);
+  if (wanted && $$("#task-order-input option").some((o) => o.value === wanted)) {
+    $("#task-order-input").value = wanted;
   }
   const title = $("#task-title-input");
   if (prefill && !title.value) title.value = prefill;
@@ -2465,6 +2562,9 @@ export function wireVehicleDetail() {
   });
 
   $("#vd-add-task").addEventListener("click", () => addTaskForThisVehicle());
+  // Same jump as + Task, minus the empty title box: this one is for going to
+  // look at the queue, not to add to it.
+  $("#vd-tasks-open").addEventListener("click", () => addTaskForThisVehicle());
 
   $("#vd-archive-vehicle").addEventListener("click", async () => {
     const { segment, id, item } = state.detail;

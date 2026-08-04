@@ -219,9 +219,28 @@ export function taskOrderOptionsHtml(orders, placeholder) {
       group = o.group;
       html += `<optgroup label="${esc(group || "Other")}">`;
     }
-    html += `<option value="${o.id}">${esc(o.label)}</option>`;
+    html += `<option value="${esc(o.value)}">${esc(o.label)}</option>`;
   }
   return group === null ? html : `${html}</optgroup>`;
+}
+
+/* What to send for a picked option.
+
+   The option value is "order:8" / "recon:4" / "we_owe:2" rather than a bare
+   number, because a follow-up can now name a car that has no ticket on it and
+   an id alone can't say which of the two it means. Looked up in the list the
+   server sent rather than parsed here, so the browser never invents a link the
+   server didn't offer. */
+export function taskLinkFields(value) {
+  const CLEARED = { order_id: -1, recon_vehicle_id: -1, we_owe_id: -1 };
+  if (!value) return CLEARED;
+  const entry = (state.taskOrders || []).find((o) => o.value === value);
+  if (!entry) return CLEARED;
+  return {
+    order_id: entry.order_id ?? -1,
+    recon_vehicle_id: entry.recon_vehicle_id ?? -1,
+    we_owe_id: entry.we_owe_id ?? -1,
+  };
 }
 
 function renderTaskOrderSelect(orders) {
@@ -290,12 +309,16 @@ export function wireTasksView() {
     const keepOrder = $("#task-order-input").value;
     const keepDue = $("#task-due-input").value;
     try {
+      const link = taskLinkFields(keepOrder);
       await post("/api/tasks", {
         title,
         assigned_to: state.newTaskAssignees,
         due_date: keepDue,
         urgent: $("#task-urgent-input").checked,
-        order_id: keepOrder ? Number(keepOrder) : null,
+        // -1 is the PATCH unlink sentinel; a create just wants nothing set.
+        order_id: link.order_id === -1 ? null : link.order_id,
+        recon_vehicle_id: link.recon_vehicle_id === -1 ? null : link.recon_vehicle_id,
+        we_owe_id: link.we_owe_id === -1 ? null : link.we_owe_id,
         actor: currentActor(),
       });
       $("#task-title-input").value = "";

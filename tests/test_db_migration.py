@@ -244,3 +244,80 @@ def test_every_estimate_item_column_reaches_a_legacy_database(tmp_path):
         f"columns a fresh database has that an updated one never gets: {sorted(missing)} "
         "-- add them to the ALTER list in init_db"
     )
+
+
+def test_existing_follow_ups_learn_which_car_their_ticket_is_on(tmp_path):
+    """The car columns on tasks are new; the shop's live queue is not.
+
+    Without the backfill, every follow-up already written stays invisible on
+    its car's page until somebody re-links it by hand -- which nobody would,
+    because nothing on screen would say it needed doing. Simulated the way an
+    update actually arrives: a database that predates the columns, then
+    init_db running over it again.
+    """
+    db_path = tmp_path / "legacy.db"
+    init_db(db_path)
+
+    with connect(db_path) as db:
+        customer_id = db.execute(
+            "INSERT INTO customers(name,phone,email,is_shop_owned,created_at) VALUES(?,?,?,?,?)",
+            ("Lot", "", "", 1, "2026-01-01T00:00:00"),
+        ).lastrowid
+        vehicle_id = db.execute(
+            "INSERT INTO vehicles(customer_id,year,make,model,created_at) VALUES(?,?,?,?,?)",
+            (customer_id, 2018, "Kia", "Sorento", "2026-01-01T00:00:00"),
+        ).lastrowid
+        recon_id = db.execute(
+            "INSERT INTO recon_vehicles(vehicle_id,stock_number,created_at,updated_at) VALUES(?,?,?,?)",
+            (vehicle_id, "R-LEGACY-1", "2026-01-01T00:00:00", "2026-01-01T00:00:00"),
+        ).lastrowid
+        order_id = db.execute(
+            "INSERT INTO orders(number,customer_id,vehicle_id,concern,segment,recon_vehicle_id,status,created_at) "
+            "VALUES(?,?,?,?,?,?,?,?)",
+            (
+                "RO-LEGACY-9001",
+                customer_id,
+                vehicle_id,
+                "Recon prep",
+                "recon",
+                recon_id,
+                "estimate",
+                "2026-01-01T00:00:00",
+            ),
+        ).lastrowid
+        # A follow-up written before the car columns existed: it names the
+        # ticket and nothing else.
+        db.execute(
+            "INSERT INTO tasks(title,assigned_to,order_id,created_at,updated_at) VALUES(?,?,?,?,?)",
+            ("Chase the title", "[]", order_id, "2026-01-01T00:00:00", "2026-01-01T00:00:00"),
+        )
+        loose_id = db.execute(
+            "INSERT INTO tasks(title,assigned_to,created_at,updated_at) VALUES(?,?,?,?)",
+            ("Restock brake cleaner", "[]", "2026-01-01T00:00:00", "2026-01-01T00:00:00"),
+        ).lastrowid
+        db.execute("UPDATE tasks SET recon_vehicle_id=NULL, we_owe_id=NULL")
+        db.commit()
+
+    init_db(db_path)
+
+    with connect(db_path) as db:
+        rows = {row["title"]: dict(row) for row in db.execute("SELECT * FROM tasks")}
+    assert rows["Chase the title"]["recon_vehicle_id"] == recon_id
+    assert rows["Chase the title"]["we_owe_id"] is None
+    # A follow-up about nothing in particular stays about nothing in
+    # particular -- the backfill must not invent a car for it.
+    assert rows["Restock brake cleaner"]["recon_vehicle_id"] is None
+    assert loose_id is not None
+
+    # And it is a no-op afterwards: a hand-made link to a different car
+    # survives the next start rather than being reset from the ticket.
+    with connect(db_path) as db:
+        db.execute(
+            "UPDATE tasks SET order_id=NULL, recon_vehicle_id=? WHERE title='Restock brake cleaner'", (recon_id,)
+        )
+        db.commit()
+    init_db(db_path)
+    with connect(db_path) as db:
+        again = {row["title"]: dict(row) for row in db.execute("SELECT * FROM tasks")}
+    assert again["Restock brake cleaner"]["recon_vehicle_id"] == recon_id
+    assert again["Restock brake cleaner"]["order_id"] is None

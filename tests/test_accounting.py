@@ -96,6 +96,36 @@ def test_vendor_update_unknown_404s(client):
     assert res.status_code == 404
 
 
+def test_vendor_list_reports_when_each_was_last_bought_from(client):
+    """The receive dialog has to guess a vendor, and guessing the one that
+    sorts first alphabetically is how it guessed wrong every time. This is the
+    field it guesses from: a vendor never bought from reports "", and the list
+    itself stays sorted by name so the dropdown doesn't shuffle."""
+    napa = client.post("/api/vendors", json={"name": "NAPA"}).json()
+    client.post("/api/vendors", json={"name": "WorldPac"})
+    _, order, item_ids = parts_ticket(client, "R-8100", [("Alternator", "ALT-1", 150)])
+    receive(client, order["id"], item_ids, napa["id"], "NAPA-1")
+
+    vendors = client.get("/api/vendors").json()
+    assert [v["name"] for v in vendors] == ["NAPA", "WorldPac"], "the list must stay alphabetical"
+    by_name = {v["name"]: v for v in vendors}
+    assert by_name["NAPA"]["last_invoice_at"], "a vendor just bought from reports no purchase"
+    assert by_name["WorldPac"]["last_invoice_at"] == "", "a vendor never bought from must report nothing"
+
+
+def test_voided_invoice_does_not_keep_a_vendor_looking_current(client):
+    """A bill taken back is a purchase that never happened -- everywhere else
+    in the app a voided invoice counts for nothing, and it must not go on
+    nominating a vendor as the one the shop most recently dealt with."""
+    vendor = client.post("/api/vendors", json={"name": "NAPA"}).json()
+    _, order, item_ids = parts_ticket(client, "R-8101", [("Alternator", "ALT-1", 150)])
+    invoice_id = receive(client, order["id"], item_ids, vendor["id"], "NAPA-2")["ap_invoice_id"]
+    assert client.get("/api/vendors").json()[0]["last_invoice_at"]
+
+    client.patch(f"/api/ap/invoices/{invoice_id}/void", json={"actor": "Clay"})
+    assert client.get("/api/vendors").json()[0]["last_invoice_at"] == ""
+
+
 def test_process_invoice_unknown_vendor_is_still_held(client):
     res = post_invoice(client)
     body = res.json()

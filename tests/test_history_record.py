@@ -99,3 +99,28 @@ def test_days_on_lot_refuses_to_answer_rather_than_guess():
     # An arrival date later than the archive stamp is a typed year, not a car
     # that left before it arrived. Floors at 0, the same way lot_age_days does.
     assert days_on_lot("2027-01-01", "2026-03-02T09:00:00") == 0
+
+
+def test_the_leaving_date_is_a_string_on_every_row_of_both_segments(client):
+    """Never None, whichever screen asked.
+
+    Two changes landed on this dict independently, each adding an archived_at
+    of its own -- one raw off the row, one coerced to "" -- and Python kept
+    whichever was written last. They agreed on what the field is for, so
+    nothing looked wrong; but the reports read it to decide whether a car has
+    gone, and `None` is neither a date nor an empty string. This asserts the
+    coerced form on both sides of the board, live and archived, so the answer
+    cannot depend on the order two dict keys happen to be in.
+    """
+    make_recon_vehicle(client, stock_number="R-COERCE")
+    owed = make_we_owe(client, customer_name="Marcus Doyle", description="Mirror")
+
+    for archived in (False, True):
+        if archived:
+            client.post(f"/api/we-owe/{owed['id']}/archive")
+        rows = client.get("/api/vehicles-board", params={"archived": archived}).json()
+        assert rows, f"no rows came back for archived={archived}"
+        for row in rows:
+            assert isinstance(row["archived_at"], str), (
+                f"{row['segment']} row {row.get('stock_number') or row['id']} sent archived_at={row['archived_at']!r}"
+            )

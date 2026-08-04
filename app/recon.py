@@ -1238,18 +1238,17 @@ def vehicle_board_rows(
                     # read identically and need different things done to them.
                     "voided_order_count": voided_count,
                     "updated_at": row["updated_at"],
-                    # Empty for a car still here. The reports can be asked for
-                    # both sides of History at once, and a sold car listed with
-                    # no mark on it reads as one still sitting on the lot.
-                    "archived_at": row["archived_at"],
                     # Carried alongside the count so the board can say what it
                     # is counting from -- "34d" is worth arguing with, "on the
                     # lot since June 27" is worth acting on.
                     "acquired_at": row["acquisition_date"] or "",
                     "age_days": lot_age_days(row["acquisition_date"], row["created_at"]),
-                    # The day the car left. Empty on everything still on the
-                    # lot; History is the only screen where it is set, and it
-                    # is the one fact that screen exists to record -- see
+                    # The day the car left, empty on everything still on the
+                    # lot. Two things need it and both need it non-null: the
+                    # reports can be asked for both sides of History at once,
+                    # where a sold car with no mark on it reads as one still
+                    # sitting on the lot; and History itself, where the day it
+                    # left is the one fact that screen exists to record -- see
                     # days_on_lot.
                     "archived_at": row["archived_at"] or "",
                     "days_on_lot": days_on_lot(row["acquisition_date"] or row["created_at"], row["archived_at"]),
@@ -1345,15 +1344,14 @@ def vehicle_board_rows(
                     "order_id": current_order["id"] if current_order else None,
                     "voided_order_count": voided_count,
                     "updated_at": row["updated_at"],
-                    # Same as recon above: which side of History this one is on.
-                    "archived_at": row["archived_at"],
                     # No arrival date on this side, and none wanted: a we-owe's
                     # clock starts when the promise was made, which is what
                     # created_at already is. The car itself was sold weeks ago.
                     "acquired_at": "",
                     "age_days": age_days(row["created_at"]),
-                    # Same as recon above, counted from the day the promise was
-                    # made -- that is when this side's clock starts.
+                    # Same as recon above: which side of History this one is
+                    # on, counted from the day the promise was made -- that is
+                    # when this side's clock starts.
                     "archived_at": row["archived_at"] or "",
                     "days_on_lot": days_on_lot(row["created_at"], row["archived_at"]),
                     "last_activity_at": activity_at,

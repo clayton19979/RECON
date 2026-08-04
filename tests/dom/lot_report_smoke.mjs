@@ -107,7 +107,7 @@ ok(JSON.stringify(working) === JSON.stringify(["R-0044", "R-1002"]),
 const bands = [...doc.querySelectorAll("#report-output tr.lot-group-head")];
 ok(bands.length === 3, `expected all 3 sections, got ${bands.length} — an empty pile disappeared`);
 const bandText = bands.map((b) => b.textContent.replace(/\s+/g, " ").trim());
-ok(bandText.some((t) => /Ready to sell/.test(t) && /2 cars/.test(t) && /\$380\.00 spent/.test(t)),
+ok(bandText.some((t) => /Ready to go/.test(t) && /2 cars/.test(t) && /\$380\.00 spent/.test(t)),
    `Ready-to-sell band is wrong: ${JSON.stringify(bandText)}`);
 ok(bandText.some((t) => /In the shop/.test(t) && /\$1,000\.00 spent/.test(t) && /\$240\.00 still to spend/.test(t)),
    `In-the-shop band doesn't carry its money: ${JSON.stringify(bandText)}`);
@@ -135,7 +135,7 @@ ok(spentCard.querySelector(".stat-value").classList.contains("warn"),
 
 // The pile the money is missing from says so on its own band, so the reader
 // doesn't have to carry the total down from the top of the sheet.
-const readyBand = bandText.find((t) => /Ready to sell/.test(t));
+const readyBand = bandText.find((t) => /Ready to go/.test(t));
 ok(/\$95\.00 never marked received/.test(readyBand || ""),
    `the Ready band doesn't flag its own shortfall: "${readyBand}"`);
 ok(!/never marked received/.test(bandText.find((t) => /In the shop/.test(t)) || ""),

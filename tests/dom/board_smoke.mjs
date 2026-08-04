@@ -85,7 +85,13 @@ const { w, doc, fetchLog, settle, ok, finish, rejections } = await boot({
            "bulkTaskTitle", "isPromiseLate", "fmtDay",
            "LOT_COLUMNS", "boardColumns", "displayedVehicles", "setVehicleLayout"],
   fetch: async (url, opts) => {
-    if (url.startsWith("/api/vehicles-board")) return url.includes("archived=true") ? archived : board;
+    if (url.startsWith("/api/vehicles-board")) {
+      if (url.includes("view=history")) return archived;
+      // Nothing in this fixture has a voided ticket, so the Void pile is
+      // empty and the live board's nudge stays off.
+      if (url.includes("view=void")) return [];
+      return board;
+    }
     if (/^\/api\/(recon\/vehicles|we-owe)\/\d+$/.test(url)) return { id: 1, archived_at: "", stock_number: "B204", vehicle: "2019 Ford F-150" };
     if (url === "/api/tasks/bulk-create") {
       const body = JSON.parse(opts.body);
@@ -785,11 +791,11 @@ ok(w.state.vehicleSelection.size === 0, "the selection survived creating its tas
 
 // History is finished work -- a follow-up task pointing at an archived car is
 // a dead end, so the button isn't offered there
-w.state.filter = "history";
+w.state.boardView = "history";
 w.state.vehicleSelection.add("recon:3");
 w.renderVehiclesTable();
 ok(bulkTaskBtn.hidden, "Make Tasks is offered on the History board");
-w.state.filter = "";
+w.state.boardView = "active";
 w.state.vehicleSelection.clear();
 w.resetVehicleView();
 await settle();
@@ -923,7 +929,7 @@ ok(body.textContent.includes("No vehicles match"),
 ok(!body.textContent.includes("History"),
    "the board claimed something about History before it had looked there");
 await settle();
-ok(fetchLog.some((f) => f.url.includes("archived=true")),
+ok(fetchLog.some((f) => f.url.includes("view=history")),
    "searching never asked the server for the archived list");
 ok(body.textContent.includes("1 match is in History"),
    `a car in History wasn't reported: ${body.textContent.replace(/\s+/g, " ").trim()}`);
@@ -931,10 +937,10 @@ ok(reachLine().hidden, "the reach line duplicated the empty state with no rows o
 
 body.querySelector('[data-search-reach="search-elsewhere"]').click();
 await settle();
-ok(w.state.filter === "history", `Open History left the board on "${w.state.filter}"`);
+ok(w.state.boardView === "history", `Open History left the board on "${w.state.boardView}"`);
 ok(stocks().includes("H900"), `Open History didn't land on the car: ${stocks().join(", ")}`);
 ok(search.value === "H900", "the search was dropped on the way to History");
-ok(chip("history").classList.contains("active"), "the History chip didn't light up");
+ok(doc.querySelector("#vehicles-view-filter").value === "history", "the Show dropdown didn't follow into History");
 
 // ...and the same the other way round, which is the case a one-directional
 // fix would miss: from History, a car on the live board is just as invisible.
@@ -944,8 +950,8 @@ ok(body.textContent.includes("1 match is on the active board"),
    `from History, a live car wasn't reported: ${body.textContent.replace(/\s+/g, " ").trim()}`);
 body.querySelector('[data-search-reach="search-elsewhere"]').click();
 await settle();
-ok(w.state.filter === "" && stocks().includes("D451"),
-   `Back to the board didn't land on the car: ${w.state.filter} / ${stocks().join(", ")}`);
+ok(w.state.boardView === "active" && stocks().includes("D451"),
+   `Back to the board didn't land on the car: ${w.state.boardView} / ${stocks().join(", ")}`);
 
 // Rows on screen and more elsewhere: the line above the table, not the empty
 // state, and it counts only the matches this view isn't showing.
@@ -992,7 +998,7 @@ ok(dataRows().length === 5, `clearing the search should restore the board, got $
    In this fixture:
      Not started    the Civic (quoted, nothing spent) and the Outback
      In the shop    the F-150, the Camry, the Silverado
-     Ready to sell  nothing, which is the empty-column case
+     Ready to go    nothing, which is the empty-column case
 */
 const layoutBtn = (which) => doc.querySelector(`#vehicles-layout-switch [data-veh-layout="${which}"]`);
 const columnsHost = doc.querySelector("#vehicles-columns");
@@ -1018,7 +1024,7 @@ ok(cardsIn("waiting").map((c) => c.dataset.key).join(",") === "recon:2,we_owe:6"
    `Not started holds ${cardsIn("waiting").map((c) => c.dataset.key).join(",")}`);
 ok(cardsIn("working").map((c) => c.dataset.key).join(",") === "recon:1,we_owe:5,recon:3",
    `In the shop holds ${cardsIn("working").map((c) => c.dataset.key).join(",")}`);
-ok(cardsIn("ready").length === 0, "Ready to sell has cars in a fixture where nothing is finished");
+ok(cardsIn("ready").length === 0, "Ready to go has cars in a fixture where nothing is finished");
 ok(allCards().every((c) => board.some((v) => w.vehicleKey(v) === c.dataset.key)),
    "a card appeared for a vehicle that isn't on the board");
 ok(w.LOT_COLUMNS.map((c) => c.key).join(",") === "waiting,working,ready",
@@ -1121,13 +1127,13 @@ press(w, "Enter");
 await settle();
 ok(fetchLog.length > fetchesBeforeEnter, "Enter didn't open the cursor card");
 
-/* A car that finishes moves to Ready to sell without a reload -- the pile is
+/* A car that finishes moves to Ready to go without a reload -- the pile is
    read off the row, so new data lands in the right column. */
 w.state.vehicles = board.map((v) =>
   v.recon_id === 3 ? { ...v, status: "complete", status_bucket: "finished", lot_bucket: "ready", remaining_cost: 0, needs: "Nothing — ready to go" } : v);
 w.renderVehiclesTable();
 ok(cardsIn("ready").map((c) => c.dataset.key).join(",") === "recon:3",
-   `a finished car didn't move to Ready to sell, which holds ${cardsIn("ready").map((c) => c.dataset.key).join(",")}`);
+   `a finished car didn't move to Ready to go, which holds ${cardsIn("ready").map((c) => c.dataset.key).join(",")}`);
 ok(!colSection("ready").querySelector(".veh-col-blank"), "the empty-column line survived the column filling up");
 ok(cardsIn("working").length === 2, "the finished car is still in the shop as well");
 w.state.vehicles = board;
@@ -1200,9 +1206,11 @@ w.setVehicleLayout("list");
 // carrying one into History would show an empty screen and a scope line about
 // parts on order. It gets dropped on the way in.
 w.state.vehiclePartsOnly = true;
-chip("history").click();
+const viewSelect = doc.querySelector("#vehicles-view-filter");
+viewSelect.value = "history";
+viewSelect.dispatchEvent(new w.Event("change", { bubbles: true }));
 await settle();
-ok(w.state.filter === "history", `the History chip left the board on "${w.state.filter}"`);
+ok(w.state.boardView === "history", `the Show dropdown left the board on "${w.state.boardView}"`);
 ok(!w.state.vehiclePartsOnly, "a live-lot filter followed the advisor into History");
 ok(dataRows().length === 4, `History shows ${dataRows().length} of 4 archived cars`);
 ok(doc.querySelector("#vehicles-parts-filter").hidden,
@@ -1274,8 +1282,13 @@ ok(cardFor("recon:41").querySelector(".idle-cell").textContent.trim().startsWith
 
 /* ...and going back restores every one of them. The wording is written on
    each render rather than only on the way in, so the board cannot come back
-   with "Average Per Car" sitting over a count of cars waiting on a part. */
-chip("").click();
+   with "Average Per Car" sitting over a count of cars waiting on a part.
+
+   Back through the Show dropdown, which is what owns this now -- the All chip
+   below it answers a different question (which kind of work) and leaving
+   History was never really its job. */
+viewSelect.value = "active";
+viewSelect.dispatchEvent(new w.Event("change", { bubbles: true }));
 await settle();
 w.setVehicleLayout("list");
 ok(headText("age") === "Age" && headText("idle") === "Idle",

@@ -237,10 +237,22 @@
         <p class="stats-scope" id="vehicles-scope" role="status" aria-live="polite" aria-atomic="true">Every vehicle on the board.</p>
 
         <div class="filters">
+          <!-- Which pile: the live work, the record of cars that have
+               gone, or tickets that were taken back. This used to be a
+               fourth segment chip reading "History", which put the
+               record's state in a row of chips about the kind of work and
+               left nowhere to put a third state at all. -->
+          <label class="filters-select-wrap" for="vehicles-view-filter">
+            <span>Show</span>
+            <select class="filters-select" id="vehicles-view-filter">
+              <option value="active">Active</option>
+              <option value="history">History</option>
+              <option value="void">Void</option>
+            </select>
+          </label>
           <button class="chip active" data-filter="">All</button>
           <button class="chip" data-filter="recon">Recon</button>
           <button class="chip" data-filter="we_owe">We-Owe</button>
-          <button class="chip" data-filter="history">History</button>
           <label class="filters-select-wrap" for="vehicles-status-filter">
             <span>Status</span>
             <select class="filters-select" id="vehicles-status-filter">
@@ -283,6 +295,13 @@
              filters, or filed to History. Sits directly above the rows it's
              talking about, and only exists while a search is running. -->
         <div class="search-reach" id="vehicles-search-reach" role="status" aria-live="polite" hidden></div>
+
+        <!-- Cars whose only ticket was voided are their own pile now, so
+             the live board has to say they exist -- a car left behind by a
+             mis-click used to sit in with the live work looking like one
+             nobody had started, and taking it off that list without
+             saying so is how it would go missing instead. -->
+        <div class="search-reach" id="vehicles-void-nudge" role="status" aria-live="polite" hidden></div>
 
         <div class="bulk-bar" id="vehicles-bulk-bar" hidden>
           <span id="vehicles-bulk-count"></span>

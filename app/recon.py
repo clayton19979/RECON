@@ -353,7 +353,7 @@ def order_status_bucket(orders: list[dict]) -> str:
 
     Voided tickets are not tickets. A car whose only one had been voided read
     as finished here, which showed a green Complete pill on the board, filed
-    the car under "Ready to sell" on Walt's Lot Report, and -- because
+    the car under "Ready to go" on Walt's Lot Report, and -- because
     is_stalled deliberately never flags a finished car -- took it out of the
     Stalled count for good. One mis-click made a car invisible in the three
     places that exist to stop cars going missing.
@@ -364,13 +364,50 @@ def order_status_bucket(orders: list[dict]) -> str:
     return "finished" if (active is None and has_closed) else "in_progress"
 
 
-def we_owe_status_bucket(status: str) -> str:
-    """A promise is done when the advisor says it is -- fulfilled or waived.
+def is_void_only(row: Mapping[str, Any]) -> bool:
+    """Is this car's only paperwork a ticket somebody took back?
 
-    Unlike recon, this doesn't read the ticket: waiving a promise closes it
-    with no work done and often no ticket at all.
+    Voiding is how a ticket written by mistake is undone, and the car left
+    behind is a loose end rather than a job: nothing was done to it and there
+    is no live ticket saying what should be. On one board with everything else
+    it is indistinguishable from a car genuinely waiting to be started, which
+    is why it gets a pile of its own.
+
+    A car that also has a live ticket is not in here -- the live ticket is
+    what the car is doing, and the voided one beside it is just history.
+
+    Deliberately reads the already-computed row rather than the database: the
+    board, the counts above it and this filter then cannot disagree about
+    which cars are which. order_id is None exactly when no live ticket exists
+    (see the row build, where it comes off live_orders).
     """
-    return "finished" if status in ("fulfilled", "waived") else "in_progress"
+    return bool(row.get("voided_order_count")) and row.get("order_id") is None
+
+
+def we_owe_status_bucket(status: str, orders: list[dict] | None = None) -> str:
+    """A promise is done when the advisor says so, or when its work is done.
+
+    Two signals, either of which is enough. fulfilled/waived is the advisor's
+    own word for it, and it has to stand alone: waiving a promise closes it
+    with no work done and often no ticket at all.
+
+    The tickets are the other half, and leaving them out was a bug people hit
+    every week. Finishing a we-owe is done on the ticket -- you close the
+    repair order, the same as any other job -- and the promise's own status
+    field sits at "open" until somebody separately remembers to mark it
+    fulfilled. Nobody does that on a busy morning. So a car whose work was
+    finished and ticket closed stayed in the "In the shop" column of the
+    Vehicles board indefinitely, next to cars actually in a bay, while the
+    status pill on the very same row already read Complete (display_status has
+    always fallen through to the ticket). One row saying two things.
+
+    Judged exactly the way recon's is -- see order_status_bucket: every live
+    ticket closed and at least one existing. A promise with no ticket at all
+    has not finished anything, and a voided ticket is not a ticket.
+    """
+    if status in ("fulfilled", "waived"):
+        return "finished"
+    return order_status_bucket(orders) if orders is not None else "in_progress"
 
 
 def recon_sold_and_settled(vehicle_status: str | None, orders: list[dict]) -> bool:
@@ -1294,7 +1331,7 @@ def vehicle_board_rows(
             )
             customer_paid = round(paid[row["id"]], 2)
             activity_at = activity.get(row["id"]) or row["created_at"]
-            status_bucket = we_owe_status_bucket(row["status"])
+            status_bucket = we_owe_status_bucket(row["status"], rollup["orders"])
             result.append(
                 {
                     "segment": "we_owe",
@@ -1472,7 +1509,9 @@ def build_recon_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
         detail["open_cost"] = rollup["open_cost"]
         detail["labor_hours"] = rollup["labor_hours"]
         # Same reason as recon_detail: a waived promise is closed, not stalled.
-        detail["status_bucket"] = we_owe_status_bucket(row["status"])
+        # The tickets go in too, so this page and the board cannot disagree
+        # about whether the work is done -- see we_owe_status_bucket.
+        detail["status_bucket"] = we_owe_status_bucket(row["status"], rollup["orders"])
         payments = [
             dict(p)
             for p in db.execute("SELECT * FROM we_owe_payments WHERE we_owe_id=? ORDER BY id DESC", (we_owe_id,))
@@ -1488,9 +1527,39 @@ def build_recon_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
         return detail
 
     @router.get("/vehicles-board")
-    def vehicles_board(segment: Literal["recon", "we_owe"] | None = None, archived: bool = False):
+    def vehicles_board(
+        segment: Literal["recon", "we_owe"] | None = None,
+        archived: bool = False,
+        view: Literal["active", "history", "void", "all"] | None = None,
+    ):
+        """The board, read as one of three separate piles of work.
+
+        `view` is what the Vehicles screen sends, and it is the record's state
+        rather than the kind of work -- which the segment chips already answer.
+        Those two were one control before, so "History" sat in a row of chips
+        next to "Recon" and "We-Owe" as if it were a third kind of work, and
+        there was nowhere at all to put a third state.
+
+            active   the live board: cars there is something to do about
+            history  cars filed away, which is a record and not a lot
+            void     cars whose only ticket was taken back
+
+        A voided ticket is a mistake being undone, not work. Left in with the
+        live cars it reads as a car nobody has started -- indistinguishable
+        from one genuinely waiting -- so it is its own pile now.
+
+        `archived` is kept because the reports call this function directly and
+        ask for both sides of History at once; `view` wins when both are sent.
+        """
         with connect() as db:
-            return vehicle_board_rows(db, segment=segment, archived=archived)
+            if view in (None, "all"):
+                return vehicle_board_rows(db, segment=segment, archived=archived)
+            rows = vehicle_board_rows(db, segment=segment, archived=view == "history")
+            if view == "active":
+                return [row for row in rows if not is_void_only(row)]
+            if view == "void":
+                return [row for row in rows if is_void_only(row)]
+            return rows
 
     # --- Recon vehicles ---
 

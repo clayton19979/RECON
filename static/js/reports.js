@@ -116,7 +116,7 @@ const IGNORES_DATE_RANGE = new Set(["lot"]);
 const LOT_GROUPS = [
   {
     key: "ready",
-    label: "Ready to sell",
+    label: "Ready to go",
     blurb: "work finished — can go back on the lot",
     sentence: "Work on these is finished. They can go back on the lot.",
     empty: "No cars are finished right now.",
@@ -440,7 +440,7 @@ function lotStatCards(rows) {
   const stalled = rows.filter(isStalled).length;
   const waiting = count("waiting");
   return [
-    { label: "Ready To Sell", value: String(count("ready")), sub: `of ${rows.length} on the lot`, tone: count("ready") ? "good" : "" },
+    { label: "Ready To Go", value: String(count("ready")), sub: `of ${rows.length} on the lot`, tone: count("ready") ? "good" : "" },
     { label: "In The Shop", value: String(count("working")), sub: "being worked on now" },
     {
       label: "Not Started",

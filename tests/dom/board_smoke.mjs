@@ -106,7 +106,9 @@ await settle();
 
 const body = doc.querySelector("#vehicles-table");
 const dataRows = () => [...body.querySelectorAll("tr.clickable")];
-const stocks = () => dataRows().map((tr) => tr.children[1].textContent.trim());
+// The stock cell carries the ticket's RO number under the stock number now,
+// so read the stock number itself rather than the whole cell.
+const stocks = () => dataRows().map((tr) => tr.children[1].querySelector(".stock-no").textContent.trim());
 const th = (key) => doc.querySelector(`#view-vehicles th[data-sort-key="${key}"]`);
 
 /* ---------- the layout the board opens on ----------
@@ -1224,7 +1226,7 @@ ok(doc.querySelector("#vehicles-parts-filter").hidden,
 const headText = (key) => th(key).textContent.replace(/[▼▲]/g, "").trim();
 ok(headText("age") === "Stay", `the Age header reads "${headText("age")}" in History`);
 ok(headText("idle") === "Left", `the Idle header reads "${headText("idle")}" in History`);
-const stockRow = (stock) => dataRows().find((tr) => tr.children[1].textContent.trim() === stock);
+const stockRow = (stock) => dataRows().find((tr) => tr.children[1].querySelector(".stock-no").textContent.trim() === stock);
 const cellText = (stock, sel) => stockRow(stock).querySelector(sel).textContent.trim();
 ok(cellText("H901", ".age-cell") === "90d",
    `the Fusion's stay reads "${cellText("H901", ".age-cell")}", not its 90 days on the lot`);

@@ -349,7 +349,14 @@ export function matchesVehicleSearch(v, query) {
   return (v.stock_number || "").toLowerCase().includes(q)
     || (v.vin || "").toLowerCase().includes(q)
     || (v.customer_name || "").toLowerCase().includes(q)
-    || (v.vehicle || "").toLowerCase().includes(q);
+    || (v.vehicle || "").toLowerCase().includes(q)
+    // The number on the paper ticket in your hand. Both forms: the short one
+    // that gets said out loud ("RO 41") and the long one filed on a vendor's
+    // paperwork. Typing either used to match nothing at all, so the one place
+    // an advisor most often starts from -- a printed RO -- was the one thing
+    // the search could not find a car by.
+    || (v.ro_number ? String(v.ro_number) === q.replace(/^ro[\s-]*/i, "").trim() : false)
+    || (v.order_number || "").toLowerCase().includes(q);
 }
 
 /* The other half of the board, fetched once and kept until the board reloads.
@@ -1373,11 +1380,20 @@ function promisedCellHtml(v) {
   return `<span class="promise-cell" title="Promised for ${full} — ${-late} day${late === -1 ? "" : "s"} to go">${label}</span>`;
 }
 
+/* The ticket's short number, as it reads everywhere it appears.
+   A car with no live ticket has no number to show, and says so rather than
+   printing "RO —" as though one existed. */
+export function roTagHtml(v) {
+  return v.ro_number
+    ? `<span class="ro-tag" title="${esc(v.order_number || "")}">RO ${esc(String(v.ro_number))}</span>`
+    : `<span class="ro-none-sm">no ticket</span>`;
+}
+
 function vehicleRowHtml(v) {
   const key = vehicleKey(v);
   return `
       <td class="col-select"><input type="checkbox" class="veh-select" data-key="${key}" aria-label="Select ${esc(v.stock_number || v.vehicle)}" ${state.vehicleSelection.has(key) ? "checked" : ""}></td>
-      <td class="num col-stock">${esc(v.stock_number || "—")}</td>
+      <td class="num col-stock"><span class="stock-no">${esc(v.stock_number || "—")}</span><div class="veh-sub">${roTagHtml(v)}</div></td>
       <td class="col-vehicle">
         <div class="veh-name" title="${esc(v.vehicle)}">${esc(v.vehicle)}</div>
         <div class="veh-sub">${v.segment === "we_owe"
@@ -1404,6 +1420,10 @@ function vehicleRowHtml(v) {
 function vehicleRowSignature(v) {
   return [
     v.stock_number, v.vehicle, v.vin, v.customer_name, v.segment, v.status, v.status_bucket,
+    // The row prints the ticket's number, so writing the first ticket on a
+    // car has to rebuild it -- otherwise the card keeps saying "no ticket"
+    // until something else about the car happens to change.
+    v.ro_number,
     v.technicians.join("|"), v.age_days, v.acquired_at, v.idle_days, v.last_activity_at,
     v.target_date, v.promise_days_late,
     // History reads Age and Idle as the stay and the day it left, so both the
@@ -1606,6 +1626,7 @@ function vehicleCardHtml(v) {
     <div class="veh-card-head">
       <span class="pill ${vehicleStatusPillClass(v)}">${esc(STATUS_LABEL[v.status] || v.status)}</span>
       <span class="veh-card-ref">${esc(ref)}${age ? ` <span class="${ageTone}">· ${esc(age)}</span>` : ""}</span>
+      ${roTagHtml(v)}
     </div>
     <div class="veh-card-name" title="${esc(v.vehicle)}">${esc(v.vehicle)}</div>
     <div class="veh-card-sub">${cardSubHtml(v)}</div>

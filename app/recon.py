@@ -650,7 +650,7 @@ def cost_rollups(
     for chunk in _chunked(ids):
         placeholders = ",".join("?" for _ in chunk)
         rows = db.execute(
-            f"""SELECT o.{column} ref_id, o.id, o.number, o.status, o.voided,
+            f"""SELECT o.{column} ref_id, o.id, o.number, o.ro_number, o.status, o.voided,
                coalesce(sum(CASE WHEN ei.kind='part' AND ei.part_returned=0 THEN ei.received_quantity*ei.unit_cost ELSE 0 END),0)
                  + coalesce(sum(CASE WHEN {core_owing} THEN ei.received_quantity*ei.core_charge ELSE 0 END),0) parts_cost,
                coalesce(sum(CASE WHEN ei.kind='labor' THEN ei.quantity*ei.unit_cost ELSE 0 END),0) labor_cost,
@@ -1269,6 +1269,12 @@ def vehicle_board_rows(
                     # board link through this, so "follow up on that stalled car"
                     # lands on the RO rather than floating unattached.
                     "order_id": current_order["id"] if current_order else None,
+                    # The short number written on the paper ticket and said
+                    # down the phone. On the board so it can be searched for:
+                    # an advisor holding an RO had no way to get from it to
+                    # the car except by opening tickets until one matched.
+                    "ro_number": current_order["ro_number"] if current_order else 0,
+                    "order_number": current_order["number"] if current_order else "",
                     # How many tickets on this car were taken back. Only used
                     # to tell "nobody has written one" apart from "the one
                     # somebody wrote was voided" -- two rows that otherwise
@@ -1379,6 +1385,9 @@ def vehicle_board_rows(
                     # board link through this, so "follow up on that stalled car"
                     # lands on the RO rather than floating unattached.
                     "order_id": current_order["id"] if current_order else None,
+                    # Same as recon above -- see there.
+                    "ro_number": current_order["ro_number"] if current_order else 0,
+                    "order_number": current_order["number"] if current_order else "",
                     "voided_order_count": voided_count,
                     "updated_at": row["updated_at"],
                     # No arrival date on this side, and none wanted: a we-owe's

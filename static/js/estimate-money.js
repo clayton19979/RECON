@@ -66,6 +66,29 @@ export function actualLineTotal(item) {
   return 0;
 }
 
+/** How much of a part line has been written down but never marked received. */
+export function unreceivedQuantity(item) {
+  return Math.max(0, (Number(item.quantity) || 0) - (Number(item.received_quantity) || 0));
+}
+
+/** The part lines on a ticket that the shop has bought but never receipted.
+ *
+ * The same rule the server's cost_rollup uses for unreceived_cost: a part
+ * line short of its written quantity, at the price it was written down at. A
+ * returned part is out of it -- that one went back to the vendor, so there is
+ * no money on it for the car's cost to be short by.
+ */
+export function unreceivedPartLines(items) {
+  return (items || []).filter((item) => item.kind === "part" && !isReturnedPart(item) && unreceivedQuantity(item) > 0.001);
+}
+
+/** What those lines come to -- the gap between what the car cost and what
+ * the app can see it cost. */
+export function unreceivedPartTotal(items) {
+  return unreceivedPartLines(items).reduce(
+    (sum, item) => sum + unreceivedQuantity(item) * (Number(writtenUnitCost(item)) || 0), 0);
+}
+
 export function ticketTotal(items) {
   return (items || []).reduce((sum, item) => sum + lineTotal(item), 0);
 }

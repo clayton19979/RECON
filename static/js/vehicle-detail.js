@@ -3,7 +3,7 @@ import { toast } from "./notify.js";
 import { confirmAction } from "./confirm.js";
 import { currentActor, esc, fmtDate, fmtDay, money, relativeTime, todayLocal, withLoading } from "./shortcuts.js";
 import { emptyState } from "./empty-states.js";
-import { actualTotal, isReturnedPart, lineTotal, ticketTotal } from "./estimate-money.js";
+import { actualTotal, isReturnedPart, lineTotal, ticketTotal, unreceivedPartLines, unreceivedPartTotal } from "./estimate-money.js";
 import { AUTH_METHOD_LABEL, ITEM_STATUS_LABEL, KIND_GROUP_LABEL, KIND_GROUP_ORDER, PAY_METHOD_LABEL, STATUS_LABEL, STATUS_OPTIONS, STATUS_PILL_CLASS, fieldLabels, state } from "./state.js";
 import { showView } from "./error-boundary.js";
 import { isStalled } from "./vehicles-board.js";
@@ -1334,6 +1334,114 @@ function updateReceiveButtonState() {
   // Say how many -- on a 20-line estimate you should know what you're about
   // to post before the dialog opens.
   btn.textContent = checked.length ? `Receive ${checked.length} Line${checked.length === 1 ? "" : "s"}` : "Receive Selected";
+}
+
+/* ---------- closing a ticket without losing what it cost ----------
+
+   The parts get picked up at the counter and thrown on the car; marking them
+   received in the app is a separate step, and on a busy morning it is the
+   step that gets skipped. Nothing used to ask. The ticket closed, the car
+   dropped to READY, and its Cost read $0.00 for a car that had just had four
+   tires put on it -- the board says so afterwards, and so does the Lot sheet,
+   but by then the invoice is in a pile and nobody remembers what it said.
+
+   Closing the ticket is the last moment anyone is looking at that car's
+   parts with the paperwork still in reach, so that is where the app asks.
+   Three answers, because there are genuinely three: receive them now (the
+   normal case -- the parts are on the car), close anyway (the part got
+   cancelled, or the bill really hasn't turned up), or back out. Escape and
+   the backdrop mean back out, never "close anyway"; see confirm.js.
+
+   Nothing here blocks anything. "Close Anyway" is one click and the ticket
+   closes exactly as it always did. */
+
+// The names of the parts, so the question is about something recognisable
+// rather than a count. Three of them fits the dialog; past that it counts.
+const CLOSEOUT_NAME_LIMIT = 3;
+function missingPartsSentence(lines, total) {
+  const names = lines.slice(0, CLOSEOUT_NAME_LIMIT).map((i) => (i.description || "").trim() || "no description");
+  const rest = lines.length - names.length;
+  return `${money(total)} — ${names.join(", ")}${rest ? ` and ${rest} more` : ""}.`;
+}
+
+/* Returns true to go ahead and close the ticket.
+   False means leave it exactly where it is -- which includes the case where
+   the receive dialog has just been opened, because posting that invoice is
+   what closes the ticket (see state.afterReceive). */
+async function confirmTicketCloseout(order) {
+  const items = order?.estimate?.items || [];
+  const missing = unreceivedPartLines(items);
+  if (!missing.length) return true;
+  const many = missing.length !== 1;
+  const choice = await confirmAction({
+    eyebrow: "PARTS",
+    title: `${missing.length} part${many ? "s" : ""} on this ticket ${many ? "were" : "was"} never marked received`,
+    body: `${missingPartsSentence(missing, unreceivedPartTotal(items))}`
+      + ` Close the ticket now and that money stays out of what this car cost.`,
+    confirmLabel: "Receive Them Now",
+    altLabel: "Close Anyway",
+  });
+  if (choice === "alt") return true;
+  if (choice === true) openCloseoutReceive(missing);
+  return false;
+}
+
+// Tick exactly those lines in the grid and hand them to the dialog that
+// already knows how to price and post them -- one flow for receiving, not a
+// second one that could drift from it.
+function openCloseoutReceive(missing) {
+  const wanted = new Set(missing.map((i) => String(i.id)));
+  let ticked = 0;
+  for (const cb of $$(".ei-receive-check", $("#vd-estimate-items"))) {
+    cb.checked = wanted.has(String(cb.dataset.id));
+    if (cb.checked) ticked += 1;
+  }
+  updateReceiveButtonState();
+  // A line with no id yet (typed but never saved) has no checkbox to tick and
+  // nothing the server could receive. Saying so beats an empty dialog.
+  if (!ticked) return void toast("Those parts aren't saved yet — save the ticket, then receive them", true);
+  // The invoice post is the real close-out, so the status change waits for it
+  // rather than being asked for a second time afterwards.
+  state.afterReceive = () => setTicketStatus("complete");
+  openReceiveDialog();
+}
+
+// One writer for the status change, shared by the dropdown and by the
+// close-out flow above, so a ticket closed either way lands identically.
+async function setTicketStatus(status) {
+  const select = $("#vd-status-select");
+  // Re-enabled by renderDetailPermissions on the reload below; only the
+  // failure path has to put it back itself.
+  if (select) select.disabled = true;
+  try {
+    await patch(`/api/orders/${state.detail.order.id}/status`, { status, actor: currentActor() });
+    toast(`Status set to ${STATUS_LABEL[status]}`);
+    await loadVehicleDetail();
+  } catch (err) {
+    toast(err.message, true);
+    if (select) select.disabled = false;
+  }
+}
+
+/* What this car's tickets say was bought and never marked received.
+   Summed off the vehicle's own ticket list rather than the one ticket on
+   screen, because filing a car away is a statement about the whole car.
+   Voided tickets are left out here for the same reason cost_rollup leaves
+   them out of the money: that work never happened. */
+function vehicleUnreceived(item) {
+  const orders = ((item && item.orders) || []).filter((o) => !o.voided);
+  return {
+    cost: orders.reduce((sum, o) => sum + (Number(o.unreceived_cost) || 0), 0),
+    parts: orders.reduce((sum, o) => sum + (Number(o.unreceived_parts) || 0), 0),
+  };
+}
+
+/* The sentence appended to this car's Send-to-History confirmation. Returns
+   "" when there is nothing to warn about, so the caller can append it
+   unconditionally rather than branching around it. */
+function missingReceiptWarning({ cost, parts }) {
+  if (!parts || !cost) return "";
+  return ` ${parts} part${parts === 1 ? " was" : "s were"} never marked received, so ${money(cost)} of what this car cost isn't counted.`;
 }
 
 // The arithmetic itself lives in estimate-money.js, which mirrors the
@@ -2691,15 +2799,15 @@ export function wireVehicleDetail() {
   $("#vd-status-select").addEventListener("change", async (e) => {
     const select = e.target;
     const status = select.value;
-    select.disabled = true;
-    try {
-      await patch(`/api/orders/${state.detail.order.id}/status`, { status, actor: currentActor() });
-      toast(`Status set to ${STATUS_LABEL[status]}`);
-      await loadVehicleDetail();
-    } catch (err) {
-      toast(err.message, true);
-      select.disabled = false;
+    const order = state.detail.order;
+    if (status === "complete" && !(await confirmTicketCloseout(order))) {
+      // Put the dropdown back to what the ticket actually says. A control
+      // reading "Complete" on a ticket that is still in progress is the kind
+      // of lie that gets acted on from across the room.
+      select.value = order.status;
+      return;
     }
+    await setTicketStatus(status);
   });
 
   $("#vd-concern-save").addEventListener("click", async (e) => {
@@ -2774,7 +2882,9 @@ export function wireVehicleDetail() {
     if (!(await confirmAction({
       eyebrow: "ARCHIVE",
       title: "Send this vehicle to History?",
-      body: "It becomes read-only until reopened. Nothing is deleted.",
+      // A car filed away stops being looked at, so this is the last chance
+      // anyone has to notice money the app can't see.
+      body: "It becomes read-only until reopened. Nothing is deleted." + missingReceiptWarning(vehicleUnreceived(item)),
       confirmLabel: "Send to History",
     }))) return;
     try {

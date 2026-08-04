@@ -116,7 +116,7 @@ const IGNORES_DATE_RANGE = new Set(["lot"]);
 const LOT_GROUPS = [
   {
     key: "ready",
-    label: "Ready to sell",
+    label: "Ready to go",
     blurb: "work finished — can go back on the lot",
     sentence: "Work on these is finished. They can go back on the lot.",
     empty: "No cars are finished right now.",
@@ -433,13 +433,14 @@ function lotStatCards(rows) {
   const count = (key) => rows.filter((r) => r.lot_bucket === key).length;
   const spent = rows.reduce((s, r) => s + (r.actual_cost || 0), 0);
   const left = rows.reduce((s, r) => s + (r.remaining_cost || 0), 0);
+  const missing = lotMissingReceipts(rows);
   // The same isStalled the board's card counts by, imported rather than
   // restated -- this screen and the board are two views of one lot, and a
   // second copy of the rule is a second answer waiting to happen.
   const stalled = rows.filter(isStalled).length;
   const waiting = count("waiting");
   return [
-    { label: "Ready To Sell", value: String(count("ready")), sub: `of ${rows.length} on the lot`, tone: count("ready") ? "good" : "" },
+    { label: "Ready To Go", value: String(count("ready")), sub: `of ${rows.length} on the lot`, tone: count("ready") ? "good" : "" },
     { label: "In The Shop", value: String(count("working")), sub: "being worked on now" },
     {
       label: "Not Started",
@@ -447,15 +448,66 @@ function lotStatCards(rows) {
       sub: stalled ? `${stalled} untouched ${STALLED_AFTER_DAYS}+ days` : "nothing stalled",
       tone: stalled ? "warn" : "",
     },
-    { label: "Spent On The Lot", value: money(spent), sub: left ? `${money(left)} written up, not yet landed` : "nothing outstanding" },
+    // Two very different kinds of money can be missing from the headline, and
+    // only one of them is normal. "Written up, not yet landed" is work still
+    // ahead -- the shop expects to spend it. Money on a *finished* ticket that
+    // was never marked received is already spent and simply isn't counted, so
+    // the figure above it is short by exactly that much. That one is said
+    // first and in the warning colour, because it is the one that makes this
+    // card's own number wrong. Parts & Cores lists them one by one.
+    {
+      label: "Spent On The Lot",
+      value: money(spent),
+      tone: missing.total ? "warn" : "",
+      sub: missing.total
+        ? `${money(missing.total)} spent but never marked received${left ? ` · ${money(left)} still to spend` : ""}`
+        : left ? `${money(left)} written up, not yet landed` : "nothing outstanding",
+    },
   ];
+}
+
+/* Money on these cars that has already gone out and is in no cost figure:
+   parts on a finished ticket that nobody marked received. The per-car numbers
+   come from the same rollup the board's warning is drawn from, so this total
+   and the sentences in the Still Needs column can never tell different
+   stories. Counted per car rather than per part here, because that is what
+   the rows on this sheet are. */
+/* The same correction on the printed sheet's per-pile total. Spelled out in
+   words rather than colour, and only when there is something to say: an extra
+   footer row reading "$0.00 never marked received" under every group would
+   train the eye to skip the row that matters. */
+function printMissingFootRow(groupRows) {
+  const missing = lotMissingReceipts(groupRows);
+  if (!missing.total) return "";
+  return `<tr class="print-foot-note">
+    <td colspan="3">Not in that total — ${missing.parts} part${missing.parts === 1 ? "" : "s"} on ${missing.cars} car${missing.cars === 1 ? "" : "s"} never marked received</td>
+    <td class="num-col">${money(missing.total)}</td><td class="num-col"></td><td></td></tr>`;
+}
+
+function lotMissingReceipts(rows) {
+  const affected = rows.filter((r) => (r.unreceived_closed_cost || 0) > 0);
+  return {
+    total: affected.reduce((s, r) => s + (r.unreceived_closed_cost || 0), 0),
+    cars: affected.length,
+    parts: affected.reduce((s, r) => s + (r.unreceived_closed_parts || 0), 0),
+  };
 }
 
 function vehicleSpendStatCards(rows) {
   const recon = rows.filter((r) => r.segment === "recon").length;
   const total = rows.reduce((s, r) => s + r.actual_cost, 0);
+  // This report covers both sides of History, so it has to say how much of it
+  // is finished work. Without it the count reads as the size of the lot today,
+  // which it deliberately isn't.
+  const filed = rows.filter((r) => r.archived_at).length;
   return [
-    { label: "Vehicles", value: String(rows.length), sub: `${recon} recon · ${rows.length - recon} we-owe` },
+    {
+      label: "Vehicles",
+      value: String(rows.length),
+      sub: filed
+        ? `${recon} recon · ${rows.length - recon} we-owe · ${filed} in History`
+        : `${recon} recon · ${rows.length - recon} we-owe`,
+    },
     { label: "Total Cost", value: money(total), sub: "received parts + labor" },
     // Averaged over every vehicle in the report, including the ones nothing
     // has been spent on yet -- that's what the label says, and it's the only
@@ -757,8 +809,14 @@ function renderLotTable(rows) {
     const note = inGroup.length
       ? `${inGroup.length} car${inGroup.length === 1 ? "" : "s"} · ${esc(group.blurb)}`
       : esc(group.empty);
+    // Same three kinds of money as the headline card, in the same order and
+    // the same words. A pile whose spend figure is short says so on its own
+    // band rather than making the reader carry the total down from the top.
+    const missing = lotMissingReceipts(inGroup);
     const cash = inGroup.length
-      ? `<span class="lot-group-money">${money(spent)} spent${left ? ` · ${money(left)} still to spend` : ""}</span>`
+      ? `<span class="lot-group-money">${money(spent)} spent${left ? ` · ${money(left)} still to spend` : ""}${
+          missing.total ? ` · <span class="cost-unreceipted">${money(missing.total)} never marked received</span>` : ""
+        }</span>`
       : "";
     // The band is laid out by a div inside the cell rather than by the cell
     // itself: a <td> with display:flex leaves table layout, and colspan goes
@@ -774,12 +832,21 @@ function renderLotTable(rows) {
   }).join("");
   const totalSpent = rows.reduce((s, r) => s + (r.actual_cost || 0), 0);
   const totalLeft = rows.reduce((s, r) => s + (r.remaining_cost || 0), 0);
+  const missing = lotMissingReceipts(rows);
+  // The footer is the number somebody writes down or reads out, so it is the
+  // last place that can afford to be short without saying so. A second row
+  // rather than a footnote: it has to line up under the column it corrects.
+  const missingRow = missing.total
+    ? `<tr class="lot-total-missing"><td colspan="3">Not in that total — ${missing.parts} part${missing.parts === 1 ? "" : "s"} on ${missing.cars} finished car${missing.cars === 1 ? "" : "s"} never marked received</td>
+        <td class="num-col cost-unreceipted">${money(missing.total)}</td><td class="num-col"></td><td></td></tr>`
+    : "";
   return `<div class="panel"><div class="table-wrap table-scroll"><table class="sticky-head report-sheet lot-table"><thead><tr>
     ${reportHeaderRow("lot")}
     </tr></thead>
     <tbody>${sections}</tbody>
     <tfoot><tr><td colspan="3">Whole lot (${rows.length} car${rows.length === 1 ? "" : "s"})</td>
-      <td class="num-col">${money(totalSpent)}</td><td class="num-col">${totalLeft ? money(totalLeft) : "—"}</td><td></td></tr></tfoot>
+      <td class="num-col">${money(totalSpent)}</td><td class="num-col">${totalLeft ? money(totalLeft) : "—"}</td><td></td></tr>
+      ${missingRow}</tfoot>
     </table></div></div>`;
 }
 
@@ -868,8 +935,13 @@ function renderReportTable(rows, shape) {
       // we-owe row onto a second line while the recon rows stayed on one, so
       // the sheet came out ragged; underneath, it costs the same height on
       // every row and reads as whose car it is.
-      return `<tr${clickable ? ` class="clickable" data-seg="${esc(r.segment)}" data-ref-id="${refId}" tabindex="0" title="Open this vehicle"` : ""}><td class="num cell-code">${esc(r.stock_number || "—")}</td><td class="cell-name">${esc(r.vehicle)}${r.customer_name ? `<span class="cell-sub">${esc(r.customer_name)}</span>` : ""}</td>
-    <td>${segmentTag(r.segment)}</td><td><span class="pill ${vehicleStatusPillClass(r)}">${esc(STATUS_LABEL[r.status] || r.status)}</span></td>
+      // A car already filed to History belongs on this report -- the money was
+      // spent inside the range -- but it is not on the lot any more, and a row
+      // that doesn't say so reads as a car still waiting on somebody.
+      const filed = !!r.archived_at;
+      const cls = ["clickable", filed ? "row-filed" : ""].filter(Boolean).join(" ");
+      return `<tr${clickable ? ` class="${cls}" data-seg="${esc(r.segment)}" data-ref-id="${refId}" tabindex="0" title="Open this vehicle"` : ""}><td class="num cell-code">${esc(r.stock_number || "—")}</td><td class="cell-name">${esc(r.vehicle)}${r.customer_name ? `<span class="cell-sub">${esc(r.customer_name)}</span>` : ""}</td>
+    <td>${segmentTag(r.segment)}</td><td><span class="pill ${vehicleStatusPillClass(r)}">${esc(STATUS_LABEL[r.status] || r.status)}</span>${filed ? ` <span class="pill pill-filed" title="Filed to History on ${esc(r.archived_at.slice(0, 10))}">History</span>` : ""}</td>
     <td class="cell-tech">${esc((r.technicians || []).join(", ")) || "—"}</td><td class="num-col">${money(r.actual_cost)}</td>${hasDeposits ? `<td class="num-col">${r.customer_paid ? money(r.customer_paid) : "—"}</td><td class="num-col">${r.customer_paid ? money(r.net_cost) : "—"}</td>` : ""}</tr>`;
     }).join("")}</tbody>
     <tfoot><tr><td colspan="5">Total (${rows.length} vehicle${rows.length === 1 ? "" : "s"})</td><td class="num-col">${money(totalActual)}</td>${hasDeposits ? `<td class="num-col">${money(totalPaid)}</td><td class="num-col">${money(totalActual - totalPaid)}</td>` : ""}</tr></tfoot>
@@ -962,13 +1034,21 @@ function renderPrintReport(rows, type, start, end) {
             <td class="num-col">${money(spent)}</td>
             <td class="num-col">${left ? money(left) : "—"}</td>
             <td></td>
-          </tr></tfoot>
+          </tr>${printMissingFootRow(inGroup)}</tfoot>
         </table>`;
     }).join("");
     const totalSpent = rows.reduce((s, r) => s + (r.actual_cost || 0), 0);
     const totalLeft = rows.reduce((s, r) => s + (r.remaining_cost || 0), 0);
+    // Paper has no colour and nobody standing beside it, so the correction
+    // has to be a sentence in the totals block rather than a red number. It
+    // sits directly under the figure it corrects, before "still to spend",
+    // because it is part of what the lot has already cost.
+    const missing = lotMissingReceipts(rows);
+    const missingLine = missing.total
+      ? `<div class="tl-row"><span>Spent but never marked received — not in the figure above</span><span class="num">${money(missing.total)}</span></div>`
+      : "";
     body = `${sections}<div class="print-totals"><div class="tl-row"><span>Spent on the whole lot</span><span class="num">${money(totalSpent)}</span></div>
-      <div class="tl-row grand"><span>Still to spend</span><span class="num">${money(totalLeft)}</span></div></div>`;
+      ${missingLine}<div class="tl-row grand"><span>Still to spend</span><span class="num">${money(totalLeft)}</span></div></div>`;
   } else if (shape === "technicians") {
     const working = rows.filter((r) => r.ro_count > 0).length;
     const totRos = rows.reduce((s, r) => s + r.ro_count, 0);

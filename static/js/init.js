@@ -14,12 +14,13 @@ import { wireWeOweDialog } from "./dialog-new-weowe.js";
 import { wireReceiveDialog } from "./dialog-receive-parts.js";
 import { loadReportPrefs, wireReportsView } from "./reports.js";
 import { wireAccountingView } from "./accounting.js";
-import { wireCoresView, wirePartsOnOrderView, wirePostReturnDialog, wireReturnsView } from "./cores.js";
+import { wireCoresView, wireMissingReceiptsView, wirePartsOnOrderView, wirePostReturnDialog, wireReturnsView } from "./cores.js";
 import { wireAddVehicleDialog, wireCustomerEditor, wireCustomersView, wireRetailRoDialog } from "./customers.js";
 import { wireStaffView } from "./staff.js";
 import { wireTasksView } from "./task-bulk.js";
 import { wireSuggestionsView } from "./ideas.js";
 import { wireUpdatesView } from "./updates-page.js";
+import { wirePulse } from "./pulse.js";
 import { wireBackupView } from "./drawer.js";
 
 /* ==================================================================
@@ -57,6 +58,7 @@ export function startApp() {
     wireReportsView();
     wireAccountingView();
     wirePartsOnOrderView();
+    wireMissingReceiptsView();
     wireCoresView();
     wireReturnsView();
     wirePostReturnDialog();
@@ -65,6 +67,10 @@ export function startApp() {
     wireSuggestionsView();
     wireUpdatesView();
     wireBackupView();
+    // After the views, before the first showView: the freshness check listens
+    // for a screen finishing its load, and the first one of those is fired by
+    // the showView further down.
+    wirePulse();
 
     $$(".rail-item").forEach((btn) => btn.addEventListener("click", () => showView(btn.dataset.view)));
 

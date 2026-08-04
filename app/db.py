@@ -590,7 +590,23 @@ CREATE TABLE IF NOT EXISTS tasks (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   completed_at TEXT NOT NULL DEFAULT '',
-  order_id INTEGER REFERENCES orders(id)
+  order_id INTEGER REFERENCES orders(id),
+  /* Which car the follow-up is about, held separately from the ticket it may
+   * or may not hang off.
+   *
+   * A task used to reach its car only through order_id, which meant the cars
+   * that most need a follow-up could not have one: a lot car sitting with no
+   * ticket written is exactly the "chase the title", "get Walt to look at it"
+   * case, and there was nothing to attach the note to. The board's own
+   * "Make Tasks" button produced unlinked rows for those cars.
+   *
+   * When there IS a ticket these are derived from it rather than trusted from
+   * the caller -- one answer, no drift -- so they are always safe to read on
+   * their own. Retail tickets set neither: a customer's own car has no lot
+   * record, and order_id is the whole link.
+   */
+  recon_vehicle_id INTEGER REFERENCES recon_vehicles(id),
+  we_owe_id INTEGER REFERENCES we_owe_items(id)
 );
 
 CREATE TABLE IF NOT EXISTS suggestions (
@@ -601,7 +617,98 @@ CREATE TABLE IF NOT EXISTS suggestions (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+
+/* One number that moves whenever anything in the shop's records changes.
+ *
+ * Two people share one database across two PCs, and until now a screen was
+ * only ever as fresh as the moment it was opened. Antonio marking the brakes
+ * finished, or receiving the parts a car was waiting on, changed nothing on
+ * Clayton's screen -- it kept showing the morning's answer all afternoon, with
+ * nothing on it to say so. That is the app quietly lying, which is the one
+ * thing it must not do.
+ *
+ * A browser reads this counter every few seconds; if it has moved since the
+ * screen was drawn, the screen is out of date and says so (see
+ * static/js/pulse.js). One row, one integer -- deliberately cheap, because it
+ * is polled by every workstation all day.
+ */
+CREATE TABLE IF NOT EXISTS shop_pulse (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  revision INTEGER NOT NULL DEFAULT 0
+);
+INSERT OR IGNORE INTO shop_pulse(id, revision) VALUES (1, 0);
 """
+
+
+# Every table holding shop records, each of which gets the three triggers
+# generated below. Triggers rather than a bump in each write path on purpose:
+# there is no call site to remember, so the UI, the agent endpoints, the MCP
+# tools and a person poking at sqlite3 by hand all move the counter equally.
+# A write rolled back takes its bump with it, because the bump is part of the
+# same transaction.
+#
+# tests/test_pulse.py asserts this lists every table in SCHEMA, so a table
+# added later cannot quietly go unwatched.
+PULSE_TABLES = (
+    "customers",
+    "vehicle_units",
+    "vehicles",
+    "recon_vehicles",
+    "we_owe_items",
+    "we_owe_payments",
+    "orders",
+    "purchase_orders",
+    "estimates",
+    "estimate_items",
+    "estimate_jobs",
+    "staff",
+    "order_workflow",
+    "order_notes",
+    "inspections",
+    "inspection_items",
+    "estimate_authorizations",
+    "customer_invoices",
+    "customer_invoice_items",
+    "payments",
+    "activity_events",
+    "technician_findings",
+    "vendors",
+    "ap_invoices",
+    "ap_invoice_items",
+    "invoice_audits",
+    "tasks",
+    "suggestions",
+)
+
+
+def _pulse_triggers() -> str:
+    return "\n".join(
+        f"CREATE TRIGGER IF NOT EXISTS pulse_{table}_{op} AFTER {op.upper()} ON {table}"
+        " BEGIN UPDATE shop_pulse SET revision = revision + 1 WHERE id = 1; END;"
+        for table in PULSE_TABLES
+        for op in ("insert", "update", "delete")
+    )
+
+
+# Appended rather than written out by hand: eighty-four near-identical triggers
+# is a place for a typo to hide, and the tables they hang off are already
+# listed once above.
+SCHEMA += "\n" + _pulse_triggers() + "\n"
+
+
+def pulse_revision(db: sqlite3.Connection) -> int:
+    """The current change counter, or 0 if this database predates it.
+
+    A restored backup taken before shop_pulse existed has no such table until
+    something re-runs init_db over it. Answering 0 rather than raising means
+    the worst case is a browser that stops offering to refresh -- exactly how
+    the app behaved before -- instead of a screen full of errors.
+    """
+    try:
+        row = db.execute("SELECT revision FROM shop_pulse WHERE id=1").fetchone()
+    except sqlite3.OperationalError:
+        return 0
+    return int(row[0]) if row else 0
 
 
 def now() -> str:
@@ -798,6 +905,25 @@ def _migrate(db: sqlite3.Connection) -> None:
     task_columns = {row[1] for row in db.execute("PRAGMA table_info(tasks)")}
     if "order_id" not in task_columns:
         db.execute("ALTER TABLE tasks ADD COLUMN order_id INTEGER REFERENCES orders(id)")
+
+    # Which car a follow-up is about -- see the columns' comment in SCHEMA.
+    for column, ddl in (
+        ("recon_vehicle_id", "recon_vehicle_id INTEGER REFERENCES recon_vehicles(id)"),
+        ("we_owe_id", "we_owe_id INTEGER REFERENCES we_owe_items(id)"),
+    ):
+        if column not in task_columns:
+            db.execute(f"ALTER TABLE tasks ADD COLUMN {ddl}")
+    # Backfill from the ticket, and keep backfilling: every task that already
+    # names a ticket learns which car that ticket is on, so an existing queue
+    # shows up on the cars' pages immediately rather than only for follow-ups
+    # written after the upgrade. Scoped to rows with no car of their own, so it
+    # never overwrites a link made directly to a car and is a no-op on every
+    # start after the first (and on anything a restored older backup brings).
+    db.execute(
+        """UPDATE tasks SET recon_vehicle_id = (SELECT o.recon_vehicle_id FROM orders o WHERE o.id=tasks.order_id),
+                            we_owe_id = (SELECT o.we_owe_id FROM orders o WHERE o.id=tasks.order_id)
+           WHERE order_id IS NOT NULL AND recon_vehicle_id IS NULL AND we_owe_id IS NULL"""
+    )
 
     for table in ("recon_vehicles", "we_owe_items"):
         cols = {row[1] for row in db.execute(f"PRAGMA table_info({table})")}

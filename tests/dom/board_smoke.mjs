@@ -83,9 +83,15 @@ const { w, doc, fetchLog, settle, ok, finish, rejections } = await boot({
            "VEHICLE_PREFS_KEY", "resetVehicleView", "boardStats", "BOARD_COLUMNS",
            "IDLE_BUCKETS", "idleBucket", "IDLE_SELECTIONS", "STALLED_AFTER_DAYS", "isStalled",
            "bulkTaskTitle", "isPromiseLate", "fmtDay",
-           "LOT_COLUMNS", "displayedVehicles", "setVehicleLayout"],
+           "LOT_COLUMNS", "boardColumns", "displayedVehicles", "setVehicleLayout"],
   fetch: async (url, opts) => {
-    if (url.startsWith("/api/vehicles-board")) return url.includes("archived=true") ? archived : board;
+    if (url.startsWith("/api/vehicles-board")) {
+      if (url.includes("view=history")) return archived;
+      // Nothing in this fixture has a voided ticket, so the Void pile is
+      // empty and the live board's nudge stays off.
+      if (url.includes("view=void")) return [];
+      return board;
+    }
     if (/^\/api\/(recon\/vehicles|we-owe)\/\d+$/.test(url)) return { id: 1, archived_at: "", stock_number: "B204", vehicle: "2019 Ford F-150" };
     if (url === "/api/tasks/bulk-create") {
       const body = JSON.parse(opts.body);
@@ -785,11 +791,11 @@ ok(w.state.vehicleSelection.size === 0, "the selection survived creating its tas
 
 // History is finished work -- a follow-up task pointing at an archived car is
 // a dead end, so the button isn't offered there
-w.state.filter = "history";
+w.state.boardView = "history";
 w.state.vehicleSelection.add("recon:3");
 w.renderVehiclesTable();
 ok(bulkTaskBtn.hidden, "Make Tasks is offered on the History board");
-w.state.filter = "";
+w.state.boardView = "active";
 w.state.vehicleSelection.clear();
 w.resetVehicleView();
 await settle();
@@ -923,7 +929,7 @@ ok(body.textContent.includes("No vehicles match"),
 ok(!body.textContent.includes("History"),
    "the board claimed something about History before it had looked there");
 await settle();
-ok(fetchLog.some((f) => f.url.includes("archived=true")),
+ok(fetchLog.some((f) => f.url.includes("view=history")),
    "searching never asked the server for the archived list");
 ok(body.textContent.includes("1 match is in History"),
    `a car in History wasn't reported: ${body.textContent.replace(/\s+/g, " ").trim()}`);
@@ -931,10 +937,10 @@ ok(reachLine().hidden, "the reach line duplicated the empty state with no rows o
 
 body.querySelector('[data-search-reach="search-elsewhere"]').click();
 await settle();
-ok(w.state.filter === "history", `Open History left the board on "${w.state.filter}"`);
+ok(w.state.boardView === "history", `Open History left the board on "${w.state.boardView}"`);
 ok(stocks().includes("H900"), `Open History didn't land on the car: ${stocks().join(", ")}`);
 ok(search.value === "H900", "the search was dropped on the way to History");
-ok(chip("history").classList.contains("active"), "the History chip didn't light up");
+ok(doc.querySelector("#vehicles-view-filter").value === "history", "the Show dropdown didn't follow into History");
 
 // ...and the same the other way round, which is the case a one-directional
 // fix would miss: from History, a car on the live board is just as invisible.
@@ -944,8 +950,8 @@ ok(body.textContent.includes("1 match is on the active board"),
    `from History, a live car wasn't reported: ${body.textContent.replace(/\s+/g, " ").trim()}`);
 body.querySelector('[data-search-reach="search-elsewhere"]').click();
 await settle();
-ok(w.state.filter === "" && stocks().includes("D451"),
-   `Back to the board didn't land on the car: ${w.state.filter} / ${stocks().join(", ")}`);
+ok(w.state.boardView === "active" && stocks().includes("D451"),
+   `Back to the board didn't land on the car: ${w.state.boardView} / ${stocks().join(", ")}`);
 
 // Rows on screen and more elsewhere: the line above the table, not the empty
 // state, and it counts only the matches this view isn't showing.
@@ -992,7 +998,7 @@ ok(dataRows().length === 5, `clearing the search should restore the board, got $
    In this fixture:
      Not started    the Civic (quoted, nothing spent) and the Outback
      In the shop    the F-150, the Camry, the Silverado
-     Ready to sell  nothing, which is the empty-column case
+     Ready to go    nothing, which is the empty-column case
 */
 const layoutBtn = (which) => doc.querySelector(`#vehicles-layout-switch [data-veh-layout="${which}"]`);
 const columnsHost = doc.querySelector("#vehicles-columns");
@@ -1018,7 +1024,7 @@ ok(cardsIn("waiting").map((c) => c.dataset.key).join(",") === "recon:2,we_owe:6"
    `Not started holds ${cardsIn("waiting").map((c) => c.dataset.key).join(",")}`);
 ok(cardsIn("working").map((c) => c.dataset.key).join(",") === "recon:1,we_owe:5,recon:3",
    `In the shop holds ${cardsIn("working").map((c) => c.dataset.key).join(",")}`);
-ok(cardsIn("ready").length === 0, "Ready to sell has cars in a fixture where nothing is finished");
+ok(cardsIn("ready").length === 0, "Ready to go has cars in a fixture where nothing is finished");
 ok(allCards().every((c) => board.some((v) => w.vehicleKey(v) === c.dataset.key)),
    "a card appeared for a vehicle that isn't on the board");
 ok(w.LOT_COLUMNS.map((c) => c.key).join(",") === "waiting,working,ready",
@@ -1121,13 +1127,13 @@ press(w, "Enter");
 await settle();
 ok(fetchLog.length > fetchesBeforeEnter, "Enter didn't open the cursor card");
 
-/* A car that finishes moves to Ready to sell without a reload -- the pile is
+/* A car that finishes moves to Ready to go without a reload -- the pile is
    read off the row, so new data lands in the right column. */
 w.state.vehicles = board.map((v) =>
   v.recon_id === 3 ? { ...v, status: "complete", status_bucket: "finished", lot_bucket: "ready", remaining_cost: 0, needs: "Nothing — ready to go" } : v);
 w.renderVehiclesTable();
 ok(cardsIn("ready").map((c) => c.dataset.key).join(",") === "recon:3",
-   `a finished car didn't move to Ready to sell, which holds ${cardsIn("ready").map((c) => c.dataset.key).join(",")}`);
+   `a finished car didn't move to Ready to go, which holds ${cardsIn("ready").map((c) => c.dataset.key).join(",")}`);
 ok(!colSection("ready").querySelector(".veh-col-blank"), "the empty-column line survived the column filling up");
 ok(cardsIn("working").length === 2, "the finished car is still in the shop as well");
 w.state.vehicles = board;
@@ -1152,6 +1158,149 @@ ok(!columnsHost.querySelector("img") && !w.__pwned, "the columns render raw HTML
 w.setVehicleLayout("list");
 ok(columnsHost.hidden && !listPanel.hidden, "switching back to List didn't restore the table");
 w.state.vehicles = board;
+w.renderVehiclesTable();
+
+/* ---------- History reads the same rows a different way ----------
+
+   History is not a lot, it is a record of cars that are gone, and everything
+   the live board is built to do is about what to act on this morning. Applied
+   to a car that left in the spring, every one of those is a false statement:
+   a sold car sat under "Not started", the Stalled clock kept counting on it
+   (and the archive itself bumped that clock, so a car filed away in April
+   read "Active today"), Age went on climbing after the car was somebody
+   else's, and the three columns finished with "Nothing finished yet" printed
+   under a screenful of finished cars.
+
+   Dates below are fixed rather than relative, so the assertions say exactly
+   what they mean; the two "this month" ones are computed off the clock, which
+   is the one number here that has to move with it. */
+const now = new Date();
+const thisMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+archived = [
+  // Left this month, and the long one: 90 days on the lot.
+  veh({ recon_id: 41, stock_number: "H901", vehicle: "2016 Ford Fusion", status: "complete",
+        status_bucket: "finished", lot_bucket: "ready", needs: "Nothing — ready to go",
+        acquired_at: "2026-01-04", age_days: 400, idle_days: 0, actual_cost: 800,
+        archived_at: `${thisMonth}-11T16:20:00`, days_on_lot: 90 }),
+  // Also this month, and cheap and quick -- so the averages can't pass by
+  // being computed off a single row.
+  veh({ recon_id: 42, stock_number: "H902", vehicle: "2018 Kia Soul", status: "complete",
+        status_bucket: "finished", lot_bucket: "ready", needs: "Nothing — ready to go",
+        acquired_at: "2026-02-01", age_days: 380, idle_days: 3, actual_cost: 200,
+        archived_at: `${thisMonth}-02T09:00:00`, days_on_lot: 10 }),
+  // Earlier the same year, and one from a previous year: one car per column.
+  veh({ recon_id: 43, stock_number: "H903", vehicle: "2015 Chevy Malibu", status: "complete",
+        status_bucket: "finished", lot_bucket: "ready", needs: "Nothing — ready to go",
+        acquired_at: `${now.getFullYear()}-01-05`, age_days: 300, idle_days: 40, actual_cost: 500,
+        archived_at: `${now.getFullYear()}-01-20T11:00:00`, days_on_lot: 15 }),
+  veh({ segment: "we_owe", we_owe_id: 44, stock_number: "", vehicle: "2013 Jeep Patriot",
+        customer_name: "P. Okafor", status: "fulfilled", status_bucket: "finished",
+        lot_bucket: "ready", needs: "Nothing — ready to go", age_days: 900, idle_days: 700,
+        actual_cost: 100, archived_at: `${now.getFullYear() - 1}-11-30T10:00:00`, days_on_lot: 20 }),
+];
+w.resetVehicleView();
+await settle();
+w.setVehicleLayout("list");
+
+// A live-lot filter left on from the board cannot match an archived car, so
+// carrying one into History would show an empty screen and a scope line about
+// parts on order. It gets dropped on the way in.
+w.state.vehiclePartsOnly = true;
+const viewSelect = doc.querySelector("#vehicles-view-filter");
+viewSelect.value = "history";
+viewSelect.dispatchEvent(new w.Event("change", { bubbles: true }));
+await settle();
+ok(w.state.boardView === "history", `the Show dropdown left the board on "${w.state.boardView}"`);
+ok(!w.state.vehiclePartsOnly, "a live-lot filter followed the advisor into History");
+ok(dataRows().length === 4, `History shows ${dataRows().length} of 4 archived cars`);
+ok(doc.querySelector("#vehicles-parts-filter").hidden,
+   "the 'waiting on parts' toggle is still on the toolbar in History, where nothing is waiting");
+
+/* The two columns whose question changes. Age stops being "how long ago did
+   this arrive" -- a number that goes on growing after the car is sold -- and
+   becomes the finished stay; Idle stops being a clock and becomes the date
+   the car left. The heading has to follow the cells, or a column of bare
+   numbers means nothing. */
+const headText = (key) => th(key).textContent.replace(/[▼▲]/g, "").trim();
+ok(headText("age") === "Stay", `the Age header reads "${headText("age")}" in History`);
+ok(headText("idle") === "Left", `the Idle header reads "${headText("idle")}" in History`);
+const stockRow = (stock) => dataRows().find((tr) => tr.children[1].textContent.trim() === stock);
+const cellText = (stock, sel) => stockRow(stock).querySelector(sel).textContent.trim();
+ok(cellText("H901", ".age-cell") === "90d",
+   `the Fusion's stay reads "${cellText("H901", ".age-cell")}", not its 90 days on the lot`);
+ok(/Jan 20/.test(cellText("H903", ".idle-cell")),
+   `the Malibu's Left cell reads "${cellText("H903", ".idle-cell")}"`);
+ok(/15 days on the lot/.test(stockRow("H903").querySelector(".idle-cell").title),
+   `the Left tooltip reads "${stockRow("H903").querySelector(".idle-cell").title}"`);
+// Nothing about a car that has gone is an alarm. The 700-day-idle Jeep would
+// have been painted as the worst car on the lot.
+ok(!doc.querySelector("#vehicles-table .age-crit") && !doc.querySelector("#vehicles-table .idle-cell.age-crit"),
+   "History is still painting finished cars red");
+
+/* The three cards that are live-lot alarms become read-outs about finished
+   work. Averages over the four rows: ($800 + $200 + $500 + $100) / 4 = $400,
+   and (90 + 10 + 15 + 20) / 4 = 34 days, longest 90. */
+const label = (f) => doc.querySelector(`[data-board-filter="${f}"] .stat-label`).textContent.trim();
+ok(label("parts") === "Average Per Car" && label("stalled") === "Average Stay"
+   && label("late") === "Left This Month",
+   `History's cards read ${label("parts")} / ${label("stalled")} / ${label("late")}`);
+ok(card("stat-parts-waiting") === "$400.00", `Average Per Car reads "${card("stat-parts-waiting")}"`);
+ok(card("stat-parts-waiting-sub") === "across 4 vehicles", `its sub reads "${card("stat-parts-waiting-sub")}"`);
+ok(card("stat-stalled") === "34d", `Average Stay reads "${card("stat-stalled")}"`);
+ok(card("stat-stalled-sub") === "longest was 90 days", `its sub reads "${card("stat-stalled-sub")}"`);
+ok(card("stat-late-promises") === "2", `Left This Month reads "${card("stat-late-promises")}", expected 2`);
+ok(card("stat-actual-total") === "$1,600.00", `History's Cost reads "${card("stat-actual-total")}"`);
+// Read-outs, not filters: there is nothing in History to narrow to, and left
+// clickable they would filter by a live-lot rule that matches nothing.
+ok(["parts", "stalled", "late"].every((f) => doc.querySelector(`[data-board-filter="${f}"]`).disabled),
+   "a History card is still clickable as a filter");
+ok(doc.querySelector("#vehicles-chart").hidden && doc.querySelector("#vehicles-chart-toggle").hidden,
+   "the 'time since anything happened' chart is still up in History, measuring a stopped clock");
+
+// Sorting the Left column puts the most recently gone car first, which is the
+// order a logbook is read in.
+th("idle").click();
+ok(stocks()[0] === "H901", `sorted by Left, History starts with ${stocks()[0]} instead of the newest`);
+
+/* The columns become when the car left, not where it is up to. */
+w.setVehicleLayout("columns");
+ok(w.boardColumns().map((c2) => c2.key).join(",") === "left-this-month,left-this-year,left-earlier",
+   "History's columns aren't the three the cards are dealt into");
+ok(cardsIn("left-this-month").map((c2) => c2.dataset.key).sort().join(",") === "recon:41,recon:42",
+   `Left this month holds ${cardsIn("left-this-month").map((c2) => c2.dataset.key).join(",")}`);
+ok(cardsIn("left-this-year").map((c2) => c2.dataset.key).join(",") === "recon:43",
+   `Earlier this year holds ${cardsIn("left-this-year").map((c2) => c2.dataset.key).join(",")}`);
+ok(cardsIn("left-earlier").map((c2) => c2.dataset.key).join(",") === "we_owe:44",
+   `Before this year holds ${cardsIn("left-earlier").map((c2) => c2.dataset.key).join(",")}`);
+ok(!columnsHost.textContent.includes("Nothing finished yet"),
+   "History is still printing the live board's empty-column lines");
+// $800 + $200 this month, and nothing "left" to spend on a car that is gone.
+ok(colMoney("left-this-month") === "$1,000.00 spent",
+   `Left this month reads "${colMoney("left-this-month")}"`);
+ok(cardFor("recon:41").querySelector(".idle-cell").textContent.trim().startsWith("Left "),
+   `an archived card's chip reads "${cardFor("recon:41").querySelector(".idle-cell").textContent.trim()}"`);
+
+/* ...and going back restores every one of them. The wording is written on
+   each render rather than only on the way in, so the board cannot come back
+   with "Average Per Car" sitting over a count of cars waiting on a part.
+
+   Back through the Show dropdown, which is what owns this now -- the All chip
+   below it answers a different question (which kind of work) and leaving
+   History was never really its job. */
+viewSelect.value = "active";
+viewSelect.dispatchEvent(new w.Event("change", { bubbles: true }));
+await settle();
+w.setVehicleLayout("list");
+ok(headText("age") === "Age" && headText("idle") === "Idle",
+   `back on the board the headers read ${headText("age")} / ${headText("idle")}`);
+ok(label("parts") === "Waiting on Parts" && label("stalled") === "Stalled"
+   && label("late") === "Past Promised",
+   `back on the board the cards read ${label("parts")} / ${label("stalled")} / ${label("late")}`);
+ok(!doc.querySelector("#vehicles-parts-filter").hidden, "the parts toggle didn't come back");
+ok(!doc.querySelector("#vehicles-chart-toggle").hidden, "the chart toggle didn't come back");
+ok(dataRows().length === 5 && cellText("C007", ".idle-cell") === "9d",
+   "the board came back showing History's wording");
+w.state.vehicleSort = { key: "", dir: "desc" };
 w.renderVehiclesTable();
 
 /* ---------- escaping ---------- */

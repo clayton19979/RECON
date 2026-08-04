@@ -10,14 +10,16 @@ import { isStalled } from "./vehicles-board.js";
 import { openMoveSegmentDialog } from "./move-ticket.js";
 import { openReceiveDialog } from "./dialog-receive-parts.js";
 import { openAddVehicleDialog, openCustomerEditor } from "./customers.js";
-import { loadTasksView } from "./task-bulk.js";
+import { loadTasksView, taskLinkFields } from "./task-bulk.js";
+import { taskDueInfo } from "./tasks.js";
+import { assigneeSummaryLabel } from "./multi-picker.js";
 import { copyText } from "./clipboard.js";
 
 /* ==================================================================
    VEHICLE DETAIL
    ================================================================== */
 export async function openVehicleDetail(segment, id) {
-  state.detail = { segment, id, item: null, order: null };
+  state.detail = { segment, id, item: null, order: null, tasks: [] };
   await loadVehicleDetail();
 }
 // showView only knows named views wired to the rail; vehicle-detail is entered directly.
@@ -31,6 +33,10 @@ function enterVehicleDetailView() {
   $$(".view").forEach((v) => v.classList.toggle("active", v.id === "view-vehicle-detail"));
   $$(".rail-item").forEach((b) => b.classList.toggle("active", b.dataset.view === home));
   $("#back-to-vehicles-label").textContent = home === "customers" ? "Back to Customers" : "Back to Vehicles";
+  // The same announcement showView makes, because this page is entered around
+  // it -- otherwise the freshness check would go on measuring against whatever
+  // the board was showing before the car was opened. See static/js/pulse.js.
+  document.dispatchEvent(new CustomEvent("recon:viewshown", { detail: "vehicle-detail" }));
 }
 
 export async function loadVehicleDetail() {
@@ -53,6 +59,17 @@ export async function loadVehicleDetail() {
   }
   state.detail.item = item;
   state.detail.ordersHistory = orders;
+  /* The whole task queue, filtered to this car in the browser. It is a short
+     list -- the shop's open follow-ups, not its history -- and fetching it
+     whole means the card and the Tasks screen can never disagree about what
+     an open follow-up is. A failure here must not take the page down with it:
+     the follow-ups are worth showing, they are not worth losing the ticket
+     over, so the card simply stays empty. */
+  try {
+    state.detail.tasks = await get("/api/tasks");
+  } catch {
+    state.detail.tasks = [];
+  }
   // A vehicle can have more than one RO over its life (recon prep now, a
   // warranty comeback later); the advisor picking an older one from Order
   // History must survive every other action on this page re-loading the
@@ -71,41 +88,28 @@ export async function loadVehicleDetail() {
   enterVehicleDetailView();
   renderDetailHead();
   renderOrderHistory(orders, active ? active.id : null);
+  renderVehicleTasks();
   // Deleting a vehicle with real order history would silently orphan its
   // cost data -- only offer it while there's nothing to lose yet. Retail
   // vehicles are never deletable from here at all: they're the customer's
   // property record, managed from the Customers screen.
   $("#vd-delete").style.display = orders.length === 0 && segment !== "retail" ? "" : "none";
-  if (!active) {
-    $("#vd-void-order").style.display = "none";
-    $("#vd-print-ticket").style.display = "none";
-    $("#vd-add-task").style.display = "none";
-    // The order-scoped header chrome is otherwise only reset by the wrapped
-    // renderStatusCard, which never runs on this branch -- navigating from a
-    // ticketed vehicle to one with no RO left the previous car's status
-    // pill, assign picker and save-state on screen.
-    ["#vd-status-picker", "#vd-assign-picker", "#vd-status-pill"].forEach((sel) => {
-      const el = $(sel);
-      if (el) el.style.display = "none";
-    });
-    const saveState = $("#vd-estimate-save-state");
-    if (saveState) { saveState.className = "save-state"; saveState.textContent = ""; }
-    $("#vd-no-order").style.display = "";
-    $("#vd-order-content").style.display = "none";
-    applyArchivedLockUI(!!item.archived_at);
-    return;
+  $("#vd-no-order").style.display = active ? "none" : "";
+  $("#vd-order-content").style.display = active ? "" : "none";
+  // Null is the state of a car nobody has written up yet, and it is set here
+  // on every load rather than only when the page is entered fresh: this
+  // function is also what runs after a save, and voiding the last ticket on a
+  // car turns a page that had one into a page that hasn't.
+  state.detail.order = null;
+  if (active) {
+    try {
+      state.detail.order = await get(`/api/orders/${active.id}`);
+    } catch (err) {
+      toast(`Could not load repair order: ${err.message}`, true);
+      return;
+    }
+    if (!state.staff.length) state.staff = await get("/api/staff");
   }
-  $("#vd-no-order").style.display = "none";
-  $("#vd-order-content").style.display = "";
-  let order;
-  try {
-    order = await get(`/api/orders/${active.id}`);
-  } catch (err) {
-    toast(`Could not load repair order: ${err.message}`, true);
-    return;
-  }
-  state.detail.order = order;
-  if (!state.staff.length) state.staff = await get("/api/staff");
   renderOrderPanel();
   applyArchivedLockUI(!!item.archived_at);
 }
@@ -131,6 +135,60 @@ function renderOrderHistory(orders, activeId) {
   `).join("");
   $$(".mini-item.clickable", $("#vd-order-history")).forEach((row) => {
     row.addEventListener("click", () => selectOrder(Number(row.dataset.id)));
+  });
+}
+
+/* The card that puts the shop's shared to-do list on the car it's about.
+
+   Open follow-ups only. A ticked-off one is history, and this card's whole
+   claim is "here is what is still owed on this car" -- padding it with last
+   month's finished notes is how a panel stops being read. The list arrives
+   already ordered by the API (urgent first, then soonest due), so it is
+   rendered in the order it came in rather than sorted a second time here and
+   risking a different answer from the Tasks screen's. */
+function renderVehicleTasks() {
+  const open = tasksForThisVehicle().filter((t) => !t.done);
+  const card = $("#vd-tasks-card");
+  if (!open.length) {
+    card.style.display = "none";
+    $("#vd-tasks-list").innerHTML = "";
+    return;
+  }
+  card.style.display = "";
+  const overdue = open.filter((t) => (taskDueInfo(t.due_date)?.days ?? 0) < 0).length;
+  $("#vd-tasks-title").textContent = open.length === 1 ? "1 follow-up" : `${open.length} follow-ups`;
+  const head = $("#vd-tasks-card .section-eyebrow");
+  head.textContent = overdue ? `${overdue} PAST DUE` : "FOLLOW-UPS";
+  head.classList.toggle("eyebrow-warn", !!overdue);
+  $("#vd-tasks-list").innerHTML = open.map((t) => {
+    const due = taskDueInfo(t.due_date);
+    const who = (t.assigned_to || []).length ? esc(assigneeSummaryLabel(t.assigned_to)) : "nobody yet";
+    const meta = [
+      who,
+      due ? `<span class="vd-task-due ${due.cls}">Due ${esc(due.label)}</span>` : "",
+      `by ${esc(t.created_by || "Unspecified")} · ${relativeTime(t.created_at)}`,
+    ].filter(Boolean).join(" · ");
+    return `
+      <div class="mini-item vd-task" data-id="${t.id}">
+        <div class="mi-title">
+          <span>${t.urgent ? '<span class="vd-task-urgent">Urgent</span>' : ""}${esc(t.title)}</span>
+          <button type="button" class="btn btn-ghost btn-xs vd-task-done" title="Mark done" aria-label="Mark ${esc(t.title)} done">Done</button>
+        </div>
+        <div class="mi-meta">${meta}</div>
+        ${t.notes ? `<div class="mi-concern">${esc(t.notes)}</div>` : ""}
+      </div>`;
+  }).join("");
+  $$(".vd-task-done", $("#vd-tasks-list")).forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const id = btn.closest(".vd-task").dataset.id;
+      try {
+        await patch(`/api/tasks/${id}`, { done: true });
+        toast("Follow-up marked done");
+        await loadVehicleDetail();
+      } catch (err) {
+        toast(err.message, true);
+      }
+    });
   });
 }
 
@@ -191,7 +249,95 @@ function renderLastWorked() {
   }
 }
 
-/* Jumps to Tasks with this vehicle's ticket pre-selected in the link
+/* "Promised to customer" -- the other end of the board's Past Promised tile.
+
+   Same closing-the-loop rule as renderLastWorked above: the board flags a
+   we-owe as days past the date the customer was given, but the date itself
+   only existed on this page as a form field inside the collapsible drawer --
+   land on the ticket and the most urgent fact about it was invisible. Stated
+   on the identity band instead, in the same three tones the shop already
+   reads everywhere else: red once the date is missed, amber when it's today
+   or tomorrow, quiet the rest of the time.
+
+   Only ever said about a promise that is still owed -- a fulfilled or waived
+   we-owe keeps its date in the drawer, but greeting someone with "3 days
+   past" about a promise that was settled on purpose is the same false alarm
+   the stalled nudge above deliberately avoids. Recon and retail cars have no
+   customer promise, so they never show the line at all. */
+function calendarDaysUntil(dateStr) {
+  // A bare calendar date, split by hand for the same reason fmtDay splits
+  // one: new Date("2026-08-01") is UTC midnight, which in Indiana is still
+  // the evening before.
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(dateStr || "").trim());
+  if (!m) return null;
+  const target = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  // Local midnights on both sides; rounding absorbs the odd DST hour.
+  return Math.round((target - today) / 86400000);
+}
+
+function renderPromiseLine() {
+  const el = $("#vd-promise-line");
+  if (!el) return;
+  const { segment, item } = state.detail;
+  const days = segment === "we_owe" && item.status === "open"
+    ? calendarDaysUntil(item.target_date)
+    : null;
+  if (days === null) {
+    el.hidden = true;
+    el.textContent = "";
+    el.className = "detail-promise";
+    return;
+  }
+  el.hidden = false;
+  const overdue = days < 0;
+  const late = Math.abs(days);
+  el.className = `detail-promise${overdue ? " overdue" : days <= 1 ? " soon" : ""}`;
+  const when = overdue ? ""
+    : days === 0 ? " — due today"
+    : days === 1 ? " — due tomorrow"
+    : ` — in ${days} days`;
+  // Past due, the count moves onto the button: the same shape as the stalled
+  // nudge one line up, and the click writes the call down instead of leaving
+  // it to memory.
+  el.innerHTML = `<span class="detail-promise-label">Promised to customer</span> ${esc(fmtDay(item.target_date))}` +
+    (when ? `<span class="detail-promise-when">${esc(when)}</span>` : "") +
+    (overdue ? ` <button type="button" class="detail-worked-nudge" id="vd-promise-nudge">${late} day${late === 1 ? "" : "s"} past — make a task</button>` : "");
+  const nudge = $("#vd-promise-nudge");
+  if (nudge) {
+    nudge.addEventListener("click", () => addTaskForThisVehicle({
+      prefill: `Call ${item.customer_name || "the customer"}: ${item.description || "we-owe work"} was promised by ${fmtDay(item.target_date)}`,
+    }));
+  }
+}
+
+/* Which entry in the Tasks screen's vehicle picker means the car on screen.
+
+   The picker offers cars with a live ticket as "order:<id>" and cars with none
+   as "recon:<id>" / "we_owe:<id>", so this asks for the ticket first and falls
+   back to the car itself -- which is what makes + Task work at all on a car
+   nobody has written up yet. */
+function detailPickerValue() {
+  const { segment, id, order } = state.detail;
+  if (order) return `order:${order.id}`;
+  return segment === "recon" || segment === "we_owe" ? `${segment}:${id}` : "";
+}
+
+/* The follow-ups left on this car, out of the whole queue.
+
+   Matched on the task's own car columns rather than on its ticket, so a note
+   left on a car with no repair order still lands on that car's page. Retail
+   pages have no lot record, so they match through the ticket's vehicle. */
+function tasksForThisVehicle() {
+  const { segment, id } = state.detail;
+  const all = state.detail.tasks || [];
+  if (segment === "recon") return all.filter((t) => t.recon_vehicle_id === id);
+  if (segment === "we_owe") return all.filter((t) => t.we_owe_id === id);
+  return all.filter((t) => t.order_vehicle_id === id);
+}
+
+/* Jumps to Tasks with this vehicle pre-selected in the link
    dropdown, rather than making the advisor reopen the picker and hunt for the
    RO they were just looking at.
 
@@ -206,11 +352,11 @@ function renderLastWorked() {
    auto-generated "follow up" rows, and the assignee and due date are the
    parts that make a task worth having. */
 async function addTaskForThisVehicle({ prefill = "" } = {}) {
-  const order = state.detail.order;
+  const wanted = detailPickerValue();
   showView("tasks");
   await loadTasksView();
-  if (order && $$("#task-order-input option").some((o) => o.value === String(order.id))) {
-    $("#task-order-input").value = String(order.id);
+  if (wanted && $$("#task-order-input option").some((o) => o.value === wanted)) {
+    $("#task-order-input").value = wanted;
   }
   const title = $("#task-title-input");
   if (prefill && !title.value) title.value = prefill;
@@ -305,6 +451,7 @@ function renderDetailHead() {
       $("#vd-deposits-card").style.display = "none";
     }
   }
+  renderPromiseLine();
   renderCostSummary();
   renderVehicleInfoSummary();
 }
@@ -631,18 +778,33 @@ function applyArchivedLockUI(archived) {
   // rows, which are rebuilt fresh every time) -- reopening must explicitly
   // re-enable them, not just skip re-disabling, or they'd stay disabled
   // forever once archived once.
-  const disableIds = [
+  //
+  // Split by what each control actually writes to, because there are two
+  // reasons a control here can't be used and they don't cover the same set.
+  // Archiving a car locks everything on the page. Having no repair order
+  // locks only the things that would be written *onto* a repair order --
+  // the car's own record (VIN, mileage, the we-owe promise, deposits) is
+  // still perfectly editable on a car nobody has written up yet, and is
+  // often the only thing there is to edit.
+  const ticketIds = [
     "vd-status-select", "vd-concern", "vd-concern-save",
     "vd-add-job", "vd-add-part", "vd-add-labor", "vd-order-parts",
-    "vd-add-note", "vd-note-text",
+    "vd-add-note", "vd-note-text", "vd-note-visibility",
     "vd-save-assignment", "vd-technician", "vd-advisor",
     "vd-save-timing", "vd-date-in", "vd-odometer", "vd-promised",
+  ];
+  const vehicleIds = [
     "vd-edit-vehicle", "vd-recon-info-save", "vd-decode-vin", "vd-recon-vin", "vd-recon-mileage", "vd-recon-year",
     "vd-recon-make", "vd-recon-model", "vd-recon-trim", "vd-recon-color", "vd-recon-acquired",
     "vd-edit-customer", "vd-we-owe-save", "vd-we-owe-description", "vd-we-owe-category", "vd-we-owe-target", "vd-we-owe-status",
     "vd-take-payment", "vd-deposit-add", "vd-deposit-amount", "vd-deposit-method", "vd-deposit-note",
   ];
-  disableIds.forEach((id) => { const el = $(`#${id}`); if (el) el.disabled = archived; });
+  // A control with no ticket behind it used to stay live and answer a click
+  // with "Cannot read properties of null (reading 'id')" -- a programmer's
+  // sentence on a screen an advisor uses. Disabled is the honest state.
+  const noTicket = !state.detail.order;
+  ticketIds.forEach((id) => { const el = $(`#${id}`); if (el) el.disabled = archived || noTicket; });
+  vehicleIds.forEach((id) => { const el = $(`#${id}`); if (el) el.disabled = archived; });
   $$(".job-control", $("#vd-estimate-items")).forEach((el) => { el.disabled = archived; });
   // Rebuilt on every render like the estimate rows, but the strip renders
   // before this runs, so the boxes still need switching off here -- an
@@ -674,6 +836,10 @@ function applyArchivedLockUI(archived) {
    saves itself is how the supplier ends up never written down. */
 function renderPoStrip(order) {
   const box = $("#vd-po-strip");
+  if (!order) {
+    box.innerHTML = "";
+    return;
+  }
   const pos = order.purchase_orders || [];
   const nextNumber = `R${order.ro_number}-${(pos.length ? pos[pos.length - 1].sequence : 0) + 1}`;
   if (!pos.length) {
@@ -713,43 +879,67 @@ function renderPoStrip(order) {
   }).join("") + `<span class="po-strip-next">Next: <strong>${esc(nextNumber)}</strong></span>`;
 }
 
-/* The supplier boxes autocomplete against vendors the shop already uses, so
-   the second order from the same yard is picked rather than retyped (and so
-   it lands on the same vendor record the bill will). Fetched the first time
-   somebody actually reaches for one -- opening a ticket is the commonest
-   thing in the app and does not need to pay for a list most visits never
-   touch. */
-async function fillVendorOptions() {
-  const list = $("#po-vendor-options");
-  if (!list) return;
-  if (!state.vendors.length) state.vendors = await get("/api/vendors").catch(() => []);
-  list.innerHTML = state.vendors.map((v) => `<option value="${esc(v.name)}"></option>`).join("");
-}
+/* Everything on this page that belongs to the *ticket* rather than to the car,
+   written from one place -- including the case where there is no ticket.
 
+   A car with nothing written up yet is not an edge case. It is the whole "Not
+   started" pile on the board: the cars that have sat longest, and the ones
+   Walt asks about most. That case used to be handled by bailing out before
+   this function ran, which hid the parts grid and left every *other*
+   ticket-scoped panel still showing whatever the last car opened had put
+   there -- its notes, its activity log, its date-in and its odometer. Open
+   the Elantra, go back, open the Sorento, and the Sorento's page reported
+   84,500 miles, a windshield note somebody typed about the Elantra, and a
+   morning's worth of parts receipts against a car nobody had touched in
+   twelve days. Every one of those is a number the app cannot stand behind.
+
+   So a missing ticket is a state this renders, not a state it returns before
+   reaching. Each panel below is handed the order and empties itself when
+   there isn't one, which is also why a panel added later gets the same
+   treatment for free instead of joining a list of resets somewhere else. */
 function renderOrderPanel() {
   const order = state.detail.order;
   // The short number is what gets said out loud and written on a vendor's
   // paperwork; the long one stays reachable on hover for anything filed under
   // it before this existed.
-  $("#vd-ro-number").textContent = `Repair Order ${order.ro_number ?? order.number}`;
-  $("#vd-ro-number").title = order.number;
+  $("#vd-ro-number").textContent = order ? `Repair Order ${order.ro_number ?? order.number}` : "Repair Order";
+  $("#vd-ro-number").title = order ? order.number : "";
   renderStatusCard(order);
   renderPoStrip(order);
   renderEstimate(order);
   renderNotes(order);
   renderActivity(order);
   renderAssignment(order);
-  $("#vd-print-ticket").style.display = "";
-  $("#vd-add-task").style.display = "";
-  $("#vd-void-order").style.display = order.voided ? "none" : "";
+  $("#vd-print-ticket").style.display = order ? "" : "none";
+  // + Task survives a car with no ticket: a follow-up can name the car
+  // itself, and a car nobody has written up is the most common thing to
+  // want to leave a note about. Retail is the exception -- a customer's
+  // own car has no lot record, so there is nothing to hang the note on.
+  $("#vd-add-task").style.display = state.detail.segment === "retail" && !order ? "none" : "";
+  $("#vd-void-order").style.display = order && !order.voided ? "" : "none";
   // Retail tickets have no lot record behind them, so there's nothing on the
   // other side for the cost to move onto -- only recon and we-owe can swap.
-  const movable = !order.voided && (order.segment === "recon" || order.segment === "we_owe");
+  const movable = order && !order.voided && (order.segment === "recon" || order.segment === "we_owe");
   $("#vd-move-segment").style.display = movable ? "" : "none";
 }
 
 function renderStatusCardBase(order) {
   const pill = $("#vd-status-pill");
+  // No ticket, nothing to say about its status. The pill is emptied rather
+  // than left reading the last car's -- drawer.js keys the picker's own
+  // visibility off this text, so blanking it is what puts the whole control
+  // away, and the save-state caption goes with it for the same reason.
+  if (!order) {
+    pill.className = "pill";
+    pill.textContent = "";
+    const picker = $("#vd-status-picker");
+    if (picker) picker.className = "status-picker";
+    $("#vd-status-select").innerHTML = "";
+    $("#vd-concern").value = "";
+    const saveState = $("#vd-estimate-save-state");
+    if (saveState) { saveState.className = "save-state"; saveState.textContent = ""; }
+    return;
+  }
   pill.className = `pill ${STATUS_PILL_CLASS[order.status] || ""}`;
   pill.textContent = order.voided ? "Voided" : (STATUS_LABEL[order.status] || order.status);
   /* The board paints each status its own colour and this control did not --
@@ -875,9 +1065,19 @@ function writeLineTotals(box) {
 }
 
 function renderEstimate(order) {
+  const box = $("#vd-estimate-items");
+  // The grid lives inside the panel that gets hidden with no ticket, so a
+  // stale one is invisible rather than wrong -- but it is still the last
+  // car's parts sitting in the page, one un-hide away from being read as
+  // this car's, and the totals underneath it are written from it.
+  if (!order) {
+    box.classList.remove("has-jobs");
+    box.innerHTML = "";
+    applyTicketTotals(0, 0);
+    return;
+  }
   const items = order.estimate ? order.estimate.items : [];
   const jobs = order.estimate?.jobs ?? [];
-  const box = $("#vd-estimate-items");
   box.classList.toggle("has-jobs", jobs.length > 0);
 
   const jobOptionsHtml = (selectedId) => `<option value="" ${!selectedId ? "selected" : ""}>General</option>` +
@@ -2031,6 +2231,22 @@ export function wireMoveItemDialog() {
 /* ---------- notes / activity ---------- */
 function renderNotes(order) {
   const box = $("#vd-note-list");
+  /* A note is filed against the repair order, so a car with no ticket has
+     nowhere to put one -- and, until this, showed the last car's notes
+     instead. It now says which it is. The box and the button go with it:
+     leaving them live meant typing a note about the Sorento and being told
+     "Cannot read properties of null", which is a message for a programmer,
+     not for somebody standing at the counter. */
+  if (!order) {
+    box.innerHTML = emptyState({
+      icon: "idea",
+      title: "No ticket to note against yet",
+      hint: "Notes are kept on the car's repair order. Start one above and this is where they'll be.",
+      compact: true,
+    });
+    $("#vd-note-text").value = "";
+    return;
+  }
   /* The note itself is the point, so it leads at reading size and everything
      about it -- who, when, who's allowed to see it -- drops to one quiet line
      underneath. The two visibilities are told apart by the edge rather than by
@@ -2160,6 +2376,15 @@ function activityTime(value) {
    actually reading for. */
 function renderActivity(order) {
   const box = $("#vd-activity-list");
+  // The worst of the leaks, because this one is a list of things that
+  // demonstrably happened: a car nobody had touched in twelve days showed a
+  // morning of parts receipts and finished repairs belonging to the car
+  // opened before it. Nothing has happened to a car with no ticket, and that
+  // is what it now says.
+  if (!order) {
+    box.innerHTML = emptyState({ icon: "check", title: "No activity yet", hint: "Once a repair order is open on this vehicle, everything done to it gets logged here.", compact: true });
+    return;
+  }
   if (!order.activity.length) {
     box.innerHTML = emptyState({ icon: "check", title: "No activity yet", hint: "Status changes, assignments, and receipts on this ticket get logged here.", compact: true });
     return;
@@ -2181,6 +2406,24 @@ function renderActivity(order) {
 
 /* ---------- assignment ---------- */
 function renderAssignment(order) {
+  /* Date in, odometer in and the promised date are all written on the ticket,
+     which is why a car with no ticket has to show them empty rather than show
+     the last car's. This was the leak with a number attached: the Timing card
+     read 84,500 miles on a Sorento that has 71,200, three inches under the
+     Vehicle Info card correctly saying 71,200. */
+  if (!order) {
+    $("#vd-technician").innerHTML = `<option value="">Unassigned</option>`;
+    $("#vd-advisor").innerHTML = `<option value="">Unassigned</option>`;
+    $("#vd-date-in").value = "";
+    $("#vd-odometer").value = "";
+    const blank = $("#vd-promised");
+    blank.value = "";
+    blank.classList.remove("overdue");
+    const emptyLabel = $("#vd-assign-picker-label");
+    emptyLabel.textContent = "Assign";
+    emptyLabel.closest("button").title = "";
+    return;
+  }
   const techs = state.staff.filter((s) => s.role === "technician");
   const advisors = state.staff.filter((s) => s.role === "advisor" || s.role === "manager");
   const a = order.assignment;
@@ -2498,6 +2741,9 @@ export function wireVehicleDetail() {
   });
 
   $("#vd-add-task").addEventListener("click", () => addTaskForThisVehicle());
+  // Same jump as + Task, minus the empty title box: this one is for going to
+  // look at the queue, not to add to it.
+  $("#vd-tasks-open").addEventListener("click", () => addTaskForThisVehicle());
 
   $("#vd-archive-vehicle").addEventListener("click", async () => {
     const { segment, id, item } = state.detail;

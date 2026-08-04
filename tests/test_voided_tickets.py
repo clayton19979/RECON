@@ -11,7 +11,7 @@ what the car is doing, and a voided ticket's status is the word "complete".
 
 So a car whose only ticket had been voided reported itself finished. On the
 board it showed a green Complete pill; on Walt's Lot Report it sat under
-"Ready to sell" with "Nothing -- ready to go" beside it; and because
+"Ready to go" with "Nothing -- ready to go" beside it; and because
 `is_stalled` deliberately never flags a finished car, it could sit on the lot
 untouched forever without ever appearing in the Stalled count. A mistake that
 takes one click to make made a car invisible in exactly the three places that
@@ -88,14 +88,14 @@ def test_the_detail_page_agrees_with_the_board_about_a_voided_ticket(client):
 
 
 def test_a_voided_ticket_does_not_put_a_car_under_ready_to_sell(client):
-    """Walt reads the Lot Report on his own. "Ready to sell" is an instruction
+    """Walt reads the Lot Report on his own. "Ready to go" is an instruction
     to put the car back out, and this car has had nothing done to it."""
     recon = make_recon_vehicle(client, stock_number="R-VOID3", purchase_price=0)
     order = make_recon_order(client, recon["id"])
     void(client, order["id"])
 
     row = lot_row(client, "R-VOID3")
-    assert row["lot_bucket"] != "ready", "a car with only a voided ticket is being called ready to sell"
+    assert row["lot_bucket"] != "ready", "a car with only a voided ticket is being called ready to go"
     assert "ready to go" not in row["needs"].lower(), row["needs"]
 
 
@@ -217,7 +217,7 @@ def test_a_we_owe_promise_with_only_a_voided_ticket_is_still_open(client):
 
 def test_voided_money_stays_out_and_the_car_still_reads_as_unstarted(client):
     """The rollup already excluded the money. The status has to agree with it,
-    or the row says "$0.00 spent" under a heading that says "Ready to sell"."""
+    or the row says "$0.00 spent" under a heading that says "Ready to go"."""
     recon = make_recon_vehicle(client, stock_number="R-VOID12", purchase_price=0)
     order = make_recon_order(client, recon["id"])
     save_estimate(client, order["id"], [PART])

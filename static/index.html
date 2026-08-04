@@ -113,6 +113,17 @@
       <button type="button" class="btn btn-primary btn-sm" id="update-install">Update Now</button>
       <button type="button" class="btn btn-ghost btn-sm" id="update-dismiss" title="Hide until the next time RECON starts">Later</button>
     </div>
+    <!-- Shown only when the other PC has changed something and this screen
+         could not be redrawn without interrupting whoever is on it (a dialog
+         open, a cursor in a box, rows ticked, a repair order on screen). Quiet
+         on purpose -- it is a note, not an alarm, and it will appear several
+         times on a busy morning. See static/js/pulse.js. -->
+    <div class="stale-bar" id="stale-bar" role="status" hidden>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 10-2.3 5.7"/><path d="M20 5v6h-6"/></svg>
+      <span class="stale-bar-text">Someone else has made a change — what's on this screen is out of date.</span>
+      <button type="button" class="btn btn-primary btn-xs" id="stale-refresh">Refresh</button>
+      <button type="button" class="btn btn-ghost btn-xs" id="stale-dismiss" title="Hide this until something else changes">Later</button>
+    </div>
     <header class="topbar">
       <!-- Search leads the bar now. Typing a stock number is the shortest route
            to a car there is, and the field it goes in was a small pill floating
@@ -226,10 +237,22 @@
         <p class="stats-scope" id="vehicles-scope" role="status" aria-live="polite" aria-atomic="true">Every vehicle on the board.</p>
 
         <div class="filters">
+          <!-- Which pile: the live work, the record of cars that have
+               gone, or tickets that were taken back. This used to be a
+               fourth segment chip reading "History", which put the
+               record's state in a row of chips about the kind of work and
+               left nowhere to put a third state at all. -->
+          <label class="filters-select-wrap" for="vehicles-view-filter">
+            <span>Show</span>
+            <select class="filters-select" id="vehicles-view-filter">
+              <option value="active">Active</option>
+              <option value="history">History</option>
+              <option value="void">Void</option>
+            </select>
+          </label>
           <button class="chip active" data-filter="">All</button>
           <button class="chip" data-filter="recon">Recon</button>
           <button class="chip" data-filter="we_owe">We-Owe</button>
-          <button class="chip" data-filter="history">History</button>
           <label class="filters-select-wrap" for="vehicles-status-filter">
             <span>Status</span>
             <select class="filters-select" id="vehicles-status-filter">
@@ -272,6 +295,13 @@
              filters, or filed to History. Sits directly above the rows it's
              talking about, and only exists while a search is running. -->
         <div class="search-reach" id="vehicles-search-reach" role="status" aria-live="polite" hidden></div>
+
+        <!-- Cars whose only ticket was voided are their own pile now, so
+             the live board has to say they exist -- a car left behind by a
+             mis-click used to sit in with the live work looking like one
+             nobody had started, and taking it off that list without
+             saying so is how it would go missing instead. -->
+        <div class="search-reach" id="vehicles-void-nudge" role="status" aria-live="polite" hidden></div>
 
         <div class="bulk-bar" id="vehicles-bulk-bar" hidden>
           <span id="vehicles-bulk-count"></span>
@@ -346,9 +376,16 @@
 
                  Both are timestamps about the same car, so they share one
                  line instead of stacking two -- the band's whole job is to be
-                 read in a glance and then scrolled past. -->
+                 read in a glance and then scrolled past.
+
+                 The promise line is the third fact on the row, we-owe only:
+                 the date the customer was told, which until now lived solely
+                 in a form field inside the collapsible drawer -- the board
+                 could say "3 days past the promised date" about a car whose
+                 own page never mentioned it. -->
             <div class="detail-meta">
               <div class="detail-worked" id="vd-last-worked" hidden></div>
+              <div class="detail-promise" id="vd-promise-line" hidden></div>
               <div class="detail-updated" id="vd-updated"></div>
             </div>
           </div>
@@ -414,6 +451,24 @@
                 <label>What's being done<textarea id="vd-new-ro-concern" placeholder="e.g. Front end recon prep, or: replace missing passenger mirror"></textarea></label>
                 <button class="btn btn-primary" id="vd-start-ro" style="margin-top:10px">Start Repair Order</button>
               </div>
+            </div>
+
+            <!-- The follow-ups somebody left on this car.
+                 Tasks were a one-way street: the + Task button above files one
+                 onto the Tasks screen, and the car's own page never mentioned
+                 it again. So the note Clayton left for Antonio about this exact
+                 car was invisible on the one screen Antonio opens to work on
+                 it. Hidden entirely when there are none, so a car nobody has
+                 left anything on looks exactly as it always did. -->
+            <div class="card" id="vd-tasks-card" style="display:none">
+              <div class="card-head">
+                <div>
+                  <p class="section-eyebrow">Follow-ups</p>
+                  <h3 class="section-title" id="vd-tasks-title">Follow-ups</h3>
+                </div>
+                <button class="btn btn-ghost btn-sm" id="vd-tasks-open">Open Tasks</button>
+              </div>
+              <div id="vd-tasks-list" class="mini-list"></div>
             </div>
 
             <div id="vd-order-content" style="display:none">
@@ -828,13 +883,13 @@
         <div class="page-head">
           <div>
             <h1>Parts &amp; Cores</h1>
-            <p class="page-desc">Everything in flight between the shop and its vendors: parts that are on order and haven't turned up, core deposits owed back, and parts going back for credit.</p>
+            <p class="page-desc">Everything in flight between the shop and its vendors: parts that are on order and haven't turned up, parts that were fitted and never receipted, core deposits owed back, and parts going back for credit.</p>
           </div>
         </div>
 
         <div class="stats stats-cores" id="cores-returns-stats"></div>
 
-        <!-- Three desks, not one long page. Each one is a self-contained card
+        <!-- Four desks, not one long page. Each one is a self-contained card
              carrying its own heading, its own count and money, its own filters
              and its own table, so scrolling past the middle of a long parts
              list never leaves you wondering which table you're now reading.
@@ -867,6 +922,37 @@
             <table>
               <thead><tr><th>Part</th><th>Part #</th><th>RO / Vehicle</th><th>Ordered From</th><th class="num-col">Qty</th><th class="num-col">Value</th><th>Ordered</th><th>Waiting</th></tr></thead>
               <tbody id="on-order-table"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <!-- Missing Receipts sits second because it is the only desk on this
+             page about money that has already gone out. On Order is a car
+             waiting; this is a car that is finished, back on the lot, and
+             costed short. Every line here is a hole in what the app says the
+             shop spent, and the fix is one click through to the ticket. -->
+        <section class="desk desk-missing" aria-labelledby="desk-missing-title">
+          <div class="desk-head">
+            <div class="desk-heading">
+              <h2 id="desk-missing-title">Missing Receipts</h2>
+              <p class="desk-desc">Parts on finished tickets that were never marked received — the money is spent but isn't in the car's cost yet. Biggest first. Click a row to open the vehicle and receive it.</p>
+            </div>
+            <div class="desk-tally">
+              <span class="desk-count" id="missing-count" aria-live="polite">0 parts</span>
+              <span class="desk-total" id="missing-total"></span>
+            </div>
+          </div>
+
+          <div class="filters desk-filters">
+            <button class="chip active" data-missing-filter="">All</button>
+            <button class="chip" data-missing-filter="recon" title="Walt's lot cars and we-owe promises only — the ones the Lot Status sheet counts">Lot Cars Only</button>
+            <input id="missing-search" class="filters-search" placeholder="Search missing receipts…" title="Searches part, part #, RO, and vehicle" aria-label="Search missing receipts" autocomplete="off">
+          </div>
+
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Part</th><th>Part #</th><th>RO / Vehicle</th><th class="num-col">Qty</th><th class="num-col">Not In Cost</th><th>Ticket Idle</th></tr></thead>
+              <tbody id="missing-table"></tbody>
             </table>
           </div>
         </section>

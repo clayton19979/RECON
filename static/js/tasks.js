@@ -6,7 +6,7 @@ import { EMPTY_ICONS, emptyState } from "./empty-states.js";
 import { state } from "./state.js";
 import { openVehicleDetail } from "./vehicle-detail.js";
 import { assigneeSummaryLabel, renderAssigneeMenu, wireAssigneeToggle } from "./multi-picker.js";
-import { loadTasks, renderTaskBulkBar, saveTaskPrefs, selectTaskRange, syncTaskSelectAll, taskOrderOptionsHtml } from "./task-bulk.js";
+import { loadTasks, renderTaskBulkBar, saveTaskPrefs, selectTaskRange, syncTaskSelectAll, taskLinkFields, taskOrderOptionsHtml } from "./task-bulk.js";
 
 /* ==================================================================
    TASKS
@@ -16,7 +16,7 @@ import { loadTasks, renderTaskBulkBar, saveTaskPrefs, selectTaskRange, syncTaskS
 // `days` is exposed alongside because the buckets, the stat cards and the
 // chip all have to agree on what "overdue" means; three separate date
 // comparisons would eventually disagree by a day at some timezone boundary.
-function taskDueInfo(dueDate) {
+export function taskDueInfo(dueDate) {
   if (!dueDate) return null;
   const today = new Date();
   today.setHours(0, 0, 0, 0);
@@ -82,12 +82,12 @@ const TASK_ORDER_STATE_TITLE = {
 };
 
 function taskVehicleChip(t, linkable, refId) {
-  if (t.order_id) {
+  if (t.order_label || t.order_id) {
     const label = esc(t.order_label || t.order_number || `#${t.order_id}`);
     const note = TASK_ORDER_STATE_NOTE[t.order_state] || "";
     const body = `${TASK_VEHICLE_SVG}${label}${note ? `<span class="task-order-state">${note}</span>` : ""}`;
     const jump = linkable
-      ? `<button type="button" class="task-order-link" data-segment="${t.order_segment}" data-ref-id="${refId}" title="${TASK_ORDER_STATE_TITLE[t.order_state] || "Open this vehicle"}">${body}</button>`
+      ? `<button type="button" class="task-order-link" data-segment="${t.link_segment}" data-ref-id="${refId}" title="${TASK_ORDER_STATE_TITLE[t.order_state] || "Open this vehicle"}">${body}</button>`
       : `<span class="task-order-link is-static">${body}</span>`;
     return `<span class="task-order-wrap">${jump}${t.done ? "" : `<button type="button" class="task-link-clear" title="Unlink this vehicle" aria-label="Unlink ${label} from ${esc(t.title)}">×</button>`}</span>`;
   }
@@ -96,8 +96,11 @@ function taskVehicleChip(t, linkable, refId) {
 
 function taskRowHtml(t) {
   const due = taskDueInfo(t.due_date);
-  const refId = t.order_segment === "retail" ? t.order_vehicle_id : (t.order_recon_vehicle_id ?? t.order_we_owe_id);
-  const linkable = t.order_id && refId != null && (t.order_segment === "recon" || t.order_segment === "we_owe" || t.order_segment === "retail");
+  // Which page the chip opens. Worked out by the server now (link_segment /
+  // link_ref_id), because a follow-up can name a car with no ticket on it and
+  // the ticket's segment is then not there to be read.
+  const refId = t.link_ref_id;
+  const linkable = refId != null && (t.link_segment === "recon" || t.link_segment === "we_owe" || t.link_segment === "retail");
   const selected = state.taskSelection.has(t.id);
   const unassigned = !(t.assigned_to || []).length;
   // The cursor class rides along in the row markup rather than being painted
@@ -269,7 +272,7 @@ function wireTaskRowActions(container) {
       const row = btn.closest(".task-row");
       // -1 is the API's documented "clear the link" sentinel (null means
       // "leave it alone", since PATCH bodies omit untouched fields).
-      await patchField(row.dataset.id, { order_id: -1 }, renderTasksList);
+      await patchField(row.dataset.id, taskLinkFields(""), renderTasksList);
     });
   });
   /* "+ vehicle" swaps in place for the same recon/we-owe picker the quick-add
@@ -290,7 +293,7 @@ function wireTaskRowActions(container) {
       select.addEventListener("change", async () => {
         if (saving || !select.value) return;
         saving = true;
-        await patchField(row.dataset.id, { order_id: Number(select.value) }, renderTasksList);
+        await patchField(row.dataset.id, taskLinkFields(select.value), renderTasksList);
       });
       select.addEventListener("blur", () => { if (!saving) renderTasksList(); });
       select.addEventListener("keydown", (e) => {

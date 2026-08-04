@@ -52,6 +52,11 @@ class TaskIn(BaseModel):
     due_date: str = ""
     urgent: bool = False
     order_id: int | None = None
+    # The car, for a follow-up about one that has no ticket written yet. When
+    # order_id is given these are ignored and taken from the ticket instead --
+    # see resolve_link.
+    recon_vehicle_id: int | None = None
+    we_owe_id: int | None = None
     actor: str = "ui"
 
 
@@ -63,6 +68,8 @@ class TaskPatch(BaseModel):
     urgent: bool | None = None
     done: bool | None = None
     order_id: int | None = Field(default=None, description="Use -1 to clear an existing link")
+    recon_vehicle_id: int | None = Field(default=None, description="Use -1 to clear an existing link")
+    we_owe_id: int | None = Field(default=None, description="Use -1 to clear an existing link")
 
 
 class TaskBulk(BaseModel):
@@ -92,6 +99,8 @@ class TaskBulkCreateItem(BaseModel):
     title: str = Field(min_length=1, max_length=300)
     notes: str = ""
     order_id: int | None = None
+    recon_vehicle_id: int | None = None
+    we_owe_id: int | None = None
 
 
 class TaskBulkCreate(BaseModel):
@@ -127,18 +136,22 @@ def build_tasks_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
 
     # --- Tasks ---
 
-    # A task's linked order shows a "jump to vehicle" chip -- resolved here
-    # rather than making the frontend cross-reference /api/orders itself.
+    # A task's linked car shows a "jump to vehicle" chip -- resolved here rather
+    # than making the frontend cross-reference /api/orders itself.
+    #
+    # The car joins hang off the task's OWN columns, not the order's, because
+    # the whole point of those columns is that a follow-up can name a car with
+    # no ticket on it. Where there is a ticket the two agree by construction
+    # (resolve_link copies them off the order), so there is nothing to coalesce.
     task_query = """
         SELECT t.*, o.number order_number, o.segment order_segment, o.voided order_voided,
-               o.recon_vehicle_id order_recon_vehicle_id, o.we_owe_id order_we_owe_id,
                o.vehicle_id order_vehicle_id,
                rv.stock_number, rv.archived_at recon_archived_at, wi.archived_at we_owe_archived_at,
                wc.name we_owe_customer_name, oc.name order_customer_name
         FROM tasks t
         LEFT JOIN orders o ON o.id=t.order_id
-        LEFT JOIN recon_vehicles rv ON rv.id=o.recon_vehicle_id
-        LEFT JOIN we_owe_items wi ON wi.id=o.we_owe_id
+        LEFT JOIN recon_vehicles rv ON rv.id=t.recon_vehicle_id
+        LEFT JOIN we_owe_items wi ON wi.id=t.we_owe_id
         LEFT JOIN customers wc ON wc.id=wi.customer_id
         LEFT JOIN customers oc ON oc.id=o.customer_id
     """
@@ -146,12 +159,27 @@ def build_tasks_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
     def task_dict(row: sqlite3.Row) -> dict:
         value = dict(row)
         value["assigned_to"] = json.loads(value["assigned_to"]) if value["assigned_to"] else []
-        if value["order_id"] is None:
-            value["order_label"] = None
-        elif value["stock_number"]:
+        # Which page the chip opens, and under which heading it reads. Sent
+        # rather than worked out in the browser so a task that names a car with
+        # no ticket behaves exactly like one that names a ticket.
+        if value["recon_vehicle_id"] is not None:
+            value["link_segment"] = "recon"
+            value["link_ref_id"] = value["recon_vehicle_id"]
+        elif value["we_owe_id"] is not None:
+            value["link_segment"] = "we_owe"
+            value["link_ref_id"] = value["we_owe_id"]
+        elif value["order_segment"] == "retail":
+            value["link_segment"] = "retail"
+            value["link_ref_id"] = value["order_vehicle_id"]
+        else:
+            value["link_segment"] = ""
+            value["link_ref_id"] = None
+        if value["stock_number"]:
             value["order_label"] = value["stock_number"]
         elif value["we_owe_customer_name"]:
             value["order_label"] = f"We-Owe: {value['we_owe_customer_name']}"
+        elif value["order_id"] is None:
+            value["order_label"] = None
         elif value["order_segment"] == "retail" and value["order_customer_name"]:
             value["order_label"] = f"Retail: {value['order_customer_name']}"
         else:
@@ -164,11 +192,10 @@ def build_tasks_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
         # link is deliberately kept (it's still the car you meant); the row just
         # says so now. The picker below never offers these in the first place.
         value["order_state"] = ""
-        if value["order_id"] is not None:
-            if value["order_voided"]:
-                value["order_state"] = "voided"
-            elif value["recon_archived_at"] or value["we_owe_archived_at"]:
-                value["order_state"] = "archived"
+        if value["recon_archived_at"] or value["we_owe_archived_at"]:
+            value["order_state"] = "archived"
+        elif value["order_id"] is not None and value["order_voided"]:
+            value["order_state"] = "voided"
         return value
 
     def assert_valid_order(db: sqlite3.Connection, order_id: int | None) -> None:
@@ -176,6 +203,36 @@ def build_tasks_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
             return
         if not db.execute("SELECT 1 FROM orders WHERE id=?", (order_id,)).fetchone():
             raise HTTPException(404, "Repair order not found")
+
+    def resolve_link(
+        db: sqlite3.Connection,
+        order_id: int | None,
+        recon_vehicle_id: int | None,
+        we_owe_id: int | None,
+    ) -> tuple[int | None, int | None, int | None]:
+        """What a follow-up is attached to, settled in one place.
+
+        A ticket knows which car it is on, so when one is named the car is
+        taken FROM it rather than from the caller. Letting both be sent
+        independently is how a task ends up claiming to be about a car its own
+        ticket isn't on, and nothing downstream could tell which half was
+        right. A car with no ticket names itself and leaves order_id empty --
+        that is the case these columns exist for.
+        """
+        assert_valid_order(db, order_id)
+        if order_id is not None:
+            row = db.execute("SELECT recon_vehicle_id, we_owe_id FROM orders WHERE id=?", (order_id,)).fetchone()
+            return order_id, row["recon_vehicle_id"], row["we_owe_id"]
+        if recon_vehicle_id is not None and we_owe_id is not None:
+            raise HTTPException(422, "A follow-up points at one car, not two")
+        if (
+            recon_vehicle_id is not None
+            and not db.execute("SELECT 1 FROM recon_vehicles WHERE id=?", (recon_vehicle_id,)).fetchone()
+        ):
+            raise HTTPException(404, "Recon vehicle not found")
+        if we_owe_id is not None and not db.execute("SELECT 1 FROM we_owe_items WHERE id=?", (we_owe_id,)).fetchone():
+            raise HTTPException(404, "We-owe promise not found")
+        return None, recon_vehicle_id, we_owe_id
 
     @router.get("/tasks")
     def list_tasks():
@@ -202,6 +259,12 @@ def build_tasks_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
         ever look at again -- and it kept growing, so finding this morning's
         car meant scrolling past a year of finished ones.
 
+        It also only ever offered TICKETS, and the cars worth leaving a note
+        about are frequently the ones with no ticket on them yet: a lot car
+        waiting on a title, a we-owe promise nobody has written up. Those are
+        offered now too, as the car itself -- one line per car either way, so
+        the list reads as "which car" rather than "which piece of paperwork".
+
         The label is built here rather than in the browser because the same
         car has to read the same way in the quick-add box, in the per-row
         picker, and on the chip the row ends up showing. Three copies of the
@@ -209,7 +272,7 @@ def build_tasks_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
         """
         with connect() as db:
             rows = db.execute(
-                """SELECT o.id, o.number, o.segment, rv.stock_number,
+                """SELECT o.id, o.number, o.segment, o.recon_vehicle_id, o.we_owe_id, rv.stock_number,
                           v.year, v.make, v.model,
                           wc.name we_owe_customer_name, oc.name order_customer_name
                      FROM orders o
@@ -225,7 +288,14 @@ def build_tasks_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
             ).fetchall()
             result = [
                 {
+                    # What the picker puts in the option and hands back. A
+                    # plain id can't say whether it means a ticket or a car,
+                    # and those are now both possible answers.
+                    "value": f"order:{row['id']}",
                     "id": row["id"],
+                    "order_id": row["id"],
+                    "recon_vehicle_id": row["recon_vehicle_id"],
+                    "we_owe_id": row["we_owe_id"],
                     "segment": row["segment"],
                     # The heading this row sits under. Sent rather than mapped
                     # in the browser so the three kinds of work are named in
@@ -245,23 +315,79 @@ def build_tasks_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
             for entry, row in zip(result, rows, strict=True):
                 if seen[entry["label"]] > 1:
                     entry["label"] = f"{entry['label']} · {row['number']}"
+
+            # The cars with nothing live on them. NOT EXISTS rather than a
+            # LEFT JOIN so a car whose only tickets are voided still counts as
+            # having none -- that is the same car as far as anyone standing in
+            # the shop is concerned, and it is exactly the one somebody wants
+            # to leave a note about.
+            for row in db.execute(
+                """SELECT rv.id, rv.stock_number, v.year, v.make, v.model
+                     FROM recon_vehicles rv
+                     JOIN vehicles v ON v.id=rv.vehicle_id
+                    WHERE coalesce(rv.archived_at,'')=''
+                      AND NOT EXISTS (SELECT 1 FROM orders o WHERE o.recon_vehicle_id=rv.id AND o.voided=0)
+                    ORDER BY rv.id DESC"""
+            ):
+                car = " ".join(str(p) for p in (row["year"], row["make"], row["model"]) if p).strip()
+                head = row["stock_number"] or "Recon vehicle"
+                result.append(
+                    {
+                        "value": f"recon:{row['id']}",
+                        "id": None,
+                        "order_id": None,
+                        "recon_vehicle_id": row["id"],
+                        "we_owe_id": None,
+                        "segment": "recon",
+                        "group": SEGMENT_LABEL["recon"],
+                        "label": f"{head} — {car}" if car else head,
+                    }
+                )
+            for row in db.execute(
+                """SELECT wi.id, v.year, v.make, v.model, c.name customer_name
+                     FROM we_owe_items wi
+                     JOIN vehicles v ON v.id=wi.vehicle_id
+                     LEFT JOIN customers c ON c.id=wi.customer_id
+                    WHERE coalesce(wi.archived_at,'')=''
+                      AND NOT EXISTS (SELECT 1 FROM orders o WHERE o.we_owe_id=wi.id AND o.voided=0)
+                    ORDER BY wi.id DESC"""
+            ):
+                car = " ".join(str(p) for p in (row["year"], row["make"], row["model"]) if p).strip()
+                head = f"We-Owe: {row['customer_name']}" if row["customer_name"] else "We-Owe"
+                result.append(
+                    {
+                        "value": f"we_owe:{row['id']}",
+                        "id": None,
+                        "order_id": None,
+                        "recon_vehicle_id": None,
+                        "we_owe_id": row["id"],
+                        "segment": "we_owe",
+                        "group": SEGMENT_LABEL["we_owe"],
+                        "label": f"{head} — {car}" if car else head,
+                    }
+                )
             result.sort(key=lambda e: SEGMENT_ORDER.get(e["segment"], 99))
             return result
 
     @router.post("/tasks", status_code=201)
     def create_task(item: TaskIn):
         with connect() as db:
-            assert_valid_order(db, item.order_id)
+            order_id, recon_vehicle_id, we_owe_id = resolve_link(
+                db, item.order_id, item.recon_vehicle_id, item.we_owe_id
+            )
             ts = now_fn()
             cur = db.execute(
-                "INSERT INTO tasks(title,notes,assigned_to,due_date,urgent,order_id,created_by,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO tasks(title,notes,assigned_to,due_date,urgent,order_id,recon_vehicle_id,we_owe_id,"
+                "created_by,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     item.title.strip(),
                     item.notes.strip(),
                     json.dumps(_clean_names(item.assigned_to)),
                     item.due_date.strip(),
                     int(item.urgent),
-                    item.order_id,
+                    order_id,
+                    recon_vehicle_id,
+                    we_owe_id,
                     item.actor.strip(),
                     ts,
                     ts,
@@ -278,18 +404,30 @@ def build_tasks_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
             # written. A partial create is worse than a clean failure here: the
             # caller is a "select 8 cars, make 8 tasks" button, and half a batch
             # means re-selecting the right subset by hand or creating doubles.
-            for entry in item.items:
-                assert_valid_order(db, entry.order_id)
+            links = [resolve_link(db, e.order_id, e.recon_vehicle_id, e.we_owe_id) for e in item.items]
             ts = now_fn()
             names = json.dumps(_clean_names(item.assigned_to))
             due = item.due_date.strip()
             urgent = int(item.urgent)
             actor = item.actor.strip()
             new_ids: list[int] = []
-            for entry in item.items:
+            for entry, (order_id, recon_vehicle_id, we_owe_id) in zip(item.items, links, strict=True):
                 cur = db.execute(
-                    "INSERT INTO tasks(title,notes,assigned_to,due_date,urgent,order_id,created_by,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
-                    (entry.title.strip(), entry.notes.strip(), names, due, urgent, entry.order_id, actor, ts, ts),
+                    "INSERT INTO tasks(title,notes,assigned_to,due_date,urgent,order_id,recon_vehicle_id,we_owe_id,"
+                    "created_by,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                    (
+                        entry.title.strip(),
+                        entry.notes.strip(),
+                        names,
+                        due,
+                        urgent,
+                        order_id,
+                        recon_vehicle_id,
+                        we_owe_id,
+                        actor,
+                        ts,
+                        ts,
+                    ),
                 )
                 new_ids.append(inserted_id(cur))
             placeholders = ",".join("?" * len(new_ids))
@@ -323,13 +461,20 @@ def build_tasks_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
                 params.append(int(item.done))
                 fields.append("completed_at=?")
                 params.append(now_fn() if item.done else "")
-            if item.order_id is not None:
-                # -1 is the "unlink" sentinel -- None already means "field
-                # not sent" for a PATCH, so a real NULL needs its own value.
-                new_order_id = None if item.order_id == -1 else item.order_id
-                assert_valid_order(db, new_order_id)
+            # -1 is the "unlink" sentinel -- None already means "field not
+            # sent" for a PATCH, so a real NULL needs its own value. The three
+            # move together: re-pointing a follow-up at a different car has to
+            # clear the ticket it used to name, or the row keeps a link to
+            # paperwork on a car it no longer claims to be about.
+            if item.order_id is not None or item.recon_vehicle_id is not None or item.we_owe_id is not None:
+                sent = [None if v == -1 else v for v in (item.order_id, item.recon_vehicle_id, item.we_owe_id)]
+                new_order_id, new_recon_id, new_we_owe_id = resolve_link(db, *sent)
                 fields.append("order_id=?")
                 params.append(new_order_id)
+                fields.append("recon_vehicle_id=?")
+                params.append(new_recon_id)
+                fields.append("we_owe_id=?")
+                params.append(new_we_owe_id)
             if fields:
                 fields.append("updated_at=?")
                 params.append(now_fn())

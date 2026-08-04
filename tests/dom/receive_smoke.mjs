@@ -38,6 +38,9 @@ const mkOrder = () => ({
 });
 
 const receivePosts = [];
+// Swapped per-case by the vendor-default tests below; the rest of the file
+// runs against the single-vendor list it has always used.
+let vendorList = [{ id: 3, name: "Pull-A-Part", last_invoice_at: "" }];
 const { w, doc, settle, ok, finish } = await boot({
   expose: ["state", "renderEstimate", "openReceiveDialog", "toast"],
   fetch: async (url, opts = {}) => {
@@ -45,7 +48,7 @@ const { w, doc, settle, ok, finish } = await boot({
       receivePosts.push(JSON.parse(opts.body));
       return { ap_invoice_id: 5, received_items: 2 };
     }
-    if (url === "/api/vendors") return [{ id: 3, name: "Pull-A-Part" }];
+    if (url === "/api/vendors") return vendorList;
     if (/^\/api\/recon\/vehicles\/7$/.test(url)) return vehicle;
     if (url.startsWith("/api/orders?")) return [mkOrder()];
     return [];
@@ -60,8 +63,8 @@ const type = (input, value) => {
   input.dispatchEvent(new w.Event("input", { bubbles: true }));
 };
 
-async function openDialogWithBothParts() {
-  w.state.detail = { segment: "recon", id: 7, item: vehicle, order: mkOrder() };
+async function openDialogWithBothParts(order = mkOrder()) {
+  w.state.detail = { segment: "recon", id: 7, item: vehicle, order };
   w.state.staff = [];
   w.renderEstimate(w.state.detail.order);
   for (const cb of doc.querySelectorAll("#vd-estimate-items .ei-receive-check")) {
@@ -71,6 +74,13 @@ async function openDialogWithBothParts() {
   await w.openReceiveDialog();
   await settle();
 }
+
+const vendorSelect = () => doc.querySelector("#receive-vendor");
+const newVendorShown = () => doc.querySelector("#receive-new-vendor").style.display !== "none";
+const whyNote = () => {
+  const el = doc.querySelector("#receive-vendor-why");
+  return el.hidden ? "" : el.textContent.trim();
+};
 
 await openDialogWithBothParts();
 
@@ -143,4 +153,83 @@ ok(receivePosts.length === 2, `the untouched-price post never landed (${receiveP
 ok(JSON.stringify(receivePosts[1].cost_overrides) === "{}",
    `an untouched dialog invented overrides: ${JSON.stringify(receivePosts[1].cost_overrides)}`);
 
-finish("receive parts dialog: invoice pricing, live totals, blank-price guard, override payload");
+/* ---------- the vendor row: selection, name box and note agree ----------
+
+   The dropdown's first option is "＋ New vendor…" and a <select> opens on its
+   first option, so this dialog used to open claiming a new vendor while
+   hiding the box to name one (that box was tied to whether any vendors
+   existed, not to what was selected). Post & Receive then said "Enter the
+   vendor's name" with nowhere to type it. */
+
+// No PO vendor, nothing received yet, no vendor ever invoiced -- the app has
+// nothing to go on, so it stays on "＋ New vendor…" and must SHOW the name box.
+vendorList = [{ id: 3, name: "Pull-A-Part", last_invoice_at: "" }];
+await openDialogWithBothParts();
+ok(vendorSelect().value === "__new__", `expected no guess, got ${vendorSelect().value}`);
+ok(newVendorShown(), "the new-vendor name box is hidden while '＋ New vendor…' is selected");
+ok(whyNote() === "", `an unexplained guess still printed a reason: ${whyNote()}`);
+
+// Falls back to whoever the shop bought from most recently. Alphabetically
+// last, to prove it is reading the date and not the list order.
+vendorList = [
+  { id: 3, name: "Pull-A-Part", last_invoice_at: "2026-01-04T09:00:00" },
+  { id: 4, name: "WorldPac", last_invoice_at: "2026-06-30T16:20:00" },
+];
+await openDialogWithBothParts();
+ok(vendorSelect().value === "4", `did not fall back to the most recent vendor: ${vendorSelect().value}`);
+ok(!newVendorShown(), "the new-vendor name box is showing while a real vendor is selected");
+ok(whyNote() === "", `a shop-wide recency guess should say nothing, said: ${whyNote()}`);
+
+// A vendor written on the purchase order these lines went out on beats it.
+const poOrder = mkOrder();
+poOrder.purchase_orders = [{ id: 9, number: "R42-1", vendor_id: 3 }];
+poOrder.estimate.items[0].purchase_order_id = 9;
+poOrder.estimate.items[1].purchase_order_id = 9;
+await openDialogWithBothParts(poOrder);
+ok(vendorSelect().value === "3", `the PO's own vendor was ignored: ${vendorSelect().value}`);
+ok(whyNote() === "On purchase order R42-1", `the PO reason is wrong: ${whyNote()}`);
+
+// Two POs to two different suppliers in one go has no single right answer, so
+// it must not state one -- it drops back to the shop-wide guess, unexplained.
+const splitOrder = mkOrder();
+splitOrder.purchase_orders = [
+  { id: 9, number: "R42-1", vendor_id: 3 },
+  { id: 10, number: "R42-2", vendor_id: 4 },
+];
+splitOrder.estimate.items[0].purchase_order_id = 9;
+splitOrder.estimate.items[1].purchase_order_id = 10;
+await openDialogWithBothParts(splitOrder);
+ok(whyNote() === "", `two suppliers in one batch claimed a single PO: ${whyNote()}`);
+
+// Nothing on the PO, but a part on this same ticket was already received from
+// someone -- receiving the rest of that order is the everyday case.
+const partlyReceived = mkOrder();
+partlyReceived.estimate.items.push({
+  id: 14, kind: "part", description: "Bulb", part_number: "B-1", quantity: 1,
+  unit_cost: 4, core_charge: 0, status: "received", received_quantity: 1,
+  received_vendor_id: 3, job_id: null,
+});
+await openDialogWithBothParts(partlyReceived);
+ok(vendorSelect().value === "3", `ignored the vendor already used on this ticket: ${vendorSelect().value}`);
+ok(whyNote() === "Last received from on this ticket", `the ticket-history reason is wrong: ${whyNote()}`);
+
+// Overruling the guess by hand drops the explanation and reveals the name box
+// when (and only when) "＋ New vendor…" is chosen.
+vendorSelect().value = "__new__";
+vendorSelect().dispatchEvent(new w.Event("change", { bubbles: true }));
+ok(newVendorShown(), "choosing '＋ New vendor…' by hand did not reveal the name box");
+ok(whyNote() === "", "the app's reason survived the user overruling it");
+vendorSelect().value = "4";
+vendorSelect().dispatchEvent(new w.Event("change", { bubbles: true }));
+ok(!newVendorShown(), "picking a real vendor left the new-vendor box on screen");
+
+// The whole point: the preselected vendor posts without anyone touching the
+// dropdown. Invoice # and Post is the entire interaction.
+await openDialogWithBothParts(partlyReceived);
+doc.querySelector("#receive-invoice-number").value = "PAP-7010";
+doc.querySelector("#receive-form").dispatchEvent(new w.Event("submit", { bubbles: true, cancelable: true }));
+await settle();
+ok(receivePosts.length === 3, `the preselected vendor did not post (${receivePosts.length} posts)`);
+ok(receivePosts[2].vendor_id === 3, `posted against the wrong vendor: ${JSON.stringify(receivePosts[2].vendor_id)}`);
+
+finish("receive parts dialog: invoice pricing, live totals, blank-price guard, override payload, vendor default");

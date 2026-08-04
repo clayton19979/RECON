@@ -10,7 +10,7 @@ import { VIEW_LOADERS } from "./nav.js";
    only trace was a console error nobody on a shop floor is going to open. Any
    view loader that throws now lands here and the view says so, with a way to
    retry that doesn't involve reloading the whole app. */
-async function runViewLoader(name) {
+export async function runViewLoader(name) {
   const load = VIEW_LOADERS[name];
   if (!load) return;
   try {
@@ -84,6 +84,10 @@ export function showView(name) {
   // view's rows stay on screen until it resolves.
   showPlaceholders(name);
   runViewLoader(name);
+  // What is on screen was just fetched, so it is current as of now. Announced
+  // rather than pushed, so the freshness check can reset its baseline without
+  // this module having to know that it exists.
+  document.dispatchEvent(new CustomEvent("recon:viewshown", { detail: name }));
 }
 
 const THEMES = ["harbor", "gunmetal", "petrol", "mesa", "cobalt", "verdigris"];

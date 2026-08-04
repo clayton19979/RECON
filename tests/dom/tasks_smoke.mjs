@@ -37,22 +37,22 @@ const STAFF = [
 let tasks = [
   { id: 1, title: "Later: order shop rags", notes: "", assigned_to: [], due_date: iso(20), urgent: 0, done: 0,
     order_id: null, created_by: "Clay", created_at: stamp(1), completed_at: "", order_label: null, order_segment: null,
-    order_recon_vehicle_id: null, order_we_owe_id: null, order_number: null },
+    recon_vehicle_id: null, we_owe_id: null, order_number: null, link_segment: "", link_ref_id: null },
   { id: 2, title: "Follow up: R-0981 — no work in 41 days", notes: "", assigned_to: [], due_date: "", urgent: 0, done: 0,
     order_id: 42, created_by: "Clay", created_at: stamp(1), completed_at: "", order_label: "R-0981", order_segment: "recon",
-    order_recon_vehicle_id: 7, order_we_owe_id: null, order_number: "RO-1042" },
+    recon_vehicle_id: 7, we_owe_id: null, order_number: "RO-1042", link_segment: "recon", link_ref_id: 7 },
   { id: 3, title: "Overdue: call John about his Civic", notes: "", assigned_to: ["Dana Ruiz"], due_date: iso(-4), urgent: 0, done: 0,
     order_id: null, created_by: "Clay", created_at: stamp(2), completed_at: "", order_label: null, order_segment: null,
-    order_recon_vehicle_id: null, order_we_owe_id: null, order_number: null },
+    recon_vehicle_id: null, we_owe_id: null, order_number: null, link_segment: "", link_ref_id: null },
   { id: 4, title: "Today: pick up the brake pads", notes: "", assigned_to: ["Dana Ruiz", "Antonio Vega"], due_date: iso(0), urgent: 1, done: 0,
     order_id: null, created_by: "Clay", created_at: stamp(3), completed_at: "", order_label: null, order_segment: null,
-    order_recon_vehicle_id: null, order_we_owe_id: null, order_number: null },
+    recon_vehicle_id: null, we_owe_id: null, order_number: null, link_segment: "", link_ref_id: null },
   { id: 5, title: "This week: inspect the loaner", notes: "", assigned_to: [], due_date: iso(3), urgent: 0, done: 0,
     order_id: null, created_by: "Clay", created_at: stamp(4), completed_at: "", order_label: null, order_segment: null,
-    order_recon_vehicle_id: null, order_we_owe_id: null, order_number: null },
+    recon_vehicle_id: null, we_owe_id: null, order_number: null, link_segment: "", link_ref_id: null },
   { id: 6, title: "Done: rotate the tires", notes: "", assigned_to: [], due_date: "", urgent: 0, done: 1,
     order_id: null, created_by: "Clay", created_at: stamp(9), completed_at: stamp(1), order_label: null, order_segment: null,
-    order_recon_vehicle_id: null, order_we_owe_id: null, order_number: null },
+    recon_vehicle_id: null, we_owe_id: null, order_number: null, link_segment: "", link_ref_id: null },
 ];
 
 // What the vehicle picker gets from /api/tasks/linkable-orders: already
@@ -60,18 +60,39 @@ let tasks = [
 // voided tickets and cars sold off to History. All three segments are offered
 // now that retail ROs have a vehicle page of their own.
 const ORDERS = [
-  { id: 42, segment: "recon", group: "Recon", label: "R-0981 — 2019 Ford Edge" },
-  { id: 55, segment: "we_owe", group: "We-Owe", label: "We-Owe: Maria Soto — 2021 Kia Sorento" },
-  { id: 60, segment: "retail", group: "Retail", label: "Retail: Bob Lang — 2020 Ford F-150" },
+  { value: "order:42", id: 42, order_id: 42, recon_vehicle_id: 7, we_owe_id: null,
+    segment: "recon", group: "Recon", label: "R-0981 — 2019 Ford Edge" },
+  // A lot car with nothing written up on it. This is the row that could not be
+  // picked at all before -- and "untouched 41 days" is exactly that car.
+  { value: "recon:8", id: null, order_id: null, recon_vehicle_id: 8, we_owe_id: null,
+    segment: "recon", group: "Recon", label: "R-0977 — 2016 Ford Fusion" },
+  { value: "order:55", id: 55, order_id: 55, recon_vehicle_id: null, we_owe_id: 9,
+    segment: "we_owe", group: "We-Owe", label: "We-Owe: Maria Soto — 2021 Kia Sorento" },
+  { value: "order:60", id: 60, order_id: 60, recon_vehicle_id: null, we_owe_id: null,
+    segment: "retail", group: "Retail", label: "Retail: Bob Lang — 2020 Ford F-150" },
 ];
 
 // The JOIN fields /api/tasks carries for each linkable order, so the PATCH
 // handler below can answer a link the way the real server would.
-const ORDER_JOIN = {
-  42: { order_label: "R-0981", order_segment: "recon", order_recon_vehicle_id: 7, order_we_owe_id: null, order_number: "RO-1042" },
-  55: { order_label: "Maria Soto", order_segment: "we_owe", order_recon_vehicle_id: null, order_we_owe_id: 9, order_number: "RO-1077" },
+const LINK_JOIN = {
+  "order:42": { order_id: 42, recon_vehicle_id: 7, we_owe_id: null, order_label: "R-0981", order_segment: "recon",
+                order_number: "RO-1042", link_segment: "recon", link_ref_id: 7 },
+  "recon:8": { order_id: null, recon_vehicle_id: 8, we_owe_id: null, order_label: "R-0977", order_segment: null,
+               order_number: null, link_segment: "recon", link_ref_id: 8 },
+  "order:55": { order_id: 55, recon_vehicle_id: null, we_owe_id: 9, order_label: "Maria Soto", order_segment: "we_owe",
+                order_number: "RO-1077", link_segment: "we_owe", link_ref_id: 9 },
 };
-const NO_ORDER = { order_id: null, order_label: null, order_segment: null, order_recon_vehicle_id: null, order_we_owe_id: null, order_number: null };
+const NO_ORDER = { order_id: null, recon_vehicle_id: null, we_owe_id: null, order_label: null, order_segment: null,
+                   order_number: null, link_segment: "", link_ref_id: null };
+// The picker sends all three link fields at once (repointing a follow-up at a
+// car has to drop the ticket the row used to name), so the fixture answers on
+// the combination rather than on order_id alone -- the same way the server does.
+const linkKeyFor = (body) => {
+  if (body.order_id > 0) return `order:${body.order_id}`;
+  if (body.recon_vehicle_id > 0) return `recon:${body.recon_vehicle_id}`;
+  if (body.we_owe_id > 0) return `we_owe:${body.we_owe_id}`;
+  return "";
+};
 
 const bulkCalls = [];
 const patchCalls = [];
@@ -124,9 +145,8 @@ const { w, doc, fetchLog, settle, ok, finish, rejections } = await boot({
         // fields the task list view is built from. A fixture that only echoed
         // order_id back would let the UI pass while rendering a chip with no
         // label and a jump that goes nowhere.
-        if (body.order_id !== undefined) {
-          if (body.order_id === -1) Object.assign(next, NO_ORDER);
-          else Object.assign(next, { order_id: body.order_id }, ORDER_JOIN[body.order_id] || {});
+        if (body.order_id !== undefined || body.recon_vehicle_id !== undefined || body.we_owe_id !== undefined) {
+          Object.assign(next, NO_ORDER, LINK_JOIN[linkKeyFor(body)] || {});
         }
         return next;
       });
@@ -546,14 +566,38 @@ ok([...linkSelect.options].some((o) => /Bob Lang/.test(o.textContent)), "the pic
 ok([...linkSelect.querySelectorAll("optgroup")].map((g) => g.label).join("|") === "Recon|We-Owe|Retail",
    `row picker headings are "${[...linkSelect.querySelectorAll("optgroup")].map((g) => g.label).join("|")}"`);
 ok(/Pick a vehicle/.test(linkSelect.options[0].textContent), "the row picker lost its placeholder option");
-linkSelect.value = "55";
+// A car nobody has written a ticket for is a pick now. It was not before, and
+// it is the one people most want: a lot car sitting doing nothing.
+ok([...linkSelect.options].some((o) => o.value === "recon:8" && /R-0977/.test(o.textContent)),
+   "the picker is missing the car that has no ticket");
+linkSelect.value = "order:55";
 linkSelect.dispatchEvent(new w.Event("change", { bubbles: true }));
 await settle();
-const linkPatch = patchCalls.find((c) => c.id === 3 && c.body.order_id === 55);
+const linkPatch = patchCalls.find((c) => c.id === 3 && c.body.we_owe_id === 9);
 ok(linkPatch, "choosing a vehicle sent no PATCH");
+// All three go together: a follow-up moved onto a different car must not keep
+// pointing at the ticket it used to name.
+ok(linkPatch && linkPatch.body.order_id === 55 && linkPatch.body.recon_vehicle_id === -1,
+   `the link PATCH sent ${JSON.stringify(linkPatch && linkPatch.body)}`);
 const newChip = rowFor(3).querySelector(".task-order-link");
 ok(newChip && /Maria Soto/.test(newChip.textContent), "the newly linked row didn't render its vehicle chip");
+ok(newChip && newChip.dataset.refId === "9", "the newly linked row's chip doesn't jump to the car");
 ok(rowFor(3).querySelector(".task-link-clear"), "the newly linked row can't be unlinked");
+
+// And the ticketless pick lands as a real, jumpable link rather than as a
+// chip with no label and a jump that goes nowhere.
+rowFor(5).querySelector(".task-link-add").click();
+await settle();
+const bareSelect = rowFor(5).querySelector(".task-link-edit");
+bareSelect.value = "recon:8";
+bareSelect.dispatchEvent(new w.Event("change", { bubbles: true }));
+await settle();
+const barePatch = patchCalls.find((c) => c.id === 5 && c.body.recon_vehicle_id === 8);
+ok(barePatch && barePatch.body.order_id === -1, "linking a ticketless car didn't clear order_id");
+const bareChip = rowFor(5).querySelector(".task-order-link");
+ok(bareChip && /R-0977/.test(bareChip.textContent), "a car with no ticket rendered no vehicle chip");
+ok(bareChip && bareChip.dataset.refId === "8" && bareChip.dataset.segment === "recon",
+   "a car with no ticket isn't jumpable from its follow-up");
 
 // Escape abandons silently -- same contract as every other editor on the row.
 const linkPatchesBefore = patchCalls.length;
@@ -570,7 +614,8 @@ ok(rowFor(1).querySelector(".task-link-add"), "Escape didn't put the + vehicle s
 // since PATCH bodies simply omit untouched fields).
 rowFor(2).querySelector(".task-link-clear").click();
 await settle();
-ok(patchCalls.some((c) => c.id === 2 && c.body.order_id === -1), "the unlink × didn't send the -1 sentinel");
+ok(patchCalls.some((c) => c.id === 2 && c.body.order_id === -1 && c.body.recon_vehicle_id === -1 && c.body.we_owe_id === -1),
+   "the unlink × didn't clear all three link fields with the -1 sentinel");
 ok(!rowFor(2).querySelector(".task-order-link"), "an unlinked row kept its vehicle chip");
 ok(rowFor(2).querySelector(".task-link-add"), "an unlinked row didn't get the + vehicle slot back");
 

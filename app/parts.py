@@ -1204,6 +1204,85 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
                 value["po_outstanding"] = batch_sizes.get(value["po_id"], 0) if value["po_id"] is not None else 0
             return result
 
+    @router.get("/parts/missing-receipts")
+    def list_missing_receipts():
+        """Money already spent that the app is not counting.
+
+        A part line on a *finished* ticket that was never marked received is
+        the one shape of missing paperwork that costs the shop a real answer.
+        The part is on the car -- the ticket was closed, so the work is done --
+        but because nobody clicked Receive, its cost never landed. The car
+        reads as cheaper than it was, and Walt's "what did we spend on it"
+        comes back short by exactly that much. On an open ticket the same line
+        is nothing to worry about: it is simply work still ahead.
+
+        The board and the lot sheet already say this per car ("Ready to go --
+        but 1 part never marked received"). What neither can do is put them in
+        one list, so clearing them meant noticing the sentence on one row at a
+        time, on the one screen where it appears, and nobody does that during
+        a busy morning. This is that list.
+
+        Deliberately NOT the On Order desk's scope. That desk is what a car is
+        waiting for (status='ordered', tickets still open); these lines are
+        usually still sitting at 'quoted' -- ordered over the counter, fitted,
+        and never written down -- so they never appeared there and never will.
+        Two lists, two questions: what hasn't turned up yet, and what turned
+        up and never got receipted.
+
+        The rule matching matters more than anything else here. Every filter
+        below is the same one cost_rollups uses for unreceived_closed_cost, so
+        the total on this desk can never disagree with the warning on the car's
+        own row. Priced at the written price (quoted_unit_cost, falling back to
+        unit_cost) for the same reason it is there: receiving overwrites
+        unit_cost with the vendor's number, and a line that was never received
+        never got one.
+        """
+        with connect() as db:
+            rows = db.execute(
+                """SELECT ei.id, ei.description, ei.part_number, ei.quantity, ei.received_quantity,
+                       coalesce(ei.quoted_unit_cost, ei.unit_cost) written_unit_cost,
+                       ei.status, ei.ordered_at, po.number po_number,
+                       o.id order_id, o.number ro_number, o.segment,
+                       o.recon_vehicle_id, o.we_owe_id, o.vehicle_id,
+                       o.created_at order_created_at, o.last_activity_at,
+                       v.year, v.make, v.model,
+                       rv.stock_number, wc.name we_owe_customer_name, oc.name order_customer_name
+                   FROM estimate_items ei
+                   JOIN estimates e ON e.id=ei.estimate_id
+                   JOIN orders o ON o.id=e.order_id
+                   JOIN vehicles v ON v.id=o.vehicle_id
+                   LEFT JOIN purchase_orders po ON po.id=ei.purchase_order_id
+                   LEFT JOIN recon_vehicles rv ON rv.id=o.recon_vehicle_id
+                   LEFT JOIN we_owe_items wi ON wi.id=o.we_owe_id
+                   LEFT JOIN customers wc ON wc.id=wi.customer_id
+                   LEFT JOIN customers oc ON oc.id=o.customer_id
+                   WHERE ei.kind='part' AND ei.part_returned=0
+                     AND ei.received_quantity < ei.quantity
+                     AND o.status='complete' AND o.voided=0
+                     AND coalesce(rv.archived_at,'')='' AND coalesce(wi.archived_at,'')=''
+                   -- Biggest hole first: this desk exists to make a cost
+                   -- figure true again, and the line that moves it most is
+                   -- the one worth walking to the filing cabinet for.
+                   ORDER BY (ei.quantity - ei.received_quantity) * coalesce(ei.quoted_unit_cost, ei.unit_cost) DESC,
+                            ei.id ASC""",
+            )
+            result = []
+            for row in rows:
+                value = dict(row)
+                value["vehicle_label"] = label_vehicle(value)
+                value["vehicle"] = f"{value['year']} {value['make']} {value['model']}"
+                missing = round(float(value["quantity"]) - float(value["received_quantity"]), 4)
+                value["missing_quantity"] = missing
+                value["value"] = round(missing * float(value["written_unit_cost"]), 2)
+                # How long the ticket has sat since anything happened to it --
+                # the same measurement, off the same column, the board's Idle
+                # count uses. A ticket closed and untouched for two months is
+                # money that is probably never being written down at all.
+                stamp = value["last_activity_at"] or value["order_created_at"]
+                value["days_idle"] = age_days(stamp) if stamp else None
+                result.append(value)
+            return result
+
     @router.get("/cores")
     def list_cores():
         """A core deposit only exists because a new part was bought and the

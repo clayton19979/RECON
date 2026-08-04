@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from .db import RECON_SHOP_CUSTOMER_ID, inserted_id, normalize_stock_number, normalize_vin
+from .db import now as db_now
 
 
 def parse_stamp(value: str | None) -> datetime | None:
@@ -91,6 +92,28 @@ def idle_days(last_activity_at: str) -> int:
     reason for tolerating garbage: one unparseable timestamp shouldn't take
     the board down."""
     return age_days(last_activity_at)
+
+
+def days_on_lot(arrived_at: str | None, archived_at: str | None) -> int | None:
+    """How long a car was here start to finish -- the day it arrived to the day
+    it was filed to History.
+
+    Deliberately only answerable once the car has gone. While it is still on
+    the lot the clock is running and age_days is the honest number; a stay
+    printed against a car that is on day four of who knows how many would read
+    as a finished result and isn't one.
+
+    None whenever either end is missing or unreadable -- History shows that as
+    a dash rather than as a car that came and went the same day. Floors at 0
+    for the same reason lot_age_days does: a typed arrival date later than the
+    archive stamp is a typo, and a negative stay is a number the app can't
+    stand behind.
+    """
+    arrived = parse_stamp(arrived_at)
+    left = parse_stamp(archived_at)
+    if arrived is None or left is None:
+        return None
+    return max(0, (left - arrived).days)
 
 
 # Anything this or newer counts as stalled. Named here rather than written as a
@@ -193,6 +216,15 @@ def lot_needs_text(row: dict) -> str:
     )
 
     if row["lot_bucket"] == LOT_READY:
+        # A sold car's lot life is over; the one thing left is to file it
+        # away -- unless it already has been, in which case History must not
+        # nudge anyone toward a step that is done. The unreceipted-parts
+        # warning still outranks either wording: the car's cost is wrong
+        # until that part is received, sold or not.
+        if row.get("status") == "sold":
+            if missing_text:
+                return f"Sold — but {missing_text}"
+            return "Sold" if row.get("archived") else "Sold — send to History"
         if missing_text:
             return f"Ready to go — but {missing_text}"
         return "Nothing — ready to go"
@@ -321,7 +353,7 @@ def order_status_bucket(orders: list[dict]) -> str:
 
     Voided tickets are not tickets. A car whose only one had been voided read
     as finished here, which showed a green Complete pill on the board, filed
-    the car under "Ready to sell" on Walt's Lot Report, and -- because
+    the car under "Ready to go" on Walt's Lot Report, and -- because
     is_stalled deliberately never flags a finished car -- took it out of the
     Stalled count for good. One mis-click made a car invisible in the three
     places that exist to stop cars going missing.
@@ -332,13 +364,70 @@ def order_status_bucket(orders: list[dict]) -> str:
     return "finished" if (active is None and has_closed) else "in_progress"
 
 
-def we_owe_status_bucket(status: str) -> str:
-    """A promise is done when the advisor says it is -- fulfilled or waived.
+def is_void_only(row: Mapping[str, Any]) -> bool:
+    """Is this car's only paperwork a ticket somebody took back?
 
-    Unlike recon, this doesn't read the ticket: waiving a promise closes it
-    with no work done and often no ticket at all.
+    Voiding is how a ticket written by mistake is undone, and the car left
+    behind is a loose end rather than a job: nothing was done to it and there
+    is no live ticket saying what should be. On one board with everything else
+    it is indistinguishable from a car genuinely waiting to be started, which
+    is why it gets a pile of its own.
+
+    A car that also has a live ticket is not in here -- the live ticket is
+    what the car is doing, and the voided one beside it is just history.
+
+    Deliberately reads the already-computed row rather than the database: the
+    board, the counts above it and this filter then cannot disagree about
+    which cars are which. order_id is None exactly when no live ticket exists
+    (see the row build, where it comes off live_orders).
     """
-    return "finished" if status in ("fulfilled", "waived") else "in_progress"
+    return bool(row.get("voided_order_count")) and row.get("order_id") is None
+
+
+def we_owe_status_bucket(status: str, orders: list[dict] | None = None) -> str:
+    """A promise is done when the advisor says so, or when its work is done.
+
+    Two signals, either of which is enough. fulfilled/waived is the advisor's
+    own word for it, and it has to stand alone: waiving a promise closes it
+    with no work done and often no ticket at all.
+
+    The tickets are the other half, and leaving them out was a bug people hit
+    every week. Finishing a we-owe is done on the ticket -- you close the
+    repair order, the same as any other job -- and the promise's own status
+    field sits at "open" until somebody separately remembers to mark it
+    fulfilled. Nobody does that on a busy morning. So a car whose work was
+    finished and ticket closed stayed in the "In the shop" column of the
+    Vehicles board indefinitely, next to cars actually in a bay, while the
+    status pill on the very same row already read Complete (display_status has
+    always fallen through to the ticket). One row saying two things.
+
+    Judged exactly the way recon's is -- see order_status_bucket: every live
+    ticket closed and at least one existing. A promise with no ticket at all
+    has not finished anything, and a voided ticket is not a ticket.
+    """
+    if status in ("fulfilled", "waived"):
+        return "finished"
+    return order_status_bucket(orders) if orders is not None else "in_progress"
+
+
+def recon_sold_and_settled(vehicle_status: str | None, orders: list[dict]) -> bool:
+    """Is this car's lot life over -- sold, with no work still owed on it?
+
+    The recon status field is legacy and mostly unmaintained (see
+    order_status_bucket), but "sold" is the one value in it that is definitive
+    when it is there: records from before the ticket-driven board carry it,
+    and the Profit report already reads the sale it describes as fact.
+    Ignoring it here meant one screen said "sold July 15" while the board
+    called the same car "not started, untouched 41 days" -- and the stalled
+    alarm rang loudest for exactly the cars nobody should touch again.
+
+    A still-open ticket outranks the flag: sold or not, work someone is in
+    the middle of is what the board has to show, and the alarm has to keep
+    working on it.
+    """
+    if vehicle_status != "sold":
+        return False
+    return all(o["status"] == "complete" for o in live_orders(orders))
 
 
 def last_activity_detail(
@@ -1070,13 +1159,31 @@ def vehicle_board_rows(
     start: str | None = None,
     end: str | None = None,
     segment: str | None = None,
-    archived: bool = False,
+    archived: bool | None = False,
 ) -> list[dict]:
     """The unified Vehicles list: recon + we-owe merged, one row per vehicle,
     with rolled-up cost and assigned technicians. This is the primary view
     of the app and also backs the date-range vehicle-spend report.
-    `archived` selects the History view instead of the live job board --
-    reports/export always use the default (live board only).
+
+    `archived` picks which side of History to read: False is the live job
+    board, True is History, and None is both -- which is what the spend report
+    asks for, because a car that was sold last month is exactly the car
+    "what did we spend in July" is about.
+
+    A date range here means *the car was on the lot during it*, not "its record
+    happens to be stamped inside it". Those are not the same question and the
+    difference was not a small one: a car written down in June and still in the
+    shop in August fell out of every ranged report the moment August began, so
+    the spend report showed one car out of eight and totalled $0.00 on a lot
+    that had real money in it -- while the Lot Status sheet one chip over, built
+    from these same rows unfiltered, showed the money. Two screens, one shop,
+    opposite answers.
+
+    So the window is an overlap test against the span the car was actually
+    here: it arrived by the end of the range, and it had not already been filed
+    to History before the range began. A car still on the lot has no end date
+    yet, so `now` stands in for one -- which also keeps a range that hasn't
+    happened yet empty, rather than matching every live car forever.
 
     Every per-vehicle number here is fetched for the whole list at once rather
     than car by car. This screen reloads after every save, and History and the
@@ -1084,7 +1191,10 @@ def vehicle_board_rows(
     handful of queries per car is a screen that gets slower every month the
     shop uses the app."""
     end_bound = f"{end}T23:59:59" if end else None
-    archived_flag = 1 if archived else 0
+    archived_flag = None if archived is None else (1 if archived else 0)
+    # The open end of a live car's stay. Shop-local, like every stamp the range
+    # is compared against -- see db.now().
+    still_here = db_now()
     result = []
     if segment in (None, "recon"):
         rows = db.execute(
@@ -1093,10 +1203,11 @@ def vehicle_board_rows(
                FROM recon_vehicles rv
                JOIN vehicles v ON v.id=rv.vehicle_id
                LEFT JOIN vehicle_units u ON u.id=v.unit_id
-               WHERE (:start IS NULL OR rv.created_at>=:start) AND (:end IS NULL OR rv.created_at<=:end)
-                 AND (rv.archived_at != '') = :archived
+               WHERE (:end IS NULL OR rv.created_at<=:end)
+                 AND (:start IS NULL OR coalesce(nullif(rv.archived_at,''), :still_here)>=:start)
+                 AND (:archived IS NULL OR (rv.archived_at != '') = :archived)
                ORDER BY rv.created_at DESC""",
-            {"start": start, "end": end_bound, "archived": archived_flag},
+            {"start": start, "end": end_bound, "archived": archived_flag, "still_here": still_here},
         ).fetchall()
         recon_ids = [row["id"] for row in rows]
         rollups = cost_rollups(db, "recon_vehicle_id", recon_ids)
@@ -1110,24 +1221,31 @@ def vehicle_board_rows(
             # cost -- see live_orders.
             live = live_orders(rollup["orders"])
             voided_count = len(rollup["orders"]) - len(live)
-            # Recon status/sale tracking isn't used here -- the repair order's
-            # own status is what the advisor actually maintains, so that's
-            # what drives the displayed status and in-progress/finished bucket.
+            # The repair order's own status is what the advisor actually
+            # maintains, so that's what drives the displayed status and
+            # in-progress/finished bucket -- except a settled sale, the one
+            # recon-status fact that outranks the tickets. See
+            # recon_sold_and_settled.
             active_order = next((o for o in reversed(live) if o["status"] != "complete"), None)
             latest_order = live[-1] if live else None
             current_order = active_order or latest_order
-            display_status = current_order["status"] if current_order else "acquired"
+            sold = recon_sold_and_settled(row["status"], rollup["orders"])
+            display_status = "sold" if sold else (current_order["status"] if current_order else "acquired")
             activity_at = activity.get(row["id"]) or row["created_at"]
             result.append(
                 {
                     "segment": "recon",
                     "recon_id": row["id"],
                     "we_owe_id": None,
+                    # Which side of the live-board/History divide this row was
+                    # fetched from -- the needs sentence reads it, so a sold
+                    # car already in History isn't told to be sent there.
+                    "archived": archived,
                     "stock_number": row["stock_number"],
                     "vehicle": f"{row['year']} {row['make']} {row['model']}",
                     "vin": row["vin"],
                     "status": display_status,
-                    "status_bucket": order_status_bucket(rollup["orders"]),
+                    "status_bucket": "finished" if sold else order_status_bucket(rollup["orders"]),
                     # From the unit, not recon_vehicles' legacy column of the same
                     # name -- one car, one purchase price, whichever half of its
                     # life you happen to be looking at.
@@ -1162,6 +1280,15 @@ def vehicle_board_rows(
                     # lot since June 27" is worth acting on.
                     "acquired_at": row["acquisition_date"] or "",
                     "age_days": lot_age_days(row["acquisition_date"], row["created_at"]),
+                    # The day the car left, empty on everything still on the
+                    # lot. Two things need it and both need it non-null: the
+                    # reports can be asked for both sides of History at once,
+                    # where a sold car with no mark on it reads as one still
+                    # sitting on the lot; and History itself, where the day it
+                    # left is the one fact that screen exists to record -- see
+                    # days_on_lot.
+                    "archived_at": row["archived_at"] or "",
+                    "days_on_lot": days_on_lot(row["acquisition_date"] or row["created_at"], row["archived_at"]),
                     "last_activity_at": activity_at,
                     "idle_days": idle_days(activity_at),
                 }
@@ -1173,10 +1300,11 @@ def vehicle_board_rows(
                FROM we_owe_items w
                JOIN customers c ON c.id=w.customer_id JOIN vehicles v ON v.id=w.vehicle_id
                LEFT JOIN vehicle_units u ON u.id=v.unit_id
-               WHERE (:start IS NULL OR w.created_at>=:start) AND (:end IS NULL OR w.created_at<=:end)
-                 AND (w.archived_at != '') = :archived
+               WHERE (:end IS NULL OR w.created_at<=:end)
+                 AND (:start IS NULL OR coalesce(nullif(w.archived_at,''), :still_here)>=:start)
+                 AND (:archived IS NULL OR (w.archived_at != '') = :archived)
                ORDER BY w.created_at DESC""",
-            {"start": start, "end": end_bound, "archived": archived_flag},
+            {"start": start, "end": end_bound, "archived": archived_flag, "still_here": still_here},
         ).fetchall()
         we_owe_ids = [row["id"] for row in rows]
         rollups = cost_rollups(db, "we_owe_id", we_owe_ids)
@@ -1203,12 +1331,15 @@ def vehicle_board_rows(
             )
             customer_paid = round(paid[row["id"]], 2)
             activity_at = activity.get(row["id"]) or row["created_at"]
-            status_bucket = we_owe_status_bucket(row["status"])
+            status_bucket = we_owe_status_bucket(row["status"], rollup["orders"])
             result.append(
                 {
                     "segment": "we_owe",
                     "recon_id": None,
                     "we_owe_id": row["id"],
+                    # Same reason as the recon rows: the needs wording is
+                    # allowed to differ between the live board and History.
+                    "archived": archived,
                     "stock_number": row["lot_stock_number"] or None,
                     "vehicle": f"{row['year']} {row['make']} {row['model']}",
                     "vin": row["vin"],
@@ -1255,6 +1386,11 @@ def vehicle_board_rows(
                     # created_at already is. The car itself was sold weeks ago.
                     "acquired_at": "",
                     "age_days": age_days(row["created_at"]),
+                    # Same as recon above: which side of History this one is
+                    # on, counted from the day the promise was made -- that is
+                    # when this side's clock starts.
+                    "archived_at": row["archived_at"] or "",
+                    "days_on_lot": days_on_lot(row["created_at"], row["archived_at"]),
                     "last_activity_at": activity_at,
                     "idle_days": idle_days(activity_at),
                 }
@@ -1319,8 +1455,13 @@ def build_recon_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
         # The same finished/in-progress answer the board gives, so the detail
         # page can tell a car that has gone quiet from one that is simply done
         # -- see is_stalled. Without it the page had no way to know, and put a
-        # "Stalled 41 days -- make a task" nudge on finished work.
-        detail["status_bucket"] = order_status_bucket(rollup["orders"])
+        # "Stalled 41 days -- make a task" nudge on finished work. A settled
+        # sale counts as done here for the same reason it does on the board.
+        detail["status_bucket"] = (
+            "finished"
+            if recon_sold_and_settled(row["status"], rollup["orders"])
+            else order_status_bucket(rollup["orders"])
+        )
         # Purchase and sale price come off the unit, which is what makes them
         # survive the car being sold and coming back on a we-owe. The legacy
         # recon_vehicles columns of the same name are no longer authoritative.
@@ -1368,7 +1509,9 @@ def build_recon_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
         detail["open_cost"] = rollup["open_cost"]
         detail["labor_hours"] = rollup["labor_hours"]
         # Same reason as recon_detail: a waived promise is closed, not stalled.
-        detail["status_bucket"] = we_owe_status_bucket(row["status"])
+        # The tickets go in too, so this page and the board cannot disagree
+        # about whether the work is done -- see we_owe_status_bucket.
+        detail["status_bucket"] = we_owe_status_bucket(row["status"], rollup["orders"])
         payments = [
             dict(p)
             for p in db.execute("SELECT * FROM we_owe_payments WHERE we_owe_id=? ORDER BY id DESC", (we_owe_id,))
@@ -1384,9 +1527,39 @@ def build_recon_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
         return detail
 
     @router.get("/vehicles-board")
-    def vehicles_board(segment: Literal["recon", "we_owe"] | None = None, archived: bool = False):
+    def vehicles_board(
+        segment: Literal["recon", "we_owe"] | None = None,
+        archived: bool = False,
+        view: Literal["active", "history", "void", "all"] | None = None,
+    ):
+        """The board, read as one of three separate piles of work.
+
+        `view` is what the Vehicles screen sends, and it is the record's state
+        rather than the kind of work -- which the segment chips already answer.
+        Those two were one control before, so "History" sat in a row of chips
+        next to "Recon" and "We-Owe" as if it were a third kind of work, and
+        there was nowhere at all to put a third state.
+
+            active   the live board: cars there is something to do about
+            history  cars filed away, which is a record and not a lot
+            void     cars whose only ticket was taken back
+
+        A voided ticket is a mistake being undone, not work. Left in with the
+        live cars it reads as a car nobody has started -- indistinguishable
+        from one genuinely waiting -- so it is its own pile now.
+
+        `archived` is kept because the reports call this function directly and
+        ask for both sides of History at once; `view` wins when both are sent.
+        """
         with connect() as db:
-            return vehicle_board_rows(db, segment=segment, archived=archived)
+            if view in (None, "all"):
+                return vehicle_board_rows(db, segment=segment, archived=archived)
+            rows = vehicle_board_rows(db, segment=segment, archived=view == "history")
+            if view == "active":
+                return [row for row in rows if not is_void_only(row)]
+            if view == "void":
+                return [row for row in rows if is_void_only(row)]
+            return rows
 
     # --- Recon vehicles ---
 

@@ -173,7 +173,11 @@ def technician_productivity_rows(db: sqlite3.Connection, start: str | None, end:
 # Which pile a car is in is decided in recon.py, next to the board rows it is
 # stamped onto; only the wording is a report concern.
 LOT_GROUP_LABEL = {
-    LOT_READY: "Ready to sell",
+    # "Ready to sell" was only ever true of Walt's lot cars. Half this board
+    # is we-owe work on cars a customer already owns and is waiting on, and
+    # telling the advisor to sell one of those is nonsense. "Ready to go"
+    # covers both: the work is done and the car can leave.
+    LOT_READY: "Ready to go",
     LOT_WORKING: "In the shop",
     LOT_WAITING: "Not started",
 }
@@ -214,8 +218,15 @@ def build_reports_router(connect: Callable[[], sqlite3.Connection]) -> APIRouter
     def vehicle_spend(
         start: str | None = None, end: str | None = None, segment: Literal["recon", "we_owe"] | None = None
     ):
+        # Both sides of History (archived=None). This report is asked about a
+        # stretch of time that has already happened, and the cars that stretch
+        # was mostly about are the ones since sold and filed away -- leaving
+        # them out meant every car dropped off this report the day it was
+        # finished with, so "what did we spend last quarter" answered with
+        # whatever happened to still be sitting on the lot today. Each row says
+        # which side it is on (archived_at) so the screen can mark it.
         with connect() as db:
-            return vehicle_board_rows(db, start, end, segment)
+            return vehicle_board_rows(db, start, end, segment, archived=None)
 
     @router.get("/reports/vehicle-profit")
     def vehicle_profit(start: str | None = None, end: str | None = None, vin: str | None = None):

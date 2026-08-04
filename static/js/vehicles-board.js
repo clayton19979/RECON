@@ -30,12 +30,12 @@ export async function loadVehiclesView() {
   // exactly what showPlaceholders exists to prevent.
   const columns = state.vehicleLayout === "columns" ? $("#vehicles-columns") : null;
   if (columns) {
-    columns.innerHTML = LOT_COLUMNS.map((col) =>
+    columns.innerHTML = boardColumns().map((col) =>
       `<section class="veh-col" data-lot-column="${col.key}"><header class="veh-col-head"><span class="veh-col-title">${esc(col.label)}</span></header>
        <div class="veh-col-body">${skeletonCards(2)}</div></section>`).join("");
   }
   try {
-    state.vehicles = await get(state.filter === "history" ? "/api/vehicles-board?archived=true" : "/api/vehicles-board");
+    state.vehicles = await get(`/api/vehicles-board?view=${state.boardView}`);
   } catch (err) {
     renderViewFailure("vehicles", err);
     return;
@@ -47,6 +47,17 @@ export async function loadVehiclesView() {
   state.searchElsewhere = null;
   state.searchElsewhereScope = "";
   state.vehicleSelection.clear();
+  loadVoidCount();
+  // The three live-lot filters cannot match an archived car, so carrying one
+  // across into History shows an empty screen and a scope line about parts on
+  // order. Dropped on the way in; the board keeps its own when you go back,
+  // because this only ever runs when the two halves are swapped.
+  if (historyMode()) {
+    state.vehiclePartsOnly = false;
+    state.vehicleLateOnly = false;
+    state.vehicleIdleBucket = "";
+  }
+  syncPartsFilterChip();
   // renderStats is driven from inside renderVehiclesTable now -- the cards
   // describe the visible rows, so they have to be recomputed on every filter,
   // search and sort, not just on fetch. Calling it here as well would render
@@ -58,6 +69,103 @@ export async function loadVehiclesView() {
   // reloads the board -- so without this the offer to look in History quietly
   // disappeared on the return trip, on a query that still had no matches here.
   if (state.search) loadSearchElsewhere();
+}
+
+/* ---------- History ----------
+
+   History is the other half of this screen and it is not a lot -- it is a
+   record of cars that are gone. Everything the live board is built to do is
+   about what to act on this morning: which pile a car is in, how long nobody
+   has touched it, what it is waiting on. Applied to a car that left in April
+   every one of those is a false statement. A sold car was filed under "Not
+   started", the Stalled clock kept counting on it forever, the Age column
+   said how long ago it arrived (a number that keeps climbing after the car is
+   somebody else's), and the three columns finished with "Nothing finished
+   yet" printed under a lot of finished cars.
+
+   So the same rows are read a different way here, driven off the one fact
+   History has that the live board doesn't: the day the car left. This flag is
+   the single place that decides which reading applies, so a screen cannot end
+   up half in one mode and half in the other. */
+export function historyMode() {
+  return state.boardView === "history";
+}
+
+/* The pile of cars whose only ticket was taken back.
+
+   Read the same way History is -- one flag, so no screen can end up half in
+   one mode and half in another. Everything the live board says about a car
+   ("not started", how long nobody has touched it, what it is waiting on) is
+   a statement about work, and there is no work here: the ticket was a
+   mistake and somebody undid it. */
+export function voidMode() {
+  return state.boardView === "void";
+}
+
+/* Switch which pile is on screen. The three are three different lists from
+   the server, not three filters over one, so this reloads rather than
+   re-rendering -- and it drops the cursor and the selection, which name rows
+   that are about to stop existing. */
+export function setBoardView(view) {
+  if (state.boardView === view) return;
+  state.boardView = view;
+  state.vehicleCursor = null;
+  state.vehicleSelection.clear();
+  syncSegmentChips();
+  loadVehiclesView();
+}
+
+/* Cars are dealt into when they left rather than into the lot piles.
+
+   Three buckets, not one per month: the columns are a fixed three-wide grid,
+   and a shop two years in would otherwise get twenty-four of them running off
+   the side of the screen. Recent to older, left to right -- the same
+   direction the live board's piles read. */
+const HISTORY_COLUMNS = [
+  { key: "left-this-month", label: "Left this month", blank: "Nothing has left this month." },
+  { key: "left-this-year", label: "Earlier this year", blank: "Nothing else has left this year." },
+  { key: "left-earlier", label: "Before this year", blank: "Nothing left before this year." },
+];
+
+/* Which History column a car belongs in, off its archive stamp.
+
+   Compared as text on the "YYYY-MM" prefix rather than through Date, because
+   the stamps are shop-local naive (app/db.py::now) and pushing them through a
+   parser is how a car archived at 8pm ends up in next month.
+
+   A car with no readable stamp lands in the oldest column rather than
+   vanishing off the screen: every archived row has one in practice (the stamp
+   is what marks a car archived at all), so this is the belt-and-braces case,
+   and losing a car is a far worse way to find out about it than seeing one
+   in the wrong pile. */
+function historyColumnKey(v) {
+  const stamp = String((v && v.archived_at) || "");
+  const now = new Date();
+  const thisMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  if (stamp.slice(0, 7) === thisMonth) return "left-this-month";
+  if (stamp.slice(0, 4) === String(now.getFullYear())) return "left-this-year";
+  return "left-earlier";
+}
+
+/* How long the car was actually here: arrival to the day it was filed away.
+
+   The server does the arithmetic (app/recon.py::days_on_lot) so this and the
+   Lot Report cannot disagree, and returns null when either end is missing --
+   a dash, not a nought-day stay. */
+function stayDays(v) {
+  return v && v.days_on_lot != null ? v.days_on_lot : null;
+}
+
+// The two sort keys History swaps in, named so the comparators stay one line
+// each and read as what the column is sorting by. A car with no stay sorts
+// below every car that has one, in both directions, the same way a blank
+// stock number does.
+function historyStay(v) {
+  const stay = stayDays(v);
+  return stay == null ? -1 : stay;
+}
+function historyLeftKey(v) {
+  return String((v && v.archived_at) || "");
 }
 
 /* ---------- board view preferences ----------
@@ -72,7 +180,12 @@ export function loadVehicleViewPrefs() {
   let saved = null;
   try { saved = JSON.parse(localStorage.getItem(VEHICLE_PREFS_KEY) || "null"); } catch { saved = null; }
   if (!saved || typeof saved !== "object") return;
-  if (["", "recon", "we_owe", "history"].includes(saved.filter)) state.filter = saved.filter;
+  if (["", "recon", "we_owe"].includes(saved.filter)) state.filter = saved.filter;
+  // Older saves put History in with the segment chips. Read it back into
+  // the control that owns it now rather than dropping the advisor's view
+  // on the floor the first time they open the new build.
+  if (saved.filter === "history") { state.filter = ""; state.boardView = "history"; }
+  if (["active", "history", "void"].includes(saved.view)) state.boardView = saved.view;
   if (typeof saved.status === "string") state.vehicleStatus = saved.status;
   if (saved.sort && (saved.sort.key === "" || VEHICLE_SORTS[saved.sort.key])) {
     state.vehicleSort = { key: saved.sort.key, dir: saved.sort.dir === "asc" ? "asc" : "desc" };
@@ -126,6 +239,11 @@ export function setVehicleLayout(layout) {
 export function syncSegmentChips() {
   $$("#view-vehicles .filters .chip[data-filter]").forEach((c) =>
     c.classList.toggle("active", (c.dataset.filter || "") === state.filter));
+  // The Show dropdown is set from the same five places the chips are, and for
+  // the same reason -- saved prefs and the search reach line both move it
+  // without anybody touching the control.
+  const select = $("#vehicles-view-filter");
+  if (select) select.value = state.boardView;
 }
 
 // The toggle's pressed state lives in two places the DOM cares about --
@@ -159,6 +277,10 @@ export function clearGlobalSearch({ focus = false } = {}) {
 export function syncPartsFilterChip() {
   const chip = $("#vehicles-parts-filter");
   if (!chip) return;
+  // Nothing in History is waiting on a part -- the ticket is closed and the
+  // car is gone. The toggle is taken off the toolbar there rather than left
+  // sitting as a control that can only blank the list.
+  chip.hidden = historyMode();
   chip.classList.toggle("active", state.vehiclePartsOnly);
   chip.setAttribute("aria-pressed", state.vehiclePartsOnly ? "true" : "false");
 }
@@ -166,7 +288,7 @@ export function syncPartsFilterChip() {
 function saveVehicleViewPrefs() {
   try {
     localStorage.setItem(VEHICLE_PREFS_KEY, JSON.stringify({
-      filter: state.filter, status: state.vehicleStatus, sort: state.vehicleSort,
+      filter: state.filter, view: state.boardView, status: state.vehicleStatus, sort: state.vehicleSort,
       partsOnly: state.vehiclePartsOnly, lateOnly: state.vehicleLateOnly,
       idleBucket: state.vehicleIdleBucket,
       chartOpen: state.vehicleChartOpen,
@@ -177,13 +299,15 @@ function saveVehicleViewPrefs() {
   // hiding the chart, or reading the same cars as columns instead of rows,
   // doesn't hide any of them, so offering to reset the view over it would be
   // noise. Every other pref here changes which cars you can see.
-  const dirty = !!(state.filter || state.vehicleStatus || state.vehicleSort.key || state.search
+  const dirty = !!(state.filter || state.boardView !== "active" || state.vehicleStatus
+    || state.vehicleSort.key || state.search
     || state.vehiclePartsOnly || state.vehicleLateOnly || state.vehicleIdleBucket);
   $("#vehicles-reset-view").hidden = !dirty;
 }
 
 export function resetVehicleView() {
   state.filter = "";
+  state.boardView = "active";
   state.vehicleStatus = "";
   state.vehiclePartsOnly = false;
   state.vehicleLateOnly = false;
@@ -236,13 +360,13 @@ export function matchesVehicleSearch(v, query) {
    table renders immediately off what's already loaded, and the reach line
    appears when this lands. */
 export async function loadSearchElsewhere() {
-  const scope = state.filter === "history" ? "live" : "history";
+  const scope = historyMode() ? "live" : "history";
   if (state.searchElsewhereScope === scope) return;
   state.searchElsewhereScope = scope;
   state.searchElsewhere = null;
   let rows;
   try {
-    rows = await get(scope === "history" ? "/api/vehicles-board?archived=true" : "/api/vehicles-board");
+    rows = await get(scope === "history" ? "/api/vehicles-board?view=history" : "/api/vehicles-board?view=active");
   } catch {
     // Say nothing rather than something wrong: with no answer the reach line
     // makes no claim about the other half at all, and clearing the scope lets
@@ -263,7 +387,7 @@ export function searchReach() {
   const q = state.search;
   const shown = visibleVehicles().length;
   const inView = state.vehicles.filter((v) => matchesVehicleSearch(v, q)).length;
-  const scope = state.filter === "history" ? "live" : "history";
+  const scope = historyMode() ? "live" : "history";
   const known = state.searchElsewhereScope === scope && Array.isArray(state.searchElsewhere);
   return {
     shown,
@@ -292,7 +416,7 @@ export function showAllSearchMatches() {
   widenToShowMatches();
   // Live and archived are two different lists from the server, so this can't
   // cross that line -- History has its own button.
-  if (state.filter !== "history") state.filter = "";
+  state.filter = "";
   syncSegmentChips();
   renderVehicleStatusOptions();
   renderVehiclesTable();
@@ -300,7 +424,7 @@ export function showAllSearchMatches() {
 
 export function openSearchElsewhere() {
   widenToShowMatches();
-  state.filter = state.filter === "history" ? "" : "history";
+  state.boardView = historyMode() ? "active" : "history";
   syncSegmentChips();
   loadVehiclesView();
 }
@@ -310,6 +434,7 @@ export function openSearchElsewhere() {
 export function runSearchReachAction(name) {
   if (name === "widen-search") showAllSearchMatches();
   else if (name === "search-elsewhere") openSearchElsewhere();
+  else if (name === "show-void") setBoardView("void");
   else return false;
   return true;
 }
@@ -321,6 +446,42 @@ const elsewhereButton = (scope) => (scope === "history" ? "Open History" : "Back
 // Only drawn when the table has rows: with none, the empty state says the
 // same thing in the space the rows would have been, and two copies of one
 // offer a few pixels apart is worse than either.
+/* How many cars are sitting in the Void pile, asked only while the live board
+   is the one on screen.
+
+   Taking those cars off the live list is the point of the pile, but a car
+   that silently stops being anywhere is exactly the failure voiding used to
+   cause (see tests/test_voided_tickets.py -- a mis-click once took a car out
+   of the Stalled count for good). So the live board says how many are over
+   there, and offers one click to go and look. Best-effort: a failed count
+   says nothing rather than something wrong. */
+async function loadVoidCount() {
+  if (!voidMode() && !historyMode()) {
+    try {
+      state.voidCount = (await get("/api/vehicles-board?view=void")).length;
+    } catch {
+      state.voidCount = 0;
+    }
+  } else {
+    state.voidCount = 0;
+  }
+  renderVoidNudge();
+}
+
+function renderVoidNudge() {
+  const line = $("#vehicles-void-nudge");
+  if (!line) return;
+  const n = state.voidCount || 0;
+  if (!n || voidMode() || historyMode()) {
+    line.hidden = true;
+    line.innerHTML = "";
+    return;
+  }
+  line.innerHTML = `<span>${n} ${n === 1 ? "car has" : "cars have"} only a voided ticket, kept out of the live work</span>
+    <button type="button" class="btn btn-ghost btn-sm" data-search-reach="show-void">Show ${n === 1 ? "it" : "them"}</button>`;
+  line.hidden = false;
+}
+
 function renderSearchReach(visibleCount) {
   const line = $("#vehicles-search-reach");
   if (!line) return;
@@ -407,6 +568,33 @@ function boardStats(rows, idlePool = rows) {
     unreceived: rows.reduce((s, v) => s + (v.unreceived_cost || 0), 0),
     stalledCount: stalled.length,
     stalledWorst: stalled.reduce((worst, v) => Math.max(worst, v.idle_days || 0), 0),
+    ...historyStats(rows),
+  };
+}
+
+/* The three numbers History puts where the live board's alarms go.
+
+   Waiting on Parts, Stalled and Past Promised are all "ring somebody today"
+   counts, and on a list of cars that have already gone every one of them is
+   permanently zero -- three dead tiles across the top of the screen. What is
+   worth knowing about finished work instead is what a car costs on average,
+   how long one takes, and how many have gone out this month.
+
+   Average stay is taken only over cars that have both dates, so one old
+   record with no arrival date drags the average down instead of being counted
+   as a car that came and went the same day. Its count travels with it so the
+   card can say what it averaged over. */
+function historyStats(rows) {
+  const stays = rows.map(stayDays).filter((d) => d != null);
+  const now = new Date();
+  const thisMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  return {
+    avgCost: rows.length ? rows.reduce((s, v) => s + (v.actual_cost || 0), 0) / rows.length : 0,
+    stayCount: stays.length,
+    avgStay: stays.length ? Math.round(stays.reduce((s, d) => s + d, 0) / stays.length) : 0,
+    worstStay: stays.reduce((worst, d) => Math.max(worst, d), 0),
+    leftThisMonth: rows.filter((v) => String(v.archived_at || "").slice(0, 7) === thisMonth).length,
+    thisMonthName: now.toLocaleDateString("en-US", { month: "long" }),
   };
 }
 
@@ -426,10 +614,25 @@ function renderStats(rows) {
     ? `${s.recon} recon · ${s.weOwe} we-owe`
     : "no vehicles";
 
-  setValue("#stat-parts-waiting", s.partsWaiting, s.partsWaiting ? "warn" : null);
-  $("#stat-parts-waiting-sub").textContent = s.partsWaiting
-    ? `${money(s.partsValue)} on order`
-    : "nothing on order";
+  // Three of the five cards ask a live-lot question, so History puts its own
+  // headings on them. Written on every render rather than only on the way in,
+  // so coming back to the board cannot leave "Average Per Car" sitting over
+  // the number of cars waiting on a part.
+  setStatLabel('[data-board-filter="parts"]', historyMode() ? "Average Per Car" : "Waiting on Parts");
+  setStatLabel('[data-board-filter="stalled"]', historyMode() ? "Average Stay" : "Stalled");
+  setStatLabel('[data-board-filter="late"]', historyMode() ? "Left This Month" : "Past Promised");
+
+  if (historyMode()) {
+    setValue("#stat-parts-waiting", s.count ? money(s.avgCost) : "—");
+    $("#stat-parts-waiting-sub").textContent = s.count
+      ? `across ${s.count} vehicle${s.count === 1 ? "" : "s"}`
+      : "nothing in History yet";
+  } else {
+    setValue("#stat-parts-waiting", s.partsWaiting, s.partsWaiting ? "warn" : null);
+    $("#stat-parts-waiting-sub").textContent = s.partsWaiting
+      ? `${money(s.partsValue)} on order`
+      : "nothing on order";
+  }
 
   // What the visible cars have cost, full stop. There is deliberately nothing
   // to compare it against: recon work isn't quoted up front -- the shop buys
@@ -452,23 +655,54 @@ function renderStats(rows) {
     costSub.style.color = "";
   }
 
-  // Same shape as Stalled, and for the same reason: the count says how many
-  // people to ring, the worst one says whether it can wait until tomorrow.
-  setValue("#stat-late-promises", s.lateCount, s.lateCount ? "crit" : null);
-  $("#stat-late-promises-sub").textContent = s.lateCount
-    ? `worst ${s.lateWorst} day${s.lateWorst === 1 ? "" : "s"} over`
-    : "no promise past due";
+  if (historyMode()) {
+    // How many cars have gone out this month -- the one number on this screen
+    // that is still moving, and the closest thing History has to news.
+    setValue("#stat-late-promises", s.leftThisMonth);
+    $("#stat-late-promises-sub").textContent = s.leftThisMonth
+      ? `filed away so far in ${s.thisMonthName}`
+      : `none filed away yet in ${s.thisMonthName}`;
+  } else {
+    // Same shape as Stalled, and for the same reason: the count says how many
+    // people to ring, the worst one says whether it can wait until tomorrow.
+    setValue("#stat-late-promises", s.lateCount, s.lateCount ? "crit" : null);
+    $("#stat-late-promises-sub").textContent = s.lateCount
+      ? `worst ${s.lateWorst} day${s.lateWorst === 1 ? "" : "s"} over`
+      : "no promise past due";
+  }
 
-  // Naming the worst car's idle time rather than repeating the count: "3" and
-  // "3 vehicles" side by side is a wasted line, and how long the worst one has
-  // been sitting is the number that decides whether you act today.
-  setValue("#stat-stalled", s.stalledCount, s.stalledCount ? "crit" : null);
-  $("#stat-stalled-sub").textContent = s.stalledCount
-    ? `worst sitting ${s.stalledWorst} days`
-    : `nothing over ${STALLED_AFTER_DAYS - 1} days`;
+  if (historyMode()) {
+    // How long a car takes from arriving to being finished with -- the recon
+    // question the live board can only ever half-answer, because every car it
+    // is looking at is still running its clock.
+    setValue("#stat-stalled", s.stayCount ? `${s.avgStay}d` : "—");
+    $("#stat-stalled-sub").textContent = s.stayCount
+      ? `longest was ${s.worstStay} day${s.worstStay === 1 ? "" : "s"}`
+      : "no arrival dates on file";
+  } else {
+    // Naming the worst car's idle time rather than repeating the count: "3" and
+    // "3 vehicles" side by side is a wasted line, and how long the worst one has
+    // been sitting is the number that decides whether you act today.
+    setValue("#stat-stalled", s.stalledCount, s.stalledCount ? "crit" : null);
+    $("#stat-stalled-sub").textContent = s.stalledCount
+      ? `worst sitting ${s.stalledWorst} days`
+      : `nothing over ${STALLED_AFTER_DAYS - 1} days`;
+  }
 
   syncBoardStatCards(s);
   $("#vehicles-scope").textContent = boardScopeLabel();
+
+  // The blurb under the heading describes the live board -- "grouped by where
+  // it is up to" is the wrong sentence over cars that are not up to anything
+  // any more, and it is the first line anybody reads on the screen.
+  const desc = $("#view-vehicles .page-desc");
+  if (desc) {
+    desc.textContent = historyMode()
+      ? "Cars the shop is finished with, grouped by when they left. Everything stays readable, "
+        + "and any of them can be put back on the board."
+      : "Every recon car and we-owe promise, grouped by where it is up to. Click a car for the "
+        + "full picture — cost, parts, technician, linked repair order.";
+  }
 }
 
 /* The two cards that are also filters. Pressed state lives in two places
@@ -479,10 +713,25 @@ function renderStats(rows) {
 
    A zero card is disabled rather than merely inert: "0 stalled" is good news
    and clicking it could only ever produce an empty table. */
+function setStatLabel(cardSelector, text) {
+  const label = $(`${cardSelector} .stat-label`);
+  if (label && label.textContent !== text) label.textContent = text;
+}
+
 function syncBoardStatCards(s) {
   const setCard = (sel, active, count, hint) => {
     const el = $(sel);
     if (!el) return;
+    // In History these three are read-outs, not filters -- there is nothing
+    // to narrow to. Left clickable they would filter the list by a live-lot
+    // rule that matches nothing, i.e. blank the screen.
+    if (historyMode()) {
+      el.classList.remove("active");
+      el.setAttribute("aria-pressed", "false");
+      el.disabled = true;
+      el.title = "";
+      return;
+    }
     el.classList.toggle("active", !!active);
     el.setAttribute("aria-pressed", active ? "true" : "false");
     el.disabled = !count && !active;
@@ -505,8 +754,9 @@ function syncBoardStatCards(s) {
 // exactly one car.
 function boardScopeLabel() {
   const parts = [];
-  if (state.filter === "history") parts.push("archived to History");
-  else if (state.filter === "recon") parts.push("recon");
+  if (historyMode()) parts.push("archived to History");
+  else if (voidMode()) parts.push("voided tickets");
+  if (state.filter === "recon") parts.push("recon");
   else if (state.filter === "we_owe") parts.push("we-owe");
   if (state.vehicleStatus) parts.push(STATUS_LABEL[state.vehicleStatus] || state.vehicleStatus);
   if (state.vehiclePartsOnly) parts.push("waiting on parts");
@@ -537,6 +787,20 @@ export function ageClass(days) {
    the car's own page). A we-owe has no arrival date: its clock starts when the
    promise was made, and that's what the cell says. */
 function ageCellHtml(v) {
+  // In History the same column answers a finished question instead of a
+  // running one: not "how long ago did this arrive" -- which goes on climbing
+  // after the car has been sold and is nobody's problem any more -- but "how
+  // long was it here", start to finish. Same column, and the only reading of
+  // it that stops changing once the car is gone.
+  if (historyMode()) {
+    const stay = stayDays(v);
+    if (stay == null) return `<span class="age-cell" title="No arrival or archive date on file">—</span>`;
+    const span = stay === 1 ? "1 day" : `${stay} days`;
+    const title = v.acquired_at
+      ? `On the lot ${v.acquired_at} until it was filed to History — ${span}`
+      : `${span} from the promise being made to being filed to History`;
+    return `<span class="age-cell" title="${esc(title)}">${stay}d</span>`;
+  }
   if (v.age_days == null) return `<span class="age-cell" title="No date on file">—</span>`;
   const days = v.age_days;
   const span = days === 0 ? "today" : `${days} day${days === 1 ? "" : "s"}`;
@@ -659,6 +923,12 @@ function idleClass(days) {
 // completely different things. Same tone and same tooltip either way -- one
 // function, so the two layouts cannot end up disagreeing about a car.
 function idleCellHtml(v, { spelled = false } = {}) {
+  // "Nobody has touched this in 41 days" is a warning about a car you can
+  // still do something about. On a car that has been filed away it is just
+  // arithmetic on a dead record -- and the archive itself bumps the clock, so
+  // a car sold in April read "Active today". History shows the one date that
+  // matters about a finished car instead: the day it left.
+  if (historyMode()) return leftCellHtml(v, { spelled });
   const days = v.idle_days || 0;
   const when = v.last_activity_at ? String(v.last_activity_at).slice(0, 10) : "";
   const finished = v.status_bucket === "finished";
@@ -671,6 +941,30 @@ function idleCellHtml(v, { spelled = false } = {}) {
     ? (days === 0 ? "Active today" : `Idle ${days}d`)
     : (days === 0 ? "today" : `${days}d`);
   return `<span class="idle-cell ${tone}" title="${esc(title)}">${text}</span>`;
+}
+
+/* The day a car was filed to History, in the slot the Idle clock uses on the
+   live board.
+
+   Always neutral in tone: nothing about a finished car is an alarm, and this
+   is the whole reason History stopped painting old cars red. The stay comes
+   along on the tooltip so the two dates and the number between them can be
+   read in one hover -- "on the lot April 2, filed August 4, 124 days".
+
+   `spelled` follows the same rule as the Idle cell: a card has no column
+   header over it, so it says "Left Aug 4" where the table can say the date on
+   its own. */
+function leftCellHtml(v, { spelled = false } = {}) {
+  const stamp = String(v.archived_at || "");
+  if (!stamp) {
+    return `<span class="idle-cell age-ok" title="No date recorded for when this was filed to History">${spelled ? "Left — date not recorded" : "—"}</span>`;
+  }
+  const day = stamp.slice(0, 10);
+  const stay = stayDays(v);
+  const title = `Filed to History on ${day}`
+    + (stay == null ? "" : ` — ${stay === 1 ? "1 day" : `${stay} days`} on the lot`);
+  const short = promisedLabel(day) || day;
+  return `<span class="idle-cell age-ok" title="${esc(title)}">${spelled ? `Left ${esc(short)}` : esc(short)}</span>`;
 }
 
 /* The board's one chart. Cost-by-vehicle already exists on Reports and would
@@ -686,8 +980,21 @@ function idleCellHtml(v, { spelled = false } = {}) {
 function renderIdleChart(rows) {
   const target = $("#vehicles-chart");
   if (!target) return;
-  target.hidden = !state.vehicleChartOpen;
   const toggle = $("#vehicles-chart-toggle");
+  // "Time since anything happened" is a question about cars somebody could
+  // still act on. In History every bar is a car that has gone, and the archive
+  // itself counts as activity -- so the chart read "everything active today"
+  // the day a batch was filed away, and drifted right forever after. It and
+  // its toggle come off the screen there rather than measuring a stopped
+  // clock. The preference is untouched, so the chart is back on return.
+  if (historyMode()) {
+    target.hidden = true;
+    target.innerHTML = "";
+    if (toggle) toggle.hidden = true;
+    return;
+  }
+  if (toggle) toggle.hidden = false;
+  target.hidden = !state.vehicleChartOpen;
   if (toggle) {
     // Fixed-width label either way, so toggling doesn't shift the toolbar.
     toggle.textContent = state.vehicleChartOpen ? "Hide activity chart" : "Show activity chart";
@@ -839,7 +1146,14 @@ function vehiclesEmptyState() {
       actions: `<button type="button" class="btn btn-ghost btn-sm" data-empty-action="clear-idle">Show all vehicles</button>`,
     };
   }
-  if (state.filter === "history") {
+  if (voidMode()) {
+    return {
+      icon: "check",
+      title: "No voided tickets",
+      hint: "A ticket written by mistake and then taken back leaves the car here, so it can be dealt with instead of sitting in with the live work looking like a car nobody has started.",
+    };
+  }
+  if (historyMode()) {
     return {
       icon: "archive",
       title: "Nothing in History yet",
@@ -892,8 +1206,16 @@ const VEHICLE_SORTS = {
   status: { label: "Status", type: "text", value: (v) => STATUS_LABEL[v.status] || v.status || "" },
   tech: { label: "Technician", type: "text", value: (v) => v.technicians.join(", ") },
   parts: { label: "Parts", type: "number", value: (v) => v.parts_pending || 0 },
-  age: { label: "Age", type: "number", value: (v) => v.age_days },
-  idle: { label: "Idle", type: "number", value: (v) => v.idle_days || 0 },
+  // These two ask a different question in History (see ageCellHtml and
+  // leftCellHtml), so their header and their sort follow what the cell under
+  // them actually says -- a column headed "Left" that sorted by idle days
+  // would be sorting by a number nobody on the screen can see. Left sorts on
+  // the stamp as text rather than parsing it: shop-local naive stamps compare
+  // correctly as strings and need no timezone, descending puts the most
+  // recently gone car first, and the text branch already files blanks last in
+  // both directions.
+  age: { label: () => (historyMode() ? "Stay" : "Age"), type: "number", value: (v) => (historyMode() ? historyStay(v) : v.age_days) },
+  idle: { label: () => (historyMode() ? "Left" : "Idle"), type: () => (historyMode() ? "text" : "number"), value: (v) => (historyMode() ? historyLeftKey(v) : v.idle_days || 0) },
   // Sorted by how late the promise is, not by the date on it: descending puts
   // the promise you have already broken at the top, which is the reason to
   // click this header at all. Everything with no live promise -- every recon
@@ -904,13 +1226,20 @@ const VEHICLE_SORTS = {
   cost: { label: "Cost", type: "number", value: (v) => v.actual_cost },
 };
 
+// A column whose meaning changes between the live board and History declares
+// its label and its type as functions of the mode; everything else states them
+// once. Read through these two so neither the sort nor the header has to know
+// which kind it is looking at.
+const sortLabel = (spec) => (typeof spec.label === "function" ? spec.label() : spec.label);
+const sortType = (spec) => (typeof spec.type === "function" ? spec.type() : spec.type);
+
 function sortVehicleRows(rows, { key, dir }) {
   const spec = VEHICLE_SORTS[key];
   if (!spec) return rows;
   const sign = dir === "asc" ? 1 : -1;
   return rows.slice().sort((a, b) => {
     const av = spec.value(a), bv = spec.value(b);
-    if (spec.type === "number") return ((av || 0) - (bv || 0)) * sign;
+    if (sortType(spec) === "number") return ((av || 0) - (bv || 0)) * sign;
     // blanks last, in both directions
     if (!av && !bv) return 0;
     if (!av) return 1;
@@ -925,7 +1254,7 @@ function sortVehicleRows(rows, { key, dir }) {
 // Every other caller gets the fully filtered list.
 export function visibleVehicles({ ignoreIdle = false } = {}) {
   let rows = state.vehicles;
-  if (state.filter && state.filter !== "history") rows = rows.filter((v) => v.segment === state.filter);
+  if (state.filter) rows = rows.filter((v) => v.segment === state.filter);
   if (state.vehicleStatus) rows = rows.filter((v) => v.status === state.vehicleStatus);
   if (state.vehiclePartsOnly) rows = rows.filter((v) => (v.parts_pending || 0) > 0);
   if (state.vehicleLateOnly) rows = rows.filter(isPromiseLate);
@@ -941,10 +1270,19 @@ function renderVehicleSortHeaders() {
     th.classList.toggle("sorted", active);
     th.setAttribute("aria-sort", active ? (state.vehicleSort.dir === "asc" ? "ascending" : "descending") : "none");
     const spec = VEHICLE_SORTS[th.dataset.sortKey];
+    const label = spec ? sortLabel(spec) : "column";
     const nextDir = active && state.vehicleSort.dir === "desc" ? "ascending" : "descending";
     th.title = active && state.vehicleSort.dir === "asc" && spec
-      ? `Sort by ${spec.label} — click to clear`
-      : `Sort by ${spec ? spec.label : "column"} (${nextDir})`;
+      ? `Sort by ${label} — click to clear`
+      : `Sort by ${label} (${nextDir})`;
+    // Two of the headers are written in index.html for the live board and
+    // renamed here when History changes what the column under them says. The
+    // heading is the only thing telling you which question a column of bare
+    // numbers is answering, so it has to follow the cells.
+    if (spec) {
+      const first = th.firstChild;
+      if (first && first.nodeType === 3 && first.textContent.trim() !== label) first.textContent = `${label} `;
+    }
     const arrow = $(".sort-arrow", th);
     if (arrow) arrow.textContent = active ? (state.vehicleSort.dir === "desc" ? "▼" : "▲") : "";
   });
@@ -1054,7 +1392,7 @@ function vehicleRowHtml(v) {
       <td class="col-status"><span class="pill ${vehicleStatusPillClass(v)}">${esc(STATUS_LABEL[v.status] || v.status)}</span></td>
       <td class="col-tech">${v.technicians.length ? `<span class="tech"><span class="tech-dot"></span><span class="tech-names">${esc(v.technicians.join(", "))}</span></span>` : `<span class="muted-dash">—</span>`}</td>
       <td class="col-parts">${partsCellHtml(v)}</td>
-      <td class="num-col age-col ${ageClass(v.age_days)}">${ageCellHtml(v)}</td>
+      <td class="num-col age-col ${historyMode() ? "age-ok" : ageClass(v.age_days)}">${ageCellHtml(v)}</td>
       <td class="num-col idle-col">${idleCellHtml(v)}</td>
       <td class="promised-col">${promisedCellHtml(v)}</td>
       <td class="num-col col-cost">${money(v.actual_cost)}${costMissingHtml(v)}</td>`;
@@ -1068,6 +1406,10 @@ function vehicleRowSignature(v) {
     v.stock_number, v.vehicle, v.vin, v.customer_name, v.segment, v.status, v.status_bucket,
     v.technicians.join("|"), v.age_days, v.acquired_at, v.idle_days, v.last_activity_at,
     v.target_date, v.promise_days_late,
+    // History reads Age and Idle as the stay and the day it left, so both the
+    // values and the mode belong in the signature -- without the mode, coming
+    // back from History would reuse rows still showing History's wording.
+    v.archived_at, v.days_on_lot, historyMode() ? "h" : "",
     v.actual_cost, v.parts_pending, v.parts_pending_value,
     v.unreceived_closed_cost, v.unreceived_closed_parts,
     state.vehicleSelection.has(vehicleKey(v)) ? 1 : 0,
@@ -1095,6 +1437,7 @@ export function renderVehiclesTable() {
   renderStats(rows);
   renderIdleChart(rows);
   renderVehicleSortHeaders();
+  renderVoidNudge();
   renderSearchReach(rows.length);
   saveVehicleViewPrefs();
   // The columns are built from these same rows -- one filtered, sorted list,
@@ -1178,16 +1521,27 @@ const LOT_READY = "ready";
 export const LOT_COLUMNS = [
   { key: LOT_WAITING, label: "Not started", blank: "Nothing waiting to be started." },
   { key: LOT_WORKING, label: "In the shop", blank: "Nothing in the shop right now." },
-  { key: LOT_READY, label: "Ready to sell", blank: "Nothing finished yet." },
+  { key: LOT_READY, label: "Ready to go", blank: "Nothing finished yet." },
 ];
 
 const LOT_COLUMN_KEYS = new Set(LOT_COLUMNS.map((c) => c.key));
+
+/* Which set of piles this half of the screen deals cards into.
+
+   The live board's three are where a car is up to. History's three are when
+   it left (see HISTORY_COLUMNS) -- "Ready to go" over a column of cars that
+   were sold months ago, with "Nothing finished yet" printed under the empty
+   one beside it, was the plainest way this screen said something untrue. */
+export function boardColumns() {
+  return historyMode() ? HISTORY_COLUMNS : LOT_COLUMNS;
+}
 
 // The server stamps every row, so the fallback is unreachable -- but a car
 // that quietly vanished off the board because its bucket was a string nobody
 // recognised would be the worst possible way to find that out, so an unknown
 // bucket lands in the middle pile rather than nowhere.
 function columnKey(v) {
+  if (historyMode()) return historyColumnKey(v);
   return LOT_COLUMN_KEYS.has(v.lot_bucket) ? v.lot_bucket : LOT_WORKING;
 }
 
@@ -1200,7 +1554,7 @@ function columnKey(v) {
 export function displayedVehicles() {
   const rows = visibleVehicles();
   if (state.vehicleLayout !== "columns") return rows;
-  return LOT_COLUMNS.flatMap((col) => rows.filter((v) => columnKey(v) === col.key));
+  return boardColumns().flatMap((col) => rows.filter((v) => columnKey(v) === col.key));
 }
 
 /* "$1,240.00 spent" plus, where there is any, what finishing the column's
@@ -1216,7 +1570,10 @@ function columnSummary(rows) {
   const left = rows.reduce((s, v) => s + (v.remaining_cost || 0), 0);
   const bits = [];
   if (spent > 0.005) bits.push(`${money(spent)} spent`);
-  if (left > 0.005) bits.push(`${money(left)} left`);
+  // "$95.00 left" is what finishing these cars should still cost. Nothing is
+  // going to be spent on a car that has been filed away, so History says what
+  // the month cost and stops there.
+  if (left > 0.005 && !historyMode()) bits.push(`${money(left)} left`);
   return bits.join(" · ");
 }
 
@@ -1232,7 +1589,15 @@ function cardSubHtml(v) {
 
 function vehicleCardHtml(v) {
   const key = vehicleKey(v);
-  const age = v.age_days == null ? "" : `${v.age_days}d old`;
+  // "37d old" is time since the car arrived, and it keeps climbing after the
+  // car has been sold -- on an archived card it is a number about somebody
+  // else's car. History says how long the stay actually was instead, and in
+  // plain grey: nothing about a finished car is late.
+  const stay = historyMode() ? stayDays(v) : null;
+  const age = historyMode()
+    ? (stay == null ? "" : `${stay}d here`)
+    : (v.age_days == null ? "" : `${v.age_days}d old`);
+  const ageTone = historyMode() ? "age-ok" : ageClass(v.age_days);
   const ref = v.stock_number || (v.segment === "we_owe" ? "We-Owe" : "—");
   return `
     <label class="veh-card-select" title="Select ${esc(v.stock_number || v.vehicle)}">
@@ -1240,7 +1605,7 @@ function vehicleCardHtml(v) {
     </label>
     <div class="veh-card-head">
       <span class="pill ${vehicleStatusPillClass(v)}">${esc(STATUS_LABEL[v.status] || v.status)}</span>
-      <span class="veh-card-ref">${esc(ref)}${age ? ` <span class="${ageClass(v.age_days)}">· ${esc(age)}</span>` : ""}</span>
+      <span class="veh-card-ref">${esc(ref)}${age ? ` <span class="${ageTone}">· ${esc(age)}</span>` : ""}</span>
     </div>
     <div class="veh-card-name" title="${esc(v.vehicle)}">${esc(v.vehicle)}</div>
     <div class="veh-card-sub">${cardSubHtml(v)}</div>
@@ -1282,8 +1647,15 @@ function renderVehicleColumns(rows) {
     host.innerHTML = `<div class="panel veh-columns-empty">${emptyState(vehiclesEmptyState())}</div>`;
     return;
   }
-  if (!host.firstElementChild || host.querySelector(".skeleton-card") || host.querySelector(".veh-columns-empty")) {
-    host.innerHTML = LOT_COLUMNS.map((col) => `
+  const cols = boardColumns();
+  // Rebuilt from scratch when the headings themselves have to change -- on the
+  // first paint, over the skeletons, over the empty state, and crossing
+  // between the live board and History, where all three columns are different
+  // piles. Everything after that is the keyed per-card update below.
+  const onScreen = [...host.children].map((el) => el.dataset.lotColumn || "").join(",");
+  if (onScreen !== cols.map((c) => c.key).join(",")
+      || host.querySelector(".skeleton-card") || host.querySelector(".veh-columns-empty")) {
+    host.innerHTML = cols.map((col) => `
       <section class="veh-col" data-lot-column="${col.key}">
         <header class="veh-col-head">
           <span class="veh-col-title">${esc(col.label)}</span>
@@ -1294,7 +1666,7 @@ function renderVehicleColumns(rows) {
       </section>`).join("");
   }
 
-  for (const col of LOT_COLUMNS) {
+  for (const col of cols) {
     const section = $(`[data-lot-column="${col.key}"]`, host);
     if (!section) continue;
     const inColumn = rows.filter((v) => columnKey(v) === col.key);
@@ -1384,12 +1756,20 @@ function renderVehicleBulkBar() {
   $("#vehicles-bulk-bar").hidden = !n;
   if (!n) return;
   $("#vehicles-bulk-count").textContent = `${n} selected`;
-  $("#vehicles-bulk-archive").textContent = state.filter === "history" ? "Reopen Selected" : "Send Selected to History";
+  // Filing a car away is a statement that its work is finished and settled.
+  // Nothing in the Void pile qualifies: the only ticket on these cars was a
+  // mistake somebody took back, so there is no finished work to file -- the
+  // car either needs writing up properly or it should never have been here.
+  // Offering the action anyway is how a loose end gets buried instead of
+  // dealt with.
+  const archive = $("#vehicles-bulk-archive");
+  archive.hidden = voidMode();
+  archive.textContent = historyMode() ? "Reopen Selected" : "Send Selected to History";
   // Nothing to follow up on in History -- those cars are done by definition,
   // and a task pointing at an archived vehicle is a dead end.
   const task = $("#vehicles-bulk-task");
   if (task) {
-    task.hidden = state.filter === "history";
+    task.hidden = historyMode();
     task.textContent = n === 1 ? "Make a Task" : `Make ${n} Tasks`;
   }
 }

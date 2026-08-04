@@ -601,7 +601,98 @@ CREATE TABLE IF NOT EXISTS suggestions (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+
+/* One number that moves whenever anything in the shop's records changes.
+ *
+ * Two people share one database across two PCs, and until now a screen was
+ * only ever as fresh as the moment it was opened. Antonio marking the brakes
+ * finished, or receiving the parts a car was waiting on, changed nothing on
+ * Clayton's screen -- it kept showing the morning's answer all afternoon, with
+ * nothing on it to say so. That is the app quietly lying, which is the one
+ * thing it must not do.
+ *
+ * A browser reads this counter every few seconds; if it has moved since the
+ * screen was drawn, the screen is out of date and says so (see
+ * static/js/pulse.js). One row, one integer -- deliberately cheap, because it
+ * is polled by every workstation all day.
+ */
+CREATE TABLE IF NOT EXISTS shop_pulse (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  revision INTEGER NOT NULL DEFAULT 0
+);
+INSERT OR IGNORE INTO shop_pulse(id, revision) VALUES (1, 0);
 """
+
+
+# Every table holding shop records, each of which gets the three triggers
+# generated below. Triggers rather than a bump in each write path on purpose:
+# there is no call site to remember, so the UI, the agent endpoints, the MCP
+# tools and a person poking at sqlite3 by hand all move the counter equally.
+# A write rolled back takes its bump with it, because the bump is part of the
+# same transaction.
+#
+# tests/test_pulse.py asserts this lists every table in SCHEMA, so a table
+# added later cannot quietly go unwatched.
+PULSE_TABLES = (
+    "customers",
+    "vehicle_units",
+    "vehicles",
+    "recon_vehicles",
+    "we_owe_items",
+    "we_owe_payments",
+    "orders",
+    "purchase_orders",
+    "estimates",
+    "estimate_items",
+    "estimate_jobs",
+    "staff",
+    "order_workflow",
+    "order_notes",
+    "inspections",
+    "inspection_items",
+    "estimate_authorizations",
+    "customer_invoices",
+    "customer_invoice_items",
+    "payments",
+    "activity_events",
+    "technician_findings",
+    "vendors",
+    "ap_invoices",
+    "ap_invoice_items",
+    "invoice_audits",
+    "tasks",
+    "suggestions",
+)
+
+
+def _pulse_triggers() -> str:
+    return "\n".join(
+        f"CREATE TRIGGER IF NOT EXISTS pulse_{table}_{op} AFTER {op.upper()} ON {table}"
+        " BEGIN UPDATE shop_pulse SET revision = revision + 1 WHERE id = 1; END;"
+        for table in PULSE_TABLES
+        for op in ("insert", "update", "delete")
+    )
+
+
+# Appended rather than written out by hand: eighty-four near-identical triggers
+# is a place for a typo to hide, and the tables they hang off are already
+# listed once above.
+SCHEMA += "\n" + _pulse_triggers() + "\n"
+
+
+def pulse_revision(db: sqlite3.Connection) -> int:
+    """The current change counter, or 0 if this database predates it.
+
+    A restored backup taken before shop_pulse existed has no such table until
+    something re-runs init_db over it. Answering 0 rather than raising means
+    the worst case is a browser that stops offering to refresh -- exactly how
+    the app behaved before -- instead of a screen full of errors.
+    """
+    try:
+        row = db.execute("SELECT revision FROM shop_pulse WHERE id=1").fetchone()
+    except sqlite3.OperationalError:
+        return 0
+    return int(row[0]) if row else 0
 
 
 def now() -> str:

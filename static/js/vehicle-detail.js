@@ -31,6 +31,10 @@ function enterVehicleDetailView() {
   $$(".view").forEach((v) => v.classList.toggle("active", v.id === "view-vehicle-detail"));
   $$(".rail-item").forEach((b) => b.classList.toggle("active", b.dataset.view === home));
   $("#back-to-vehicles-label").textContent = home === "customers" ? "Back to Customers" : "Back to Vehicles";
+  // The same announcement showView makes, because this page is entered around
+  // it -- otherwise the freshness check would go on measuring against whatever
+  // the board was showing before the car was opened. See static/js/pulse.js.
+  document.dispatchEvent(new CustomEvent("recon:viewshown", { detail: "vehicle-detail" }));
 }
 
 export async function loadVehicleDetail() {

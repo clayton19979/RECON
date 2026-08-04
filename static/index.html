@@ -113,6 +113,17 @@
       <button type="button" class="btn btn-primary btn-sm" id="update-install">Update Now</button>
       <button type="button" class="btn btn-ghost btn-sm" id="update-dismiss" title="Hide until the next time RECON starts">Later</button>
     </div>
+    <!-- Shown only when the other PC has changed something and this screen
+         could not be redrawn without interrupting whoever is on it (a dialog
+         open, a cursor in a box, rows ticked, a repair order on screen). Quiet
+         on purpose -- it is a note, not an alarm, and it will appear several
+         times on a busy morning. See static/js/pulse.js. -->
+    <div class="stale-bar" id="stale-bar" role="status" hidden>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 10-2.3 5.7"/><path d="M20 5v6h-6"/></svg>
+      <span class="stale-bar-text">Someone else has made a change — what's on this screen is out of date.</span>
+      <button type="button" class="btn btn-primary btn-xs" id="stale-refresh">Refresh</button>
+      <button type="button" class="btn btn-ghost btn-xs" id="stale-dismiss" title="Hide this until something else changes">Later</button>
+    </div>
     <header class="topbar">
       <!-- Search leads the bar now. Typing a stock number is the shortest route
            to a car there is, and the field it goes in was a small pill floating

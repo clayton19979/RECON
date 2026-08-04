@@ -191,6 +191,69 @@ function renderLastWorked() {
   }
 }
 
+/* "Promised to customer" -- the other end of the board's Past Promised tile.
+
+   Same closing-the-loop rule as renderLastWorked above: the board flags a
+   we-owe as days past the date the customer was given, but the date itself
+   only existed on this page as a form field inside the collapsible drawer --
+   land on the ticket and the most urgent fact about it was invisible. Stated
+   on the identity band instead, in the same three tones the shop already
+   reads everywhere else: red once the date is missed, amber when it's today
+   or tomorrow, quiet the rest of the time.
+
+   Only ever said about a promise that is still owed -- a fulfilled or waived
+   we-owe keeps its date in the drawer, but greeting someone with "3 days
+   past" about a promise that was settled on purpose is the same false alarm
+   the stalled nudge above deliberately avoids. Recon and retail cars have no
+   customer promise, so they never show the line at all. */
+function calendarDaysUntil(dateStr) {
+  // A bare calendar date, split by hand for the same reason fmtDay splits
+  // one: new Date("2026-08-01") is UTC midnight, which in Indiana is still
+  // the evening before.
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(dateStr || "").trim());
+  if (!m) return null;
+  const target = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  // Local midnights on both sides; rounding absorbs the odd DST hour.
+  return Math.round((target - today) / 86400000);
+}
+
+function renderPromiseLine() {
+  const el = $("#vd-promise-line");
+  if (!el) return;
+  const { segment, item } = state.detail;
+  const days = segment === "we_owe" && item.status === "open"
+    ? calendarDaysUntil(item.target_date)
+    : null;
+  if (days === null) {
+    el.hidden = true;
+    el.textContent = "";
+    el.className = "detail-promise";
+    return;
+  }
+  el.hidden = false;
+  const overdue = days < 0;
+  const late = Math.abs(days);
+  el.className = `detail-promise${overdue ? " overdue" : days <= 1 ? " soon" : ""}`;
+  const when = overdue ? ""
+    : days === 0 ? " — due today"
+    : days === 1 ? " — due tomorrow"
+    : ` — in ${days} days`;
+  // Past due, the count moves onto the button: the same shape as the stalled
+  // nudge one line up, and the click writes the call down instead of leaving
+  // it to memory.
+  el.innerHTML = `<span class="detail-promise-label">Promised to customer</span> ${esc(fmtDay(item.target_date))}` +
+    (when ? `<span class="detail-promise-when">${esc(when)}</span>` : "") +
+    (overdue ? ` <button type="button" class="detail-worked-nudge" id="vd-promise-nudge">${late} day${late === 1 ? "" : "s"} past — make a task</button>` : "");
+  const nudge = $("#vd-promise-nudge");
+  if (nudge) {
+    nudge.addEventListener("click", () => addTaskForThisVehicle({
+      prefill: `Call ${item.customer_name || "the customer"}: ${item.description || "we-owe work"} was promised by ${fmtDay(item.target_date)}`,
+    }));
+  }
+}
+
 /* Jumps to Tasks with this vehicle's ticket pre-selected in the link
    dropdown, rather than making the advisor reopen the picker and hunt for the
    RO they were just looking at.
@@ -305,6 +368,7 @@ function renderDetailHead() {
       $("#vd-deposits-card").style.display = "none";
     }
   }
+  renderPromiseLine();
   renderCostSummary();
   renderVehicleInfoSummary();
 }

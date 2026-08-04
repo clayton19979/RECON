@@ -143,7 +143,10 @@ ok(!/never marked received/.test(bandText.find((t) => /In the shop/.test(t)) || 
 
 // And the footer -- the number somebody writes down or reads out -- carries
 // the correction on its own row, lined up under the column it corrects.
-const correction = doc.querySelector("#report-output tfoot tr.lot-total-missing");
+// .total-missing, not .lot-total-missing: the spend and profit sheets report
+// the same money and now carry the same correction row, so the class stopped
+// belonging to this one sheet.
+const correction = doc.querySelector("#report-output tfoot tr.total-missing");
 ok(!!correction, "the whole-lot total is short with nothing under it saying so");
 const correctionText = correction.textContent.replace(/\s+/g, " ");
 ok(/1 part on 1 finished car never marked received/.test(correctionText),

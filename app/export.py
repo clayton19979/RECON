@@ -148,6 +148,13 @@ def build_export_router(connect: Callable[[], sqlite3.Connection], now_fn: Calla
                 "Technicians",
                 "Written Up",
                 "Cost",
+                # Money out the door on a finished ticket nobody marked
+                # received, so it is not in Cost. Its own column for the same
+                # reason the lot sheet's export gives it one (see below):
+                # summing Cost is the first thing anyone does with this file,
+                # and a total that is quietly short is worst in a spreadsheet,
+                # where there is no screen beside it to explain itself.
+                "Never Marked Received",
                 "Customer Paid",
                 "Net to Shop",
                 "Age (days)",
@@ -165,6 +172,7 @@ def build_export_router(connect: Callable[[], sqlite3.Connection], now_fn: Calla
                     ", ".join(row.get("technicians") or []),
                     f"{row.get('quoted_cost') or 0:.2f}",
                     f"{row['actual_cost']:.2f}",
+                    f"{row.get('unreceived_closed_cost') or 0:.2f}",
                     f"{row.get('customer_paid') or 0:.2f}",
                     f"{row.get('net_cost', row['actual_cost']):.2f}",
                     row["age_days"],
@@ -249,6 +257,12 @@ def build_export_router(connect: Callable[[], sqlite3.Connection], now_fn: Calla
                 "We-Owe Cost",
                 "Customer Paid",
                 "Total Invested",
+                # The one column that says the three cost columns to its left
+                # may be short. A car whose parts were bought and never
+                # receipted reports its whole shortfall as extra profit, so on
+                # the sheet the profit figure is read off this has to be
+                # visible beside it rather than only on the screen version.
+                "Never Marked Received",
                 "Sale Price",
                 "Profit",
                 "Margin %",
@@ -264,6 +278,7 @@ def build_export_router(connect: Callable[[], sqlite3.Connection], now_fn: Calla
                     f"{row['we_owe_cost']:.2f}",
                     f"{row['we_owe_customer_paid']:.2f}",
                     f"{row['total_invested']:.2f}",
+                    f"{row['unreceived_closed_cost']:.2f}",
                     "" if row["sale_price"] is None else f"{row['sale_price']:.2f}",
                     "" if row["profit"] is None else f"{row['profit']:.2f}",
                     "" if row["margin_pct"] is None else f"{row['margin_pct']:.1f}",

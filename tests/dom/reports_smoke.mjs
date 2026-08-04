@@ -53,7 +53,7 @@ const STALE_PREFS = {
 const { w, doc, fetchLog, settle, ok, finish, rejections } = await boot({
   expose: ["state", "generateReport", "loadReportsView", "sortReportRows", "visibleReportRows",
            "REPORT_SORTS", "REPORT_PREFS_KEY", "loadReportPrefs", "saveReportPrefs", "setReportRange",
-           "computeQuickRange", "reportCsvHref", "syncReportControls"],
+           "computeQuickRange", "reportCsvHref", "syncReportControls", "renderPrintReport"],
   // Staged before the app boots, so the first fetch the screen ever makes is
   // the one under test. REPORT_PREFS_KEY isn't on window yet at this point.
   beforeBoot: (win) => win.localStorage.setItem("dao-report-view", JSON.stringify(STALE_PREFS)),
@@ -389,6 +389,74 @@ ok(doc.querySelectorAll("#report-stats .stat").length === 3, "the summary cards 
 ok(bars().length === 3, "the chart didn't come back after a failed report");
 ok(!doc.querySelector("#report-output .empty-state.error"), "the error message outlived the failure");
 
+/* ---------- money that is already spent and in no total ----------
+   Parts on a finished ticket nobody marked received. The board has carried
+   this per car for a while and the Lot Status sheet totals it; this sheet is
+   the one a month's spending gets read off, and it said nothing at all -- so
+   $3,000.00 of cost sat above four rows that between them had another $475.00
+   already out the door. Nothing here is a rounding question: it is money the
+   shop has spent that no total on the screen contains. */
+spend[0].unreceived_closed_cost = 380;
+spend[0].unreceived_closed_parts = 1;
+spend[2].unreceived_closed_cost = 95;
+spend[2].unreceived_closed_parts = 2;
+await w.loadReportsView();
+await settle();
+
+const costCard = stats()[1];
+ok(costCard.value === "$3,000.00", `the Total Cost figure moved: ${costCard.value}`);
+ok(costCard.sub.includes("$475.00") && costCard.sub.includes("never marked received"),
+   `the Total Cost card doesn't say what it is short by: "${costCard.sub}"`);
+ok(doc.querySelector("#report-stats .stat-value.warn"),
+   "the short total is worded as a warning but not coloured as one");
+
+// Per car, in the same words and the same badge the Vehicles board uses, so
+// somebody who has learned it on one screen doesn't have to learn it twice.
+const badges = [...doc.querySelectorAll("#report-output tbody .cost-missing")];
+ok(badges.length === 2, `expected 2 flagged rows, got ${badges.length}`);
+ok(badges[0].textContent.includes("$380.00"), `the badge reads "${badges[0].textContent}"`);
+ok(badges[0].getAttribute("title").includes("never marked received"),
+   "the badge has no tooltip explaining what to do about it");
+// The badge sits in the Cost cell, not loose in the row -- it is a correction
+// to one number, and under any other column it corrects nothing.
+ok(badges[0].closest("td").textContent.includes("$1,450.00"),
+   "the shortfall badge isn't under the cost figure it corrects");
+
+// The footer is the line somebody writes down or reads out, so it is the last
+// place that can afford to be short without saying so.
+const footMissing = doc.querySelector("#report-output tfoot tr.total-missing");
+ok(footMissing, "the spend sheet's footer total carries no correction row");
+ok(footMissing.textContent.includes("3 parts on 2 cars"),
+   `the correction row miscounts: "${footMissing.textContent.trim()}"`);
+ok(footMissing.textContent.includes("$475.00"),
+   `the correction row's figure is wrong: "${footMissing.textContent.trim()}"`);
+// The figure has to land under Cost. A correction row is only a correction
+// if it lines up with the column it corrects; one cell out and it reads as a
+// number about the technicians.
+const spanBefore = [...footMissing.children]
+  .slice(0, [...footMissing.children].indexOf(footMissing.querySelector(".cost-unreceipted")))
+  .reduce((n, td) => n + (Number(td.getAttribute("colspan")) || 1), 0);
+ok(spanBefore === col("cost"),
+   `the correction figure sits in column ${spanBefore}, but Cost is column ${col("cost")}`);
+
+// The printed copy has to say it too -- on paper there is no colour and
+// nobody standing beside it to explain the number.
+const printed = w.renderPrintReport(w.visibleReportRows(), "vehicle-spend", "", "");
+ok(printed.includes("never marked received") && printed.includes("$475.00"),
+   "the printed spend sheet drops the correction the screen carries");
+
+// Nothing missing, nothing said. A "$0.00 never marked received" line under
+// every clean report trains the eye to skip the row that matters.
+spend[0].unreceived_closed_cost = 0;
+spend[0].unreceived_closed_parts = 0;
+spend[2].unreceived_closed_cost = 0;
+spend[2].unreceived_closed_parts = 0;
+await w.loadReportsView();
+await settle();
+ok(!doc.querySelector("#report-output tfoot tr.total-missing"), "the correction row outlived the shortfall");
+ok(!doc.querySelector("#report-output .cost-missing"), "a per-car badge outlived the shortfall");
+ok(stats()[1].sub === "received parts + labor", `the Total Cost card kept its warning: "${stats()[1].sub}"`);
+
 ok(rejections.length === 0, `unhandled rejections during the run: ${rejections.map((e) => e && e.message).join(" | ")}`);
 
-finish("reports: summary cards, chart scaling, sorting, ranges, CSV link, prefs, empty + error states");
+finish("reports: summary cards, chart scaling, sorting, ranges, CSV link, prefs, unreceipted parts, empty + error states");

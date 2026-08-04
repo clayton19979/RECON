@@ -173,7 +173,11 @@ def technician_productivity_rows(db: sqlite3.Connection, start: str | None, end:
 # Which pile a car is in is decided in recon.py, next to the board rows it is
 # stamped onto; only the wording is a report concern.
 LOT_GROUP_LABEL = {
-    LOT_READY: "Ready to sell",
+    # "Ready to sell" was only ever true of Walt's lot cars. Half this board
+    # is we-owe work on cars a customer already owns and is waiting on, and
+    # telling the advisor to sell one of those is nonsense. "Ready to go"
+    # covers both: the work is done and the car can leave.
+    LOT_READY: "Ready to go",
     LOT_WORKING: "In the shop",
     LOT_WAITING: "Not started",
 }

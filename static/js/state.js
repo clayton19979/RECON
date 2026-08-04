@@ -7,7 +7,14 @@ export const state = {
   // ticket printer and the reports printer share one iframe.
   printSurfaceOwner: "report",
   vehicles: [],
-  filter: "",
+  filter: "",                             // kind of work: "" | "recon" | "we_owe"
+  // Which pile of the board is on screen: the live work, the record of
+  // cars that have gone, or the tickets somebody took back. Separate from
+  // `filter` above, which is the kind of work -- those were one control,
+  // so "History" sat in a row of chips about recon vs we-owe and there
+  // was nowhere at all to put a third state.
+  boardView: "active",                    // "active" | "history" | "void"
+  voidCount: 0,                           // cars in the Void pile, for the live board's nudge
   search: "",
   // The board's whole view state -- which segment, which status, which column
   // it's sorted by -- is restored from localStorage on load (see

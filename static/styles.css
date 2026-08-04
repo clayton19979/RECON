@@ -698,7 +698,7 @@ table.sticky-head thead th {
 /* ---------- vehicles: the columns layout ----------
    The three piles the owner asks about, left to right in the direction a car
    travels through the shop. Each column scrolls on its own so a lot with
-   thirty cars in the shop doesn't push "Ready to sell" off the bottom of the
+   thirty cars in the shop doesn't push "Ready to go" off the bottom of the
    screen -- the whole point is seeing all three at once. */
 .veh-columns { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; align-items: start; }
 
@@ -706,7 +706,7 @@ table.sticky-head thead th {
    and the sheet Walt reads are visibly the same three piles: quiet slate for
    "not started" (nothing happening is not an alarm -- Stalled is the alarm,
    and it has its own card), the theme's accent for "in the shop" (work is
-   moving), green for "ready to sell" (the answer he came for). Set as custom
+   moving), green for "ready to go" (the answer he came for). Set as custom
    properties on the container so the edge, the dot and the count pill can
    never disagree about a pile's colour. */
 [data-lot-column], [data-lot-group] { --stage: var(--ink-faint); --stage-tint: var(--paper-raise); }

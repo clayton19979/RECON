@@ -35,7 +35,7 @@ export async function loadVehiclesView() {
        <div class="veh-col-body">${skeletonCards(2)}</div></section>`).join("");
   }
   try {
-    state.vehicles = await get(state.filter === "history" ? "/api/vehicles-board?archived=true" : "/api/vehicles-board");
+    state.vehicles = await get(`/api/vehicles-board?view=${state.boardView}`);
   } catch (err) {
     renderViewFailure("vehicles", err);
     return;
@@ -47,6 +47,7 @@ export async function loadVehiclesView() {
   state.searchElsewhere = null;
   state.searchElsewhereScope = "";
   state.vehicleSelection.clear();
+  loadVoidCount();
   // The three live-lot filters cannot match an archived car, so carrying one
   // across into History shows an empty screen and a scope line about parts on
   // order. Dropped on the way in; the board keeps its own when you go back,
@@ -87,7 +88,31 @@ export async function loadVehiclesView() {
    the single place that decides which reading applies, so a screen cannot end
    up half in one mode and half in the other. */
 export function historyMode() {
-  return state.filter === "history";
+  return state.boardView === "history";
+}
+
+/* The pile of cars whose only ticket was taken back.
+
+   Read the same way History is -- one flag, so no screen can end up half in
+   one mode and half in another. Everything the live board says about a car
+   ("not started", how long nobody has touched it, what it is waiting on) is
+   a statement about work, and there is no work here: the ticket was a
+   mistake and somebody undid it. */
+export function voidMode() {
+  return state.boardView === "void";
+}
+
+/* Switch which pile is on screen. The three are three different lists from
+   the server, not three filters over one, so this reloads rather than
+   re-rendering -- and it drops the cursor and the selection, which name rows
+   that are about to stop existing. */
+export function setBoardView(view) {
+  if (state.boardView === view) return;
+  state.boardView = view;
+  state.vehicleCursor = null;
+  state.vehicleSelection.clear();
+  syncSegmentChips();
+  loadVehiclesView();
 }
 
 /* Cars are dealt into when they left rather than into the lot piles.
@@ -155,7 +180,12 @@ export function loadVehicleViewPrefs() {
   let saved = null;
   try { saved = JSON.parse(localStorage.getItem(VEHICLE_PREFS_KEY) || "null"); } catch { saved = null; }
   if (!saved || typeof saved !== "object") return;
-  if (["", "recon", "we_owe", "history"].includes(saved.filter)) state.filter = saved.filter;
+  if (["", "recon", "we_owe"].includes(saved.filter)) state.filter = saved.filter;
+  // Older saves put History in with the segment chips. Read it back into
+  // the control that owns it now rather than dropping the advisor's view
+  // on the floor the first time they open the new build.
+  if (saved.filter === "history") { state.filter = ""; state.boardView = "history"; }
+  if (["active", "history", "void"].includes(saved.view)) state.boardView = saved.view;
   if (typeof saved.status === "string") state.vehicleStatus = saved.status;
   if (saved.sort && (saved.sort.key === "" || VEHICLE_SORTS[saved.sort.key])) {
     state.vehicleSort = { key: saved.sort.key, dir: saved.sort.dir === "asc" ? "asc" : "desc" };
@@ -209,6 +239,11 @@ export function setVehicleLayout(layout) {
 export function syncSegmentChips() {
   $$("#view-vehicles .filters .chip[data-filter]").forEach((c) =>
     c.classList.toggle("active", (c.dataset.filter || "") === state.filter));
+  // The Show dropdown is set from the same five places the chips are, and for
+  // the same reason -- saved prefs and the search reach line both move it
+  // without anybody touching the control.
+  const select = $("#vehicles-view-filter");
+  if (select) select.value = state.boardView;
 }
 
 // The toggle's pressed state lives in two places the DOM cares about --
@@ -253,7 +288,7 @@ export function syncPartsFilterChip() {
 function saveVehicleViewPrefs() {
   try {
     localStorage.setItem(VEHICLE_PREFS_KEY, JSON.stringify({
-      filter: state.filter, status: state.vehicleStatus, sort: state.vehicleSort,
+      filter: state.filter, view: state.boardView, status: state.vehicleStatus, sort: state.vehicleSort,
       partsOnly: state.vehiclePartsOnly, lateOnly: state.vehicleLateOnly,
       idleBucket: state.vehicleIdleBucket,
       chartOpen: state.vehicleChartOpen,
@@ -264,13 +299,15 @@ function saveVehicleViewPrefs() {
   // hiding the chart, or reading the same cars as columns instead of rows,
   // doesn't hide any of them, so offering to reset the view over it would be
   // noise. Every other pref here changes which cars you can see.
-  const dirty = !!(state.filter || state.vehicleStatus || state.vehicleSort.key || state.search
+  const dirty = !!(state.filter || state.boardView !== "active" || state.vehicleStatus
+    || state.vehicleSort.key || state.search
     || state.vehiclePartsOnly || state.vehicleLateOnly || state.vehicleIdleBucket);
   $("#vehicles-reset-view").hidden = !dirty;
 }
 
 export function resetVehicleView() {
   state.filter = "";
+  state.boardView = "active";
   state.vehicleStatus = "";
   state.vehiclePartsOnly = false;
   state.vehicleLateOnly = false;
@@ -323,13 +360,13 @@ export function matchesVehicleSearch(v, query) {
    table renders immediately off what's already loaded, and the reach line
    appears when this lands. */
 export async function loadSearchElsewhere() {
-  const scope = state.filter === "history" ? "live" : "history";
+  const scope = historyMode() ? "live" : "history";
   if (state.searchElsewhereScope === scope) return;
   state.searchElsewhereScope = scope;
   state.searchElsewhere = null;
   let rows;
   try {
-    rows = await get(scope === "history" ? "/api/vehicles-board?archived=true" : "/api/vehicles-board");
+    rows = await get(scope === "history" ? "/api/vehicles-board?view=history" : "/api/vehicles-board?view=active");
   } catch {
     // Say nothing rather than something wrong: with no answer the reach line
     // makes no claim about the other half at all, and clearing the scope lets
@@ -350,7 +387,7 @@ export function searchReach() {
   const q = state.search;
   const shown = visibleVehicles().length;
   const inView = state.vehicles.filter((v) => matchesVehicleSearch(v, q)).length;
-  const scope = state.filter === "history" ? "live" : "history";
+  const scope = historyMode() ? "live" : "history";
   const known = state.searchElsewhereScope === scope && Array.isArray(state.searchElsewhere);
   return {
     shown,
@@ -379,7 +416,7 @@ export function showAllSearchMatches() {
   widenToShowMatches();
   // Live and archived are two different lists from the server, so this can't
   // cross that line -- History has its own button.
-  if (state.filter !== "history") state.filter = "";
+  state.filter = "";
   syncSegmentChips();
   renderVehicleStatusOptions();
   renderVehiclesTable();
@@ -387,7 +424,7 @@ export function showAllSearchMatches() {
 
 export function openSearchElsewhere() {
   widenToShowMatches();
-  state.filter = state.filter === "history" ? "" : "history";
+  state.boardView = historyMode() ? "active" : "history";
   syncSegmentChips();
   loadVehiclesView();
 }
@@ -397,6 +434,7 @@ export function openSearchElsewhere() {
 export function runSearchReachAction(name) {
   if (name === "widen-search") showAllSearchMatches();
   else if (name === "search-elsewhere") openSearchElsewhere();
+  else if (name === "show-void") setBoardView("void");
   else return false;
   return true;
 }
@@ -408,6 +446,42 @@ const elsewhereButton = (scope) => (scope === "history" ? "Open History" : "Back
 // Only drawn when the table has rows: with none, the empty state says the
 // same thing in the space the rows would have been, and two copies of one
 // offer a few pixels apart is worse than either.
+/* How many cars are sitting in the Void pile, asked only while the live board
+   is the one on screen.
+
+   Taking those cars off the live list is the point of the pile, but a car
+   that silently stops being anywhere is exactly the failure voiding used to
+   cause (see tests/test_voided_tickets.py -- a mis-click once took a car out
+   of the Stalled count for good). So the live board says how many are over
+   there, and offers one click to go and look. Best-effort: a failed count
+   says nothing rather than something wrong. */
+async function loadVoidCount() {
+  if (!voidMode() && !historyMode()) {
+    try {
+      state.voidCount = (await get("/api/vehicles-board?view=void")).length;
+    } catch {
+      state.voidCount = 0;
+    }
+  } else {
+    state.voidCount = 0;
+  }
+  renderVoidNudge();
+}
+
+function renderVoidNudge() {
+  const line = $("#vehicles-void-nudge");
+  if (!line) return;
+  const n = state.voidCount || 0;
+  if (!n || voidMode() || historyMode()) {
+    line.hidden = true;
+    line.innerHTML = "";
+    return;
+  }
+  line.innerHTML = `<span>${n} ${n === 1 ? "car has" : "cars have"} only a voided ticket, kept out of the live work</span>
+    <button type="button" class="btn btn-ghost btn-sm" data-search-reach="show-void">Show ${n === 1 ? "it" : "them"}</button>`;
+  line.hidden = false;
+}
+
 function renderSearchReach(visibleCount) {
   const line = $("#vehicles-search-reach");
   if (!line) return;
@@ -680,8 +754,9 @@ function syncBoardStatCards(s) {
 // exactly one car.
 function boardScopeLabel() {
   const parts = [];
-  if (state.filter === "history") parts.push("archived to History");
-  else if (state.filter === "recon") parts.push("recon");
+  if (historyMode()) parts.push("archived to History");
+  else if (voidMode()) parts.push("voided tickets");
+  if (state.filter === "recon") parts.push("recon");
   else if (state.filter === "we_owe") parts.push("we-owe");
   if (state.vehicleStatus) parts.push(STATUS_LABEL[state.vehicleStatus] || state.vehicleStatus);
   if (state.vehiclePartsOnly) parts.push("waiting on parts");
@@ -1071,7 +1146,14 @@ function vehiclesEmptyState() {
       actions: `<button type="button" class="btn btn-ghost btn-sm" data-empty-action="clear-idle">Show all vehicles</button>`,
     };
   }
-  if (state.filter === "history") {
+  if (voidMode()) {
+    return {
+      icon: "check",
+      title: "No voided tickets",
+      hint: "A ticket written by mistake and then taken back leaves the car here, so it can be dealt with instead of sitting in with the live work looking like a car nobody has started.",
+    };
+  }
+  if (historyMode()) {
     return {
       icon: "archive",
       title: "Nothing in History yet",
@@ -1172,7 +1254,7 @@ function sortVehicleRows(rows, { key, dir }) {
 // Every other caller gets the fully filtered list.
 export function visibleVehicles({ ignoreIdle = false } = {}) {
   let rows = state.vehicles;
-  if (state.filter && state.filter !== "history") rows = rows.filter((v) => v.segment === state.filter);
+  if (state.filter) rows = rows.filter((v) => v.segment === state.filter);
   if (state.vehicleStatus) rows = rows.filter((v) => v.status === state.vehicleStatus);
   if (state.vehiclePartsOnly) rows = rows.filter((v) => (v.parts_pending || 0) > 0);
   if (state.vehicleLateOnly) rows = rows.filter(isPromiseLate);
@@ -1355,6 +1437,7 @@ export function renderVehiclesTable() {
   renderStats(rows);
   renderIdleChart(rows);
   renderVehicleSortHeaders();
+  renderVoidNudge();
   renderSearchReach(rows.length);
   saveVehicleViewPrefs();
   // The columns are built from these same rows -- one filtered, sorted list,
@@ -1438,7 +1521,7 @@ const LOT_READY = "ready";
 export const LOT_COLUMNS = [
   { key: LOT_WAITING, label: "Not started", blank: "Nothing waiting to be started." },
   { key: LOT_WORKING, label: "In the shop", blank: "Nothing in the shop right now." },
-  { key: LOT_READY, label: "Ready to sell", blank: "Nothing finished yet." },
+  { key: LOT_READY, label: "Ready to go", blank: "Nothing finished yet." },
 ];
 
 const LOT_COLUMN_KEYS = new Set(LOT_COLUMNS.map((c) => c.key));
@@ -1446,7 +1529,7 @@ const LOT_COLUMN_KEYS = new Set(LOT_COLUMNS.map((c) => c.key));
 /* Which set of piles this half of the screen deals cards into.
 
    The live board's three are where a car is up to. History's three are when
-   it left (see HISTORY_COLUMNS) -- "Ready to sell" over a column of cars that
+   it left (see HISTORY_COLUMNS) -- "Ready to go" over a column of cars that
    were sold months ago, with "Nothing finished yet" printed under the empty
    one beside it, was the plainest way this screen said something untrue. */
 export function boardColumns() {
@@ -1673,12 +1756,20 @@ function renderVehicleBulkBar() {
   $("#vehicles-bulk-bar").hidden = !n;
   if (!n) return;
   $("#vehicles-bulk-count").textContent = `${n} selected`;
-  $("#vehicles-bulk-archive").textContent = state.filter === "history" ? "Reopen Selected" : "Send Selected to History";
+  // Filing a car away is a statement that its work is finished and settled.
+  // Nothing in the Void pile qualifies: the only ticket on these cars was a
+  // mistake somebody took back, so there is no finished work to file -- the
+  // car either needs writing up properly or it should never have been here.
+  // Offering the action anyway is how a loose end gets buried instead of
+  // dealt with.
+  const archive = $("#vehicles-bulk-archive");
+  archive.hidden = voidMode();
+  archive.textContent = historyMode() ? "Reopen Selected" : "Send Selected to History";
   // Nothing to follow up on in History -- those cars are done by definition,
   // and a task pointing at an archived vehicle is a dead end.
   const task = $("#vehicles-bulk-task");
   if (task) {
-    task.hidden = state.filter === "history";
+    task.hidden = historyMode();
     task.textContent = n === 1 ? "Make a Task" : `Make ${n} Tasks`;
   }
 }

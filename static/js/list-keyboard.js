@@ -4,7 +4,7 @@ import { confirmAction } from "./confirm.js";
 import { currentActor } from "./shortcuts.js";
 import { state } from "./state.js";
 import { showView } from "./error-boundary.js";
-import { applyVehicleCursor, bulkTaskTitle, clearGlobalSearch, cssEscape, loadSearchElsewhere, loadVehiclesView, moveVehicleCursor, renderVehicleStatusOptions, renderVehiclesTable, resetVehicleView, runSearchReachAction, selectVehicleRange, setVehicleLayout, setVehicleSelected, syncPartsFilterChip, syncSearchChrome, syncSegmentChips, vehicleKey, vehicleNodeFor, visibleVehicles } from "./vehicles-board.js";
+import { applyVehicleCursor, bulkTaskTitle, clearGlobalSearch, cssEscape, historyMode, loadSearchElsewhere, loadVehiclesView, moveVehicleCursor, renderVehicleStatusOptions, renderVehiclesTable, resetVehicleView, runSearchReachAction, selectVehicleRange, setBoardView, setVehicleLayout, setVehicleSelected, syncPartsFilterChip, syncSearchChrome, syncSegmentChips, vehicleKey, vehicleNodeFor, visibleVehicles } from "./vehicles-board.js";
 import { openVehicleDetail } from "./vehicle-detail.js";
 import { openReconDialog } from "./dialog-new-recon.js";
 import { openWeOweDialog } from "./dialog-new-weowe.js";
@@ -89,14 +89,20 @@ export function wireVehiclesView() {
   const vehicleChips = $$("#view-vehicles .filters .chip[data-filter]");
   vehicleChips.forEach((chip) => {
     chip.addEventListener("click", () => {
-      const wasHistory = state.filter === "history";
       state.filter = chip.dataset.filter;
       syncSegmentChips();
       state.vehicleCursor = null;
-      if (wasHistory !== (state.filter === "history")) loadVehiclesView();
-      else { renderVehicleStatusOptions(); renderVehiclesTable(); }
+      // Every pile is already loaded -- the chips narrow what is on screen
+      // rather than asking the server for a different list, which is what
+      // the Show dropdown below does.
+      renderVehicleStatusOptions();
+      renderVehiclesTable();
     });
   });
+  // Which pile: the live work, the record of cars that have gone, or the
+  // tickets somebody took back. Three separate lists from the server, so
+  // setBoardView reloads.
+  $("#vehicles-view-filter").addEventListener("change", (e) => setBoardView(e.target.value));
   $("#vehicles-status-filter").addEventListener("change", (e) => {
     state.vehicleStatus = e.target.value;
     state.vehicleCursor = null;
@@ -230,6 +236,7 @@ export function wireVehiclesView() {
     });
   };
   wireSearchReach(reachLine);
+  wireSearchReach($("#vehicles-void-nudge"));
   wireSearchReach($("#vehicles-table"));
   wireSearchReach($("#vehicles-columns"));
 
@@ -436,7 +443,7 @@ export function wireVehiclesView() {
   }
 
   $("#vehicles-bulk-archive").addEventListener("click", async () => {
-    const reopening = state.filter === "history";
+    const reopening = historyMode();
     const targets = [...state.vehicleSelection].map((key) => {
       const [segment, id] = key.split(":");
       return { segment, id };

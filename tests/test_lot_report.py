@@ -201,6 +201,103 @@ def test_an_unfinished_car_left_alone_is_still_called_out(client, db_path):
     assert is_stalled(row)
 
 
+def sell(client, recon_id: int) -> None:
+    """Mark a car sold the way the API allows -- legacy records and imports
+    carry this state; the board has to read it honestly wherever it came from."""
+    res = client.patch(
+        f"/api/recon/vehicles/{recon_id}",
+        json={"status": "sold", "sale_price": 6995, "sale_date": "2026-07-15"},
+    )
+    assert res.status_code == 200, res.text
+
+
+def test_a_sold_car_is_called_sold_not_untouched(client):
+    """The Profit report reads the sold flag as fact, so the lot sheet must
+    not contradict it on the same data: a car sold weeks ago was filed under
+    "Not started -- no ticket written yet, untouched 41 days", and it was the
+    loudest car in the Stalled alarm."""
+    recon = make_recon_vehicle(client, stock_number="R-SOLDBARE", purchase_price=0)
+    sell(client, recon["id"])
+
+    row = row_for(lot(client), "R-SOLDBARE")
+    assert row["status"] == "sold"
+    assert row["status_bucket"] == "finished"
+    assert row["lot_bucket"] == "ready"
+    assert row["needs"] == "Sold — send to History", row["needs"]
+    # However long it sits unarchived, a sold car is never a neglected one.
+    assert not is_stalled({**row, "idle_days": 41})
+
+
+def test_sold_does_not_silence_a_ticket_someone_is_working(client):
+    """The flag closes the car only once its work is settled. A sold car can
+    still owe the lot an open repair, and that work must stay on the board
+    and stay eligible for the stalled alarm."""
+    recon = make_recon_vehicle(client, stock_number="R-SOLDOPEN", purchase_price=0)
+    order = make_recon_order(client, recon["id"])
+    client.patch(f"/api/orders/{order['id']}/status", json={"status": "in_progress", "actor": "tester"})
+    sell(client, recon["id"])
+
+    row = row_for(lot(client), "R-SOLDOPEN")
+    assert row["status"] == "in_progress"
+    assert row["status_bucket"] == "in_progress"
+    assert row["lot_bucket"] == "working"
+
+
+def test_a_sold_car_still_owes_its_unreceipted_parts_warning(client):
+    """Selling the car does not make its cost right. A part nobody marked
+    received is money missing from what the car cost, and that is the number
+    Walt does his own arithmetic on -- the warning outranks the filing nudge."""
+    recon = make_recon_vehicle(client, stock_number="R-SOLDPART", purchase_price=0)
+    order = make_recon_order(client, recon["id"])
+    save_estimate(client, order["id"], [PART])
+    client.patch(f"/api/orders/{order['id']}/estimate/order-parts")
+    client.patch(f"/api/orders/{order['id']}/status", json={"status": "complete", "actor": "tester"})
+    sell(client, recon["id"])
+
+    row = row_for(lot(client), "R-SOLDPART")
+    assert row["status"] == "sold"
+    assert row["needs"].startswith("Sold — but "), row["needs"]
+    assert "never marked received" in row["needs"], row["needs"]
+
+
+def test_a_sold_car_with_only_a_voided_ticket_is_not_asked_for_a_new_one(client):
+    """ "Ticket was voided -- needs a new one" is the right nudge on a live
+    car and a wrong one on a sold car: nobody should write new work against
+    a car that is gone."""
+    recon = make_recon_vehicle(client, stock_number="R-SOLDVOID", purchase_price=0)
+    order = make_recon_order(client, recon["id"])
+    client.post(f"/api/orders/{order['id']}/void", json={"actor": "tester"})
+    sell(client, recon["id"])
+
+    row = row_for(lot(client), "R-SOLDVOID")
+    assert row["status"] == "sold"
+    assert row["lot_bucket"] == "ready"
+    assert "needs a new one" not in row["needs"], row["needs"]
+
+
+def test_history_does_not_tell_you_to_file_a_car_that_is_already_filed(client):
+    """Once the sold car IS in History, "send to History" would be a nudge
+    toward a step that is already done -- there it is just "Sold"."""
+    recon = make_recon_vehicle(client, stock_number="R-SOLDGONE", purchase_price=0)
+    sell(client, recon["id"])
+    detail = client.get(f"/api/recon/vehicles/{recon['id']}").json()
+    client.post(f"/api/recon/vehicles/{recon['id']}/archive", json={"expected_version": detail["edit_version"]})
+
+    row = row_for(client.get("/api/vehicles-board?archived=true").json(), "R-SOLDGONE")
+    assert row["status"] == "sold"
+    assert row["needs"] == "Sold", row["needs"]
+
+
+def test_the_detail_page_agrees_a_sold_car_is_finished(client):
+    """The detail page's stalled nudge reads its own status_bucket -- the
+    board dropping the alarm while the page still says "Stalled 41 days --
+    make a task" would be the two-screens-disagreeing failure all over."""
+    recon = make_recon_vehicle(client, stock_number="R-SOLDDET", purchase_price=0)
+    sell(client, recon["id"])
+    detail = client.get(f"/api/recon/vehicles/{recon['id']}").json()
+    assert detail["status_bucket"] == "finished"
+
+
 def test_we_owe_promises_are_on_the_sheet_too(client):
     """A we-owe is work the shop owes on a car Walt already sold; it belongs
     on the same sheet, labelled, not hidden on another screen."""

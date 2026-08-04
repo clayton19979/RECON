@@ -193,6 +193,15 @@ def lot_needs_text(row: dict) -> str:
     )
 
     if row["lot_bucket"] == LOT_READY:
+        # A sold car's lot life is over; the one thing left is to file it
+        # away -- unless it already has been, in which case History must not
+        # nudge anyone toward a step that is done. The unreceipted-parts
+        # warning still outranks either wording: the car's cost is wrong
+        # until that part is received, sold or not.
+        if row.get("status") == "sold":
+            if missing_text:
+                return f"Sold — but {missing_text}"
+            return "Sold" if row.get("archived") else "Sold — send to History"
         if missing_text:
             return f"Ready to go — but {missing_text}"
         return "Nothing — ready to go"
@@ -339,6 +348,26 @@ def we_owe_status_bucket(status: str) -> str:
     with no work done and often no ticket at all.
     """
     return "finished" if status in ("fulfilled", "waived") else "in_progress"
+
+
+def recon_sold_and_settled(vehicle_status: str | None, orders: list[dict]) -> bool:
+    """Is this car's lot life over -- sold, with no work still owed on it?
+
+    The recon status field is legacy and mostly unmaintained (see
+    order_status_bucket), but "sold" is the one value in it that is definitive
+    when it is there: records from before the ticket-driven board carry it,
+    and the Profit report already reads the sale it describes as fact.
+    Ignoring it here meant one screen said "sold July 15" while the board
+    called the same car "not started, untouched 41 days" -- and the stalled
+    alarm rang loudest for exactly the cars nobody should touch again.
+
+    A still-open ticket outranks the flag: sold or not, work someone is in
+    the middle of is what the board has to show, and the alarm has to keep
+    working on it.
+    """
+    if vehicle_status != "sold":
+        return False
+    return all(o["status"] == "complete" for o in live_orders(orders))
 
 
 def last_activity_detail(
@@ -1110,24 +1139,31 @@ def vehicle_board_rows(
             # cost -- see live_orders.
             live = live_orders(rollup["orders"])
             voided_count = len(rollup["orders"]) - len(live)
-            # Recon status/sale tracking isn't used here -- the repair order's
-            # own status is what the advisor actually maintains, so that's
-            # what drives the displayed status and in-progress/finished bucket.
+            # The repair order's own status is what the advisor actually
+            # maintains, so that's what drives the displayed status and
+            # in-progress/finished bucket -- except a settled sale, the one
+            # recon-status fact that outranks the tickets. See
+            # recon_sold_and_settled.
             active_order = next((o for o in reversed(live) if o["status"] != "complete"), None)
             latest_order = live[-1] if live else None
             current_order = active_order or latest_order
-            display_status = current_order["status"] if current_order else "acquired"
+            sold = recon_sold_and_settled(row["status"], rollup["orders"])
+            display_status = "sold" if sold else (current_order["status"] if current_order else "acquired")
             activity_at = activity.get(row["id"]) or row["created_at"]
             result.append(
                 {
                     "segment": "recon",
                     "recon_id": row["id"],
                     "we_owe_id": None,
+                    # Which side of the live-board/History divide this row was
+                    # fetched from -- the needs sentence reads it, so a sold
+                    # car already in History isn't told to be sent there.
+                    "archived": archived,
                     "stock_number": row["stock_number"],
                     "vehicle": f"{row['year']} {row['make']} {row['model']}",
                     "vin": row["vin"],
                     "status": display_status,
-                    "status_bucket": order_status_bucket(rollup["orders"]),
+                    "status_bucket": "finished" if sold else order_status_bucket(rollup["orders"]),
                     # From the unit, not recon_vehicles' legacy column of the same
                     # name -- one car, one purchase price, whichever half of its
                     # life you happen to be looking at.
@@ -1209,6 +1245,9 @@ def vehicle_board_rows(
                     "segment": "we_owe",
                     "recon_id": None,
                     "we_owe_id": row["id"],
+                    # Same reason as the recon rows: the needs wording is
+                    # allowed to differ between the live board and History.
+                    "archived": archived,
                     "stock_number": row["lot_stock_number"] or None,
                     "vehicle": f"{row['year']} {row['make']} {row['model']}",
                     "vin": row["vin"],
@@ -1319,8 +1358,13 @@ def build_recon_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
         # The same finished/in-progress answer the board gives, so the detail
         # page can tell a car that has gone quiet from one that is simply done
         # -- see is_stalled. Without it the page had no way to know, and put a
-        # "Stalled 41 days -- make a task" nudge on finished work.
-        detail["status_bucket"] = order_status_bucket(rollup["orders"])
+        # "Stalled 41 days -- make a task" nudge on finished work. A settled
+        # sale counts as done here for the same reason it does on the board.
+        detail["status_bucket"] = (
+            "finished"
+            if recon_sold_and_settled(row["status"], rollup["orders"])
+            else order_status_bucket(rollup["orders"])
+        )
         # Purchase and sale price come off the unit, which is what makes them
         # survive the car being sold and coming back on a we-owe. The legacy
         # recon_vehicles columns of the same name are no longer authoritative.

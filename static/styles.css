@@ -939,8 +939,12 @@ table.sticky-head thead th {
   display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px;
   margin-top: 11px; padding-top: 9px; border-top: 1px dashed var(--line-soft);
 }
-/* Keeps the two facts from reading as one sentence now they share a line. */
-.detail-worked:not([hidden]) + .detail-updated:not(:empty)::before {
+/* Keeps the facts from reading as one sentence now they share a line. General
+   siblings rather than adjacent ones, because any of the three can be absent:
+   each later fact takes a dot when anything visible precedes it. */
+.detail-worked:not([hidden]) ~ .detail-promise:not([hidden])::before,
+.detail-worked:not([hidden]) ~ .detail-updated:not(:empty)::before,
+.detail-promise:not([hidden]) ~ .detail-updated:not(:empty)::before {
   content: "·"; margin-right: 10px; color: var(--line);
 }
 /* No rule floating over nothing: a brand-new car has no activity yet and an
@@ -969,6 +973,23 @@ table.sticky-head thead th {
 
 .detail-updated { font-size: 11px; color: var(--ink-faint); }
 .detail-updated.recent { color: var(--warn); font-weight: 600; }
+
+/* "Promised to customer" -- we-owe only, same anatomy as the worked line.
+   Three tones, no new colors: quiet while the date is comfortably ahead,
+   the warn amber when it's today or tomorrow, and the same red as a stalled
+   car once it's missed (the nudge button reuses .detail-worked-nudge whole,
+   so the two red buttons on this band can never drift apart). */
+.detail-promise {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 6px;
+  font-size: 12.5px; color: var(--ink);
+}
+.detail-promise-label { color: var(--ink-faint); font-weight: 600; }
+.detail-promise-when { color: var(--ink-soft); }
+.detail-promise.soon { color: var(--warn); font-weight: 600; }
+.detail-promise.soon .detail-promise-label,
+.detail-promise.soon .detail-promise-when { color: var(--warn); }
+.detail-promise.overdue { color: var(--crit); font-weight: 600; }
+.detail-promise.overdue .detail-promise-label { color: var(--crit); }
 /* Was an inline style on #vd-actions. Capped so the button set wraps into a
    compact block on the band's right instead of one long strip that shoves
    the title aside. */

@@ -54,6 +54,8 @@ def flat_app_js() -> str:
 RUNTIME_CREATED_IDS: set[str] = {
     # rendered into #vd-last-worked, and only for a stalled vehicle
     "vd-worked-nudge",
+    # rendered into #vd-promise-line, and only for a we-owe past its date
+    "vd-promise-nudge",
     # rendered into the staff table's empty state (no rows / no search hits)
     "staff-empty-add",
     "staff-empty-clear",

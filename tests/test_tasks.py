@@ -81,7 +81,7 @@ def test_task_links_to_recon_order_and_resolves_label(client):
     task = client.post("/api/tasks", json={"title": "Chase down the title", "order_id": order["id"]}).json()
     assert task["order_id"] == order["id"]
     assert task["order_label"] == "R-TASK-1"
-    assert task["order_recon_vehicle_id"] == vehicle["id"]
+    assert task["recon_vehicle_id"] == vehicle["id"]
     assert task["order_segment"] == "recon"
 
     listed = next(t for t in client.get("/api/tasks").json() if t["id"] == task["id"])
@@ -96,7 +96,7 @@ def test_task_links_to_we_owe_order_with_customer_label(client):
 
     task = client.post("/api/tasks", json={"title": "Call Jamie", "order_id": order["id"]}).json()
     assert task["order_label"] == "We-Owe: Jamie Customer"
-    assert task["order_we_owe_id"] == we_owe["id"]
+    assert task["we_owe_id"] == we_owe["id"]
     assert task["order_segment"] == "we_owe"
 
 
@@ -171,15 +171,18 @@ def test_linkable_orders_groups_recon_first_then_we_owe_then_retail(client):
 
 def test_linkable_orders_leaves_out_voided_tickets(client):
     """Pinning a follow-up to a cancelled ticket buries it: nobody opens that
-    car again, so the task is never seen and never done."""
+    car again, so the task is never seen and never done. The car is still
+    offered -- as the car, with no ticket behind it -- because voiding the
+    paperwork doesn't move the car off the lot."""
     vehicle = make_recon_vehicle(client, stock_number="R-2202")
     keep = make_recon_order(client, vehicle["id"])
     other = make_recon_vehicle(client, stock_number="R-2203", vin="1HGCM82633A004353")
     voided = make_recon_order(client, other["id"])
     assert client.post(f"/api/orders/{voided['id']}/void", json={"actor": "tester"}).status_code == 200
 
-    ids = [row["id"] for row in client.get("/api/tasks/linkable-orders").json()]
-    assert ids == [keep["id"]]
+    rows = client.get("/api/tasks/linkable-orders").json()
+    assert [row["order_id"] for row in rows] == [keep["id"], None]
+    assert [row["value"] for row in rows] == [f"order:{keep['id']}", f"recon:{other['id']}"]
 
 
 def test_linkable_orders_leaves_out_cars_sent_to_history(client):
@@ -217,8 +220,39 @@ def test_linkable_orders_disambiguates_two_live_tickets_on_one_car(client):
     assert by_id[alone["id"]] == "R-2207 — 2019 Honda Civic"
 
 
-def test_linkable_orders_is_empty_before_any_ticket_exists(client):
-    make_recon_vehicle(client, stock_number="R-2208")
+def test_linkable_orders_offers_a_car_with_no_ticket_written_yet(client):
+    """The cars worth leaving a note about are frequently the ones nobody has
+    written up -- "untouched 41 days" is exactly that car -- and the picker
+    used to offer nothing at all until a ticket existed."""
+    vehicle = make_recon_vehicle(client, stock_number="R-2208")
+    rows = client.get("/api/tasks/linkable-orders").json()
+    assert [row["value"] for row in rows] == [f"recon:{vehicle['id']}"]
+    assert rows[0]["label"] == "R-2208 — 2019 Honda Civic"
+    assert rows[0]["order_id"] is None
+    assert rows[0]["recon_vehicle_id"] == vehicle["id"]
+    assert rows[0]["group"] == "Recon"
+
+
+def test_linkable_orders_offers_a_we_owe_promise_with_no_ticket(client):
+    promise = make_we_owe(client, customer_name="Dee Waiting")
+    rows = client.get("/api/tasks/linkable-orders").json()
+    assert [row["value"] for row in rows] == [f"we_owe:{promise['id']}"]
+    assert rows[0]["label"].startswith("We-Owe: Dee Waiting — ")
+    assert rows[0]["we_owe_id"] == promise["id"]
+    assert rows[0]["group"] == "We-Owe"
+
+
+def test_linkable_orders_offers_a_car_once_not_twice(client):
+    """A car with a live ticket is offered through that ticket and nowhere
+    else -- two lines for one car is a pick nobody can check afterwards."""
+    vehicle = make_recon_vehicle(client, stock_number="R-2209")
+    order = make_recon_order(client, vehicle["id"])
+    rows = client.get("/api/tasks/linkable-orders").json()
+    assert [row["value"] for row in rows] == [f"order:{order['id']}"]
+    assert rows[0]["recon_vehicle_id"] == vehicle["id"]
+
+
+def test_linkable_orders_is_empty_on_an_empty_shop(client):
     assert client.get("/api/tasks/linkable-orders").json() == []
 
 
@@ -266,6 +300,152 @@ def test_task_says_when_a_we_owe_car_went_to_history(client):
 def test_task_with_no_vehicle_has_no_order_state(client):
     task = client.post("/api/tasks", json={"title": "Restock brake cleaner"}).json()
     assert task["order_state"] == ""
+
+
+# --- a follow-up about a car, with or without a ticket -------------------
+#
+# A task used to reach its car only through a repair order, so the cars that
+# most need a follow-up -- the ones sitting on the lot with nothing written up
+# -- could not have one. These cover the car link standing on its own.
+
+
+def test_task_can_name_a_recon_car_with_no_ticket(client):
+    vehicle = make_recon_vehicle(client, stock_number="R-3301")
+    task = client.post(
+        "/api/tasks", json={"title": "Chase Walt for the title", "recon_vehicle_id": vehicle["id"]}
+    ).json()
+    assert task["order_id"] is None
+    assert task["recon_vehicle_id"] == vehicle["id"]
+    # The chip has to be able to open the car even though there is no ticket
+    # for it to read a segment off.
+    assert task["order_label"] == "R-3301"
+    assert task["link_segment"] == "recon"
+    assert task["link_ref_id"] == vehicle["id"]
+
+    listed = next(t for t in client.get("/api/tasks").json() if t["id"] == task["id"])
+    assert listed["order_label"] == "R-3301"
+    assert listed["link_ref_id"] == vehicle["id"]
+
+
+def test_task_can_name_a_we_owe_promise_with_no_ticket(client):
+    promise = make_we_owe(client, customer_name="Nadia Waiting")
+    task = client.post("/api/tasks", json={"title": "Order the tie rod", "we_owe_id": promise["id"]}).json()
+    assert task["order_id"] is None
+    assert task["order_label"] == "We-Owe: Nadia Waiting"
+    assert task["link_segment"] == "we_owe"
+    assert task["link_ref_id"] == promise["id"]
+
+
+def test_a_ticket_decides_which_car_the_follow_up_is_about(client):
+    """The car is taken off the ticket rather than trusted from the caller.
+    Sending both independently is how a task ends up claiming to be about a
+    car its own ticket isn't on, with nothing downstream able to say which
+    half was right."""
+    right = make_recon_vehicle(client, stock_number="R-3302")
+    wrong = make_recon_vehicle(client, stock_number="R-3303", vin="1HGCM82633A004353")
+    order = make_recon_order(client, right["id"])
+
+    task = client.post(
+        "/api/tasks",
+        json={"title": "Follow up", "order_id": order["id"], "recon_vehicle_id": wrong["id"]},
+    ).json()
+    assert task["recon_vehicle_id"] == right["id"]
+    assert task["order_label"] == "R-3302"
+
+
+def test_repointing_a_follow_up_at_a_car_drops_the_old_ticket(client):
+    """Otherwise the row keeps a link to paperwork on a car it no longer
+    claims to be about."""
+    ticketed = make_recon_vehicle(client, stock_number="R-3304")
+    order = make_recon_order(client, ticketed["id"])
+    bare = make_recon_vehicle(client, stock_number="R-3305", vin="1HGCM82633A004353")
+
+    task = client.post("/api/tasks", json={"title": "Follow up", "order_id": order["id"]}).json()
+    moved = client.patch(f"/api/tasks/{task['id']}", json={"recon_vehicle_id": bare["id"]}).json()
+    assert moved["order_id"] is None
+    assert moved["recon_vehicle_id"] == bare["id"]
+    assert moved["order_label"] == "R-3305"
+
+
+def test_unlinking_a_follow_up_clears_the_car_as_well_as_the_ticket(client):
+    vehicle = make_recon_vehicle(client, stock_number="R-3306")
+    order = make_recon_order(client, vehicle["id"])
+    task = client.post("/api/tasks", json={"title": "Follow up", "order_id": order["id"]}).json()
+
+    cleared = client.patch(
+        f"/api/tasks/{task['id']}", json={"order_id": -1, "recon_vehicle_id": -1, "we_owe_id": -1}
+    ).json()
+    assert cleared["order_id"] is None
+    assert cleared["recon_vehicle_id"] is None
+    assert cleared["we_owe_id"] is None
+    assert cleared["order_label"] is None
+    assert cleared["link_ref_id"] is None
+
+
+def test_a_follow_up_points_at_one_car_not_two(client):
+    vehicle = make_recon_vehicle(client, stock_number="R-3307")
+    promise = make_we_owe(client)
+    res = client.post(
+        "/api/tasks",
+        json={"title": "Follow up", "recon_vehicle_id": vehicle["id"], "we_owe_id": promise["id"]},
+    )
+    assert res.status_code == 422
+
+
+def test_create_task_rejects_an_unknown_car(client):
+    assert client.post("/api/tasks", json={"title": "Ghost car", "recon_vehicle_id": 99999}).status_code == 404
+    assert client.post("/api/tasks", json={"title": "Ghost promise", "we_owe_id": 99999}).status_code == 404
+
+
+def test_a_follow_up_on_an_archived_car_says_so_without_a_ticket(client):
+    """The board's "Make Tasks" now links cars that have no ticket, so the
+    archived warning has to come off the car and not only off the ticket."""
+    vehicle = make_recon_vehicle(client, stock_number="R-3308")
+    task = client.post("/api/tasks", json={"title": "Follow up", "recon_vehicle_id": vehicle["id"]}).json()
+    assert task["order_state"] == ""
+
+    client.post(f"/api/recon/vehicles/{vehicle['id']}/archive")
+    listed = next(t for t in client.get("/api/tasks").json() if t["id"] == task["id"])
+    assert listed["order_state"] == "archived"
+
+
+def test_bulk_create_links_cars_that_have_no_ticket(client):
+    """This is the board's "Make N Tasks" button. A stalled car with nothing
+    written up is the most common row in that selection, and those tasks used
+    to arrive linked to nothing at all."""
+    bare = make_recon_vehicle(client, stock_number="R-3309")
+    ticketed = make_recon_vehicle(client, stock_number="R-3310", vin="1HGCM82633A004353")
+    order = make_recon_order(client, ticketed["id"])
+
+    res = client.post(
+        "/api/tasks/bulk-create",
+        json={
+            "items": [
+                {"title": "Follow up: R-3309 — no work in 41 days", "recon_vehicle_id": bare["id"]},
+                {"title": "Follow up: R-3310", "order_id": order["id"], "recon_vehicle_id": ticketed["id"]},
+            ]
+        },
+    )
+    assert res.status_code == 201
+    tasks = res.json()["tasks"]
+    assert [t["order_label"] for t in tasks] == ["R-3309", "R-3310"]
+    assert [t["recon_vehicle_id"] for t in tasks] == [bare["id"], ticketed["id"]]
+    assert [t["order_id"] for t in tasks] == [None, order["id"]]
+
+
+def test_bulk_create_is_all_or_nothing_on_a_bad_car_link(client):
+    good = make_recon_vehicle(client, stock_number="R-3311")
+    res = client.post(
+        "/api/tasks/bulk-create",
+        json={
+            "items": [
+                {"title": "Fine", "recon_vehicle_id": good["id"]},
+                {"title": "Ghost", "recon_vehicle_id": 99999},
+            ]
+        },
+    )
+    assert res.status_code == 404
+    assert client.get("/api/tasks").json() == []
 
 
 # --- bulk edit ---------------------------------------------------------
@@ -424,7 +604,7 @@ def test_bulk_keeps_the_order_link_and_its_label(client):
     task = res.json()["tasks"][0]
     assert task["order_id"] == order["id"]
     assert task["order_label"] == "R-0981"
-    assert task["order_recon_vehicle_id"] == vehicle["id"]
+    assert task["recon_vehicle_id"] == vehicle["id"]
 
 
 # --- bulk create -------------------------------------------------------
@@ -491,7 +671,7 @@ def test_bulk_create_keeps_per_item_order_links_and_labels(client):
     )
     tasks = res.json()["tasks"]
     assert [t["order_label"] for t in tasks] == ["R-0981", "R-0977"]
-    assert [t["order_recon_vehicle_id"] for t in tasks] == [first["id"], second["id"]]
+    assert [t["recon_vehicle_id"] for t in tasks] == [first["id"], second["id"]]
     assert tasks[1]["notes"] == "41 days idle"
 
 

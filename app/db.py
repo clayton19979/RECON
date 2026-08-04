@@ -590,7 +590,23 @@ CREATE TABLE IF NOT EXISTS tasks (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   completed_at TEXT NOT NULL DEFAULT '',
-  order_id INTEGER REFERENCES orders(id)
+  order_id INTEGER REFERENCES orders(id),
+  /* Which car the follow-up is about, held separately from the ticket it may
+   * or may not hang off.
+   *
+   * A task used to reach its car only through order_id, which meant the cars
+   * that most need a follow-up could not have one: a lot car sitting with no
+   * ticket written is exactly the "chase the title", "get Walt to look at it"
+   * case, and there was nothing to attach the note to. The board's own
+   * "Make Tasks" button produced unlinked rows for those cars.
+   *
+   * When there IS a ticket these are derived from it rather than trusted from
+   * the caller -- one answer, no drift -- so they are always safe to read on
+   * their own. Retail tickets set neither: a customer's own car has no lot
+   * record, and order_id is the whole link.
+   */
+  recon_vehicle_id INTEGER REFERENCES recon_vehicles(id),
+  we_owe_id INTEGER REFERENCES we_owe_items(id)
 );
 
 CREATE TABLE IF NOT EXISTS suggestions (
@@ -889,6 +905,25 @@ def _migrate(db: sqlite3.Connection) -> None:
     task_columns = {row[1] for row in db.execute("PRAGMA table_info(tasks)")}
     if "order_id" not in task_columns:
         db.execute("ALTER TABLE tasks ADD COLUMN order_id INTEGER REFERENCES orders(id)")
+
+    # Which car a follow-up is about -- see the columns' comment in SCHEMA.
+    for column, ddl in (
+        ("recon_vehicle_id", "recon_vehicle_id INTEGER REFERENCES recon_vehicles(id)"),
+        ("we_owe_id", "we_owe_id INTEGER REFERENCES we_owe_items(id)"),
+    ):
+        if column not in task_columns:
+            db.execute(f"ALTER TABLE tasks ADD COLUMN {ddl}")
+    # Backfill from the ticket, and keep backfilling: every task that already
+    # names a ticket learns which car that ticket is on, so an existing queue
+    # shows up on the cars' pages immediately rather than only for follow-ups
+    # written after the upgrade. Scoped to rows with no car of their own, so it
+    # never overwrites a link made directly to a car and is a no-op on every
+    # start after the first (and on anything a restored older backup brings).
+    db.execute(
+        """UPDATE tasks SET recon_vehicle_id = (SELECT o.recon_vehicle_id FROM orders o WHERE o.id=tasks.order_id),
+                            we_owe_id = (SELECT o.we_owe_id FROM orders o WHERE o.id=tasks.order_id)
+           WHERE order_id IS NOT NULL AND recon_vehicle_id IS NULL AND we_owe_id IS NULL"""
+    )
 
     for table in ("recon_vehicles", "we_owe_items"):
         cols = {row[1] for row in db.execute(f"PRAGMA table_info({table})")}

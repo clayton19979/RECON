@@ -44,7 +44,7 @@ export const CUSTOMER_COLUMNS = 7;
 // Part, Part #, RO / Vehicle, Qty, Value, Ordered, Waiting. Same contract
 // again: the loading skeleton, the empty state and the error state all have
 // to span the On Order table's real width.
-export const ON_ORDER_COLUMNS = 7;
+export const ON_ORDER_COLUMNS = 8;
 
 // Part, Part #, RO / Vehicle, Qty, Not In Cost, Ticket Idle. One column
 // shorter than On Order: a line that was never received has no Ordered date

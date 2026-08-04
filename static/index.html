@@ -514,6 +514,9 @@
                      is the moment an advisor actually needs it. Clicking a
                      batch lights up its own parts in the grid below. -->
                 <div id="vd-po-strip" class="po-strip"></div>
+                <!-- Suppliers the shop already uses, offered to every "who
+                     from?" box on the strip above. Filled on first focus. -->
+                <datalist id="po-vendor-options"></datalist>
                 <div id="vd-estimate-items"></div>
               </div>
               <!-- Two figures, no comparison between them. Recon work isn't
@@ -912,12 +915,12 @@
           <div class="filters desk-filters">
             <button class="chip active" data-on-order-filter="">All</button>
             <button class="chip" data-on-order-filter="overdue" title="Ordered a week or more ago and still not here">Waiting 7+ days</button>
-            <input id="on-order-search" class="filters-search" placeholder="Search parts on order…" title="Searches part, part #, RO, and vehicle" aria-label="Search parts on order" autocomplete="off">
+            <input id="on-order-search" class="filters-search" placeholder="Search parts on order…" title="Searches part, part #, RO, vehicle, supplier and PO" aria-label="Search parts on order" autocomplete="off">
           </div>
 
           <div class="table-wrap">
             <table>
-              <thead><tr><th>Part</th><th>Part #</th><th>RO / Vehicle</th><th class="num-col">Qty</th><th class="num-col">Value</th><th>Ordered</th><th>Waiting</th></tr></thead>
+              <thead><tr><th>Part</th><th>Part #</th><th>RO / Vehicle</th><th>Ordered From</th><th class="num-col">Qty</th><th class="num-col">Value</th><th>Ordered</th><th>Waiting</th></tr></thead>
               <tbody id="on-order-table"></tbody>
             </table>
           </div>

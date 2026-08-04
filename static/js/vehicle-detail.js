@@ -806,6 +806,11 @@ function applyArchivedLockUI(archived) {
   ticketIds.forEach((id) => { const el = $(`#${id}`); if (el) el.disabled = archived || noTicket; });
   vehicleIds.forEach((id) => { const el = $(`#${id}`); if (el) el.disabled = archived; });
   $$(".job-control", $("#vd-estimate-items")).forEach((el) => { el.disabled = archived; });
+  // Rebuilt on every render like the estimate rows, but the strip renders
+  // before this runs, so the boxes still need switching off here -- an
+  // archived car's ticket is frozen, and a supplier box that takes typing and
+  // then answers with an error is worse than one that plainly won't.
+  $$(".po-chip-vendor", $("#vd-po-strip")).forEach((el) => { el.disabled = archived; });
   if (archived) {
     $("#vd-void-order").style.display = "none";
     $("#vd-receive-parts").disabled = true;
@@ -822,10 +827,13 @@ function applyArchivedLockUI(archived) {
 }
 
 /* The ticket's PO numbers, above the parts they cover.
-   Two jobs, and the second is the one that gets used most: it shows the
-   batches already out with a vendor (so a delivery can be matched to one at a
-   glance), and it says what the *next* number will be -- because the moment an
-   advisor needs a PO number is before the call, not after it. */
+   Three jobs. It shows the batches already out with a vendor (so a delivery
+   can be matched to one at a glance); it says what the *next* number will be,
+   because the moment an advisor needs a PO number is before the call, not
+   after it; and it carries the box that records who the call went to. That
+   last one is a plain input rather than a dialog on purpose -- it is typed
+   with a vendor still on the phone, and anything heavier than a box that
+   saves itself is how the supplier ends up never written down. */
 function renderPoStrip(order) {
   const box = $("#vd-po-strip");
   if (!order) {
@@ -850,13 +858,24 @@ function renderPoStrip(order) {
       : done
         ? `${po.line_count} part${po.line_count === 1 ? "" : "s"} · all in`
         : `${po.received_count} of ${po.line_count} in`;
+    // Only a batch still waiting on parts nags for a supplier. On one that has
+    // fully turned up the question has stopped mattering, and an empty box
+    // shouting on every old PO would train people to ignore all of them.
+    const wanted = !po.vendor_name && !done && po.line_count > 0;
     // The × only on a number nothing has been ordered against. Once a batch is
     // closed it is a vendor's paperwork, whatever happened to its lines since.
-    return `<button type="button" class="po-chip ${cls}" data-po="${esc(po.number)}" data-po-id="${po.id}" title="Click to highlight this batch's parts below${po.vendor_name ? ` — ${esc(po.vendor_name)}` : ""}">
-      <span class="po-chip-number">${esc(po.number)}</span>
-      <span class="po-chip-detail">${esc(detail)}</span>
+    return `<span class="po-chip ${cls}" data-po="${esc(po.number)}" data-po-id="${po.id}">
+      <button type="button" class="po-chip-main" title="Click to highlight this batch's parts below">
+        <span class="po-chip-number">${esc(po.number)}</span>
+        <span class="po-chip-detail">${esc(detail)}</span>
+      </button>
+      <input class="po-chip-vendor${wanted ? " po-chip-vendor-wanted" : ""}" list="po-vendor-options"
+             value="${esc(po.vendor_name || "")}" placeholder="who from?" autocomplete="off"
+             data-po-id="${po.id}" data-was="${esc(po.vendor_name || "")}"
+             aria-label="Supplier for purchase order ${esc(po.number)}"
+             title="Who ${esc(po.number)} was ordered from — type a name and press Enter">
       ${spare ? `<span class="po-chip-drop" data-drop-po="${po.id}" title="Remove this unused PO number">×</span>` : ""}
-    </button>`;
+    </span>`;
   }).join("") + `<span class="po-strip-next">Next: <strong>${esc(nextNumber)}</strong></span>`;
 }
 
@@ -2274,6 +2293,7 @@ const ACTIVITY_LABEL = {
   estimate_item_moved_in: "Line moved onto this ticket",
   estimate_item_moved_out: "Line moved to another ticket",
   purchase_order_created: "PO number taken",
+  purchase_order_vendor_set: "Supplier recorded on a PO",
   parts_ordered: "Parts marked ordered",
   parts_order_undone: "Part put back to quoted",
   parts_received: "Parts received",
@@ -2837,7 +2857,9 @@ export function wireVehicleDetail() {
       }
       return;
     }
-    const chip = t.closest(".po-chip");
+    // Only the number itself toggles the highlight. The supplier box sits
+    // inside the chip and must be clickable without lighting up the grid.
+    const chip = t.closest(".po-chip-main") && t.closest(".po-chip");
     if (!chip) return;
     const wasActive = chip.classList.contains("po-chip-active");
     $$(".po-chip", $("#vd-po-strip")).forEach((c) => c.classList.remove("po-chip-active"));
@@ -2845,6 +2867,32 @@ export function wireVehicleDetail() {
     if (wasActive) return;
     chip.classList.add("po-chip-active");
     $$(`.part-row[data-po="${chip.dataset.po}"]`, $("#vd-estimate-items")).forEach((r) => r.classList.add("po-highlight"));
+  });
+
+  /* Recording the supplier. `change` rather than every keystroke: it fires on
+     Enter, on tab, and on clicking away, which covers every way somebody
+     finishes typing a name -- and it does not fire when nothing was edited,
+     so simply tabbing across the strip writes nothing. */
+  $("#vd-po-strip").addEventListener("focusin", (e) => {
+    if (e.target instanceof Element && e.target.classList.contains("po-chip-vendor")) fillVendorOptions();
+  });
+  $("#vd-po-strip").addEventListener("change", async (e) => {
+    const input = e.target;
+    if (!(input instanceof HTMLInputElement) || !input.classList.contains("po-chip-vendor")) return;
+    const name = input.value.trim();
+    if (name === input.dataset.was) return;
+    try {
+      await patch(`/api/orders/${state.detail.order.id}/purchase-orders/${input.dataset.poId}`, {
+        vendor_name: name, actor: currentActor(),
+      });
+      // A name typed here can create a vendor, so the cached list is stale.
+      state.vendors = [];
+      toast(name ? `Supplier saved — ${name}` : "Supplier cleared");
+      await loadVehicleDetail();
+    } catch (err) {
+      input.value = input.dataset.was || "";
+      toast(err.message, true);
+    }
   });
 
   $("#vd-receive-parts").addEventListener("click", () => openReceiveDialog());

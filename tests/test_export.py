@@ -182,6 +182,75 @@ def test_the_lot_csv_is_still_stamped_with_the_day_it_was_taken(client):
     assert name == f"discount-auto-ops-lot-status-{date.today():%Y-%m-%d}.csv"
 
 
+def test_the_lot_csv_carries_the_money_that_is_not_in_spent_so_far(client):
+    """Summing Spent So Far is the first thing anyone does with this file, and
+    a total that is quietly short is worse in a spreadsheet than on a screen --
+    there is nothing beside it to explain itself. A car whose ticket closed
+    with parts nobody receipted gets its own column, so the sum can be
+    completed rather than merely being wrong."""
+    vehicle = make_recon_vehicle(client, stock_number="R-8301")
+    order = make_recon_order(client, vehicle["id"])
+    save_estimate(
+        client,
+        order["id"],
+        [
+            {
+                "kind": "part",
+                "description": "Tires (set of 4)",
+                "part_number": "T-4",
+                "quantity": 1,
+                "unit_price": 380,
+                "unit_cost": 380,
+            }
+        ],
+    )
+    client.patch(f"/api/orders/{order['id']}/status", json={"status": "complete"})
+
+    header, body = _rows(client.get("/api/export/report/lot.csv"))
+    assert "Never Marked Received" in header
+    spent = header.index("Spent So Far")
+    never = header.index("Never Marked Received")
+    # Directly beside the figure it corrects, and before Still To Spend --
+    # the two are different kinds of money and reading them in the wrong
+    # order is how one gets added to the other.
+    assert never == spent + 1
+    assert header[never + 1] == "Still To Spend"
+
+    row = next(r for r in body if r[header.index("Stock #")] == "R-8301")
+    assert row[spent] == "0.00"
+    assert row[never] == "380.00"
+
+
+def test_a_fully_receipted_car_reports_nothing_missing_in_the_csv(client):
+    vendor = client.post("/api/vendors", json={"name": "NAPA"}).json()
+    vehicle = make_recon_vehicle(client, stock_number="R-8302")
+    order = make_recon_order(client, vehicle["id"])
+    estimate = save_estimate(
+        client,
+        order["id"],
+        [
+            {
+                "kind": "part",
+                "description": "Battery",
+                "part_number": "B-1",
+                "quantity": 1,
+                "unit_price": 140,
+                "unit_cost": 140,
+            }
+        ],
+    )
+    client.post(
+        f"/api/orders/{order['id']}/estimate/receive-parts",
+        json={"item_ids": [estimate["items"][0]["id"]], "vendor_id": vendor["id"], "invoice_number": "INV-8302"},
+    )
+    client.patch(f"/api/orders/{order['id']}/status", json={"status": "complete"})
+
+    header, body = _rows(client.get("/api/export/report/lot.csv"))
+    row = next(r for r in body if r[header.index("Stock #")] == "R-8302")
+    assert row[header.index("Spent So Far")] == "140.00"
+    assert row[header.index("Never Marked Received")] == "0.00"
+
+
 def test_export_technician_report_csv(client):
     technician = client.post("/api/staff", json={"name": "Wes", "role": "technician"}).json()
     vehicle = make_recon_vehicle(client, stock_number="R-8002")

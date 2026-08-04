@@ -1,10 +1,18 @@
 // Parts & Cores screen smoke test.
 //
-// Three tables. On Order is the one that holds a car up -- parts somebody is
+// Four tables. On Order is the one that holds a car up -- parts somebody is
 // waiting for -- and its assertions are about honesty above all: a line with
 // no recorded order date must never render as "ordered today", must not claim
 // a wait it can't back, and must not lead a list sorted by how long things
 // have been waiting.
+//
+// Missing Receipts is the opposite complaint on the same shelf: parts that
+// did arrive, went on a car, and were never written down, so the money is
+// gone and no cost figure in the app includes it. Its assertions are about
+// the total and the order -- biggest hole first, because this desk exists to
+// make a wrong number right again -- and about the Lot Cars Only chip, which
+// is how somebody reconciling Walt's spend figure puts Tekmetric's retail
+// tickets aside.
 //
 // The other two share one three-state vocabulary: Pending (still at the shop),
 // Awaiting Credit (physically gone, no paperwork), Credited (the vendor's
@@ -96,6 +104,28 @@ const ON_ORDER = [
     we_owe_customer_name: null },
 ];
 
+// Missing receipts: two lot cars and one retail ticket, biggest first the way
+// the server hands them over, plus one line with no idle count at all (a
+// ticket that predates the app recording activity) so the row can be checked
+// for the same refusal-to-guess the On Order table's undated line gets.
+const MISSING = [
+  { id: 41, order_id: 4, description: "Tires (set of 4)", part_number: "T-4", ro_number: "RO-2607-0004",
+    po_number: "4-1", vehicle_label: "R-1042", vehicle: "2019 Ford Edge",
+    missing_quantity: 1, value: 380, days_idle: 41,
+    segment: "recon", recon_vehicle_id: 7, we_owe_id: null, vehicle_id: 5, stock_number: "R-1042",
+    we_owe_customer_name: null },
+  { id: 42, order_id: 5, description: "Tie rod end", part_number: "TR-9", ro_number: "RO-2607-0005",
+    po_number: null, vehicle_label: "We-Owe: Maria Soto", vehicle: "2021 Kia Sorento",
+    missing_quantity: 2, value: 128, days_idle: 3,
+    segment: "we_owe", recon_vehicle_id: null, we_owe_id: 9, vehicle_id: 6, stock_number: null,
+    we_owe_customer_name: "Maria Soto" },
+  { id: 43, order_id: 6, description: "Oil filter", part_number: null, ro_number: "RO-2607-0006",
+    po_number: null, vehicle_label: "Retail: Dee Winters", vehicle: "2016 Toyota Camry",
+    missing_quantity: 1, value: 6, days_idle: null,
+    segment: "retail", recon_vehicle_id: null, we_owe_id: null, vehicle_id: 8, stock_number: null,
+    we_owe_customer_name: null },
+];
+
 const VENDORS = [
   { id: 1, name: "WorldPac", aliases: [], account_number: null },
   { id: 2, name: "NAPA", aliases: [], account_number: null },
@@ -108,6 +138,7 @@ const { w, doc, settle, ok, finish, rejections } = await boot({
   expose: ["state", "showView", "loadCoresView", "renderCoresTable", "renderReturnsTable"],
   fetch: async (url, opts) => {
     if (url === "/api/parts/on-order") return ON_ORDER;
+    if (url === "/api/parts/missing-receipts") return MISSING;
     if (url === "/api/cores") return cores;
     if (url === "/api/returns") return returns;
     if (url === "/api/vendors") return VENDORS;
@@ -155,6 +186,12 @@ await settle();
 const $ = (sel) => doc.querySelector(sel);
 const $$ = (sel) => [...doc.querySelectorAll(sel)];
 const onOrderRow = (id) => $(`#on-order-table tr[data-id="${id}"]`);
+const missingRow = (id) => $(`#missing-table tr[data-id="${id}"]`);
+// Cards are found by their label rather than their position. A new summary
+// card used to shift every index below it and quietly re-point an assertion
+// at the wrong number -- which is the one failure a smoke test must not have.
+const statCard = (label) =>
+  $$("#cores-returns-stats .stat").find((el) => el.querySelector(".stat-label").textContent.trim() === label);
 const coreRow = (id) => $(`#cores-table tr[data-id="${id}"]`);
 const returnRow = (id) => $(`#returns-table tr[data-id="${id}"]`);
 const chip = (table, filter) => $(`[data-${table}-filter="${filter}"]`);
@@ -169,9 +206,9 @@ const stats = $("#cores-returns-stats").textContent.replace(/\s+/g, " ");
 // Returns not credited: 120 + 60 + 15 = 195. Total 375.
 ok(/\$375\.00/.test(stats), `Outstanding should read $375.00 across both tables: "${stats.trim()}"`);
 ok(/oldest 35d/.test(stats), `the awaiting card doesn't name the stalest pickup: "${stats.trim()}"`);
-const awaitingValue = $$("#cores-returns-stats .stat-value")[2];
+const awaitingValue = statCard("Awaiting Credit").querySelector(".stat-value");
 ok(awaitingValue.classList.contains("crit"), "a 35-day-old pickup doesn't tone the Awaiting Credit card critical");
-ok(/Credited/.test(stats) && /2/.test($$("#cores-returns-stats .stat-value")[3].textContent),
+ok(/2/.test(statCard("Credited").querySelector(".stat-value").textContent),
    "the Credited card should count the credited core and the credited return");
 
 // On Order leads the strip: 180 + 28 + 95 = 303, oldest known wait 21 days,
@@ -183,8 +220,26 @@ ok(/\$303\.00/.test(onOrderCard), `the On Order card doesn't total what's outsta
 ok(/oldest 21d/.test(onOrderCard), `the On Order card doesn't name the longest wait: "${onOrderCard.trim()}"`);
 ok(/1 with no date/.test(onOrderCard),
    `an undated line is being counted as if its wait were known: "${onOrderCard.trim()}"`);
-ok($$("#cores-returns-stats .stat-value")[0].classList.contains("crit"),
+ok(statCard("On Order").querySelector(".stat-value").classList.contains("crit"),
    "a part 21 days on order doesn't tone the On Order card critical");
+
+// Money nobody is counting: 380 + 128 + 6 = 514, across three cars. This is
+// the one card on the page that reports a fault in another screen's number,
+// so it says how many parts and how many cars rather than only a total --
+// "$514 missing" is a fact, "on 3 finished cars" is where to go and fix it.
+const missingCard = statCard("Not In Any Cost");
+ok(missingCard, "the summary strip has no card for money that's in no cost figure");
+const missingText = missingCard.textContent.replace(/\s+/g, " ");
+ok(/\$514\.00/.test(missingText), `the missing-money card doesn't total the desk: "${missingText.trim()}"`);
+ok(/3 parts on 3 finished cars/.test(missingText),
+   `the missing-money card doesn't say where to go: "${missingText.trim()}"`);
+// Warn, not crit, and the same warn the board's own "+$380 not received"
+// badge uses. The total isn't wrong so much as incomplete, and one fact
+// wearing two severities on two screens is how a shop stops believing either.
+ok(missingCard.querySelector(".stat-value").classList.contains("warn"),
+   "money in nobody's cost figure isn't flagged at all");
+ok(!missingCard.querySelector(".stat-value").classList.contains("crit"),
+   "missing paperwork is being shouted louder than a car that can't be finished");
 
 /* ---------- on order: longest wait first, unknowns last and unclaimed ---------- */
 const onOrderIds = $$("#on-order-table tr[data-id]").map((r) => Number(r.dataset.id));
@@ -219,6 +274,45 @@ input($("#on-order-search"), "zzz-none");
 ok(/No parts on order match/.test($("#on-order-table").textContent), "a no-match on-order search explains nothing");
 input($("#on-order-search"), "");
 await settle();
+
+/* ---------- missing receipts: the money nobody is counting ---------- */
+const missingIds = $$("#missing-table tr[data-id]").map((r) => Number(r.dataset.id));
+ok(missingIds.join(",") === "41,42,43", `missing-receipt rows aren't in server order: ${missingIds.join(",")}`);
+ok(/3 parts/.test($("#missing-count").textContent), `missing count reads "${$("#missing-count").textContent}"`);
+ok(/\$514\.00 missing from 3 vehicles/.test($("#missing-total").textContent),
+   `missing total reads "${$("#missing-total").textContent}"`);
+ok(/\$380\.00/.test(missingRow(41).textContent), "the row doesn't say how much money is missing");
+ok(/2019 Ford Edge/.test(missingRow(41).textContent), "the row doesn't say which car the money went into");
+ok(/PO 4-1/.test(missingRow(41).textContent),
+   `a line with a PO doesn't print it, so there's no paperwork to go and find: "${missingRow(41).textContent.replace(/\s+/g, " ")}"`);
+ok(!/PO/.test(missingRow(42).textContent), "a line with no PO is inventing one");
+ok(/41d/.test(missingRow(41).textContent), "the row doesn't say how long the finished ticket has sat");
+ok(!/null/.test(missingRow(43).textContent), "a null part number renders as the string null");
+ok(!/0d/.test(missingRow(43).textContent), "a line with no known idle count is claiming zero days");
+
+// Lot Cars Only: what the Lot Status sheet totals. Retail work is real
+// missing money and stays in the default view, but its books are Tekmetric's,
+// so reconciling Walt's spend figure means being able to set it aside.
+chip("missing", "recon").click();
+await settle();
+ok(missingRow(41) && missingRow(42), "the lot-cars filter dropped a recon or we-owe line");
+ok(!missingRow(43), "a retail ticket is being counted against Walt's lot figure");
+ok(/\$508\.00/.test($("#missing-total").textContent),
+   `the filtered total didn't drop the retail line: "${$("#missing-total").textContent}"`);
+chip("missing", "").click();
+await settle();
+ok($$("#missing-table tr[data-id]").length === 3, "the All chip didn't restore every missing receipt");
+
+input($("#missing-search"), "tires");
+ok($$("#missing-table tr[data-id]").length === 1, "searching a part description didn't narrow the missing table");
+input($("#missing-search"), "R-1042");
+ok(missingRow(41), "searching a stock number doesn't reach the missing table");
+input($("#missing-search"), "zzz-none");
+ok(/No missing receipts match/.test($("#missing-table").textContent),
+   "a no-match missing-receipts search explains nothing");
+$("#missing-table [data-empty-action='missing-clear-search']").click();
+await settle();
+ok($$("#missing-table tr[data-id]").length === 3, "the empty state's Clear search button is a dead end");
 
 /* ---------- default filter shows pending, voided renders struck ---------- */
 ok(coreRow(11) && coreRow(15), "the pending cores didn't render under the default filter");
@@ -404,4 +498,4 @@ ok($("#returns-select-all").disabled, "select-all is enabled over a table with n
 
 ok(rejections.length === 0, `unhandled rejections during the run: ${rejections.map((e) => e && e.message).join(" | ")}`);
 
-finish("parts & cores: on-order ordering/undated honesty and overdue filter, combined stats, three-state filters, pickup/undo, credit prompts, forced vendor choice, A/P confirm, bulk pickup");
+finish("parts & cores: on-order ordering/undated honesty and overdue filter, missing-receipt totals/lot-cars filter/search, combined stats, three-state filters, pickup/undo, credit prompts, forced vendor choice, A/P confirm, bulk pickup");

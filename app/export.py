@@ -190,6 +190,13 @@ def build_export_router(connect: Callable[[], sqlite3.Connection], now_fn: Calla
                 # column beats a heading.
                 "Still Needs",
                 "Spent So Far",
+                # Money already out the door on a finished ticket that nobody
+                # marked received, so it is not in Spent So Far. A spreadsheet
+                # gets its own column rather than a sentence: summing Spent So
+                # Far is the first thing anyone does with this file, and a
+                # total that is quietly short is worse here than anywhere
+                # else -- there is no screen beside it to explain itself.
+                "Never Marked Received",
                 "Still To Spend",
                 "Days Sitting",
                 "Days On Lot",
@@ -205,6 +212,7 @@ def build_export_router(connect: Callable[[], sqlite3.Connection], now_fn: Calla
                     ", ".join(row.get("technicians") or []),
                     row["needs"],
                     f"{row['actual_cost']:.2f}",
+                    f"{row.get('unreceived_closed_cost', 0):.2f}",
                     f"{row['remaining_cost']:.2f}",
                     row["idle_days"],
                     row["age_days"],

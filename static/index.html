@@ -825,13 +825,13 @@
         <div class="page-head">
           <div>
             <h1>Parts &amp; Cores</h1>
-            <p class="page-desc">Everything in flight between the shop and its vendors: parts that are on order and haven't turned up, core deposits owed back, and parts going back for credit.</p>
+            <p class="page-desc">Everything in flight between the shop and its vendors: parts that are on order and haven't turned up, parts that were fitted and never receipted, core deposits owed back, and parts going back for credit.</p>
           </div>
         </div>
 
         <div class="stats stats-cores" id="cores-returns-stats"></div>
 
-        <!-- Three desks, not one long page. Each one is a self-contained card
+        <!-- Four desks, not one long page. Each one is a self-contained card
              carrying its own heading, its own count and money, its own filters
              and its own table, so scrolling past the middle of a long parts
              list never leaves you wondering which table you're now reading.
@@ -864,6 +864,37 @@
             <table>
               <thead><tr><th>Part</th><th>Part #</th><th>RO / Vehicle</th><th class="num-col">Qty</th><th class="num-col">Value</th><th>Ordered</th><th>Waiting</th></tr></thead>
               <tbody id="on-order-table"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <!-- Missing Receipts sits second because it is the only desk on this
+             page about money that has already gone out. On Order is a car
+             waiting; this is a car that is finished, back on the lot, and
+             costed short. Every line here is a hole in what the app says the
+             shop spent, and the fix is one click through to the ticket. -->
+        <section class="desk desk-missing" aria-labelledby="desk-missing-title">
+          <div class="desk-head">
+            <div class="desk-heading">
+              <h2 id="desk-missing-title">Missing Receipts</h2>
+              <p class="desk-desc">Parts on finished tickets that were never marked received — the money is spent but isn't in the car's cost yet. Biggest first. Click a row to open the vehicle and receive it.</p>
+            </div>
+            <div class="desk-tally">
+              <span class="desk-count" id="missing-count" aria-live="polite">0 parts</span>
+              <span class="desk-total" id="missing-total"></span>
+            </div>
+          </div>
+
+          <div class="filters desk-filters">
+            <button class="chip active" data-missing-filter="">All</button>
+            <button class="chip" data-missing-filter="recon" title="Walt's lot cars and we-owe promises only — the ones the Lot Status sheet counts">Lot Cars Only</button>
+            <input id="missing-search" class="filters-search" placeholder="Search missing receipts…" title="Searches part, part #, RO, and vehicle" aria-label="Search missing receipts" autocomplete="off">
+          </div>
+
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Part</th><th>Part #</th><th>RO / Vehicle</th><th class="num-col">Qty</th><th class="num-col">Not In Cost</th><th>Ticket Idle</th></tr></thead>
+              <tbody id="missing-table"></tbody>
             </table>
           </div>
         </section>

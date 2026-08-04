@@ -2,7 +2,7 @@ import { $, $$, api, get, patch, post } from "./core.js";
 import { copyText } from "./clipboard.js";
 import { toast } from "./notify.js";
 import { confirmAction } from "./confirm.js";
-import { currentActor, esc, fmtDate, relativeTime, withLoading } from "./shortcuts.js";
+import { actorLabel, currentActor, esc, fmtDate, relativeTime, withLoading } from "./shortcuts.js";
 import { emptyState } from "./empty-states.js";
 import { state } from "./state.js";
 import { renderViewFailure } from "./error-boundary.js";
@@ -12,7 +12,10 @@ import { inlineEdit } from "./tasks.js";
    SUGGESTIONS / IDEAS
    ================================================================== */
 function suggestionCardHtml(s) {
-  const author = !s.author ? "" : (s.author === currentActor() ? "You" : s.author);
+  // actorLabel first, so an idea posted before anyone picked a name reads as
+  // an idea rather than as one posted by somebody called "ui".
+  const name = actorLabel(s.author);
+  const author = !name ? "" : (name === currentActor() ? "You" : name);
   return `
     <div class="suggestion-card ${s.resolved ? "resolved" : ""}" data-id="${s.id}">
       <button type="button" class="suggestion-text" title="Click to edit">${esc(s.text)}</button>
@@ -65,7 +68,7 @@ function wireSuggestionCardActions(container) {
       const title = s.text.length > 300 ? `${s.text.slice(0, 297)}...` : s.text;
       await withLoading(btn, "Creating…", async () => {
         try {
-          await post("/api/tasks", { title, actor: currentActor() });
+          await post("/api/tasks", { title });
           await patch(`/api/suggestions/${s.id}`, { resolved: true });
           toast("Task created from this idea");
           await loadSuggestionsView();

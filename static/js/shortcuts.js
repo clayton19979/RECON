@@ -86,7 +86,29 @@ export function money(value) {
   return n < 0 ? `-$${formatted}` : `$${formatted}`;
 }
 export function currentActor() {
-  return state.currentUser || "Unspecified";
+  // Empty when nobody has been picked, never the word "Unspecified": that
+  // string was being sent as the actor and stored as the person, so tickets
+  // filled up with work done by a colleague named Unspecified. An empty
+  // actor lets the server keep its own placeholder and lets actorLabel below
+  // say nothing rather than say something untrue.
+  return state.currentUser;
+}
+/* Placeholders that mean "nobody said who". "ui" is what the server defaults
+   to when a request arrives without an actor -- it is the request's origin,
+   not a name -- "unknown" is what record_activity substitutes for a blank one,
+   and older rows carry "Unspecified" from when the front end sent that word as
+   somebody's name. All three are on screen in ticket histories today,
+   captioning real events with a person who does not exist. */
+const ACTOR_PLACEHOLDERS = new Set(["", "ui", "api", "system", "unknown", "unspecified"]);
+export function actorLabel(actor) {
+  const name = String(actor ?? "").trim();
+  return ACTOR_PLACEHOLDERS.has(name.toLowerCase()) ? "" : name;
+}
+/* " by Antonio", or nothing at all. Kept as one helper so the half-dozen
+   places that caption an event with a person all fall silent together. */
+export function byActor(actor, prefix = " by ") {
+  const name = actorLabel(actor);
+  return name ? `${prefix}${name}` : "";
 }
 // Disables a button and swaps its label while an async action is in
 // flight, so a slow save doesn't look like nothing happened (and can't be

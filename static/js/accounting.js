@@ -1,7 +1,7 @@
 import { $, $$, get, patch, post } from "./core.js";
 import { toast } from "./notify.js";
 import { confirmAction } from "./confirm.js";
-import { currentActor, esc, fmtDate, money, relativeTime, withLoading } from "./shortcuts.js";
+import { esc, fmtDate, money, relativeTime, withLoading } from "./shortcuts.js";
 import { emptyRow, emptyState } from "./empty-states.js";
 import { state } from "./state.js";
 import { renderViewFailure } from "./error-boundary.js";
@@ -289,7 +289,7 @@ function renderApTable(invoices) {
         danger: true,
       }))) return;
       try {
-        const result = await patch(`/api/ap/invoices/${btn.dataset.id}/void`, { actor: currentActor() });
+        const result = await patch(`/api/ap/invoices/${btn.dataset.id}/void`, {});
         toast(voidResultMessage(result));
         await loadApTable();
       } catch (err) {

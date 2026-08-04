@@ -1,7 +1,7 @@
 import { $, $$, get, post } from "./core.js";
 import { toast } from "./notify.js";
 import { confirmAction } from "./confirm.js";
-import { currentActor, esc } from "./shortcuts.js";
+import { esc } from "./shortcuts.js";
 import { state } from "./state.js";
 import { renderViewFailure } from "./error-boundary.js";
 import { wireListKeyboard } from "./list-keyboard.js";
@@ -319,7 +319,6 @@ export function wireTasksView() {
         order_id: link.order_id === -1 ? null : link.order_id,
         recon_vehicle_id: link.recon_vehicle_id === -1 ? null : link.recon_vehicle_id,
         we_owe_id: link.we_owe_id === -1 ? null : link.we_owe_id,
-        actor: currentActor(),
       });
       $("#task-title-input").value = "";
       $("#task-urgent-input").checked = false;

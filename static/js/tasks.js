@@ -1,7 +1,7 @@
 import { $, $$, api, patch } from "./core.js";
 import { toast } from "./notify.js";
 import { confirmAction } from "./confirm.js";
-import { currentActor, esc, relativeTime } from "./shortcuts.js";
+import { actorLabel, byActor, currentActor, esc, relativeTime } from "./shortcuts.js";
 import { EMPTY_ICONS, emptyState } from "./empty-states.js";
 import { state } from "./state.js";
 import { openVehicleDetail } from "./vehicle-detail.js";
@@ -126,7 +126,7 @@ function taskRowHtml(t) {
           <button type="button" class="task-flag ${t.urgent ? "on" : ""}" title="${t.urgent ? "Clear the urgent flag" : "Flag this urgent"}">${t.urgent ? "Urgent" : "Flag urgent"}</button>
           ${t.notes ? "" : `<button type="button" class="task-notes-add" title="Add a note">+ note</button>`}
           ${taskVehicleChip(t, linkable, refId)}
-          <span>by ${esc(t.created_by || "Unspecified")} · ${relativeTime(t.created_at)}${t.done && t.completed_at ? ` · done ${relativeTime(t.completed_at)}` : ""}</span>
+          <span>${esc(byActor(t.created_by, "by "))}${actorLabel(t.created_by) ? " · " : ""}${relativeTime(t.created_at)}${t.done && t.completed_at ? ` · done ${relativeTime(t.completed_at)}` : ""}</span>
         </div>
         ${t.notes ? `<button type="button" class="task-notes" title="Click to edit this note">${esc(t.notes)}</button>` : ""}
       </div>

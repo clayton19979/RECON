@@ -1,7 +1,7 @@
 import { $, $$, get, patch, post } from "./core.js";
 import { toast } from "./notify.js";
 import { confirmAction } from "./confirm.js";
-import { currentActor, esc, fmtDate, money, promptInvoiceNumber, withLoading } from "./shortcuts.js";
+import { esc, fmtDate, money, promptInvoiceNumber, withLoading } from "./shortcuts.js";
 import { emptyRow } from "./empty-states.js";
 import { MISSING_RECEIPT_COLUMNS, ON_ORDER_COLUMNS } from "./skeletons.js";
 import { state } from "./state.js";
@@ -501,7 +501,7 @@ function renderCoresTable() {
       const returned = btn.dataset.returned !== "1";
       try {
         await patch(`/api/orders/${btn.dataset.orderId}/estimate/items/${btn.dataset.itemId}/core-return`,
-          { returned, actor: currentActor() });
+          { returned });
         toast(returned ? "Core marked picked up — record the credit when the vendor's paperwork arrives" : "Back on the shelf");
         await loadCoresView();
       } catch (err) {
@@ -525,7 +525,7 @@ function renderCoresTable() {
       if (answer === null) return;
       try {
         await post(`/api/orders/${btn.dataset.orderId}/estimate/items/${btn.dataset.itemId}/core-credit`,
-          { invoice_number: answer, actor: currentActor() });
+          { invoice_number: answer });
         toast("Core credit recorded");
         await loadCoresView();
       } catch (err) {
@@ -605,7 +605,7 @@ export function wireCoresView() {
     await withLoading(e.currentTarget, "Updating…", async () => {
       const targets = ids.map((id) => state.cores.find((c) => c.id === id)).filter(Boolean);
       const results = await Promise.allSettled(targets.map((c) =>
-        patch(`/api/orders/${c.order_id}/estimate/items/${c.id}/core-return`, { returned: true, actor: currentActor() })
+        patch(`/api/orders/${c.order_id}/estimate/items/${c.id}/core-return`, { returned: true })
       ));
       const failed = results.filter((r) => r.status === "rejected").length;
       toast(failed ? `${targets.length - failed} of ${targets.length} marked picked up` : `${targets.length} core${targets.length === 1 ? "" : "s"} marked picked up`, !!failed);
@@ -710,7 +710,7 @@ function renderReturnsTable() {
       const pickedUp = btn.dataset.pickedUp !== "1";
       try {
         await patch(`/api/orders/${item.order_id}/estimate/items/${item.id}/part-pickup`,
-          { picked_up: pickedUp, actor: currentActor() });
+          { picked_up: pickedUp });
         toast(pickedUp ? "Marked picked up — record the credit when it arrives" : "Back on the shelf");
         await loadCoresView();
       } catch (err) {
@@ -794,7 +794,7 @@ export function wireReturnsView() {
     await withLoading(e.currentTarget, "Updating…", async () => {
       const targets = ids.map((id) => state.returns.find((r) => r.id === id)).filter(Boolean);
       const results = await Promise.allSettled(targets.map((r) =>
-        patch(`/api/orders/${r.order_id}/estimate/items/${r.id}/part-pickup`, { picked_up: true, actor: currentActor() })
+        patch(`/api/orders/${r.order_id}/estimate/items/${r.id}/part-pickup`, { picked_up: true })
       ));
       const failed = results.filter((r) => r.status === "rejected").length;
       toast(failed ? `${targets.length - failed} of ${targets.length} marked picked up` : `${targets.length} part${targets.length === 1 ? "" : "s"} marked picked up`, !!failed);
@@ -856,7 +856,6 @@ export function wirePostReturnDialog() {
         await post(`/api/orders/${item.order_id}/estimate/items/${item.id}/post-return-credit`, {
           vendor_id: vendorId,
           credit_number: creditNumber,
-          actor: currentActor(),
         });
         dialog.close();
         toast("Credit posted to A/P");

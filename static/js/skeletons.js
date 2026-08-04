@@ -44,7 +44,7 @@ export const CUSTOMER_COLUMNS = 7;
 // Part, Part #, RO / Vehicle, Qty, Value, Ordered, Waiting. Same contract
 // again: the loading skeleton, the empty state and the error state all have
 // to span the On Order table's real width.
-export const ON_ORDER_COLUMNS = 7;
+export const ON_ORDER_COLUMNS = 8;
 
 // Which containers to fill with a placeholder when a view is opened, and how
 // many columns each table has (so the skeleton lines up with its header).

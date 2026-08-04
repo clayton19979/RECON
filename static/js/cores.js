@@ -148,8 +148,29 @@ function openVehicleFromRow(row) {
 
 function onOrderMatchesSearch(p, query) {
   if (!query) return true;
-  return [p.description, p.part_number, p.ro_number, p.vehicle_label, p.vehicle]
+  return [p.description, p.part_number, p.ro_number, p.vehicle_label, p.vehicle, p.vendor_name, p.po_number]
     .some((f) => (f || "").toLowerCase().includes(query));
+}
+
+/* Who to ring about this part, and what to quote them.
+   This desk exists to get somebody to pick up the phone, and until now it
+   could not name either end of that call. A supplier nobody wrote down says
+   so plainly rather than leaving the cell blank -- blank reads as "no
+   supplier involved", and there is always a supplier; what's missing is the
+   record of it. The count is the reason to make one call instead of three:
+   the other lines on this same list that went out on the same PO. */
+function orderedFromHtml(p) {
+  if (!p.po_number && !p.vendor_name) {
+    return '<span class="muted-dash" title="This part was marked ordered before RECON recorded purchase orders">not recorded</span>';
+  }
+  const supplier = p.vendor_name
+    ? `<span class="supplier-name">${esc(p.vendor_name)}</span>`
+    : '<span class="supplier-unknown" title="Nobody recorded who this was ordered from. Open the vehicle and fill in the “who from?” box on the PO.">supplier not recorded</span>';
+  const together = p.po_outstanding > 1
+    ? ` · <span class="supplier-together">${p.po_outstanding} parts on this PO</span>`
+    : "";
+  const po = p.po_number ? `<div class="veh-sub">${esc(p.po_number)}${together}</div>` : "";
+  return supplier + po;
 }
 
 // Date only. The Ordered column answers "which day did we call this in", and
@@ -191,6 +212,7 @@ function renderPartsOnOrderTable() {
       <td>${esc(p.description)}<div class="veh-sub">${esc(p.vehicle)}</div></td>
       <td>${p.part_number ? esc(p.part_number) : '<span class="muted-dash">—</span>'}</td>
       <td>${esc(p.ro_number)} · ${esc(p.vehicle_label)}</td>
+      <td>${orderedFromHtml(p)}</td>
       <td class="num-col">${esc(String(p.outstanding_quantity))}</td>
       <td class="num-col">${money(p.value)}</td>
       <td>${orderedOnHtml(p.ordered_at)}</td>

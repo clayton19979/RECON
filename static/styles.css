@@ -3325,6 +3325,37 @@ th.sel-col, td.sel-col { width: 32px; padding-right: 0; }
   font-size: 13px; color: var(--ink-faint); padding: 0 2px; border-radius: 4px;
 }
 .po-chip-drop:hover { color: var(--crit); background: var(--crit-tint); }
+/* The number and its counts are one button; the supplier box beside them is a
+   real input, so the chip is a container and only the button part toggles the
+   highlight. */
+.po-chip-main {
+  display: inline-flex; align-items: center; gap: 7px;
+  border: 0; background: none; padding: 0; margin: 0; font: inherit;
+  cursor: pointer; color: inherit;
+}
+/* Sized to a supplier name rather than to the box: it should read as part of
+   the chip, not as a form field parked in the middle of a toolbar. */
+.po-chip-vendor {
+  width: 108px; min-width: 0; padding: 1px 5px;
+  border: 1px solid transparent; border-radius: 5px;
+  background: none; color: var(--ink-soft);
+  font: inherit; font-size: 11.5px; line-height: 1.3;
+}
+.po-chip-vendor::placeholder { color: var(--ink-faint); font-style: italic; }
+.po-chip-vendor:hover { border-color: var(--line); }
+.po-chip-vendor:focus {
+  outline: none; background: var(--surface);
+  border-color: var(--accent); color: var(--ink);
+}
+/* A batch still waiting on parts with nobody written against it is the one
+   worth asking about -- that is the part somebody will want to chase and
+   won't know who to ring. */
+.po-chip-vendor-wanted { border-color: var(--line); border-style: dashed; }
+.po-chip-vendor-wanted::placeholder { color: var(--warn); font-style: normal; }
+/* Ordered From, on the parts-chase desk. */
+.supplier-name { color: var(--ink); }
+.supplier-unknown { color: var(--ink-faint); font-style: italic; }
+.supplier-together { color: var(--warn); font-weight: 600; }
 /* The batch stamp on a part's own row. */
 .po-badge {
   font-family: "IBM Plex Mono", "Cascadia Mono", Consolas, monospace;

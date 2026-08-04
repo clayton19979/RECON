@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from collections.abc import Callable
 from typing import Annotated, Literal
@@ -7,7 +8,13 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from .accounting import InvoiceItemIn, create_ap_invoice_record, invoice_line_reach, receive_onto_invoice
+from .accounting import (
+    InvoiceItemIn,
+    create_ap_invoice_record,
+    invoice_line_reach,
+    normalize,
+    receive_onto_invoice,
+)
 from .db import inserted_id, purchase_order_number
 from .recon import age_days, assert_vehicle_editable
 from .workflow import (
@@ -65,10 +72,29 @@ class OrderPartsIn(BaseModel):
 
 
 class PurchaseOrderIn(BaseModel):
-    # Both optional, because the number is normally pulled before either is
+    # All optional, because the number is normally pulled before any of them is
     # known -- an advisor reaches for a PO number *in order to* place the call.
     vendor_id: int | None = None
+    # The supplier typed rather than picked. A shop ringing round four
+    # junkyards for the cheapest strut is not going to stop and configure a
+    # vendor record first, so a name is enough and the vendor row is made for
+    # them; see vendor_for_name.
+    vendor_name: str = Field(default="", max_length=200)
     note: str = Field(default="", max_length=200)
+    actor: str = "ui"
+
+
+class PurchaseOrderPatch(BaseModel):
+    """Fill in who a batch went to after the fact.
+
+    Every field is None-means-leave-alone rather than defaulting, because this
+    is what the supplier box on the ticket sends and it must be able to say
+    "set the supplier" without also silently clearing the note.
+    """
+
+    vendor_id: int | None = None
+    vendor_name: str | None = Field(default=None, max_length=200)
+    note: str | None = Field(default=None, max_length=200)
     actor: str = "ui"
 
 
@@ -173,6 +199,50 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
 
     # --- Purchase orders (parts batches) ---
 
+    def vendor_for_name(db: sqlite3.Connection, supplied: str) -> int | None:
+        """The vendor a typed supplier name means, creating them if they're new.
+
+        Matched on the same normalised name-or-alias rule the vendor invoice
+        side uses, so "O'Reilly", "oreilly" and "O Reilly Auto Parts" typed at
+        the parts bench land on the row the accounting screen already knows --
+        otherwise the supplier recorded when the parts were ordered and the
+        supplier on the bill that follows would be two different vendors, and
+        neither screen could be reconciled against the other.
+
+        Creating on first use is deliberate. Recording who the call went to has
+        to cost one field during that call; making an advisor go and configure
+        a vendor first is how it ends up never being recorded at all. A vendor
+        made this way is an ordinary vendor row -- the accounting screen can
+        rename it, alias it, and post invoices to it.
+        """
+        name = supplied.strip()
+        if not name:
+            return None
+        target = normalize(name)
+        if not target:
+            raise HTTPException(422, "That supplier name has no letters or numbers in it")
+        for row in db.execute("SELECT id, normalized_name, aliases FROM vendors"):
+            names = [row["normalized_name"], *(normalize(alias) for alias in json.loads(row["aliases"]))]
+            if target in names:
+                return int(row["id"])
+        cur = db.execute(
+            "INSERT INTO vendors(name,normalized_name,aliases,account_number,created_at) VALUES(?,?,'[]','',?)",
+            (name, target, now_fn()),
+        )
+        return inserted_id(cur)
+
+    def resolve_vendor(db: sqlite3.Connection, vendor_id: int | None, vendor_name: str) -> int | None:
+        """Which vendor a caller meant, from an id, a typed name, or neither.
+
+        An id wins when both are given: it is a row that already exists, and a
+        name typed beside it is at worst a stale label for the same vendor.
+        """
+        if vendor_id is not None:
+            if not db.execute("SELECT 1 FROM vendors WHERE id=?", (vendor_id,)).fetchone():
+                raise HTTPException(404, "Vendor not found")
+            return vendor_id
+        return vendor_for_name(db, vendor_name)
+
     def create_purchase_order(
         db: sqlite3.Connection, order: sqlite3.Row, vendor_id: int | None, note: str, actor: str
     ) -> dict:
@@ -272,9 +342,59 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
         with connect() as db:
             order = order_row(db, order_id)
             assert_vehicle_editable(db, order)
-            created = create_purchase_order(db, order, item.vendor_id, item.note, item.actor)
+            vendor_id = resolve_vendor(db, item.vendor_id, item.vendor_name)
+            created = create_purchase_order(db, order, vendor_id, item.note, item.actor)
             record_activity(db, order_id, "purchase_order_created", item.actor, {"number": created["number"]}, now_fn)
             return created
+
+    @router.patch("/orders/{order_id}/purchase-orders/{po_id}")
+    def update_purchase_order(order_id: int, po_id: int, item: PurchaseOrderPatch):
+        """Say who a batch of parts was ordered from.
+
+        Deliberately editable after the fact, and for the whole life of the
+        batch. The number is pulled *before* the call -- that is the point of
+        pulling it -- so at the moment the batch is created nobody knows who is
+        getting the order yet. It gets known a minute later, when somebody says
+        yes on the phone, and the only way that ever reaches the record is if
+        typing it then is allowed.
+
+        Closed and fully-received batches stay editable for the same reason a
+        misremembered supplier is worth correcting: unlike the PO number, the
+        supplier was never quoted to anybody, so changing it cannot make the
+        shop's paper and the vendor's paper disagree. What it does change is
+        whether "who do I ring about this part" has an answer.
+        """
+        with connect() as db:
+            order = order_row(db, order_id)
+            row = db.execute("SELECT * FROM purchase_orders WHERE id=? AND order_id=?", (po_id, order_id)).fetchone()
+            if not row:
+                raise HTTPException(404, "Purchase order not found on this repair order")
+            assert_vehicle_editable(db, order)
+            if item.vendor_id is not None or item.vendor_name is not None:
+                # An explicitly blank name clears the supplier -- that is how a
+                # wrong one gets taken back off, and "we don't know" has to
+                # stay sayable or a slip becomes permanent.
+                vendor_id = resolve_vendor(db, item.vendor_id, item.vendor_name or "")
+                db.execute("UPDATE purchase_orders SET vendor_id=? WHERE id=?", (vendor_id, po_id))
+            if item.note is not None:
+                db.execute("UPDATE purchase_orders SET note=? WHERE id=?", (item.note.strip(), po_id))
+            updated = db.execute(
+                "SELECT po.*, v.name vendor_name FROM purchase_orders po"
+                " LEFT JOIN vendors v ON v.id=po.vendor_id WHERE po.id=?",
+                (po_id,),
+            ).fetchone()
+            if updated["vendor_id"] != row["vendor_id"]:
+                record_activity(
+                    db,
+                    order_id,
+                    "purchase_order_vendor_set",
+                    item.actor,
+                    {"number": row["number"], "vendor": updated["vendor_name"] or ""},
+                    now_fn,
+                )
+            else:
+                touch_order(db, order_id, now_fn)
+            return dict(updated)
 
     @router.delete("/orders/{order_id}/purchase-orders/{po_id}", status_code=204)
     def delete_purchase_order(order_id: int, po_id: int):
@@ -1024,6 +1144,12 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
         days_waiting is None, not 0, for a line ordered before ordered_at
         existed -- "we don't know" and "it went on order today" are opposite
         answers and must not share a rendering.
+
+        Carries the batch and its supplier, because the action this list exists
+        to prompt is a phone call and neither the number to quote nor the
+        person to quote it to was reachable from here. `po_outstanding` counts
+        the other lines on this list from the same batch, so one call can be
+        made about all of them instead of the same vendor being rung twice.
         """
         with connect() as db:
             rows = db.execute(
@@ -1032,11 +1158,15 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
                        o.id order_id, o.number ro_number, o.segment,
                        o.recon_vehicle_id, o.we_owe_id, o.vehicle_id,
                        v.year, v.make, v.model,
+                       po.id po_id, po.number po_number,
+                       po.vendor_id, coalesce(pv.name,'') vendor_name,
                        rv.stock_number, wc.name we_owe_customer_name, oc.name order_customer_name
                    FROM estimate_items ei
                    JOIN estimates e ON e.id=ei.estimate_id
                    JOIN orders o ON o.id=e.order_id
                    JOIN vehicles v ON v.id=o.vehicle_id
+                   LEFT JOIN purchase_orders po ON po.id=ei.purchase_order_id
+                   LEFT JOIN vendors pv ON pv.id=po.vendor_id
                    LEFT JOIN recon_vehicles rv ON rv.id=o.recon_vehicle_id
                    LEFT JOIN we_owe_items wi ON wi.id=o.we_owe_id
                    LEFT JOIN customers wc ON wc.id=wi.customer_id
@@ -1062,6 +1192,16 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
                 value["value"] = round(outstanding * float(value["unit_cost"]), 2)
                 value["days_waiting"] = age_days(value["ordered_at"]) if value["ordered_at"] else None
                 result.append(value)
+            # Counted over the rows actually on this list, not over the batch
+            # in the database: a batch of four whose other three turned up is
+            # one phone call about one part, and saying "4 parts on this PO"
+            # would send somebody chasing three parts already on the shelf.
+            batch_sizes: dict[int, int] = {}
+            for value in result:
+                if value["po_id"] is not None:
+                    batch_sizes[value["po_id"]] = batch_sizes.get(value["po_id"], 0) + 1
+            for value in result:
+                value["po_outstanding"] = batch_sizes.get(value["po_id"], 0) if value["po_id"] is not None else 0
             return result
 
     @router.get("/cores")

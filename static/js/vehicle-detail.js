@@ -902,6 +902,19 @@ function renderPoStrip(order) {
    reaching. Each panel below is handed the order and empties itself when
    there isn't one, which is also why a panel added later gets the same
    treatment for free instead of joining a list of resets somewhere else. */
+/* The supplier boxes autocomplete against vendors the shop already uses, so
+   the second order from the same yard is picked rather than retyped (and so
+   it lands on the same vendor record the bill will). Fetched the first time
+   somebody actually reaches for one -- opening a ticket is the commonest
+   thing in the app and does not need to pay for a list most visits never
+   touch. */
+async function fillVendorOptions() {
+  const list = $("#po-vendor-options");
+  if (!list) return;
+  if (!state.vendors.length) state.vendors = await get("/api/vendors").catch(() => []);
+  list.innerHTML = state.vendors.map((v) => `<option value="${esc(v.name)}"></option>`).join("");
+}
+
 function renderOrderPanel() {
   const order = state.detail.order;
   // The short number is what gets said out loud and written on a vendor's

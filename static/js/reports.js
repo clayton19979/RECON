@@ -454,8 +454,18 @@ function lotStatCards(rows) {
 function vehicleSpendStatCards(rows) {
   const recon = rows.filter((r) => r.segment === "recon").length;
   const total = rows.reduce((s, r) => s + r.actual_cost, 0);
+  // This report covers both sides of History, so it has to say how much of it
+  // is finished work. Without it the count reads as the size of the lot today,
+  // which it deliberately isn't.
+  const filed = rows.filter((r) => r.archived_at).length;
   return [
-    { label: "Vehicles", value: String(rows.length), sub: `${recon} recon · ${rows.length - recon} we-owe` },
+    {
+      label: "Vehicles",
+      value: String(rows.length),
+      sub: filed
+        ? `${recon} recon · ${rows.length - recon} we-owe · ${filed} in History`
+        : `${recon} recon · ${rows.length - recon} we-owe`,
+    },
     { label: "Total Cost", value: money(total), sub: "received parts + labor" },
     // Averaged over every vehicle in the report, including the ones nothing
     // has been spent on yet -- that's what the label says, and it's the only
@@ -868,8 +878,13 @@ function renderReportTable(rows, shape) {
       // we-owe row onto a second line while the recon rows stayed on one, so
       // the sheet came out ragged; underneath, it costs the same height on
       // every row and reads as whose car it is.
-      return `<tr${clickable ? ` class="clickable" data-seg="${esc(r.segment)}" data-ref-id="${refId}" tabindex="0" title="Open this vehicle"` : ""}><td class="num cell-code">${esc(r.stock_number || "—")}</td><td class="cell-name">${esc(r.vehicle)}${r.customer_name ? `<span class="cell-sub">${esc(r.customer_name)}</span>` : ""}</td>
-    <td>${segmentTag(r.segment)}</td><td><span class="pill ${vehicleStatusPillClass(r)}">${esc(STATUS_LABEL[r.status] || r.status)}</span></td>
+      // A car already filed to History belongs on this report -- the money was
+      // spent inside the range -- but it is not on the lot any more, and a row
+      // that doesn't say so reads as a car still waiting on somebody.
+      const filed = !!r.archived_at;
+      const cls = ["clickable", filed ? "row-filed" : ""].filter(Boolean).join(" ");
+      return `<tr${clickable ? ` class="${cls}" data-seg="${esc(r.segment)}" data-ref-id="${refId}" tabindex="0" title="Open this vehicle"` : ""}><td class="num cell-code">${esc(r.stock_number || "—")}</td><td class="cell-name">${esc(r.vehicle)}${r.customer_name ? `<span class="cell-sub">${esc(r.customer_name)}</span>` : ""}</td>
+    <td>${segmentTag(r.segment)}</td><td><span class="pill ${vehicleStatusPillClass(r)}">${esc(STATUS_LABEL[r.status] || r.status)}</span>${filed ? ` <span class="pill pill-filed" title="Filed to History on ${esc(r.archived_at.slice(0, 10))}">History</span>` : ""}</td>
     <td class="cell-tech">${esc((r.technicians || []).join(", ")) || "—"}</td><td class="num-col">${money(r.actual_cost)}</td>${hasDeposits ? `<td class="num-col">${r.customer_paid ? money(r.customer_paid) : "—"}</td><td class="num-col">${r.customer_paid ? money(r.net_cost) : "—"}</td>` : ""}</tr>`;
     }).join("")}</tbody>
     <tfoot><tr><td colspan="5">Total (${rows.length} vehicle${rows.length === 1 ? "" : "s"})</td><td class="num-col">${money(totalActual)}</td>${hasDeposits ? `<td class="num-col">${money(totalPaid)}</td><td class="num-col">${money(totalActual - totalPaid)}</td>` : ""}</tr></tfoot>

@@ -107,6 +107,9 @@ def test_export_vehicle_spend_report_csv(client):
         "Customer Paid",
         "Net to Shop",
         "Age (days)",
+        # This report covers cars already filed to History, so the file has to
+        # say which rows those are -- see test_spend_report_window.py.
+        "Filed To History",
     ]
     assert len(body) == 2
     recon_row = next(r for r in body if r[0] == "R-8001")

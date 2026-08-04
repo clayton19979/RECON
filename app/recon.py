@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from .db import RECON_SHOP_CUSTOMER_ID, inserted_id, normalize_stock_number, normalize_vin
+from .db import now as db_now
 
 
 def parse_stamp(value: str | None) -> datetime | None:
@@ -1070,13 +1071,31 @@ def vehicle_board_rows(
     start: str | None = None,
     end: str | None = None,
     segment: str | None = None,
-    archived: bool = False,
+    archived: bool | None = False,
 ) -> list[dict]:
     """The unified Vehicles list: recon + we-owe merged, one row per vehicle,
     with rolled-up cost and assigned technicians. This is the primary view
     of the app and also backs the date-range vehicle-spend report.
-    `archived` selects the History view instead of the live job board --
-    reports/export always use the default (live board only).
+
+    `archived` picks which side of History to read: False is the live job
+    board, True is History, and None is both -- which is what the spend report
+    asks for, because a car that was sold last month is exactly the car
+    "what did we spend in July" is about.
+
+    A date range here means *the car was on the lot during it*, not "its record
+    happens to be stamped inside it". Those are not the same question and the
+    difference was not a small one: a car written down in June and still in the
+    shop in August fell out of every ranged report the moment August began, so
+    the spend report showed one car out of eight and totalled $0.00 on a lot
+    that had real money in it -- while the Lot Status sheet one chip over, built
+    from these same rows unfiltered, showed the money. Two screens, one shop,
+    opposite answers.
+
+    So the window is an overlap test against the span the car was actually
+    here: it arrived by the end of the range, and it had not already been filed
+    to History before the range began. A car still on the lot has no end date
+    yet, so `now` stands in for one -- which also keeps a range that hasn't
+    happened yet empty, rather than matching every live car forever.
 
     Every per-vehicle number here is fetched for the whole list at once rather
     than car by car. This screen reloads after every save, and History and the
@@ -1084,7 +1103,10 @@ def vehicle_board_rows(
     handful of queries per car is a screen that gets slower every month the
     shop uses the app."""
     end_bound = f"{end}T23:59:59" if end else None
-    archived_flag = 1 if archived else 0
+    archived_flag = None if archived is None else (1 if archived else 0)
+    # The open end of a live car's stay. Shop-local, like every stamp the range
+    # is compared against -- see db.now().
+    still_here = db_now()
     result = []
     if segment in (None, "recon"):
         rows = db.execute(
@@ -1093,10 +1115,11 @@ def vehicle_board_rows(
                FROM recon_vehicles rv
                JOIN vehicles v ON v.id=rv.vehicle_id
                LEFT JOIN vehicle_units u ON u.id=v.unit_id
-               WHERE (:start IS NULL OR rv.created_at>=:start) AND (:end IS NULL OR rv.created_at<=:end)
-                 AND (rv.archived_at != '') = :archived
+               WHERE (:end IS NULL OR rv.created_at<=:end)
+                 AND (:start IS NULL OR coalesce(nullif(rv.archived_at,''), :still_here)>=:start)
+                 AND (:archived IS NULL OR (rv.archived_at != '') = :archived)
                ORDER BY rv.created_at DESC""",
-            {"start": start, "end": end_bound, "archived": archived_flag},
+            {"start": start, "end": end_bound, "archived": archived_flag, "still_here": still_here},
         ).fetchall()
         recon_ids = [row["id"] for row in rows]
         rollups = cost_rollups(db, "recon_vehicle_id", recon_ids)
@@ -1157,6 +1180,10 @@ def vehicle_board_rows(
                     # read identically and need different things done to them.
                     "voided_order_count": voided_count,
                     "updated_at": row["updated_at"],
+                    # Empty for a car still here. The reports can be asked for
+                    # both sides of History at once, and a sold car listed with
+                    # no mark on it reads as one still sitting on the lot.
+                    "archived_at": row["archived_at"],
                     # Carried alongside the count so the board can say what it
                     # is counting from -- "34d" is worth arguing with, "on the
                     # lot since June 27" is worth acting on.
@@ -1173,10 +1200,11 @@ def vehicle_board_rows(
                FROM we_owe_items w
                JOIN customers c ON c.id=w.customer_id JOIN vehicles v ON v.id=w.vehicle_id
                LEFT JOIN vehicle_units u ON u.id=v.unit_id
-               WHERE (:start IS NULL OR w.created_at>=:start) AND (:end IS NULL OR w.created_at<=:end)
-                 AND (w.archived_at != '') = :archived
+               WHERE (:end IS NULL OR w.created_at<=:end)
+                 AND (:start IS NULL OR coalesce(nullif(w.archived_at,''), :still_here)>=:start)
+                 AND (:archived IS NULL OR (w.archived_at != '') = :archived)
                ORDER BY w.created_at DESC""",
-            {"start": start, "end": end_bound, "archived": archived_flag},
+            {"start": start, "end": end_bound, "archived": archived_flag, "still_here": still_here},
         ).fetchall()
         we_owe_ids = [row["id"] for row in rows]
         rollups = cost_rollups(db, "we_owe_id", we_owe_ids)
@@ -1250,6 +1278,8 @@ def vehicle_board_rows(
                     "order_id": current_order["id"] if current_order else None,
                     "voided_order_count": voided_count,
                     "updated_at": row["updated_at"],
+                    # Same as recon above: which side of History this one is on.
+                    "archived_at": row["archived_at"],
                     # No arrival date on this side, and none wanted: a we-owe's
                     # clock starts when the promise was made, which is what
                     # created_at already is. The car itself was sold weeks ago.

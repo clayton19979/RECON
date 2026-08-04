@@ -2605,6 +2605,20 @@ tbody tr.skeleton-row:hover { background: none; }
    shouldn't read as an equal row to one with work on it. */
 tbody tr.row-muted td { color: var(--ink-faint); }
 
+/* A car on the spend report that has already been filed to History. It is a
+   real row -- the money was spent inside the range -- but it is finished
+   business, so it sits back a little and carries its own tag. Deliberately
+   only tinted, never greyed to unreadable: this is the report somebody opens
+   to find out what a car that has already gone ended up costing.
+
+   The tint is mixed rather than --paper-raise, which is what a hovered row
+   uses: painted in that colour a filed row would sit there looking
+   permanently hovered, and hovering it would then do nothing visible. The
+   hover rule is restated below so it still wins on a filed row. */
+tbody tr.row-filed td { background: color-mix(in srgb, var(--ink-faint) 8%, transparent); }
+tbody tr.row-filed.clickable:hover td { background: var(--paper-raise); }
+.pill-filed { background: var(--ink-faint); color: #fff; margin-left: 6px; }
+
 tfoot td {
   padding: 11px 16px; font-weight: 700; background: var(--paper-raise);
   border-top: 1px solid var(--line);

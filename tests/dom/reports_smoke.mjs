@@ -320,6 +320,38 @@ ok(bars().length === 0, "a $0 vehicle was plotted");
 ok(doc.querySelector("#report-chart .chart-empty"), "the chart vanished silently instead of saying there was nothing to plot");
 spend.forEach((v, i) => { v.actual_cost = costed[i]; });
 
+/* ---------- cars already filed to History ----------
+   This report covers both sides of History on purpose: the cars a past month
+   was mostly about are the ones since sold. So a sold car's money is on the
+   sheet -- but the row has to say it is off the lot, or it reads as a car
+   still sitting there waiting on somebody. */
+spend[3].archived_at = "2026-07-28T16:20:00";
+click(w, doc.querySelector('[data-report-range="all"]'));
+await settle();
+
+const filedRow = rows().find((r) => r.textContent.includes("C007"));
+ok(filedRow, "the filed car is missing from the report entirely");
+ok(filedRow.classList.contains("row-filed"), "a car filed to History isn't marked apart from the cars still on the lot");
+ok(filedRow.textContent.includes("History"), `the filed row carries no History tag: "${filedRow.textContent.trim()}"`);
+ok(filedRow.querySelector(".pill-filed").getAttribute("title").includes("2026-07-28"),
+   "the History tag doesn't say when the car was filed");
+// Still clickable: this is the report somebody opens to find out what a car
+// that has already gone ended up costing.
+ok(filedRow.classList.contains("clickable"), "a filed car's row stopped opening the vehicle");
+
+// ...and the count above the table has to say how much of it is finished
+// business, or "4 vehicles" reads as the size of the lot today.
+ok(stats()[0].sub === "3 recon · 1 we-owe · 1 in History",
+   `the Vehicles card doesn't account for filed cars: "${stats()[0].sub}"`);
+
+// A report with nothing filed says nothing about History rather than "0 in
+// History" -- the ordinary case shouldn't grow a clause about an empty set.
+delete spend[3].archived_at;
+click(w, doc.querySelector('[data-report-range="month"]'));
+await settle();
+ok(stats()[0].sub === "3 recon · 1 we-owe", `the History clause stuck around with nothing filed: "${stats()[0].sub}"`);
+ok(!doc.querySelector("#report-output tbody tr.row-filed"), "a row is still marked filed after the flag was cleared");
+
 /* ---------- empty state ---------- */
 const emptied = spend.splice(0, spend.length);
 click(w, doc.querySelector('[data-report-type="vehicle-spend-recon"]'));

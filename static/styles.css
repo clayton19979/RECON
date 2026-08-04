@@ -3266,6 +3266,24 @@ th.sel-col, td.sel-col { width: 32px; padding-right: 0; }
 }
 .update-bar .btn:focus-visible { outline: 2px solid var(--paper); outline-offset: 2px; }
 
+/* ---------- "this screen is behind" ----------
+   Deliberately NOT the accent band above it. A new version of RECON turns up
+   a few times a year and is worth a loud one; the other PC changing something
+   happens all morning, and a band that shouts every time is a band people
+   stop reading. So: the warn tint, ordinary ink, one hairline under it --
+   present at a glance, gone the moment it's dealt with. */
+.stale-bar {
+  display: flex; align-items: center; gap: 10px;
+  background: var(--warn-tint); border-bottom: 1px solid var(--line);
+  padding: 7px 18px; font-size: 13px; color: var(--ink-soft);
+}
+.stale-bar svg {
+  width: 15px; height: 15px; flex: none;
+  fill: none; stroke: var(--warn); stroke-width: 2;
+  stroke-linecap: round; stroke-linejoin: round;
+}
+.stale-bar-text { flex: 1; }
+
 /* ---------- the running version, in the rail ----------
    Small, quiet, and always there. It is a button because it goes somewhere,
    but it must not read as one -- the rail already has ten of those. */

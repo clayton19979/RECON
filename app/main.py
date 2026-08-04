@@ -19,7 +19,7 @@ from . import paths
 from .accounting import build_accounting_router
 from .agent_routes import build_agent_router
 from .backup_routes import build_backup_router
-from .db import RECON_SHOP_CUSTOMER_ID, init_db, inserted_id, next_ro_number, now, vin_check_digit_ok
+from .db import RECON_SHOP_CUSTOMER_ID, init_db, inserted_id, next_ro_number, now, pulse_revision, vin_check_digit_ok
 from .db import connect as db_connect
 from .export import build_export_router
 from .jobs import build_jobs_router
@@ -363,6 +363,19 @@ def create_app(db_path: Path = DEFAULT_DB, backups_dir: Path = DEFAULT_BACKUPS_D
     @app.get("/api/health")
     def health():
         return {"app": "ok"}
+
+    @app.get("/api/pulse")
+    def pulse():
+        """How many times the shop's records have changed.
+
+        Every workstation asks this every few seconds, so it has to stay a
+        single-row lookup and nothing more. The browser only compares the
+        number to the one it had when the screen was drawn -- it never reads
+        anything into the value itself, so a fresh database starting back at
+        zero is a change like any other.
+        """
+        with connect() as db:
+            return {"revision": pulse_revision(db)}
 
     @app.get("/api/dashboard")
     def dashboard():

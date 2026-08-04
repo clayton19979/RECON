@@ -2120,6 +2120,11 @@ dialog::backdrop { background: var(--backdrop); backdrop-filter: blur(3px); }
   /* The grand total bookends the letterhead's 2px document rule. */
   .print-table tfoot tr:first-child td { border-top: 2px solid #000; padding-top: 7px; }
   .print-table tfoot td.num-col { font-weight: 700; }
+  /* The "not in that total" correction under a pile's total. Lighter than the
+     total it hangs off, and no rule of its own, so it reads as a note about
+     the line above rather than as a second figure to be added on. */
+  .print-table tfoot tr.print-foot-note td { border-top: 0; padding-top: 1px; font-weight: 400; font-style: italic; }
+  .print-table tfoot tr.print-foot-note td.num-col { font-weight: 400; }
   /* Repeating-tfoot spacer: reserves running-footer clearance on every
      page the table spans, which body padding alone only does for the last. */
   .print-table tfoot tr.tfoot-space td { border: 0; padding: 0; height: 18px; }
@@ -3133,23 +3138,28 @@ tbody tr.voided-row td:nth-child(-n+3) { text-decoration: line-through; }
 /* Five now: On Order joined the four credit-chasing figures, and it's the one
    that holds a car up, so it leads. Same neutral-edge rule as the board --
    the colour is earned by the number, not by the position. */
-.stats-cores { grid-template-columns: repeat(5, 1fr); margin-bottom: 16px; }
+.stats-cores { grid-template-columns: repeat(6, 1fr); margin-bottom: 16px; }
 .stats-cores .stat { border-top-color: var(--line); }
 .stats-cores .stat:has(.stat-value.warn) { border-top-color: var(--warn); }
 .stats-cores .stat:has(.stat-value.crit) { border-top-color: var(--crit); }
 th.sel-col, td.sel-col { width: 32px; padding-right: 0; }
 
-/* The three desks.
+/* The four desks.
    This page used to be one continuous scroll: heading, paragraph, filter
    strip, table, repeat, all in the same grey. Halfway down a long parts list
-   there was nothing on screen saying which of the three tables you were in.
+   there was nothing on screen saying which of the tables you were in.
    Each desk is now one card that carries its own heading, tally, filters and
-   table, with a coloured edge and matching dot so the three are told apart
+   table, with a coloured edge and matching dot so they are told apart
    from the corner of the eye while scrolling.
 
-   Colour is by errand, not by position: amber for a part that hasn't turned
-   up (a car is waiting on it), accent for a deposit the vendor owes back, and
-   steel for the housekeeping of parts going the other way. */
+   Colour is by errand, not by position, and there are only two errands here:
+   something a car is owed (amber -- a part that hasn't turned up, or one that
+   turned up and was never written down) and something the vendor owes back
+   (accent for a core deposit, steel for the housekeeping of parts going the
+   other way). On Order and Missing Receipts deliberately share the amber:
+   they are two halves of one complaint, and giving the second its own
+   severity colour would have said this shop treats missing paperwork as a
+   worse thing than a car that can't be finished. */
 .desk {
   --desk: var(--recon);
   background: var(--surface); border: 1px solid var(--line);
@@ -3159,6 +3169,7 @@ th.sel-col, td.sel-col { width: 32px; padding-right: 0; }
 }
 .desk:last-child { margin-bottom: 0; }
 .desk-order { --desk: var(--warn); }
+.desk-missing { --desk: var(--warn); }
 .desk-core { --desk: var(--accent); }
 .desk-return { --desk: var(--recon); }
 
@@ -3385,6 +3396,21 @@ th.sel-col, td.sel-col { width: 32px; padding-right: 0; }
 /* What the group has cost sits at the far end of its own band, so "how much
    is in these cars" is answered per pile without opening anything. */
 .lot-group-money { margin-left: auto; color: var(--ink-soft); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+/* Money already spent that the figure beside it doesn't include. The board's
+   own per-car badge (.cost-missing, above) is the same fact about one car;
+   this is the inline form for the aggregate, on the lot sheet's group bands,
+   its footer correction row and the Missing Receipts desk. Same warn colour
+   for the same reason spelled out up there -- the total isn't wrong so much
+   as incomplete -- so one fact keeps one colour wherever it turns up. */
+.cost-unreceipted { color: var(--warn); font-weight: 700; }
+/* The correction row under the whole-lot total. It hangs off the same footer
+   so it lines up under the column it corrects, but reads as a note rather
+   than a second total -- no top rule, lighter label, same tabular figures. */
+.lot-table tfoot tr.lot-total-missing td { border-top: 0; padding-top: 2px; font-weight: 400; color: var(--ink-soft); font-size: 11.5px; }
+/* The money on the correction row keeps its own colour and weight: the row
+   above sets a muted tone for the label, and at this specificity it would
+   otherwise repaint the one figure the row exists to show. */
+.lot-table tfoot tr.lot-total-missing td.cost-unreceipted { color: var(--warn); font-weight: 700; }
 /* An empty pile still gets its heading -- "no cars are finished right now" is
    an answer. Muted back to the neutral tone, because there is nothing under
    it to read. */
@@ -3543,9 +3569,10 @@ input.overdue { border-color: var(--crit); color: var(--crit); }
    above -- so at equal specificity they always won, and none of the three
    ever actually collapsed on a narrow window. Re-apply the same breakpoints
    here, after their declarations, so they do. */
-/* Five cards, so .stats-cores needs the same early stop .stats-board has --
+/* Six cards, so .stats-cores needs the same early stop .stats-board has --
    and it has to be declared here, after its own unconditional rule above,
-   for the same cascade reason this whole block exists. */
+   for the same cascade reason this whole block exists. Six divides into the
+   three- and two-column steps evenly, so no row is left with an orphan. */
 @media (max-width: 1440px) {
   .stats-cores { grid-template-columns: repeat(3, 1fr); }
 }

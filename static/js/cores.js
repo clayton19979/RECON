@@ -3,7 +3,7 @@ import { toast } from "./notify.js";
 import { confirmAction } from "./confirm.js";
 import { currentActor, esc, fmtDate, money, promptInvoiceNumber, withLoading } from "./shortcuts.js";
 import { emptyRow } from "./empty-states.js";
-import { ON_ORDER_COLUMNS } from "./skeletons.js";
+import { MISSING_RECEIPT_COLUMNS, ON_ORDER_COLUMNS } from "./skeletons.js";
 import { state } from "./state.js";
 import { renderViewFailure } from "./error-boundary.js";
 import { ageClass } from "./vehicles-board.js";
@@ -15,14 +15,20 @@ import { openVehicleDetail } from "./vehicle-detail.js";
 export async function loadCoresView() {
   // Fetched independently: one dead endpoint should degrade one panel, not
   // freeze the other two thirds of the screen on skeleton rows forever.
-  const [onOrderRes, coresRes, returnsRes] = await Promise.allSettled([
-    get("/api/parts/on-order"), get("/api/cores"), get("/api/returns"),
+  const [onOrderRes, missingRes, coresRes, returnsRes] = await Promise.allSettled([
+    get("/api/parts/on-order"), get("/api/parts/missing-receipts"), get("/api/cores"), get("/api/returns"),
   ]);
   if (onOrderRes.status === "fulfilled") {
     state.partsOnOrder = onOrderRes.value;
     renderPartsOnOrderTable();
   } else {
     renderViewFailure("cores", onOrderRes.reason, [["#on-order-table", ON_ORDER_COLUMNS]]);
+  }
+  if (missingRes.status === "fulfilled") {
+    state.missingReceipts = missingRes.value;
+    renderMissingReceiptsTable();
+  } else {
+    renderViewFailure("cores", missingRes.reason, [["#missing-table", MISSING_RECEIPT_COLUMNS]]);
   }
   if (coresRes.status === "fulfilled") {
     state.cores = coresRes.value;
@@ -104,11 +110,26 @@ function renderCoresReturnsStats() {
     undated ? `${undated} with no date` : "",
   ].filter(Boolean).join(" · ");
 
+  // Money already out the door that no cost figure in the app includes. It is
+  // shown even when it's zero, because "nothing missing" is the answer this
+  // card exists to be able to give -- a card that only appears when there's a
+  // problem is a card nobody learns to trust the absence of.
+  const missing = state.missingReceipts;
+  const missingValue = missing.reduce((s, p) => s + (p.value || 0), 0);
+  const missingCars = new Set(missing.map((p) => p.vehicle_label)).size;
+
   $("#cores-returns-stats").innerHTML = `
     <div class="stat">
       <div class="stat-label">On Order</div>
       <div class="stat-value${onOrderTone ? ` ${onOrderTone}` : ""}">${onOrder.length}</div>
       <div class="stat-sub">${onOrder.length ? onOrderSub : "nothing on order"}</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Not In Any Cost</div>
+      <div class="stat-value num${missing.length ? " warn" : ""}">${money(missingValue)}</div>
+      <div class="stat-sub">${missing.length
+        ? `${missing.length} part${missing.length === 1 ? "" : "s"} on ${missingCars} finished car${missingCars === 1 ? "" : "s"}`
+        : "every finished ticket is receipted"}</div>
     </div>
     <div class="stat">
       <div class="stat-label">Outstanding</div>
@@ -230,6 +251,120 @@ export function wirePartsOnOrderView() {
   $("#on-order-search").addEventListener("input", (e) => {
     state.onOrderSearch = e.target.value.trim();
     renderPartsOnOrderTable();
+  });
+}
+
+/* ---------- Missing Receipts ----------
+   The other half of On Order, and the more expensive half. On Order asks
+   "what is this car still waiting for"; this asks "what did we already put on
+   a car and never write down". Both are part lines that never landed; what
+   separates them is that this ticket is finished, which is what turns an
+   unreceived line from work-still-ahead into a cost the app is understating.
+   The rule is the server's (see list_missing_receipts) so this desk and the
+   warning on the car's own row can never disagree. */
+
+// Lot cars only: recon and we-owe, the two segments the Lot Status sheet
+// counts. Retail lines are real missing money too and stay in the default
+// view, but they belong to Tekmetric's books, so somebody reconciling Walt's
+// spend figure needs to be able to put them aside.
+function isLotCar(p) {
+  return p.segment === "recon" || p.segment === "we_owe";
+}
+
+function missingMatchesSearch(p, query) {
+  if (!query) return true;
+  return [p.description, p.part_number, p.ro_number, p.vehicle_label, p.vehicle]
+    .some((f) => (f || "").toLowerCase().includes(query));
+}
+
+function visibleMissingRows() {
+  const query = (state.missingSearch || "").toLowerCase();
+  return state.missingReceipts.filter((p) => {
+    if (!missingMatchesSearch(p, query)) return false;
+    return state.missingFilter === "recon" ? isLotCar(p) : true;
+  });
+}
+
+// How long the finished ticket has sat untouched, on the same age scale the
+// board colours its own day counts with. A ticket closed last week might just
+// be paperwork in someone's pocket; one closed two months ago is money that
+// is never going to be written down unless somebody goes looking.
+function ticketIdleHtml(p) {
+  if (p.days_idle == null) return '<span class="muted-dash">—</span>';
+  const label = p.days_idle === 0 ? "today" : `${p.days_idle}d`;
+  return `<span class="${ageClass(p.days_idle)}">${label}</span>`;
+}
+
+function renderMissingReceiptsTable() {
+  const rows = visibleMissingRows();
+  const query = (state.missingSearch || "").toLowerCase();
+  $("#missing-count").textContent = `${rows.length} part${rows.length === 1 ? "" : "s"}`;
+  const total = rows.reduce((s, p) => s + (p.value || 0), 0);
+  const cars = new Set(rows.map((p) => p.vehicle_label)).size;
+  $("#missing-total").textContent = rows.length
+    ? `${money(total)} missing from ${cars} vehicle${cars === 1 ? "" : "s"}`
+    : "";
+
+  $("#missing-table").innerHTML = rows.length ? rows.map((p) => `
+    <tr class="clickable" data-id="${p.id}" title="Open ${esc(p.vehicle_label)} and receive this part">
+      <td>${esc(p.description)}<div class="veh-sub">${esc(p.vehicle)}</div></td>
+      <td>${p.part_number ? esc(p.part_number) : '<span class="muted-dash">—</span>'}</td>
+      <td>${esc(p.ro_number)} · ${esc(p.vehicle_label)}${p.po_number ? `<div class="veh-sub num">PO ${esc(p.po_number)}</div>` : ""}</td>
+      <td class="num-col">${esc(String(p.missing_quantity))}</td>
+      <td class="num-col cost-unreceipted">${money(p.value)}</td>
+      <td>${ticketIdleHtml(p)}</td>
+    </tr>
+  `).join("") : emptyRow(MISSING_RECEIPT_COLUMNS, query ? {
+    icon: "search",
+    title: "No missing receipts match that search",
+    hint: `Nothing matched "${state.missingSearch}".`,
+    actions: `<button type="button" class="btn btn-ghost btn-sm" data-empty-action="missing-clear-search">Clear search</button>`,
+  } : state.missingFilter === "recon" ? {
+    icon: "check",
+    title: "Every lot car is fully receipted",
+    hint: "What the Lot Status sheet says each of Walt's cars cost is the whole story right now.",
+    actions: `<button type="button" class="btn btn-ghost btn-sm" data-empty-action="missing-show-all">Show every ticket</button>`,
+  } : {
+    icon: "check",
+    title: "Nothing missing",
+    hint: "Every part on every finished ticket has been marked received, so the cost on each car is the real one.",
+  });
+
+  $$(".clickable", $("#missing-table")).forEach((row) => {
+    row.addEventListener("click", () => {
+      const item = state.missingReceipts.find((p) => p.id === Number(row.dataset.id));
+      if (item) openVehicleFromRow(item);
+    });
+  });
+}
+
+export function wireMissingReceiptsView() {
+  $$("#view-cores [data-missing-filter]").forEach((chip) => {
+    chip.addEventListener("click", () => {
+      state.missingFilter = chip.dataset.missingFilter;
+      $$("#view-cores [data-missing-filter]").forEach((c) => c.classList.remove("active"));
+      chip.classList.add("active");
+      renderMissingReceiptsTable();
+    });
+  });
+  $("#missing-search").addEventListener("input", (e) => {
+    state.missingSearch = e.target.value.trim();
+    renderMissingReceiptsTable();
+  });
+  // Delegated for the same reason the cores table's is: the empty state and
+  // its button are rebuilt on every render.
+  $("#missing-table").addEventListener("click", (e) => {
+    const trigger = e.target.closest("[data-empty-action]");
+    if (!trigger) return;
+    if (trigger.dataset.emptyAction === "missing-clear-search") {
+      state.missingSearch = "";
+      $("#missing-search").value = "";
+    } else if (trigger.dataset.emptyAction === "missing-show-all") {
+      state.missingFilter = "";
+      $$("#view-cores [data-missing-filter]").forEach((c) =>
+        c.classList.toggle("active", c.dataset.missingFilter === ""));
+    } else return;
+    renderMissingReceiptsTable();
   });
 }
 

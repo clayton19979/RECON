@@ -14,7 +14,7 @@ import { wireWeOweDialog } from "./dialog-new-weowe.js";
 import { wireReceiveDialog } from "./dialog-receive-parts.js";
 import { loadReportPrefs, wireReportsView } from "./reports.js";
 import { wireAccountingView } from "./accounting.js";
-import { wireCoresView, wirePartsOnOrderView, wirePostReturnDialog, wireReturnsView } from "./cores.js";
+import { wireCoresView, wireMissingReceiptsView, wirePartsOnOrderView, wirePostReturnDialog, wireReturnsView } from "./cores.js";
 import { wireAddVehicleDialog, wireCustomerEditor, wireCustomersView, wireRetailRoDialog } from "./customers.js";
 import { wireStaffView } from "./staff.js";
 import { wireTasksView } from "./task-bulk.js";
@@ -57,6 +57,7 @@ export function startApp() {
     wireReportsView();
     wireAccountingView();
     wirePartsOnOrderView();
+    wireMissingReceiptsView();
     wireCoresView();
     wireReturnsView();
     wirePostReturnDialog();

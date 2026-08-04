@@ -56,6 +56,9 @@ export const state = {
   partsOnOrder: [],
   onOrderFilter: "",            // "" == everything on order; "overdue" == waiting a week or more
   onOrderSearch: "",
+  missingReceipts: [],
+  missingFilter: "",            // "" == every ticket; "recon" == lot cars only (recon + we-owe)
+  missingSearch: "",
   cores: [],
   coresFilter: "pending",
   coresSearch: "",

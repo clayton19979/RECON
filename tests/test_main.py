@@ -45,16 +45,18 @@ def test_customer_patch_updates_fields(client):
 
 
 def test_customer_phone_normalized_on_create_and_patch(client):
-    # Ten digits in any punctuation come out in the one canonical shape.
-    for raw in ("313.555.0142", "3135550142", "(313) 555-0142", "+1 313-555-0142", "1-313-555-0142"):
-        customer = client.post("/api/customers", json={"name": "Pat", "phone": raw}).json()
+    # Ten digits in any punctuation come out in the one canonical shape. Each
+    # one is a different person, because five people named Pat on one number
+    # is the duplicate the save now refuses -- see test_customer_duplicates.py.
+    for i, raw in enumerate(("313.555.0142", "3135550142", "(313) 555-0142", "+1 313-555-0142", "1-313-555-0142")):
+        customer = client.post("/api/customers", json={"name": f"Pat {i}", "phone": raw}).json()
         assert customer["phone"] == "(313) 555-0142", f"{raw!r} -> {customer['phone']!r}"
 
     # Anything that isn't a 10-digit number is kept as typed, not rejected:
     # legacy records and oddball entries (extensions, short codes) still save.
-    kept = client.post("/api/customers", json={"name": "Pat", "phone": "555-0142"}).json()
+    kept = client.post("/api/customers", json={"name": "Pat Short", "phone": "555-0142"}).json()
     assert kept["phone"] == "555-0142"
-    empty = client.post("/api/customers", json={"name": "Pat", "phone": "  "}).json()
+    empty = client.post("/api/customers", json={"name": "Pat Blank", "phone": "  "}).json()
     assert empty["phone"] == ""
 
     # PATCH goes through the same normalization as create.

@@ -17,6 +17,14 @@
             <label>Name<input id="we-owe-new-customer-name" placeholder="Jordan Whitfield"></label>
             <label>Phone<input id="we-owe-new-customer-phone" type="tel" inputmode="tel" placeholder="(313) 555-0142 — optional"></label>
           </div>
+          <!-- Filled in as soon as the name or the number matches somebody the
+               shop already has, so a returning customer is picked rather than
+               written down a second time. The same guard the recon dialog puts
+               under the stock number, for people instead of cars. -->
+          <div class="field-note" id="we-owe-customer-match" hidden>
+            <span id="we-owe-customer-match-text"></span>
+            <button type="button" class="btn btn-ghost btn-xs" id="we-owe-customer-match-use">Use Them</button>
+          </div>
         </div>
         <label>Vehicle<select id="we-owe-vehicle"><option value="__new__">＋ New vehicle…</option></select></label>
         <div id="we-owe-new-vehicle" style="display:none">

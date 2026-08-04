@@ -13,20 +13,30 @@
 /* ---------- theme tokens ---------- */
 /* Every block carries its own color-scheme (native date pickers, form
    controls) and --backdrop (dialog::backdrop) so no rule further down has
-   to enumerate theme names. All token pairs are contrast-validated: ink 7:1
-   on all grounds, solid-on-tint 4.5:1, white-on-pill floors, and the
-   paper < paper-raise < surface luminance ladder. */
+   to enumerate theme names. All token pairs are contrast-validated to
+   4.5:1 at small-text sizes: ink on every ground, --ink-faint on the
+   lightest ground it sits on (surface in the dark themes, paper in the
+   light ones), each status color both as text on a panel and as a fill
+   under --ink-on-fill, and the paper < paper-raise < surface ladder.
+
+   --ink-on-fill is the text color for anything painted with a solid
+   status/accent fill (pills, primary buttons, active chips). It is the
+   theme's own paper color on the dark themes -- their accents are bright,
+   and white on them measures ~3:1 -- and plain white on the light themes,
+   whose accents are dark. Same trick the update bar documents below; it
+   simply applies everywhere now. */
 /* "harbor" is the default look -- ink-navy water, azure beacon accent. */
 :root, :root[data-theme="harbor"] {
   --paper: #0c1118; --paper-raise: #121a25; --surface: #172232;
-  --ink: #e9eff7; --ink-soft: #a9b6c8; --ink-faint: #74839a;
+  --ink: #e9eff7; --ink-soft: #a9b6c8; --ink-faint: #7d8ba1;
+  --ink-on-fill: #0c1118;
   --line: #2a3850; --line-soft: #1f2a3c;
-  --accent: #3f8bd9; --accent-strong: #67a3e1; --accent-tint: #0d1e33;
+  --accent: #428dda; --accent-strong: #67a3e1; --accent-tint: #0d1e33;
   --recon: #90a4bb; --recon-tint: #1b2536;
   --weowe: #d79d3e; --weowe-tint: #2a2008;
   --good: #2fa161; --good-tint: #0c2716;
   --warn: #c1802a; --warn-tint: #2a1e09;
-  --crit: #e0564a; --crit-tint: #2b0f0d;
+  --crit: #e26156; --crit-tint: #2b0f0d;
   --shadow: 0 1px 2px rgba(3,8,15,.5), 0 10px 28px -12px rgba(3,8,15,.65);
   --backdrop: color-mix(in srgb, #060b12 55%, transparent);
   color-scheme: dark;
@@ -34,14 +44,15 @@
 /* "gunmetal" -- parkerized steel, polished-brass accent. */
 :root[data-theme="gunmetal"] {
   --paper: #151a21; --paper-raise: #1b212a; --surface: #232b36;
-  --ink: #e9edf3; --ink-soft: #a9b4c2; --ink-faint: #7c8794;
+  --ink: #e9edf3; --ink-soft: #a9b4c2; --ink-faint: #89939f;
+  --ink-on-fill: #151a21;
   --line: #38424f; --line-soft: #2a333e;
-  --accent: #b18b2c; --accent-strong: #bc9b48; --accent-tint: #251d0b;
+  --accent: #b48e2d; --accent-strong: #bc9b48; --accent-tint: #251d0b;
   --recon: #94a5b4; --recon-tint: #1c2530;
   --weowe: #d19a3d; --weowe-tint: #271b07;
-  --good: #43a05c; --good-tint: #0e2513;
-  --warn: #c4762a; --warn-tint: #2a1a06;
-  --crit: #dd5a4a; --crit-tint: #260c09;
+  --good: #45a65f; --good-tint: #0e2513;
+  --warn: #d27f2e; --warn-tint: #2a1a06;
+  --crit: #e27164; --crit-tint: #260c09;
   --shadow: 0 1px 2px rgba(6,10,16,.5), 0 10px 28px -12px rgba(6,10,16,.65);
   --backdrop: color-mix(in srgb, #0b0f16 55%, transparent);
   color-scheme: dark;
@@ -49,14 +60,15 @@
 /* "petrol" -- engine-oil green-black, petrol-teal sheen. */
 :root[data-theme="petrol"] {
   --paper: #0e1514; --paper-raise: #141c1a; --surface: #1a2422;
-  --ink: #e4ede9; --ink-soft: #a2b6af; --ink-faint: #71857f;
+  --ink: #e4ede9; --ink-soft: #a2b6af; --ink-faint: #7b8f89;
+  --ink-on-fill: #0e1514;
   --line: #2e3d39; --line-soft: #23302d;
   --accent: #26a191; --accent-strong: #46afa1; --accent-tint: #0a1f1c;
   --recon: #93a7ad; --recon-tint: #182226;
   --weowe: #cf9b3a; --weowe-tint: #251b08;
   --good: #3fa25b; --good-tint: #0c2413;
-  --warn: #bf7527; --warn-tint: #281905;
-  --crit: #d9564a; --crit-tint: #250c0a;
+  --warn: #c47828; --warn-tint: #281905;
+  --crit: #dd665b; --crit-tint: #250c0a;
   --shadow: 0 1px 2px rgba(4,10,9,.5), 0 10px 28px -12px rgba(4,10,9,.65);
   --backdrop: color-mix(in srgb, #081110 55%, transparent);
   color-scheme: dark;
@@ -64,14 +76,15 @@
 /* "mesa" -- high-desert dusk, plum-brown ground, ember-copper accent. */
 :root[data-theme="mesa"] {
   --paper: #171114; --paper-raise: #1d161a; --surface: #251c21;
-  --ink: #f3eae6; --ink-soft: #c8b2ab; --ink-faint: #937d76;
+  --ink: #f3eae6; --ink-soft: #c8b2ab; --ink-faint: #97827c;
+  --ink-on-fill: #171114;
   --line: #3d2e33; --line-soft: #2e2226;
-  --accent: #d4622f; --accent-strong: #df8a63; --accent-tint: #2b130a;
+  --accent: #d56736; --accent-strong: #df8a63; --accent-tint: #2b130a;
   --recon: #ae9ea3; --recon-tint: #2b2126;
   --weowe: #d59a38; --weowe-tint: #2a2008;
   --good: #35a05e; --good-tint: #0d2615;
   --warn: #c48520; --warn-tint: #2a1e07;
-  --crit: #dc4a55; --crit-tint: #220a0c;
+  --crit: #df5b65; --crit-tint: #220a0c;
   --shadow: 0 1px 2px rgba(12,6,8,.5), 0 10px 28px -12px rgba(12,6,8,.65);
   --backdrop: color-mix(in srgb, #0d0709 55%, transparent);
   color-scheme: dark;
@@ -79,7 +92,8 @@
 /* "cobalt" -- light: warm ivory ledger paper, fountain-pen cobalt. */
 :root[data-theme="cobalt"] {
   --paper: #f2ebdb; --paper-raise: #f7f2e7; --surface: #fdfbf4;
-  --ink: #262119; --ink-soft: #5c5546; --ink-faint: #857b68;
+  --ink: #262119; --ink-soft: #5c5546; --ink-faint: #706858;
+  --ink-on-fill: #fff;
   --line: #d5cab2; --line-soft: #e3dac7;
   --accent: #2149c9; --accent-strong: #16389f; --accent-tint: #dbe3fa;
   --recon: #43596b; --recon-tint: #dde5eb;
@@ -94,7 +108,8 @@
 /* "verdigris" -- light: patina-green mist, deep viridian accent. */
 :root[data-theme="verdigris"] {
   --paper: #e5ede6; --paper-raise: #eff5ef; --surface: #fbfdfa;
-  --ink: #1b2620; --ink-soft: #47594f; --ink-faint: #6b7f74;
+  --ink: #1b2620; --ink-soft: #47594f; --ink-faint: #5b6c63;
+  --ink-on-fill: #fff;
   --line: #c2d1c5; --line-soft: #d4e0d6;
   --accent: #0c6b57; --accent-strong: #094f41; --accent-tint: #d7f0e7;
   --recon: #465c6c; --recon-tint: #dbe6ec;
@@ -158,7 +173,7 @@ button { font-family: inherit; }
 .rail-brand-top { display: flex; align-items: center; gap: 10px; }
 .rail-mark {
   font-family: "Space Grotesk", sans-serif;
-  color: #fff; background: var(--accent);
+  color: var(--ink-on-fill); background: var(--accent);
   width: 32px; height: 32px; border-radius: 8px;
   display: flex; align-items: center; justify-content: center;
   font-weight: 700; font-size: 12.5px; flex-shrink: 0;
@@ -350,11 +365,11 @@ button { font-family: inherit; }
 }
 .btn svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; }
 .btn:active { transform: translateY(1px); }
-.btn-primary { background: var(--accent); color: #fff; }
+.btn-primary { background: var(--accent); color: var(--ink-on-fill); }
 .btn-primary:hover { background: var(--accent-strong); }
 .btn-ghost { background: var(--surface); border-color: var(--line); color: var(--ink); }
 .btn-ghost:hover { border-color: var(--accent); color: var(--accent); }
-.btn-danger { background: var(--crit); color: #fff; border-color: var(--crit); }
+.btn-danger { background: var(--crit); color: var(--ink-on-fill); border-color: var(--crit); }
 .btn-danger:hover { filter: brightness(1.08); }
 .btn-sm { padding: 6px 12px; font-size: 12px; }
 .btn-xs { padding: 3px 8px; font-size: 10.5px; gap: 4px; }
@@ -448,7 +463,7 @@ button { font-family: inherit; }
 }
 .chip:hover { border-color: var(--accent); }
 .chip:active { transform: translateY(1px); }
-.chip.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+.chip.active { background: var(--accent); border-color: var(--accent); color: var(--ink-on-fill); }
 
 /* An independent on/off beside the mutually-exclusive segment chips. Same
    shape so it belongs to the row, warn-colored when on so it doesn't read as
@@ -820,7 +835,7 @@ table.sticky-head thead th {
 .pill {
   display: inline-flex; align-items: center; gap: 5px; padding: 4px 11px;
   border-radius: 6px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
-  color: #fff;
+  color: var(--ink-on-fill);
 }
 .pill-recon { background: var(--recon); }
 /* Outline, not filled: Type sits directly beside a filled Status pill
@@ -832,7 +847,7 @@ table.sticky-head thead th {
 .pill-progress { background: var(--warn); }
 .pill-done { background: var(--good); }
 
-.status-pill { display: inline-flex; padding: 3px 10px; border-radius: 6px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: #fff; }
+.status-pill { display: inline-flex; padding: 3px 10px; border-radius: 6px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--ink-on-fill); }
 .sp-quoted { background: var(--ink-faint); }
 .sp-ordered { background: var(--warn); }
 .sp-received { background: var(--good); }
@@ -939,8 +954,12 @@ table.sticky-head thead th {
   display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px;
   margin-top: 11px; padding-top: 9px; border-top: 1px dashed var(--line-soft);
 }
-/* Keeps the two facts from reading as one sentence now they share a line. */
-.detail-worked:not([hidden]) + .detail-updated:not(:empty)::before {
+/* Keeps the facts from reading as one sentence now they share a line. General
+   siblings rather than adjacent ones, because any of the three can be absent:
+   each later fact takes a dot when anything visible precedes it. */
+.detail-worked:not([hidden]) ~ .detail-promise:not([hidden])::before,
+.detail-worked:not([hidden]) ~ .detail-updated:not(:empty)::before,
+.detail-promise:not([hidden]) ~ .detail-updated:not(:empty)::before {
   content: "·"; margin-right: 10px; color: var(--line);
 }
 /* No rule floating over nothing: a brand-new car has no activity yet and an
@@ -964,11 +983,28 @@ table.sticky-head thead th {
   border: 1px solid var(--crit); border-radius: 999px; padding: 2px 10px;
   white-space: nowrap;
 }
-.detail-worked-nudge:hover { background: var(--crit); color: #fff; }
+.detail-worked-nudge:hover { background: var(--crit); color: var(--ink-on-fill); }
 .detail-worked-nudge:focus-visible { outline: 2px solid var(--crit); outline-offset: 2px; }
 
 .detail-updated { font-size: 11px; color: var(--ink-faint); }
 .detail-updated.recent { color: var(--warn); font-weight: 600; }
+
+/* "Promised to customer" -- we-owe only, same anatomy as the worked line.
+   Three tones, no new colors: quiet while the date is comfortably ahead,
+   the warn amber when it's today or tomorrow, and the same red as a stalled
+   car once it's missed (the nudge button reuses .detail-worked-nudge whole,
+   so the two red buttons on this band can never drift apart). */
+.detail-promise {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 6px;
+  font-size: 12.5px; color: var(--ink);
+}
+.detail-promise-label { color: var(--ink-faint); font-weight: 600; }
+.detail-promise-when { color: var(--ink-soft); }
+.detail-promise.soon { color: var(--warn); font-weight: 600; }
+.detail-promise.soon .detail-promise-label,
+.detail-promise.soon .detail-promise-when { color: var(--warn); }
+.detail-promise.overdue { color: var(--crit); font-weight: 600; }
+.detail-promise.overdue .detail-promise-label { color: var(--crit); }
 /* Was an inline style on #vd-actions. Capped so the button set wraps into a
    compact block on the band's right instead of one long strip that shoves
    the title aside. */
@@ -1099,10 +1135,10 @@ textarea { min-height: 70px; resize: vertical; font-family: inherit; }
 .check-row input[type="checkbox"] { width: auto; margin: 0; }
 
 /* ---------- ticket status pills (color-coded, one per status) ---------- */
-.pill-status-estimate { background: var(--ink-faint); color: #fff; }
-.pill-status-pending { background: var(--warn); color: #fff; }
-.pill-status-progress { background: var(--accent); color: #fff; }
-.pill-status-complete { background: var(--good); color: #fff; }
+.pill-status-estimate { background: var(--ink-faint); color: var(--ink-on-fill); }
+.pill-status-pending { background: var(--warn); color: var(--ink-on-fill); }
+.pill-status-progress { background: var(--accent); color: var(--ink-on-fill); }
+.pill-status-complete { background: var(--good); color: var(--ink-on-fill); }
 
 /* ---------- estimate / parts rows ----------
    The row is a grid of .pr-cell wrappers rather than bare inputs, which buys
@@ -1415,6 +1451,11 @@ textarea { min-height: 70px; resize: vertical; font-family: inherit; }
 .receive-line .rl-note.over { color: var(--crit); }
 .receive-line .rl-note.under { color: var(--good); }
 .receive-line .rl-note.bad { color: var(--crit); }
+/* Sits directly under the vendor dropdown to say why that name is already in
+   it. Faint on purpose: it is an explanation of a filled-in box, not a warning
+   -- the dropdown next to it is the thing to read. Negative top margin pulls
+   it up under the <label> it belongs to, which carries its own bottom gap. */
+.receive-vendor-why { margin: -6px 0 0; font-size: 11px; color: var(--ink-faint); }
 .receive-line .rl-qty { color: var(--ink-faint); font-variant-numeric: tabular-nums; }
 .receive-line input.rl-cost { width: 92px; text-align: right; padding: 5px 8px; font-size: 12.5px; }
 .receive-line.bad input.rl-cost { border-color: var(--crit); }
@@ -1966,7 +2007,7 @@ dialog::backdrop { background: var(--backdrop); backdrop-filter: blur(3px); }
 /* ---------- toast ---------- */
 #toast {
   position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%) translateY(12px);
-  background: var(--accent-strong); color: #fff; padding: 11px 20px; border-radius: 8px;
+  background: var(--accent-strong); color: var(--ink-on-fill); padding: 11px 20px; border-radius: 8px;
   font-size: 13px; font-weight: 600; box-shadow: var(--shadow); opacity: 0; pointer-events: none;
   transition: opacity .18s, transform .18s; z-index: 999; max-width: 480px; text-align: center;
 }
@@ -1992,7 +2033,7 @@ dialog::backdrop { background: var(--backdrop); backdrop-filter: blur(3px); }
 .notif-toggle:hover { border-color: var(--accent); color: var(--accent); }
 .notif-dot {
   position: absolute; top: -5px; right: -5px; min-width: 15px; height: 15px; padding: 0 3px;
-  border-radius: 999px; background: var(--crit); color: #fff;
+  border-radius: 999px; background: var(--crit); color: var(--ink-on-fill);
   font-size: 9.5px; font-weight: 700; line-height: 15px; text-align: center;
   border: 2px solid var(--paper-raise);
 }
@@ -2122,6 +2163,11 @@ dialog::backdrop { background: var(--backdrop); backdrop-filter: blur(3px); }
   /* The grand total bookends the letterhead's 2px document rule. */
   .print-table tfoot tr:first-child td { border-top: 2px solid #000; padding-top: 7px; }
   .print-table tfoot td.num-col { font-weight: 700; }
+  /* The "not in that total" correction under a pile's total. Lighter than the
+     total it hangs off, and no rule of its own, so it reads as a note about
+     the line above rather than as a second figure to be added on. */
+  .print-table tfoot tr.print-foot-note td { border-top: 0; padding-top: 1px; font-weight: 400; font-style: italic; }
+  .print-table tfoot tr.print-foot-note td.num-col { font-weight: 400; }
   /* Repeating-tfoot spacer: reserves running-footer clearance on every
      page the table spans, which body padding alone only does for the last. */
   .print-table tfoot tr.tfoot-space td { border: 0; padding: 0; height: 18px; }
@@ -2523,7 +2569,7 @@ tbody tr.skeleton-row:hover { background: none; }
   color: var(--ink-soft); white-space: nowrap;
 }
 .seg-btn:hover { color: var(--ink); }
-.seg-btn.active { background: var(--accent); color: #fff; }
+.seg-btn.active { background: var(--accent); color: var(--ink-on-fill); }
 
 .report-date {
   display: flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 600;
@@ -2627,6 +2673,20 @@ tbody tr.skeleton-row:hover { background: none; }
 /* A technician with nothing in the range still belongs on the roster, but
    shouldn't read as an equal row to one with work on it. */
 tbody tr.row-muted td { color: var(--ink-faint); }
+
+/* A car on the spend report that has already been filed to History. It is a
+   real row -- the money was spent inside the range -- but it is finished
+   business, so it sits back a little and carries its own tag. Deliberately
+   only tinted, never greyed to unreadable: this is the report somebody opens
+   to find out what a car that has already gone ended up costing.
+
+   The tint is mixed rather than --paper-raise, which is what a hovered row
+   uses: painted in that colour a filed row would sit there looking
+   permanently hovered, and hovering it would then do nothing visible. The
+   hover rule is restated below so it still wins on a filed row. */
+tbody tr.row-filed td { background: color-mix(in srgb, var(--ink-faint) 8%, transparent); }
+tbody tr.row-filed.clickable:hover td { background: var(--paper-raise); }
+.pill-filed { background: var(--ink-faint); color: #fff; margin-left: 6px; }
 
 tfoot td {
   padding: 11px 16px; font-weight: 700; background: var(--paper-raise);
@@ -3135,23 +3195,28 @@ tbody tr.voided-row td:nth-child(-n+3) { text-decoration: line-through; }
 /* Five now: On Order joined the four credit-chasing figures, and it's the one
    that holds a car up, so it leads. Same neutral-edge rule as the board --
    the colour is earned by the number, not by the position. */
-.stats-cores { grid-template-columns: repeat(5, 1fr); margin-bottom: 16px; }
+.stats-cores { grid-template-columns: repeat(6, 1fr); margin-bottom: 16px; }
 .stats-cores .stat { border-top-color: var(--line); }
 .stats-cores .stat:has(.stat-value.warn) { border-top-color: var(--warn); }
 .stats-cores .stat:has(.stat-value.crit) { border-top-color: var(--crit); }
 th.sel-col, td.sel-col { width: 32px; padding-right: 0; }
 
-/* The three desks.
+/* The four desks.
    This page used to be one continuous scroll: heading, paragraph, filter
    strip, table, repeat, all in the same grey. Halfway down a long parts list
-   there was nothing on screen saying which of the three tables you were in.
+   there was nothing on screen saying which of the tables you were in.
    Each desk is now one card that carries its own heading, tally, filters and
-   table, with a coloured edge and matching dot so the three are told apart
+   table, with a coloured edge and matching dot so they are told apart
    from the corner of the eye while scrolling.
 
-   Colour is by errand, not by position: amber for a part that hasn't turned
-   up (a car is waiting on it), accent for a deposit the vendor owes back, and
-   steel for the housekeeping of parts going the other way. */
+   Colour is by errand, not by position, and there are only two errands here:
+   something a car is owed (amber -- a part that hasn't turned up, or one that
+   turned up and was never written down) and something the vendor owes back
+   (accent for a core deposit, steel for the housekeeping of parts going the
+   other way). On Order and Missing Receipts deliberately share the amber:
+   they are two halves of one complaint, and giving the second its own
+   severity colour would have said this shop treats missing paperwork as a
+   worse thing than a car that can't be finished. */
 .desk {
   --desk: var(--recon);
   background: var(--surface); border: 1px solid var(--line);
@@ -3161,6 +3226,7 @@ th.sel-col, td.sel-col { width: 32px; padding-right: 0; }
 }
 .desk:last-child { margin-bottom: 0; }
 .desk-order { --desk: var(--warn); }
+.desk-missing { --desk: var(--warn); }
 .desk-core { --desk: var(--accent); }
 .desk-return { --desk: var(--recon); }
 
@@ -3217,8 +3283,8 @@ th.sel-col, td.sel-col { width: 32px; padding-right: 0; }
    the four dark themes -- their accents are bright, and brass at 3.18 was the
    worst of them. --paper inverts with the theme for free: near-black under a
    bright accent, near-white under a dark one. Measured 4.96-6.18:1 on all
-   six, where a flat white sat under AA on four. (Primary buttons elsewhere
-   still use white on accent; that is long-standing and untouched here.) */
+   six, where a flat white sat under AA on four. (--ink-on-fill in the theme
+   blocks is this same idea, applied to every filled pill and button.) */
 .update-bar {
   display: flex; align-items: center; gap: 12px;
   background: var(--accent); border-bottom: 1px solid var(--accent-strong);
@@ -3242,6 +3308,24 @@ th.sel-col, td.sel-col { width: 32px; padding-right: 0; }
   border-color: var(--paper); color: var(--paper);
 }
 .update-bar .btn:focus-visible { outline: 2px solid var(--paper); outline-offset: 2px; }
+
+/* ---------- "this screen is behind" ----------
+   Deliberately NOT the accent band above it. A new version of RECON turns up
+   a few times a year and is worth a loud one; the other PC changing something
+   happens all morning, and a band that shouts every time is a band people
+   stop reading. So: the warn tint, ordinary ink, one hairline under it --
+   present at a glance, gone the moment it's dealt with. */
+.stale-bar {
+  display: flex; align-items: center; gap: 10px;
+  background: var(--warn-tint); border-bottom: 1px solid var(--line);
+  padding: 7px 18px; font-size: 13px; color: var(--ink-soft);
+}
+.stale-bar svg {
+  width: 15px; height: 15px; flex: none;
+  fill: none; stroke: var(--warn); stroke-width: 2;
+  stroke-linecap: round; stroke-linejoin: round;
+}
+.stale-bar-text { flex: 1; }
 
 /* ---------- the running version, in the rail ----------
    Small, quiet, and always there. It is a button because it goes somewhere,
@@ -3387,6 +3471,21 @@ th.sel-col, td.sel-col { width: 32px; padding-right: 0; }
 /* What the group has cost sits at the far end of its own band, so "how much
    is in these cars" is answered per pile without opening anything. */
 .lot-group-money { margin-left: auto; color: var(--ink-soft); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+/* Money already spent that the figure beside it doesn't include. The board's
+   own per-car badge (.cost-missing, above) is the same fact about one car;
+   this is the inline form for the aggregate, on the lot sheet's group bands,
+   its footer correction row and the Missing Receipts desk. Same warn colour
+   for the same reason spelled out up there -- the total isn't wrong so much
+   as incomplete -- so one fact keeps one colour wherever it turns up. */
+.cost-unreceipted { color: var(--warn); font-weight: 700; }
+/* The correction row under the whole-lot total. It hangs off the same footer
+   so it lines up under the column it corrects, but reads as a note rather
+   than a second total -- no top rule, lighter label, same tabular figures. */
+.lot-table tfoot tr.lot-total-missing td { border-top: 0; padding-top: 2px; font-weight: 400; color: var(--ink-soft); font-size: 11.5px; }
+/* The money on the correction row keeps its own colour and weight: the row
+   above sets a muted tone for the label, and at this specificity it would
+   otherwise repaint the one figure the row exists to show. */
+.lot-table tfoot tr.lot-total-missing td.cost-unreceipted { color: var(--warn); font-weight: 700; }
 /* An empty pile still gets its heading -- "no cars are finished right now" is
    an answer. Muted back to the neutral tone, because there is nothing under
    it to read. */
@@ -3545,9 +3644,10 @@ input.overdue { border-color: var(--crit); color: var(--crit); }
    above -- so at equal specificity they always won, and none of the three
    ever actually collapsed on a narrow window. Re-apply the same breakpoints
    here, after their declarations, so they do. */
-/* Five cards, so .stats-cores needs the same early stop .stats-board has --
+/* Six cards, so .stats-cores needs the same early stop .stats-board has --
    and it has to be declared here, after its own unconditional rule above,
-   for the same cascade reason this whole block exists. */
+   for the same cascade reason this whole block exists. Six divides into the
+   three- and two-column steps evenly, so no row is left with an orphan. */
 @media (max-width: 1440px) {
   .stats-cores { grid-template-columns: repeat(3, 1fr); }
 }

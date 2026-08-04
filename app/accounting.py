@@ -420,10 +420,28 @@ def build_accounting_router(connect: Callable[[], sqlite3.Connection], now: Call
 
     @router.get("/vendors")
     def list_vendors():
+        """Every vendor, alphabetical, each carrying when it was last bought from.
+
+        `last_invoice_at` is the newest non-voided A/P invoice posted against
+        the vendor, or "" for one never used. It exists so a screen that has to
+        guess a vendor can guess the one the shop actually deals with instead
+        of whichever name sorts first -- the receive dialog uses it as its last
+        fallback. Voided invoices are excluded for the same reason they are
+        excluded everywhere else: a bill taken back is a purchase that never
+        happened, and it should not keep a vendor looking current forever.
+
+        The list stays sorted by name. Recency picks a default; it must not
+        reorder the dropdown, or the option under the cursor would move around
+        as the day goes on.
+        """
         with connect() as db:
             return [
                 dict(row) | {"aliases": json.loads(row["aliases"])}
-                for row in db.execute("SELECT * FROM vendors ORDER BY name")
+                for row in db.execute(
+                    """SELECT v.*, coalesce((SELECT max(a.posted_at) FROM ap_invoices a
+                                              WHERE a.vendor_id = v.id AND a.status != 'voided'), '') last_invoice_at
+                         FROM vendors v ORDER BY v.name"""
+                )
             ]
 
     @router.post("/vendors", status_code=201)

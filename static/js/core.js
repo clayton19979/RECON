@@ -15,6 +15,15 @@ export async function api(path, opts = {}) {
     } catch {}
     throw new Error(message);
   }
+  // Anything that isn't a GET just changed the shop's records, and the change
+  // counter is about to move because of it. Said out loud here so the freshness
+  // check (pulse.js) can tell "I did that" from "the other PC did that" and
+  // not offer to refresh a screen that is already reloading itself. A plain
+  // DOM event rather than a call, so the lowest-level module in the app stays
+  // free of imports.
+  if ((opts.method || "GET").toUpperCase() !== "GET") {
+    document.dispatchEvent(new CustomEvent("recon:wrote"));
+  }
   if (res.status === 204) return null;
   return res.json();
 }

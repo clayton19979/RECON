@@ -56,6 +56,9 @@ export const state = {
   partsOnOrder: [],
   onOrderFilter: "",            // "" == everything on order; "overdue" == waiting a week or more
   onOrderSearch: "",
+  missingReceipts: [],
+  missingFilter: "",            // "" == every ticket; "recon" == lot cars only (recon + we-owe)
+  missingSearch: "",
   cores: [],
   coresFilter: "pending",
   coresSearch: "",
@@ -132,14 +135,17 @@ export const STATUS_OPTIONS = ["estimate", "pending_approval", "in_progress", "c
 export const STATUS_LABEL = {
   estimate: "Estimate", pending_approval: "Pending Approval", in_progress: "In Progress", complete: "Complete",
   // Vehicle-board labels for statuses that aren't ticket statuses: recon's
-  // "acquired" (no RO started yet) and we-owe's own open/fulfilled/waived
+  // "acquired" (no RO started yet) and "sold" (its lot life is over, it just
+  // hasn't been sent to History yet), and we-owe's own open/fulfilled/waived
   // (shown only once the promise itself has been marked resolved, or before
   // any ticket exists -- otherwise the board shows the ticket's own status).
-  acquired: "Acquired", open: "Open", fulfilled: "Fulfilled", waived: "Waived",
+  acquired: "Acquired", sold: "Sold", open: "Open", fulfilled: "Fulfilled", waived: "Waived",
 };
 export const STATUS_PILL_CLASS = {
   estimate: "pill-status-estimate", pending_approval: "pill-status-pending",
   in_progress: "pill-status-progress", complete: "pill-status-complete",
+  // Same green family as finished work: a sold car is an outcome, not an alarm.
+  sold: "pill-done",
 };
 // The three groups a person builds a ticket out of, in the order they read.
 // "credit" is deliberately not one of them -- nobody adds a credit by hand, it

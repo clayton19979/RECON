@@ -46,6 +46,12 @@ export const CUSTOMER_COLUMNS = 7;
 // to span the On Order table's real width.
 export const ON_ORDER_COLUMNS = 7;
 
+// Part, Part #, RO / Vehicle, Qty, Not In Cost, Ticket Idle. One column
+// shorter than On Order: a line that was never received has no Ordered date
+// worth printing, and a blank column reads as missing data rather than as a
+// question that doesn't apply.
+export const MISSING_RECEIPT_COLUMNS = 6;
+
 // Which containers to fill with a placeholder when a view is opened, and how
 // many columns each table has (so the skeleton lines up with its header).
 export const VIEW_PLACEHOLDERS = {
@@ -56,7 +62,7 @@ export const VIEW_PLACEHOLDERS = {
   // failed load should say so once rather than three times down the page.
   reports:     [["#report-output", 0]],
   accounting:  [["#ap-table", 8]],
-  cores:       [["#on-order-table", ON_ORDER_COLUMNS], ["#cores-table", 8], ["#returns-table", 8]],
+  cores:       [["#on-order-table", ON_ORDER_COLUMNS], ["#missing-table", MISSING_RECEIPT_COLUMNS], ["#cores-table", 8], ["#returns-table", 8]],
   staff:       [["#staff-table", 5]],
   backup:      [["#backup-table", 4]],
   tasks:       [["#tasks-list", 0]],
@@ -78,7 +84,7 @@ export const VIEW_PLACEHOLDERS = {
    instead (see loadVehiclesView). */
 export const VIEW_STAT_STRIPS = {
   accounting: ["#ap-stats", 4],
-  cores:      ["#cores-returns-stats", 4],
+  cores:      ["#cores-returns-stats", 5],
   staff:      ["#staff-stats", 4],
   backup:     ["#backup-stats", 5],
 };

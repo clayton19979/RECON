@@ -38,10 +38,16 @@ const lot = [
     status: "complete", status_bucket: "finished", actual_cost: 380, quoted_cost: 380,
     remaining_cost: 0, idle_days: 1, needs: "Nothing — ready to go",
   }),
+  // The car whose money is wrong. Its ticket is closed, so nobody is going to
+  // spend anything more on it -- and $95 of what was already spent was never
+  // marked received, so every "spent" figure on this sheet is short by that
+  // much until somebody clears it.
   car({
     lot_bucket: "ready", segment: "we_owe", we_owe_id: 5, vehicle: "2018 Honda Accord",
     customer_name: "Marcus Doyle", status: "fulfilled", status_bucket: "finished",
-    actual_cost: 0, remaining_cost: 0, idle_days: 21, needs: "Nothing — ready to go",
+    actual_cost: 0, remaining_cost: 0, idle_days: 21,
+    unreceived_closed_cost: 95, unreceived_closed_parts: 1,
+    needs: "Ready to go — but 1 part never marked received ($95.00 not in the cost)",
   }),
   car({
     lot_bucket: "working", recon_id: 9, stock_number: "R-1002", vehicle: "2017 Hyundai Elantra",
@@ -110,6 +116,47 @@ ok(!!emptyBand, "the empty section rendered as a normal band with no rows under 
 ok(/Every car has been started/.test(emptyBand?.textContent || ""),
    `empty section says "${emptyBand?.textContent.trim()}" instead of explaining itself`);
 
+/* ---------- money already spent that this sheet doesn't count ----------
+   "Spent so far" only counts parts somebody marked received, and on recon
+   work receiving is the step that gets skipped. A sheet that answers "what
+   did we spend on this car" with a number it knows is short, and says nothing,
+   is the one thing this report cannot do. */
+const spentCard = [...doc.querySelectorAll("#report-stats .stat")]
+  .find((el) => /Spent On The Lot/i.test(el.querySelector(".stat-label").textContent));
+ok(!!spentCard, "the lot report has no Spent On The Lot card");
+const spentText = spentCard.textContent.replace(/\s+/g, " ");
+ok(/\$1,380\.00/.test(spentText), `the headline spend is wrong: "${spentText.trim()}"`);
+ok(/\$95\.00 spent but never marked received/.test(spentText),
+   `the card doesn't say its own figure is short: "${spentText.trim()}"`);
+ok(/\$240\.00 still to spend/.test(spentText),
+   `money still ahead got lost when the correction went in: "${spentText.trim()}"`);
+ok(spentCard.querySelector(".stat-value").classList.contains("warn"),
+   "a spend figure that is knowably short isn't toned as a warning");
+
+// The pile the money is missing from says so on its own band, so the reader
+// doesn't have to carry the total down from the top of the sheet.
+const readyBand = bandText.find((t) => /Ready to sell/.test(t));
+ok(/\$95\.00 never marked received/.test(readyBand || ""),
+   `the Ready band doesn't flag its own shortfall: "${readyBand}"`);
+ok(!/never marked received/.test(bandText.find((t) => /In the shop/.test(t)) || ""),
+   "a pile with nothing missing is still printing a shortfall line");
+
+// And the footer -- the number somebody writes down or reads out -- carries
+// the correction on its own row, lined up under the column it corrects.
+const correction = doc.querySelector("#report-output tfoot tr.lot-total-missing");
+ok(!!correction, "the whole-lot total is short with nothing under it saying so");
+const correctionText = correction.textContent.replace(/\s+/g, " ");
+ok(/1 part on 1 finished car never marked received/.test(correctionText),
+   `the correction row doesn't say what it's counting: "${correctionText.trim()}"`);
+ok(/\$95\.00/.test(correctionText), `the correction row doesn't carry the money: "${correctionText.trim()}"`);
+ok(correction.querySelector("td.cost-unreceipted"),
+   "the correction's money isn't marked as the figure that's missing");
+// The board's own per-car badge already owns .cost-missing, and it is styled
+// display:block with a help cursor for a card, not a table cell. Borrowing
+// the name here would have recoloured that badge and stretched these cells.
+ok(!doc.querySelector("#report-output .cost-missing"),
+   "the lot sheet is reusing the board badge's class instead of its own");
+
 /* ---------- days read as days ---------- */
 ok(w.sittingText(0) === "today", `sittingText(0) is "${w.sittingText(0)}"`);
 ok(w.sittingText(1) === "1 day", `sittingText(1) is "${w.sittingText(1)}"`);
@@ -155,6 +202,18 @@ const foots = [...printed.querySelectorAll(".print-table.report tfoot")];
 ok(foots.length === 2, `expected a subtotal under each of the 2 non-empty sections, got ${foots.length}`);
 ok(/Spent on the whole lot/.test(printText) && /\$1,380\.00/.test(printText),
    "the whole-lot total is missing or wrong (380 + 1000)");
+
+// Paper has no colour and nobody standing beside it, so the correction has to
+// be a sentence -- under the pile's own subtotal and again in the totals
+// block, before "still to spend", because it is money already gone.
+ok(/Not in that total — 1 part on 1 car never marked received/.test(printText),
+   "the printed section subtotal doesn't say what it's leaving out");
+ok(/Spent but never marked received — not in the figure above/.test(printText),
+   "the printed whole-lot total doesn't say it's short");
+ok(/\$95\.00/.test(printText), "the printed sheet doesn't carry the missing money at all");
+const noteRows = [...printed.querySelectorAll(".print-table.report tfoot tr.print-foot-note")];
+ok(noteRows.length === 1,
+   `expected the correction under exactly the one pile that's missing money, got ${noteRows.length}`);
 
 ok(rejections.length === 0, `unhandled rejections: ${rejections.map((e) => e && e.message).join(", ")}`);
 

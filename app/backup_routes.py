@@ -22,6 +22,7 @@ from .backup import (
     prune_backups_tiered,
     restore_database,
 )
+from .db import init_db
 
 
 def _entry(path: Path) -> dict:
@@ -37,6 +38,20 @@ def _resolve_existing(backups_dir: Path, name: str) -> Path:
     if match is None:
         raise HTTPException(status_code=404, detail="Backup not found")
     return match
+
+
+def _bring_schema_up_to_date(db_path: Path) -> None:
+    """Run the boot-time schema steps over a database that has just been
+    restored over the live one.
+
+    A backup is a snapshot of whatever RECON was at the time it was taken, and
+    restoring one puts that older shape back under a running server -- which
+    only re-runs init_db when it starts. So a backup from before a column (or,
+    now, before the change counter) existed left the app talking to a database
+    missing it until somebody happened to restart RECON, and nothing on screen
+    said why. Running the same idempotent steps here closes that window.
+    """
+    init_db(db_path)
 
 
 def build_backup_router(db_path: Path, backups_dir: Path) -> APIRouter:
@@ -100,6 +115,7 @@ def build_backup_router(db_path: Path, backups_dir: Path) -> APIRouter:
             restore_database(target, db_path)
         except (FileNotFoundError, RuntimeError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        _bring_schema_up_to_date(db_path)
         return {"restored_from": target.name}
 
     @router.delete("/{name}")
@@ -129,6 +145,7 @@ def build_backup_router(db_path: Path, backups_dir: Path) -> APIRouter:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         finally:
             scratch.unlink(missing_ok=True)
+        _bring_schema_up_to_date(db_path)
         return {"restored_from": safe_name}
 
     return router

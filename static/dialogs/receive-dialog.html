@@ -12,7 +12,12 @@
            from the same figure; correcting it afterwards fixes only one of
            them. -->
       <div class="receive-lines" id="receive-lines"></div>
+      <!-- The dialog opens on the vendor these parts were most likely bought
+           from, and says why underneath when it has a real reason (see
+           preferredVendor). The note is not shown for a shop-wide "bought from
+           them last" guess -- that says nothing about these parts. -->
       <label>Vendor<select id="receive-vendor"><option value="__new__">＋ New vendor…</option></select></label>
+      <p class="receive-vendor-why" id="receive-vendor-why" hidden></p>
       <div id="receive-new-vendor" style="display:none">
         <label>New vendor name<input id="receive-new-vendor-name" placeholder="WorldPac"></label>
       </div>

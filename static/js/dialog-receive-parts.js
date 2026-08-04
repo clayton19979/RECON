@@ -47,6 +47,79 @@ function receiveLineRow(line) {
     </div>`;
 }
 
+/* ---------- which vendor the dialog opens on ----------
+
+   The dropdown's first option is "＋ New vendor…", and a <select> opens on its
+   first option. So on a shop with vendors on file -- which is every shop after
+   its first week -- this dialog opened claiming you were adding a new vendor,
+   with the name box hidden (it was tied to whether any vendors existed rather
+   than to what was selected). Pressing Post & Receive answered "Enter the
+   vendor's name" and there was no box on screen to type one into. The only way
+   through was to notice the dropdown and pick the supplier by hand, every
+   time, on the app's most-used money action.
+
+   The box now follows the selection, and the selection is a real guess rather
+   than an accident of option order. In priority:
+
+     1. The vendor on the purchase order these lines were ordered against. If
+        somebody wrote down who the PO went to, that is not a guess at all.
+     2. The vendor the last part on this same ticket was received from. Parts
+        for one car usually come off one supplier's truck, and receiving the
+        rest of an order is the common case.
+     3. The vendor the shop bought from most recently, shop-wide.
+
+   Only 1 and 2 are stated on screen; 3 is a convenience and says nothing,
+   because "we happened to buy from them last" is not a claim about these
+   parts. Nothing here is ever posted unread -- the name is in the dropdown
+   the whole time, and a wrong guess costs one click to change. */
+export function preferredVendor(lines, vendors, order) {
+  const known = new Set(vendors.map((v) => v.id));
+  const items = order?.estimate?.items || [];
+  const byId = new Map(items.map((i) => [i.id, i]));
+  const ids = new Set(lines.map((l) => l.id));
+
+  // 1. The PO these lines went out on. Only when the lines agree on a single
+  // PO -- receiving two batches from two suppliers at once has no one answer,
+  // and picking either of them would be stating something untrue.
+  const poIds = new Set([...ids].map((id) => byId.get(id)?.purchase_order_id).filter(Boolean));
+  if (poIds.size === 1) {
+    const po = (order?.purchase_orders || []).find((p) => p.id === [...poIds][0]);
+    if (po?.vendor_id && known.has(po.vendor_id)) {
+      return { id: po.vendor_id, why: `On purchase order ${po.number}` };
+    }
+  }
+
+  // 2. The last part received on this ticket. Newest first by the line's own
+  // order, which is the sequence they were received in.
+  const received = items.filter((i) => i.received_vendor_id && known.has(i.received_vendor_id));
+  if (received.length) {
+    const last = received[received.length - 1];
+    return { id: last.received_vendor_id, why: "Last received from on this ticket" };
+  }
+
+  // 3. Whoever the shop bought from most recently. Silent: see above.
+  const used = vendors.filter((v) => v.last_invoice_at);
+  if (used.length) {
+    const latest = used.reduce((a, b) => (b.last_invoice_at > a.last_invoice_at ? b : a));
+    return { id: latest.id, why: "" };
+  }
+  return null;
+}
+
+// One writer for the vendor row: which option is selected, whether the
+// new-vendor name box is on screen, and the note saying why. Called on open
+// and on every change of the dropdown, so the three can never disagree --
+// that disagreement is the bug this section exists for.
+export function syncReceiveVendorRow(why = "") {
+  const select = $("#receive-vendor");
+  const isNew = select.value === "__new__";
+  $("#receive-new-vendor").style.display = isNew ? "" : "none";
+  const note = $("#receive-vendor-why");
+  if (!note) return;
+  note.textContent = isNew ? "" : why;
+  note.hidden = isNew || !why;
+}
+
 export async function openReceiveDialog() {
   const box = $("#vd-estimate-items");
   const checked = $$(".ei-receive-check:checked", box);
@@ -83,7 +156,9 @@ export async function openReceiveDialog() {
   const vendors = await get("/api/vendors").catch(() => []);
   state.vendors = vendors;
   $("#receive-vendor").innerHTML = `<option value="__new__">＋ New vendor…</option>` + vendors.map((v) => `<option value="${v.id}">${esc(v.name)}</option>`).join("");
-  $("#receive-new-vendor").style.display = vendors.length ? "none" : "";
+  const preferred = preferredVendor(lines, vendors, state.detail?.order);
+  if (preferred) $("#receive-vendor").value = String(preferred.id);
+  syncReceiveVendorRow(preferred?.why || "");
   $("#receive-invoice-number").value = "";
   $("#receive-new-vendor-name").value = "";
   $("#receive-tax").value = "0";
@@ -149,9 +224,9 @@ function updateReceiveTotalSummary() {
 export function wireReceiveDialog() {
   $("#receive-cancel").addEventListener("click", () => $("#receive-dialog").close());
   $("#receive-cancel-2").addEventListener("click", () => $("#receive-dialog").close());
-  $("#receive-vendor").addEventListener("change", () => {
-    $("#receive-new-vendor").style.display = $("#receive-vendor").value === "__new__" ? "" : "none";
-  });
+  // Picking a vendor by hand drops the note: it explained the app's guess, and
+  // once you have overruled it there is nothing left for it to explain.
+  $("#receive-vendor").addEventListener("change", () => syncReceiveVendorRow(""));
   $("#receive-tax").addEventListener("input", updateReceiveTotalSummary);
   // Delegated: the line rows are rebuilt every time the dialog opens.
   $("#receive-lines").addEventListener("input", (e) => {

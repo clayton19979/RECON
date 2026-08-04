@@ -48,7 +48,6 @@ export function promptInvoiceNumber({ title, body = "", label = "Invoice / credi
   return new Promise((resolve) => {
     invoicePromptResolve = resolve;
     dlg.showModal();
-    input.focus();
   });
 }
 

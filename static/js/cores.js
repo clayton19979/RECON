@@ -327,11 +327,20 @@ function renderMissingReceiptsTable() {
     ? `${money(total)} missing from ${cars} vehicle${cars === 1 ? "" : "s"}`
     : "";
 
+  // A ticket already billed out to a retail customer is frozen, so this line
+  // cannot be received no matter how many times somebody clicks it. It stays
+  // listed -- the money genuinely isn't in any cost -- but the row says why
+  // rather than inviting a click that comes back "Invoiced estimates are
+  // locked". Clicking still opens the car, which is the only thing left to do
+  // with it.
   $("#missing-table").innerHTML = rows.length ? rows.map((p) => `
-    <tr class="clickable" data-id="${p.id}" title="Open ${esc(p.vehicle_label)} and receive this part">
+    <tr class="clickable" data-id="${p.id}" title="${p.billed_out
+      ? `Open ${esc(p.vehicle_label)} — this ticket is billed out, so the part can't be received`
+      : `Open ${esc(p.vehicle_label)} and receive this part`}">
       <td>${esc(p.description)}<div class="veh-sub">${esc(p.vehicle)}</div></td>
       <td>${p.part_number ? esc(p.part_number) : '<span class="muted-dash">—</span>'}</td>
-      <td>${esc(p.ro_number)} · ${esc(p.vehicle_label)}${p.po_number ? `<div class="veh-sub num">PO ${esc(p.po_number)}</div>` : ""}</td>
+      <td>${esc(p.ro_number)} · ${esc(p.vehicle_label)}${p.po_number ? `<div class="veh-sub num">PO ${esc(p.po_number)}</div>` : ""}${
+        p.billed_out ? `<div class="veh-sub">billed to the customer — can't be received</div>` : ""}</td>
       <td class="num-col">${esc(String(p.missing_quantity))}</td>
       <td class="num-col cost-unreceipted">${money(p.value)}</td>
       <td>${ticketIdleHtml(p)}</td>

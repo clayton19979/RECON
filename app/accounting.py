@@ -11,7 +11,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from .db import inserted_id, normalize_po_reference
-from .workflow import estimate_line_total, record_activity
+from .workflow import estimate_line_total, parts_bill_block_reason, record_activity
 
 
 def _check_auth(request: Request) -> None:
@@ -692,8 +692,6 @@ def build_accounting_router(connect: Callable[[], sqlite3.Connection], now: Call
             ),
         )
 
-    RECEIVABLE_ORDER_STATUSES = {"estimate", "pending_approval", "in_progress"}
-
     @router.post("/agent/invoices/process")
     def process_invoice(invoice: InvoiceIn, request: Request):
         _check_auth(request)
@@ -719,10 +717,13 @@ def build_accounting_router(connect: Callable[[], sqlite3.Connection], now: Call
 
             if not vendor:
                 issues.append(f"Vendor '{invoice.vendor_name}' did not exactly match a configured vendor or alias")
-            if order and order["status"] not in RECEIVABLE_ORDER_STATUSES:
-                issues.append(
-                    f"Repair order '{order['number']}' has status '{order['status']}' and cannot receive parts"
-                )
+            # A finished ticket takes a late parts bill, because that is when
+            # most of them arrive. The three tickets that cannot are named by
+            # workflow.parts_bill_block_reason -- the same rule the car's own
+            # Receive Selected button enforces.
+            blocked = parts_bill_block_reason(db, order) if order else None
+            if blocked:
+                issues.append(blocked)
             if (
                 vendor
                 and db.execute(

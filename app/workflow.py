@@ -10,7 +10,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from .db import RECON_SHOP_CUSTOMER_ID
-from .recon import assert_vehicle_editable
+from .recon import assert_vehicle_editable, order_vehicle_archived
 
 
 class StaffIn(BaseModel):
@@ -250,6 +250,51 @@ def assert_estimate_editable(db: sqlite3.Connection, order_id: int) -> None:
     out (retail only): once that exists, line items are frozen."""
     if db.execute("SELECT 1 FROM customer_invoices WHERE order_id=?", (order_id,)).fetchone():
         raise HTTPException(409, "Invoiced estimates are locked")
+
+
+def parts_bill_block_reason(db: sqlite3.Connection, order_row: sqlite3.Row) -> str | None:
+    """Why a vendor's parts bill cannot be written onto this ticket, in a
+    sentence somebody can act on -- or None when it can.
+
+    One rule, because there are two doors into the same act. A part gets
+    received either from the car's own screen (Receive Selected) or from the
+    A/P screen (Post a Vendor Invoice), and the two used to disagree about
+    which tickets would take one. The car's screen allowed a finished ticket;
+    A/P refused every one of them, on a status whitelist that let only
+    estimate / pending approval / in progress through.
+
+    That whitelist was backwards for the way parts are actually bought here.
+    A used alternator gets fetched from the yard, fitted, and the ticket is
+    closed the same afternoon -- the vendor's invoice turns up days later.
+    The app already knows this: the Missing Receipts desk exists to list
+    exactly those parts, and the board prints "Ready to go -- but 1 part
+    never marked received" on the car. Then A/P would not let the bill land,
+    so the only way through was to reopen the ticket, post, and close it
+    again, which moves the car back onto the board mid-morning for everyone
+    else looking at it.
+
+    What the whitelist did catch, it caught by accident: a voided ticket is
+    stored as complete, so it fell out on status rather than on being voided.
+    The three boundaries below are the real ones, and they are the same three
+    the car's own screen enforces -- so both doors now open on the same
+    tickets and close on the same tickets.
+    """
+    number = order_row["number"]
+    if order_row["voided"]:
+        return f"Repair order {number} was voided, so nothing can be received against it"
+    if order_vehicle_archived(db, order_row):
+        return f"Repair order {number} is filed away in History -- reopen the vehicle to receive parts against it"
+    if db.execute("SELECT 1 FROM customer_invoices WHERE order_id=?", (order_row["id"],)).fetchone():
+        return f"Repair order {number} has already been billed to the customer, so its lines are locked"
+    return None
+
+
+def assert_parts_receivable(db: sqlite3.Connection, order_row: sqlite3.Row) -> None:
+    """parts_bill_block_reason as a refusal, for the routes that take a parts
+    receipt directly rather than reporting on one."""
+    reason = parts_bill_block_reason(db, order_row)
+    if reason:
+        raise HTTPException(409, reason)
 
 
 def get_or_create_estimate(db: sqlite3.Connection, order_id: int, now_fn: Callable[[], str]) -> sqlite3.Row:

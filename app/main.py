@@ -128,6 +128,109 @@ def _normalize_phone(raw: str) -> str:
     return raw
 
 
+def _customer_name_key(name: str) -> str:
+    """The form of a person's name two spellings of the same person share.
+
+    Case, punctuation and spacing are the whole difference between "Iris
+    Chandler", "iris chandler" and "Iris  Chandler." -- three ways the same
+    person gets typed on three different mornings, and three separate customer
+    records if nothing notices. Everything that isn't a letter or a digit is
+    dropped outright rather than turned into a separator, because the two
+    spellings that actually collide in a name go opposite ways otherwise:
+    "O'Brien"/"OBrien" want the punctuation gone, "Mary-Jane"/"Mary Jane" want
+    it to be a space. Dropping it puts both pairs on one key.
+
+    Deliberately not clever beyond that: no nickname table, no fuzzy distance.
+    A key that matches too eagerly would start warning about two genuinely
+    different people, and the warning is only worth anything while it is
+    always right.
+    """
+    return re.sub(r"[^0-9a-z]+", "", name.casefold())
+
+
+def _phone_key(phone: str) -> str:
+    """Just the digits, so a number typed bare matches the same number typed
+    with brackets and a dash. A US 1- prefix is dropped for the same reason
+    _normalize_phone drops it. Anything that isn't ten digits (an extension,
+    an old oddball entry) is compared on its digits as-is."""
+    digits = re.sub(r"\D", "", phone)
+    if len(digits) == 11 and digits.startswith("1"):
+        digits = digits[1:]
+    return digits
+
+
+def _customer_match(db: sqlite3.Connection, name: str, phone: str) -> dict:
+    """Is this person already on file?
+
+    The we-owe dialog is the only place in the app that creates a customer,
+    and its dropdown opens on "+ New customer...". So typing the name is the
+    path of least resistance, and on a shop with a few hundred people on file
+    it is easier than finding them in the list -- which means the default
+    outcome for a returning customer was a second record.
+
+    That splits the person in half permanently. The promises they are still
+    owed sit on one record and the new one on the other, "what's still owed"
+    on the Customers screen counts each half separately, and nothing on either
+    row says the other exists. It is the same failure intake already guards
+    against for cars (see recon.recon_match) -- this is the half of it that
+    was missing for people.
+
+    Reports the name match and the phone match separately, because they mean
+    different things. Same name is usually the same person and occasionally a
+    coincidence. Same phone is a household as often as it is a person, so
+    "this number is already on file for Marcus Doyle" is worth saying and is
+    not worth refusing a save over.
+
+    The shop-owned recon sentinel is excluded, the same way it is excluded
+    from the customer list and 404s from the detail route: it is not a person
+    anyone is typing in.
+    """
+    name_key = _customer_name_key(name)
+    phone_key = _phone_key(phone)
+    if not name_key and not phone_key:
+        return {"name": None, "phone": None}
+
+    rows = db.execute(
+        """SELECT c.id, c.name, c.phone,
+                  (SELECT count(*) FROM vehicles v WHERE v.customer_id=c.id) vehicle_count,
+                  (SELECT count(*) FROM we_owe_items w
+                    WHERE w.customer_id=c.id AND w.archived_at='' AND w.status='open') open_promises,
+                  (SELECT count(*) FROM orders o
+                    WHERE o.customer_id=c.id AND o.voided=0 AND o.status!='complete') open_orders,
+                  (SELECT max(o.created_at) FROM orders o WHERE o.customer_id=c.id AND o.voided=0) last_visit_at
+             FROM customers c WHERE c.is_shop_owned=0 ORDER BY c.id"""
+    ).fetchall()
+
+    def described(row: sqlite3.Row) -> dict:
+        value = dict(row)
+        value["customer_id"] = value.pop("id")
+        value["last_visit_at"] = value["last_visit_at"] or ""
+        return value
+
+    def best(matches: list[sqlite3.Row], also: str = "") -> dict | None:
+        """The match worth reporting: one that agrees on the other key too if
+        there is one, else the most recent.
+
+        The "if there is one" half is not a nicety. The very shop this guard
+        exists for already has people on file twice, and the second copy is
+        routinely the thinner record -- a name typed in a hurry with no phone
+        number. Reporting only the newest match then answers with the copy
+        that has no number, the save compares numbers, finds nothing to
+        object to, and writes a third one. Preferring the record that agrees
+        on both keys is what stops a duplicate from hiding behind a duplicate.
+        """
+        if also:
+            agreeing = [r for r in matches if _phone_key(r["phone"]) == also]
+            if agreeing:
+                return described(agreeing[-1])
+        return described(matches[-1]) if matches else None
+
+    return {
+        "name": best([r for r in rows if _customer_name_key(r["name"]) == name_key], phone_key) if name_key else None,
+        "phone": best([r for r in rows if _phone_key(r["phone"]) == phone_key]) if phone_key else None,
+    }
+
+
 def _state_abbrev(state: str) -> str:
     """Geocoders return the full state name ('Indiana'); the form field holds
     the two-letter code. Pass through anything already short (a code, or a
@@ -428,6 +531,21 @@ def create_app(db_path: Path = DEFAULT_DB, backups_dir: Path = DEFAULT_BACKUPS_D
             )
             return [dict(row) for row in rows]
 
+    # Declared before /customers/{customer_id} because a literal path segment
+    # has to be matched before a parameterised one, the same rule the bulk
+    # task routes follow.
+    @app.get("/api/customers/match")
+    def match_customer(name: str = "", phone: str = ""):
+        """Whoever is already on file under this name or this number.
+
+        Asked as each identifying field is filled in, so a customer the shop
+        already knows is caught while there is still one field typed rather
+        than by a refusal at the bottom of the form. See _customer_match for
+        why the two keys are reported apart.
+        """
+        with connect() as db:
+            return _customer_match(db, name, phone)
+
     @app.get("/api/customers/{customer_id}")
     def get_customer(customer_id: int):
         """One customer with their vehicles, each vehicle with its repair
@@ -479,6 +597,25 @@ def create_app(db_path: Path = DEFAULT_DB, backups_dir: Path = DEFAULT_BACKUPS_D
     @app.post("/api/customers", status_code=201)
     def create_customer(item: CustomerIn):
         with connect() as db:
+            # The one duplicate that cannot be a coincidence: the same name and
+            # the same phone number as somebody already on file. Two different
+            # people share a name, and a household shares a number, but nobody
+            # shares both -- so this is the same person being written down a
+            # second time, and it is refused rather than warned about.
+            #
+            # Softer overlaps (same name, no number on either; same number,
+            # different name) are deliberately let through and left to the
+            # note under the field, because both of them do happen for real
+            # and a save with no way past it is a dead end at the counter.
+            match = _customer_match(db, item.name, item.phone)
+            existing = match["name"]
+            phone_key = _phone_key(item.phone)
+            if existing and phone_key and _phone_key(existing["phone"]) == phone_key:
+                raise HTTPException(
+                    409,
+                    f"{existing['name']} is already on file with this phone number"
+                    " -- pick them from the customer list instead of adding them again",
+                )
             cur = db.execute(
                 "INSERT INTO customers(name,phone,email,address_line1,address_line2,city,state,postal_code,created_at) VALUES(?,?,?,?,?,?,?,?,?)",
                 (

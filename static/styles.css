@@ -3688,3 +3688,32 @@ input.overdue { border-color: var(--crit); color: var(--crit); }
 @media (max-width: 700px) {
   .stats-staff, .stats-ap, .stats-backup, .stats-cores { grid-template-columns: 1fr; }
 }
+
+/* The repair order's own number.
+ *
+ * It lived inside a .section-eyebrow, which is caption styling -- 10.5px,
+ * uppercase, --ink-faint -- so the one number written on the paper ticket and
+ * said down the phone was the faintest thing on the page. It reads as an
+ * identifier now: monospace so digits line up between one ticket and the
+ * next, and dark enough to find at a glance.
+ *
+ * The long RO-2608-0001 form sits beside it, quiet, because it is what a
+ * vendor's paperwork gets filed under and occasionally has to be read off. */
+.ro-tag {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px; font-weight: 700; letter-spacing: .02em;
+  color: var(--ink); text-transform: none;
+}
+.ro-long {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 10.5px; color: var(--ink-faint); text-transform: none; margin-left: 7px;
+}
+.ro-none { color: var(--ink-faint); text-transform: none; font-weight: 600; }
+/* In the Order History strip the long form would double the row's width for
+   a number nobody reads there -- the short one is what tells two tickets on
+   one car apart. */
+.mini-item .ro-tag { font-size: 12px; }
+/* The RO tag as it appears on the board -- small enough to sit under a stock
+   number without competing with it, monospace so a column of them scans. */
+.veh-sub .ro-tag, .veh-card-head .ro-tag { font-size: 11px; font-weight: 700; }
+.ro-none-sm { font-size: 11px; color: var(--ink-faint); font-style: italic; }

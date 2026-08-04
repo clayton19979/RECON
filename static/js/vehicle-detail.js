@@ -126,7 +126,7 @@ function renderOrderHistory(orders, activeId) {
   $("#vd-order-history").innerHTML = orders.map((o) => `
     <div class="mini-item clickable ${o.id === activeId ? "active" : ""}" data-id="${o.id}">
       <div class="mi-title">
-        <span>${esc(o.number)}</span>
+        <span><span class="ro-tag">RO ${esc(String(o.ro_number || "—"))}</span></span>
         <span class="pill ${STATUS_PILL_CLASS[o.status] || ""}" style="font-size:9.5px">${o.voided ? "Voided" : (STATUS_LABEL[o.status] || o.status)}</span>
       </div>
       <div class="mi-concern">${esc(o.concern)}</div>
@@ -506,6 +506,11 @@ function renderVehicleInfoSummary() {
       : item.mileage ? item.mileage.toLocaleString() : "—"],
     ["Year/Make/Model", esc([item.year, item.make, item.model].filter(Boolean).join(" "))],
     ["Trim", esc(item.trim || "—")],
+    // Decoding a VIN fills this in and the printed ticket has always shown it,
+    // but nothing on screen did -- so the answer to "what engine is in it",
+    // which is what gets asked before every parts call, was sitting in the
+    // record with no way to read it short of opening the edit dialog.
+    ["Engine", esc(item.engine || "—")],
     ["Color", esc(item.color || "—")],
   ];
   // The day the car landed, on the card rather than buried in the edit
@@ -902,7 +907,13 @@ function renderOrderPanel() {
   // The short number is what gets said out loud and written on a vendor's
   // paperwork; the long one stays reachable on hover for anything filed under
   // it before this existed.
-  $("#vd-ro-number").textContent = order ? `Repair Order ${order.ro_number ?? order.number}` : "Repair Order";
+  // Set as its own line rather than folded into the eyebrow's caption
+  // styling: this is the ticket's name, the thing written on the paper copy
+  // and said down the phone, and at caption size in the faint grey a caption
+  // gets it was the hardest number on the page to find.
+  $("#vd-ro-number").innerHTML = order
+    ? `<span class="ro-tag">RO ${esc(String(order.ro_number || "—"))}</span><span class="ro-long">${esc(order.number || "")}</span>`
+    : `<span class="ro-none">No repair order</span>`;
   $("#vd-ro-number").title = order ? order.number : "";
   renderStatusCard(order);
   renderPoStrip(order);

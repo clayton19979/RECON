@@ -80,36 +80,22 @@ export async function loadVehicleDetail() {
   // vehicles are never deletable from here at all: they're the customer's
   // property record, managed from the Customers screen.
   $("#vd-delete").style.display = orders.length === 0 && segment !== "retail" ? "" : "none";
-  if (!active) {
-    $("#vd-void-order").style.display = "none";
-    $("#vd-print-ticket").style.display = "none";
-    $("#vd-add-task").style.display = "none";
-    // The order-scoped header chrome is otherwise only reset by the wrapped
-    // renderStatusCard, which never runs on this branch -- navigating from a
-    // ticketed vehicle to one with no RO left the previous car's status
-    // pill, assign picker and save-state on screen.
-    ["#vd-status-picker", "#vd-assign-picker", "#vd-status-pill"].forEach((sel) => {
-      const el = $(sel);
-      if (el) el.style.display = "none";
-    });
-    const saveState = $("#vd-estimate-save-state");
-    if (saveState) { saveState.className = "save-state"; saveState.textContent = ""; }
-    $("#vd-no-order").style.display = "";
-    $("#vd-order-content").style.display = "none";
-    applyArchivedLockUI(!!item.archived_at);
-    return;
+  $("#vd-no-order").style.display = active ? "none" : "";
+  $("#vd-order-content").style.display = active ? "" : "none";
+  // Null is the state of a car nobody has written up yet, and it is set here
+  // on every load rather than only when the page is entered fresh: this
+  // function is also what runs after a save, and voiding the last ticket on a
+  // car turns a page that had one into a page that hasn't.
+  state.detail.order = null;
+  if (active) {
+    try {
+      state.detail.order = await get(`/api/orders/${active.id}`);
+    } catch (err) {
+      toast(`Could not load repair order: ${err.message}`, true);
+      return;
+    }
+    if (!state.staff.length) state.staff = await get("/api/staff");
   }
-  $("#vd-no-order").style.display = "none";
-  $("#vd-order-content").style.display = "";
-  let order;
-  try {
-    order = await get(`/api/orders/${active.id}`);
-  } catch (err) {
-    toast(`Could not load repair order: ${err.message}`, true);
-    return;
-  }
-  state.detail.order = order;
-  if (!state.staff.length) state.staff = await get("/api/staff");
   renderOrderPanel();
   applyArchivedLockUI(!!item.archived_at);
 }
@@ -699,18 +685,33 @@ function applyArchivedLockUI(archived) {
   // rows, which are rebuilt fresh every time) -- reopening must explicitly
   // re-enable them, not just skip re-disabling, or they'd stay disabled
   // forever once archived once.
-  const disableIds = [
+  //
+  // Split by what each control actually writes to, because there are two
+  // reasons a control here can't be used and they don't cover the same set.
+  // Archiving a car locks everything on the page. Having no repair order
+  // locks only the things that would be written *onto* a repair order --
+  // the car's own record (VIN, mileage, the we-owe promise, deposits) is
+  // still perfectly editable on a car nobody has written up yet, and is
+  // often the only thing there is to edit.
+  const ticketIds = [
     "vd-status-select", "vd-concern", "vd-concern-save",
     "vd-add-job", "vd-add-part", "vd-add-labor", "vd-order-parts",
-    "vd-add-note", "vd-note-text",
+    "vd-add-note", "vd-note-text", "vd-note-visibility",
     "vd-save-assignment", "vd-technician", "vd-advisor",
     "vd-save-timing", "vd-date-in", "vd-odometer", "vd-promised",
+  ];
+  const vehicleIds = [
     "vd-edit-vehicle", "vd-recon-info-save", "vd-decode-vin", "vd-recon-vin", "vd-recon-mileage", "vd-recon-year",
     "vd-recon-make", "vd-recon-model", "vd-recon-trim", "vd-recon-color", "vd-recon-acquired",
     "vd-edit-customer", "vd-we-owe-save", "vd-we-owe-description", "vd-we-owe-category", "vd-we-owe-target", "vd-we-owe-status",
     "vd-take-payment", "vd-deposit-add", "vd-deposit-amount", "vd-deposit-method", "vd-deposit-note",
   ];
-  disableIds.forEach((id) => { const el = $(`#${id}`); if (el) el.disabled = archived; });
+  // A control with no ticket behind it used to stay live and answer a click
+  // with "Cannot read properties of null (reading 'id')" -- a programmer's
+  // sentence on a screen an advisor uses. Disabled is the honest state.
+  const noTicket = !state.detail.order;
+  ticketIds.forEach((id) => { const el = $(`#${id}`); if (el) el.disabled = archived || noTicket; });
+  vehicleIds.forEach((id) => { const el = $(`#${id}`); if (el) el.disabled = archived; });
   $$(".job-control", $("#vd-estimate-items")).forEach((el) => { el.disabled = archived; });
   if (archived) {
     $("#vd-void-order").style.display = "none";
@@ -734,6 +735,10 @@ function applyArchivedLockUI(archived) {
    advisor needs a PO number is before the call, not after it. */
 function renderPoStrip(order) {
   const box = $("#vd-po-strip");
+  if (!order) {
+    box.innerHTML = "";
+    return;
+  }
   const pos = order.purchase_orders || [];
   const nextNumber = `R${order.ro_number}-${(pos.length ? pos[pos.length - 1].sequence : 0) + 1}`;
   if (!pos.length) {
@@ -762,30 +767,63 @@ function renderPoStrip(order) {
   }).join("") + `<span class="po-strip-next">Next: <strong>${esc(nextNumber)}</strong></span>`;
 }
 
+/* Everything on this page that belongs to the *ticket* rather than to the car,
+   written from one place -- including the case where there is no ticket.
+
+   A car with nothing written up yet is not an edge case. It is the whole "Not
+   started" pile on the board: the cars that have sat longest, and the ones
+   Walt asks about most. That case used to be handled by bailing out before
+   this function ran, which hid the parts grid and left every *other*
+   ticket-scoped panel still showing whatever the last car opened had put
+   there -- its notes, its activity log, its date-in and its odometer. Open
+   the Elantra, go back, open the Sorento, and the Sorento's page reported
+   84,500 miles, a windshield note somebody typed about the Elantra, and a
+   morning's worth of parts receipts against a car nobody had touched in
+   twelve days. Every one of those is a number the app cannot stand behind.
+
+   So a missing ticket is a state this renders, not a state it returns before
+   reaching. Each panel below is handed the order and empties itself when
+   there isn't one, which is also why a panel added later gets the same
+   treatment for free instead of joining a list of resets somewhere else. */
 function renderOrderPanel() {
   const order = state.detail.order;
   // The short number is what gets said out loud and written on a vendor's
   // paperwork; the long one stays reachable on hover for anything filed under
   // it before this existed.
-  $("#vd-ro-number").textContent = `Repair Order ${order.ro_number ?? order.number}`;
-  $("#vd-ro-number").title = order.number;
+  $("#vd-ro-number").textContent = order ? `Repair Order ${order.ro_number ?? order.number}` : "Repair Order";
+  $("#vd-ro-number").title = order ? order.number : "";
   renderStatusCard(order);
   renderPoStrip(order);
   renderEstimate(order);
   renderNotes(order);
   renderActivity(order);
   renderAssignment(order);
-  $("#vd-print-ticket").style.display = "";
-  $("#vd-add-task").style.display = "";
-  $("#vd-void-order").style.display = order.voided ? "none" : "";
+  $("#vd-print-ticket").style.display = order ? "" : "none";
+  $("#vd-add-task").style.display = order ? "" : "none";
+  $("#vd-void-order").style.display = order && !order.voided ? "" : "none";
   // Retail tickets have no lot record behind them, so there's nothing on the
   // other side for the cost to move onto -- only recon and we-owe can swap.
-  const movable = !order.voided && (order.segment === "recon" || order.segment === "we_owe");
+  const movable = order && !order.voided && (order.segment === "recon" || order.segment === "we_owe");
   $("#vd-move-segment").style.display = movable ? "" : "none";
 }
 
 function renderStatusCardBase(order) {
   const pill = $("#vd-status-pill");
+  // No ticket, nothing to say about its status. The pill is emptied rather
+  // than left reading the last car's -- drawer.js keys the picker's own
+  // visibility off this text, so blanking it is what puts the whole control
+  // away, and the save-state caption goes with it for the same reason.
+  if (!order) {
+    pill.className = "pill";
+    pill.textContent = "";
+    const picker = $("#vd-status-picker");
+    if (picker) picker.className = "status-picker";
+    $("#vd-status-select").innerHTML = "";
+    $("#vd-concern").value = "";
+    const saveState = $("#vd-estimate-save-state");
+    if (saveState) { saveState.className = "save-state"; saveState.textContent = ""; }
+    return;
+  }
   pill.className = `pill ${STATUS_PILL_CLASS[order.status] || ""}`;
   pill.textContent = order.voided ? "Voided" : (STATUS_LABEL[order.status] || order.status);
   /* The board paints each status its own colour and this control did not --
@@ -911,9 +949,19 @@ function writeLineTotals(box) {
 }
 
 function renderEstimate(order) {
+  const box = $("#vd-estimate-items");
+  // The grid lives inside the panel that gets hidden with no ticket, so a
+  // stale one is invisible rather than wrong -- but it is still the last
+  // car's parts sitting in the page, one un-hide away from being read as
+  // this car's, and the totals underneath it are written from it.
+  if (!order) {
+    box.classList.remove("has-jobs");
+    box.innerHTML = "";
+    applyTicketTotals(0, 0);
+    return;
+  }
   const items = order.estimate ? order.estimate.items : [];
   const jobs = order.estimate?.jobs ?? [];
-  const box = $("#vd-estimate-items");
   box.classList.toggle("has-jobs", jobs.length > 0);
 
   const jobOptionsHtml = (selectedId) => `<option value="" ${!selectedId ? "selected" : ""}>General</option>` +
@@ -2067,6 +2115,22 @@ export function wireMoveItemDialog() {
 /* ---------- notes / activity ---------- */
 function renderNotes(order) {
   const box = $("#vd-note-list");
+  /* A note is filed against the repair order, so a car with no ticket has
+     nowhere to put one -- and, until this, showed the last car's notes
+     instead. It now says which it is. The box and the button go with it:
+     leaving them live meant typing a note about the Sorento and being told
+     "Cannot read properties of null", which is a message for a programmer,
+     not for somebody standing at the counter. */
+  if (!order) {
+    box.innerHTML = emptyState({
+      icon: "idea",
+      title: "No ticket to note against yet",
+      hint: "Notes are kept on the car's repair order. Start one above and this is where they'll be.",
+      compact: true,
+    });
+    $("#vd-note-text").value = "";
+    return;
+  }
   /* The note itself is the point, so it leads at reading size and everything
      about it -- who, when, who's allowed to see it -- drops to one quiet line
      underneath. The two visibilities are told apart by the edge rather than by
@@ -2195,6 +2259,15 @@ function activityTime(value) {
    actually reading for. */
 function renderActivity(order) {
   const box = $("#vd-activity-list");
+  // The worst of the leaks, because this one is a list of things that
+  // demonstrably happened: a car nobody had touched in twelve days showed a
+  // morning of parts receipts and finished repairs belonging to the car
+  // opened before it. Nothing has happened to a car with no ticket, and that
+  // is what it now says.
+  if (!order) {
+    box.innerHTML = emptyState({ icon: "check", title: "No activity yet", hint: "Once a repair order is open on this vehicle, everything done to it gets logged here.", compact: true });
+    return;
+  }
   if (!order.activity.length) {
     box.innerHTML = emptyState({ icon: "check", title: "No activity yet", hint: "Status changes, assignments, and receipts on this ticket get logged here.", compact: true });
     return;
@@ -2216,6 +2289,24 @@ function renderActivity(order) {
 
 /* ---------- assignment ---------- */
 function renderAssignment(order) {
+  /* Date in, odometer in and the promised date are all written on the ticket,
+     which is why a car with no ticket has to show them empty rather than show
+     the last car's. This was the leak with a number attached: the Timing card
+     read 84,500 miles on a Sorento that has 71,200, three inches under the
+     Vehicle Info card correctly saying 71,200. */
+  if (!order) {
+    $("#vd-technician").innerHTML = `<option value="">Unassigned</option>`;
+    $("#vd-advisor").innerHTML = `<option value="">Unassigned</option>`;
+    $("#vd-date-in").value = "";
+    $("#vd-odometer").value = "";
+    const blank = $("#vd-promised");
+    blank.value = "";
+    blank.classList.remove("overdue");
+    const emptyLabel = $("#vd-assign-picker-label");
+    emptyLabel.textContent = "Assign";
+    emptyLabel.closest("button").title = "";
+    return;
+  }
   const techs = state.staff.filter((s) => s.role === "technician");
   const advisors = state.staff.filter((s) => s.role === "advisor" || s.role === "manager");
   const a = order.assignment;

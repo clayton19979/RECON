@@ -85,7 +85,8 @@ const { w, doc, settle, ok, finish } = await boot({
 
 const dlg = () => doc.querySelector("#confirm-dialog");
 const confirmText = () => `${doc.querySelector("#confirm-title").textContent} ${doc.querySelector("#confirm-body").textContent}`;
-const statusSelect = () => doc.querySelector("#vd-status-select");
+const stageStrip = () => doc.querySelector("#vd-stage-strip");
+const currentStage = () => stageStrip().querySelector(".stage-step.current")?.dataset.status;
 const receiveDialog = () => doc.querySelector("#receive-dialog");
 const tickedIds = () => [...doc.querySelectorAll("#vd-estimate-items .ei-receive-check")]
   .filter((cb) => cb.checked).map((cb) => cb.dataset.id).sort().join(",");
@@ -96,16 +97,17 @@ async function openTicket(next = mkOrder()) {
   await settle();
 }
 
-// Pick a status the way a person does -- change the dropdown and let the app
-// react -- then let the confirmation appear.
+// Pick a status the way a person does -- press that stage on the strip --
+// then let the confirmation appear.
 async function chooseStatus(value) {
-  statusSelect().value = value;
-  statusSelect().dispatchEvent(new w.Event("change", { bubbles: true }));
+  stageStrip().querySelector(`.stage-step[data-status="${value}"]`).click();
   await settle();
 }
 
 await openTicket();
-ok(statusSelect().value === "in_progress", `the page did not load onto the ticket: ${statusSelect().value}`);
+ok(currentStage() === "in_progress", `the page did not load onto the ticket: ${currentStage()}`);
+ok(stageStrip().querySelectorAll(".stage-step").length === 4,
+   "the stage strip did not lay out all four stages");
 
 /* ---------- moving to any other status still just happens ---------- */
 await chooseStatus("pending_approval");
@@ -131,8 +133,8 @@ ok(statusPatches.length === 0, "the ticket closed before anyone answered");
 doc.querySelector("#confirm-cancel").click();
 await settle();
 ok(statusPatches.length === 0, "Cancel closed the ticket anyway");
-ok(statusSelect().value === "in_progress",
-   `the dropdown kept claiming Complete on a ticket that is still open: ${statusSelect().value}`);
+ok(currentStage() === "in_progress",
+   `the strip kept claiming Complete on a ticket that is still open: ${currentStage()}`);
 
 /* ---------- Escape means back out, not "close anyway" ---------- */
 await chooseStatus("complete");
@@ -140,7 +142,7 @@ ok(dlg().open, "the warning did not come back a second time");
 dlg().close(); // what Escape and a backdrop click do
 await settle();
 ok(statusPatches.length === 0, "Escape closed the ticket");
-ok(statusSelect().value === "in_progress", `Escape left the dropdown lying: ${statusSelect().value}`);
+ok(currentStage() === "in_progress", `Escape left the strip lying: ${currentStage()}`);
 
 /* ---------- "Close Anyway" closes it, exactly as before ---------- */
 await chooseStatus("complete");

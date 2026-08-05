@@ -12,20 +12,17 @@ import { overrideRenderStatusCard } from "./vehicle-detail.js";
    than changing them, so none of the real data flow above this line needs to
    change.
    ================================================================== */
-// The dot used to be painted from a colour map here, in an inline style. It
-// is now the stylesheet's job: renderStatusCardBase puts the status on the
-// picker as a class and the dot, the field and its edge all take their colour
-// from that one place, so they cannot drift apart.
+// The status pill's text doubles as "is there a ticket at all": the assign
+// control only makes sense on a car with a ticket, so it appears and
+// disappears with the pill. (The status control itself lives on the stage
+// strip now, which renderStatusCardBase shows and hides directly.)
 export function wireDrawer() {
   overrideRenderStatusCard((orig) => function (order) {
     orig(order);
     const pillEl = $("#vd-status-pill");
-    const picker = $("#vd-status-picker");
     const assignPicker = $("#vd-assign-picker");
-    if (pillEl && picker) {
-      const text = pillEl.textContent.trim();
-      picker.style.display = text ? "" : "none";
-      if (assignPicker) assignPicker.style.display = text ? "" : "none";
+    if (pillEl && assignPicker) {
+      assignPicker.style.display = pillEl.textContent.trim() ? "" : "none";
     }
   });
 

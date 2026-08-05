@@ -2869,14 +2869,13 @@ export function wireVehicleDetail() {
   $("#vd-status-select").addEventListener("change", async (e) => {
     const select = e.target;
     const status = select.value;
-    select.disabled = true;
-    try {
-      await patch(`/api/orders/${state.detail.order.id}/status`, { status });
-      toast(`Status set to ${STATUS_LABEL[status]}`);
-      await loadVehicleDetail();
-    } catch (err) {
-      toast(err.message, true);
-      select.disabled = false;
+    const order = state.detail.order;
+    if (status === "complete" && !(await confirmTicketCloseout(order))) {
+      // Put the dropdown back to what the ticket actually says. A control
+      // reading "Complete" on a ticket that is still in progress is the kind
+      // of lie that gets acted on from across the room.
+      select.value = order.status;
+      return;
     }
     await setTicketStatus(status);
   });

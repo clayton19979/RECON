@@ -366,6 +366,100 @@ def assert_parts_receivable(db: sqlite3.Connection, order_row: sqlite3.Row) -> N
         raise HTTPException(409, reason)
 
 
+def vendor_bills_on_order(db: sqlite3.Connection, order_id: int) -> list[dict]:
+    """The live vendor bills with money sitting on this ticket.
+
+    Attributed exactly the way the A/P screen attributes them (see
+    accounting.invoice_coverage): a bill that carries per-line links counts
+    only the lines that landed on *this* ticket, because one counter run
+    routinely pays for parts on three different cars; a bill typed in whole
+    against a ticket has no per-line links to read, so its own subtotal is
+    what it put on the car.
+
+    Voided bills are left out -- voiding one already takes its parts back off
+    the ticket -- and credits come through as the negative rows they are
+    stored as, so a part received and then returned for full credit nets to
+    zero and is correctly not money stranded anywhere.
+
+    LEFT JOIN on the vendor rather than an inner one. Naming the supplier is
+    only how the refusal below reads; whether money is owed does not depend on
+    it, and the one thing a guard must never do is let a bill through because
+    a lookup *beside* the money came back empty.
+    """
+    rows = db.execute(
+        """SELECT a.id, a.invoice_number, a.subtotal, coalesce(v.name,'Vendor not recorded') vendor_name,
+                  (SELECT round(sum(ai.line_total), 2)
+                     FROM ap_invoice_items ai
+                     JOIN estimate_items ei ON ei.id=ai.estimate_item_id
+                     JOIN estimates e ON e.id=ei.estimate_id
+                    WHERE ai.ap_invoice_id=a.id AND e.order_id=:order_id) billed_here
+             FROM ap_invoices a
+             LEFT JOIN vendors v ON v.id=a.vendor_id
+            WHERE a.status!='voided'
+              AND (a.order_id=:order_id
+                   OR EXISTS (SELECT 1 FROM ap_invoice_items ai
+                                JOIN estimate_items ei ON ei.id=ai.estimate_item_id
+                                JOIN estimates e ON e.id=ei.estimate_id
+                               WHERE ai.ap_invoice_id=a.id AND e.order_id=:order_id))
+            ORDER BY a.id""",
+        {"order_id": order_id},
+    ).fetchall()
+    return [
+        {
+            "id": row["id"],
+            "invoice_number": row["invoice_number"],
+            "vendor_name": row["vendor_name"],
+            "amount": round(float(row["billed_here"] if row["billed_here"] is not None else row["subtotal"]), 2),
+        }
+        for row in rows
+    ]
+
+
+#: How many bills the refusal below names before it starts counting. Two is
+#: enough to recognise which ones are meant; a list of nine is a wall of text
+#: in a toast.
+_NAMED_BILLS = 2
+
+
+def vendor_bill_void_block_reason(db: sqlite3.Connection, order_id: int) -> str | None:
+    """Why this ticket cannot be voided while the shop still owes money on it.
+
+    Voiding means the work never happened, so the ticket's cost stops counting
+    toward the vehicle (see live_orders). That is right when a ticket was
+    written on the wrong car or by mistake -- and wrong the moment a vendor
+    has actually billed for parts against it. The money was really spent, the
+    bill is really owed, and it stays in Accounts Payable whatever happens to
+    the ticket. Voiding anyway left a car reading $0.00 spent with a real
+    invoice for it sitting on the payables screen, and Walt's "what did we
+    spend on this one" came back short by the whole amount with nothing on any
+    screen saying so.
+
+    This is the same argument the customer-invoice guard beside it already
+    makes, applied to the side of the books that recon and we-owe work
+    actually has. Those tickets are never billed to a customer -- there is no
+    markup and nothing to charge out -- so that guard never fires on them, and
+    the app's own core case was the unprotected one.
+
+    Both ways out stay open. If the bill was real, the ticket is not a mistake
+    and should not be voided. If the bill was posted in error, voiding it in
+    Accounts Payable puts its parts back on order and takes the cost off the
+    car, after which nothing is stranded and the void goes through.
+    """
+    bills = vendor_bills_on_order(db, order_id)
+    owed = round(sum(bill["amount"] for bill in bills), 2)
+    if not bills or owed == 0:
+        return None
+    named = ", ".join(f"{bill['vendor_name']} {bill['invoice_number']}" for bill in bills[:_NAMED_BILLS])
+    hidden = len(bills) - _NAMED_BILLS
+    if hidden > 0:
+        named += f" +{hidden} more"
+    return (
+        f"${owed:,.2f} of vendor bills are posted against this ticket ({named}) -- voiding would take that "
+        "off the vehicle's cost while Accounts Payable still shows it owed. Void the bill on the Accounts "
+        "Payable screen first if it was posted by mistake."
+    )
+
+
 def get_or_create_estimate(db: sqlite3.Connection, order_id: int, now_fn: Callable[[], str]) -> sqlite3.Row:
     """Estimates are created lazily on first write (a line item or now a
     job) -- a ticket with no parts/labor yet has no estimates row at all."""
@@ -823,6 +917,11 @@ def build_workflow_router(connect: Callable[[], sqlite3.Connection], now_fn: Cal
                     409,
                     "This order has already been invoiced to the customer -- voiding would leave its cost excluded while the invoice still shows it as billed",
                 )
+            # The same rule on the vendor side, which is the side recon and
+            # we-owe tickets actually have -- see vendor_bill_void_block_reason.
+            blocked = vendor_bill_void_block_reason(db, order_id)
+            if blocked:
+                raise HTTPException(409, blocked)
             db.execute("UPDATE orders SET status='complete', voided=1 WHERE id=?", (order_id,))
             record_activity(db, order_id, "order_voided", item.actor, {"from": current_row["status"]}, now_fn)
             return {"id": order_id, "status": "complete", "voided": True}

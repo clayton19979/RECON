@@ -1151,9 +1151,21 @@ def create_app(db_path: Path = DEFAULT_DB, backups_dir: Path = DEFAULT_BACKUPS_D
                     # editing it (a keyed-wrong invoice price, say) is a
                     # correction to the bill -- it must not quietly rewrite
                     # what the shop said the job would cost.
+                    #
+                    # That same correction has to reach received_cost, which is
+                    # otherwise a running total of bills as they arrived: the
+                    # only thing changing the Cost box on a received line can
+                    # mean is "every unit that landed was at this price". It
+                    # fires only when the number actually moved, so re-saving a
+                    # ticket (which the grid does on every keystroke elsewhere)
+                    # can't flatten a line that was genuinely billed twice at
+                    # two prices. Compared with a tolerance, not with =, since
+                    # both sides are floats that have been through JSON.
                     db.execute(
                         "UPDATE estimate_items SET kind=?,description=?,part_number=?,quantity=?,unit_price=?,unit_cost=?,"
                         "quoted_unit_cost=CASE WHEN received_quantity>0 THEN quoted_unit_cost ELSE ? END,"
+                        "received_cost=CASE WHEN received_quantity>0 AND abs(unit_cost-?)>0.0005"
+                        " THEN round(received_quantity*?,2) ELSE received_cost END,"
                         "line_total=?,review_required=0,reviewed_by=?,reviewed_at=?,sort_order=?,job_id=?,core_charge=? WHERE id=?",
                         (
                             item.kind,
@@ -1161,6 +1173,8 @@ def create_app(db_path: Path = DEFAULT_DB, backups_dir: Path = DEFAULT_BACKUPS_D
                             item.part_number.strip().upper(),
                             item.quantity,
                             item.unit_price,
+                            item.unit_cost,
+                            item.unit_cost,
                             item.unit_cost,
                             item.unit_cost,
                             estimate_line_total(item.kind, item.quantity, item.unit_price),

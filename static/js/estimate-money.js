@@ -51,10 +51,22 @@ export function lineTotal(item) {
   return item.kind === "credit" ? -total : total;
 }
 
+/** What the shop has actually been billed for the units on this line that have
+ * landed. Not received_quantity * unit_cost: a part that arrived on two bills
+ * at two prices was charged both, and unit_cost only remembers the newer one,
+ * so the product re-prices the earlier delivery at the later price. Lines
+ * written before the app kept a running total carry 0 and fall back to the
+ * product, which is exactly what they always reported. */
+export function receivedCost(item) {
+  const recorded = Number(item.received_cost);
+  if (Number.isFinite(recorded) && recorded !== 0) return recorded;
+  return (Number(item.received_quantity) || 0) * (Number(item.unit_cost) || 0);
+}
+
 /** What one line contributes to what the car has actually cost so far. */
 export function actualLineTotal(item) {
   if (item.kind === "part") {
-    return isReturnedPart(item) ? 0 : (Number(item.received_quantity) || 0) * (Number(item.unit_cost) || 0);
+    return isReturnedPart(item) ? 0 : receivedCost(item);
   }
   // Labour and fees are real the moment they are written down. Anything else
   // -- a credit today, a kind that doesn't exist yet tomorrow -- stays out

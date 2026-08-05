@@ -336,25 +336,39 @@ def unreceive_invoice_lines(db: sqlite3.Connection, invoice: sqlite3.Row) -> dic
     `unit_cost` is deliberately left where the invoice put it. What the vendor
     actually billed is a better number than the guess it replaced, and the
     original quote was overwritten at receiving time rather than kept.
+    `received_cost` is not left alone, because it is a running total of real
+    bills: a bill taken back has to come out of it.
     """
-    # Which estimate line each billed line paid for. Recorded per line since
-    # ap_invoice_items grew estimate_item_id; invoices posted before that (and
-    # by the agent endpoint, which posts the bill whole) have no links, so
-    # those fall back to the invoice number the receipt itself recorded.
+    # Which estimate line each billed line paid for, and what it was billed at.
+    # Recorded per line since ap_invoice_items grew estimate_item_id; invoices
+    # posted before that (and by the agent endpoint, which posts the bill
+    # whole) have no links, so those fall back to the invoice number the
+    # receipt itself recorded.
+    #
+    # Only the part lines. A core deposit rides on the same bill and points at
+    # the same estimate line, so summing every linked line counted the deposit
+    # as a second delivery of the part: voiding a bill for two of the four
+    # rotors put all four back on order instead of two, and dragged the money
+    # for a delivery this invoice never covered off the car with them.
     quantities: dict[int, float] = {}
+    billed: dict[int, float] = {}
     for row in db.execute(
-        "SELECT estimate_item_id, quantity FROM ap_invoice_items WHERE ap_invoice_id=? AND estimate_item_id IS NOT NULL",
+        "SELECT estimate_item_id, quantity, unit_cost FROM ap_invoice_items"
+        " WHERE ap_invoice_id=? AND estimate_item_id IS NOT NULL AND kind='part'",
         (invoice["id"],),
     ):
-        quantities[row["estimate_item_id"]] = quantities.get(row["estimate_item_id"], 0.0) + float(row["quantity"])
+        item_id = row["estimate_item_id"]
+        quantities[item_id] = quantities.get(item_id, 0.0) + float(row["quantity"])
+        billed[item_id] = round(billed.get(item_id, 0.0) + float(row["quantity"]) * float(row["unit_cost"]), 2)
     if not quantities and invoice["order_id"] is not None:
         for row in db.execute(
-            """SELECT ei.id, ei.received_quantity FROM estimate_items ei
+            """SELECT ei.id, ei.received_quantity, ei.received_cost FROM estimate_items ei
                JOIN estimates e ON e.id=ei.estimate_id
                WHERE e.order_id=? AND ei.received_invoice_number=? AND ei.received_quantity>0""",
             (invoice["order_id"], invoice["invoice_number"]),
         ):
             quantities[row["id"]] = float(row["received_quantity"])
+            billed[row["id"]] = float(row["received_cost"])
 
     unreceived = 0
     value = 0.0
@@ -376,18 +390,28 @@ def unreceive_invoice_lines(db: sqlite3.Connection, invoice: sqlite3.Row) -> dic
         ):
             continue
         remaining = round(max(0.0, float(row["received_quantity"]) - quantity), 4)
-        value += round((float(row["received_quantity"]) - remaining) * float(row["unit_cost"]), 2)
+        # What comes off the car is what this bill charged, not the quantity
+        # re-priced at whatever unit_cost currently says -- on a line filled by
+        # two deliveries those are different numbers, and the vendor's own
+        # paper is the one that is true. Floored at zero and at the line's own
+        # running total so an old invoice with no per-line links (the fallback
+        # above) can never drive a car's cost negative.
+        taken = min(round(billed.get(item_id, 0.0), 2), round(float(row["received_cost"]), 2))
+        if remaining <= 0.0001:
+            taken = round(float(row["received_cost"]), 2)
+        taken = max(0.0, taken)
+        value += taken
         if remaining <= 0.0001:
             db.execute(
-                "UPDATE estimate_items SET received_quantity=0,status='ordered',received_invoice_number='',"
-                "received_vendor_id=NULL WHERE id=?",
+                "UPDATE estimate_items SET received_quantity=0,received_cost=0,status='ordered',"
+                "received_invoice_number='',received_vendor_id=NULL WHERE id=?",
                 (item_id,),
             )
         else:
             db.execute(
-                "UPDATE estimate_items SET received_quantity=?,received_invoice_number='',received_vendor_id=NULL"
-                " WHERE id=?",
-                (remaining, item_id),
+                "UPDATE estimate_items SET received_quantity=?,received_cost=round(received_cost-?,2),"
+                "received_invoice_number='',received_vendor_id=NULL WHERE id=?",
+                (remaining, taken, item_id),
             )
         unreceived += 1
         order_ids.add(row["order_id"])
@@ -913,12 +937,25 @@ def build_accounting_router(connect: Callable[[], sqlite3.Connection], now: Call
                 existing = existing_by_part.get(part_key)
                 if existing:
                     db.execute(
-                        "UPDATE estimate_items SET received_quantity=received_quantity+?,unit_cost=?,status='received',received_invoice_number=? WHERE id=?",
-                        (item.quantity, item.unit_cost, invoice.invoice_number.strip(), existing["id"]),
+                        # This is the everyday split delivery: two of the four
+                        # rotors on today's bill, the other two on next week's
+                        # at whatever the vendor charges then. The money adds
+                        # up bill by bill; unit_cost keeps only the newest
+                        # price. See received_cost's comment in db.SCHEMA.
+                        "UPDATE estimate_items SET received_quantity=received_quantity+?,"
+                        "received_cost=round(received_cost+?,2),unit_cost=?,status='received',"
+                        "received_invoice_number=? WHERE id=?",
+                        (
+                            item.quantity,
+                            round(item.quantity * item.unit_cost, 2),
+                            item.unit_cost,
+                            invoice.invoice_number.strip(),
+                            existing["id"],
+                        ),
                     )
                 else:
                     db.execute(
-                        "INSERT INTO estimate_items(estimate_id,kind,description,part_number,quantity,unit_price,unit_cost,received_quantity,line_total,status,received_invoice_number) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                        "INSERT INTO estimate_items(estimate_id,kind,description,part_number,quantity,unit_price,unit_cost,received_quantity,received_cost,line_total,status,received_invoice_number) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
                         (
                             estimate_id,
                             "part",
@@ -928,6 +965,7 @@ def build_accounting_router(connect: Callable[[], sqlite3.Connection], now: Call
                             item.unit_cost,
                             item.unit_cost,
                             item.quantity,
+                            round(item.quantity * item.unit_cost, 2),
                             round(item.quantity * item.unit_cost, 2),
                             "received",
                             invoice.invoice_number.strip(),

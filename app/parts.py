@@ -1417,9 +1417,21 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
             for row in rows:
                 remaining, unit_cost = remaining_by_id[row["id"]]
                 db.execute(
-                    "UPDATE estimate_items SET received_quantity=received_quantity+?,unit_cost=?,status='received',"
+                    # received_cost accumulates rather than being recomputed: a
+                    # line filled by two deliveries at two prices was billed
+                    # both of them, and unit_cost below only remembers the
+                    # newer one. See the column's comment in db.SCHEMA.
+                    "UPDATE estimate_items SET received_quantity=received_quantity+?,"
+                    "received_cost=round(received_cost+?,2),unit_cost=?,status='received',"
                     "received_invoice_number=?,received_vendor_id=? WHERE id=?",
-                    (remaining, unit_cost, item.invoice_number.strip(), item.vendor_id, row["id"]),
+                    (
+                        remaining,
+                        round(remaining * unit_cost, 2),
+                        unit_cost,
+                        item.invoice_number.strip(),
+                        item.vendor_id,
+                        row["id"],
+                    ),
                 )
 
             recompute_estimate_totals(db, estimate["id"])

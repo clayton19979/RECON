@@ -174,6 +174,15 @@ def ticket_vehicle_label(row: Any) -> str:
 # the coverage query below and the A/P list itself so the two cannot drift.
 _TICKET_COLUMNS = """o.id order_id, o.number ro_number, o.segment,
                      o.recon_vehicle_id, o.we_owe_id, o.vehicle_id,
+                     -- A voided ticket's cost counts toward nothing (see
+                     -- recon.live_orders), so a bill hanging off one is money
+                     -- the shop owes that no car is carrying. Voiding a ticket
+                     -- with a live bill on it is refused now
+                     -- (workflow.vendor_bill_void_block_reason), but tickets
+                     -- voided before that rule existed still have theirs, and
+                     -- this screen is where somebody with a vendor statement
+                     -- in hand would go looking.
+                     o.voided ticket_voided,
                      rv.stock_number, wc.name we_owe_customer_name, oc.name order_customer_name"""
 
 _TICKET_JOINS = """LEFT JOIN recon_vehicles rv ON rv.id=o.recon_vehicle_id
@@ -215,6 +224,7 @@ def invoice_coverage(db: sqlite3.Connection) -> dict[int, list[dict]]:
         entry = dict(row)
         entry.pop("ap_invoice_id")
         entry["vehicle_label"] = ticket_vehicle_label(row)
+        entry["ticket_voided"] = bool(row["ticket_voided"])
         coverage.setdefault(row["ap_invoice_id"], []).append(entry)
     return coverage
 
@@ -548,10 +558,19 @@ def build_accounting_router(connect: Callable[[], sqlite3.Connection], now: Call
                             "we_owe_customer_name": value["we_owe_customer_name"],
                             "order_customer_name": value["order_customer_name"],
                             "vehicle_label": ticket_vehicle_label(row),
+                            "ticket_voided": bool(value["ticket_voided"]),
                             "amount": value["subtotal"],
                         }
                     ]
                 value["coverage"] = covers
+                value.pop("ticket_voided", None)
+                # Money on this bill that no car is carrying, because the
+                # ticket behind it was voided. Nearly always 0; when it isn't,
+                # the screen says so rather than leaving it to be found by
+                # opening cars one at a time.
+                value["stranded_total"] = round(
+                    sum(cover["amount"] or 0 for cover in covers if cover.get("ticket_voided")), 2
+                )
                 if not covers:
                     # No ticket by design, not a broken link -- say so plainly
                     # rather than mislabelling it as a retail job.

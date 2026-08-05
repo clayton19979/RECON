@@ -3,7 +3,7 @@ import { toast } from "./notify.js";
 import { confirmAction } from "./confirm.js";
 import { actorLabel, byActor, esc, fmtDate, fmtDay, money, relativeTime, todayLocal, withLoading } from "./shortcuts.js";
 import { emptyState } from "./empty-states.js";
-import { actualTotal, isReturnedPart, lineTotal, ticketTotal } from "./estimate-money.js";
+import { actualTotal, isReturnedPart, lineTotal, ticketTotal, unreceivedPartLines, unreceivedPartTotal } from "./estimate-money.js";
 import { AUTH_METHOD_LABEL, ITEM_STATUS_LABEL, KIND_GROUP_LABEL, KIND_GROUP_ORDER, PAY_METHOD_LABEL, STATUS_LABEL, STATUS_OPTIONS, STATUS_PILL_CLASS, fieldLabels, state } from "./state.js";
 import { showView } from "./error-boundary.js";
 import { isStalled } from "./vehicles-board.js";
@@ -404,6 +404,13 @@ function specTagsHtml(parts) {
   return parts.filter(Boolean).map((p) => `<span class="spec">${esc(p)}</span>`).join("");
 }
 
+// "ABC1234 (IN)", or nothing at all when no plate is on file. Sits in the
+// header beside the VIN because it is the identifier someone walking back in
+// from the lot actually has in their head.
+function plateTag(item) {
+  return item.plate ? `${item.plate}${item.plate_state ? ` (${item.plate_state})` : ""}` : "";
+}
+
 function renderDetailHead() {
   const { segment, item } = state.detail;
   // The band's left edge names the side, same colour rule as the board's
@@ -437,6 +444,8 @@ function renderDetailHead() {
   $("#vd-recon-model").value = item.model;
   $("#vd-recon-trim").value = item.trim || "";
   $("#vd-recon-color").value = item.color || "";
+  $("#vd-recon-plate").value = item.plate || "";
+  $("#vd-recon-plate-state").value = item.plate_state || "";
   // Arrival date is a recon-only fact: a we-owe car was bought and sold long
   // before this shop wrote it down, so there is no lot arrival to record.
   $("#vd-acquired-row").hidden = segment !== "recon";
@@ -446,7 +455,7 @@ function renderDetailHead() {
   $("#vd-recon-stock").value = segment === "recon" ? item.stock_number || "" : "";
   if (segment === "recon") {
     $("#vd-title").textContent = `${item.stock_number} — ${item.year} ${item.make} ${item.model}`;
-    $("#vd-sub").innerHTML = specTagsHtml([item.vin, item.mileage ? `${item.mileage.toLocaleString()} mi` : "", item.trim]);
+    $("#vd-sub").innerHTML = specTagsHtml([plateTag(item), item.vin, item.mileage ? `${item.mileage.toLocaleString()} mi` : "", item.trim]);
     $("#vd-customer-line").hidden = true;
     $("#vd-customer-info-card").style.display = "none";
     $("#vd-other-vehicles-card").style.display = "none";
@@ -456,7 +465,7 @@ function renderDetailHead() {
     // we_owe and retail share the customer-owned-car layout; only we_owe has
     // the promise machinery (status/category/target, dealer-paid deposits).
     $("#vd-title").textContent = `${item.year} ${item.make} ${item.model}`;
-    $("#vd-sub").innerHTML = specTagsHtml([item.vin, item.mileage ? `${item.mileage.toLocaleString()} mi` : "", item.description]);
+    $("#vd-sub").innerHTML = specTagsHtml([plateTag(item), item.vin, item.mileage ? `${item.mileage.toLocaleString()} mi` : "", item.description]);
     // Customer name gets its own prominent line in the header rather than
     // being buried mid-subtitle -- whose car it is is the first thing the
     // advisor needs.
@@ -535,6 +544,9 @@ function renderVehicleInfoSummary() {
     ["Mileage", item.odometer_broken
       ? `<span title="Recorded as unreadable at intake">Odometer broken</span>`
       : item.mileage ? item.mileage.toLocaleString() : "—"],
+    // Same reason as the VIN above, minus the copy button: nobody retypes a
+    // plate into a catalogue, they read it off a car and type it into search.
+    ["Plate", esc(plateTag(item) || "—")],
     ["Year/Make/Model", esc([item.year, item.make, item.model].filter(Boolean).join(" "))],
     ["Trim", esc(item.trim || "—")],
     // Decoding a VIN fills this in and the printed ticket has always shown it,
@@ -831,7 +843,8 @@ function applyArchivedLockUI(archived) {
   ];
   const vehicleIds = [
     "vd-edit-vehicle", "vd-recon-info-save", "vd-decode-vin", "vd-recon-vin", "vd-recon-mileage", "vd-recon-year",
-    "vd-recon-make", "vd-recon-model", "vd-recon-trim", "vd-recon-color", "vd-recon-acquired",
+    "vd-recon-make", "vd-recon-model", "vd-recon-trim", "vd-recon-color",
+    "vd-recon-plate", "vd-recon-plate-state", "vd-recon-acquired",
     "vd-edit-customer", "vd-we-owe-save", "vd-we-owe-description", "vd-we-owe-category", "vd-we-owe-target", "vd-we-owe-status",
     "vd-take-payment", "vd-deposit-add", "vd-deposit-amount", "vd-deposit-method", "vd-deposit-note",
   ];
@@ -1366,6 +1379,114 @@ function updateReceiveButtonState() {
   // Say how many -- on a 20-line estimate you should know what you're about
   // to post before the dialog opens.
   btn.textContent = checked.length ? `Receive ${checked.length} Line${checked.length === 1 ? "" : "s"}` : "Receive Selected";
+}
+
+/* ---------- closing a ticket without losing what it cost ----------
+
+   The parts get picked up at the counter and thrown on the car; marking them
+   received in the app is a separate step, and on a busy morning it is the
+   step that gets skipped. Nothing used to ask. The ticket closed, the car
+   dropped to READY, and its Cost read $0.00 for a car that had just had four
+   tires put on it -- the board says so afterwards, and so does the Lot sheet,
+   but by then the invoice is in a pile and nobody remembers what it said.
+
+   Closing the ticket is the last moment anyone is looking at that car's
+   parts with the paperwork still in reach, so that is where the app asks.
+   Three answers, because there are genuinely three: receive them now (the
+   normal case -- the parts are on the car), close anyway (the part got
+   cancelled, or the bill really hasn't turned up), or back out. Escape and
+   the backdrop mean back out, never "close anyway"; see confirm.js.
+
+   Nothing here blocks anything. "Close Anyway" is one click and the ticket
+   closes exactly as it always did. */
+
+// The names of the parts, so the question is about something recognisable
+// rather than a count. Three of them fits the dialog; past that it counts.
+const CLOSEOUT_NAME_LIMIT = 3;
+function missingPartsSentence(lines, total) {
+  const names = lines.slice(0, CLOSEOUT_NAME_LIMIT).map((i) => (i.description || "").trim() || "no description");
+  const rest = lines.length - names.length;
+  return `${money(total)} — ${names.join(", ")}${rest ? ` and ${rest} more` : ""}.`;
+}
+
+/* Returns true to go ahead and close the ticket.
+   False means leave it exactly where it is -- which includes the case where
+   the receive dialog has just been opened, because posting that invoice is
+   what closes the ticket (see state.afterReceive). */
+async function confirmTicketCloseout(order) {
+  const items = order?.estimate?.items || [];
+  const missing = unreceivedPartLines(items);
+  if (!missing.length) return true;
+  const many = missing.length !== 1;
+  const choice = await confirmAction({
+    eyebrow: "PARTS",
+    title: `${missing.length} part${many ? "s" : ""} on this ticket ${many ? "were" : "was"} never marked received`,
+    body: `${missingPartsSentence(missing, unreceivedPartTotal(items))}`
+      + ` Close the ticket now and that money stays out of what this car cost.`,
+    confirmLabel: "Receive Them Now",
+    altLabel: "Close Anyway",
+  });
+  if (choice === "alt") return true;
+  if (choice === true) openCloseoutReceive(missing);
+  return false;
+}
+
+// Tick exactly those lines in the grid and hand them to the dialog that
+// already knows how to price and post them -- one flow for receiving, not a
+// second one that could drift from it.
+function openCloseoutReceive(missing) {
+  const wanted = new Set(missing.map((i) => String(i.id)));
+  let ticked = 0;
+  for (const cb of $$(".ei-receive-check", $("#vd-estimate-items"))) {
+    cb.checked = wanted.has(String(cb.dataset.id));
+    if (cb.checked) ticked += 1;
+  }
+  updateReceiveButtonState();
+  // A line with no id yet (typed but never saved) has no checkbox to tick and
+  // nothing the server could receive. Saying so beats an empty dialog.
+  if (!ticked) return void toast("Those parts aren't saved yet — save the ticket, then receive them", true);
+  // The invoice post is the real close-out, so the status change waits for it
+  // rather than being asked for a second time afterwards.
+  state.afterReceive = () => setTicketStatus("complete");
+  openReceiveDialog();
+}
+
+// One writer for the status change, shared by the dropdown and by the
+// close-out flow above, so a ticket closed either way lands identically.
+async function setTicketStatus(status) {
+  const select = $("#vd-status-select");
+  // Re-enabled by renderDetailPermissions on the reload below; only the
+  // failure path has to put it back itself.
+  if (select) select.disabled = true;
+  try {
+    await patch(`/api/orders/${state.detail.order.id}/status`, { status, actor: currentActor() });
+    toast(`Status set to ${STATUS_LABEL[status]}`);
+    await loadVehicleDetail();
+  } catch (err) {
+    toast(err.message, true);
+    if (select) select.disabled = false;
+  }
+}
+
+/* What this car's tickets say was bought and never marked received.
+   Summed off the vehicle's own ticket list rather than the one ticket on
+   screen, because filing a car away is a statement about the whole car.
+   Voided tickets are left out here for the same reason cost_rollup leaves
+   them out of the money: that work never happened. */
+function vehicleUnreceived(item) {
+  const orders = ((item && item.orders) || []).filter((o) => !o.voided);
+  return {
+    cost: orders.reduce((sum, o) => sum + (Number(o.unreceived_cost) || 0), 0),
+    parts: orders.reduce((sum, o) => sum + (Number(o.unreceived_parts) || 0), 0),
+  };
+}
+
+/* The sentence appended to this car's Send-to-History confirmation. Returns
+   "" when there is nothing to warn about, so the caller can append it
+   unconditionally rather than branching around it. */
+function missingReceiptWarning({ cost, parts }) {
+  if (!parts || !cost) return "";
+  return ` ${parts} part${parts === 1 ? " was" : "s were"} never marked received, so ${money(cost)} of what this car cost isn't counted.`;
 }
 
 // The arithmetic itself lives in estimate-money.js, which mirrors the
@@ -2823,6 +2944,7 @@ export function wireVehicleDetail() {
       toast(err.message, true);
       select.disabled = false;
     }
+    await setTicketStatus(status);
   });
 
   $("#vd-concern-save").addEventListener("click", async (e) => {
@@ -2897,7 +3019,9 @@ export function wireVehicleDetail() {
     if (!(await confirmAction({
       eyebrow: "ARCHIVE",
       title: "Send this vehicle to History?",
-      body: "It becomes read-only until reopened. Nothing is deleted.",
+      // A car filed away stops being looked at, so this is the last chance
+      // anyone has to notice money the app can't see.
+      body: "It becomes read-only until reopened. Nothing is deleted." + missingReceiptWarning(vehicleUnreceived(item)),
       confirmLabel: "Send to History",
     }))) return;
     try {
@@ -3187,6 +3311,8 @@ export function wireVehicleDetail() {
     });
   });
 
+  wirePlateFields("#vd-recon-plate", "#vd-recon-plate-state");
+
   $("#vehicle-edit-form").addEventListener("submit", async (e) => {
     e.preventDefault();
     const { segment, id, item } = state.detail;
@@ -3200,6 +3326,8 @@ export function wireVehicleDetail() {
           model: $("#vd-recon-model").value.trim(),
           trim: $("#vd-recon-trim").value.trim(),
           color: $("#vd-recon-color").value.trim(),
+          plate: $("#vd-recon-plate").value.trim(),
+          plate_state: $("#vd-recon-plate-state").value.trim(),
           expected_version: item.edit_version,
         };
         if (segment === "recon") {

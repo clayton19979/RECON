@@ -224,6 +224,10 @@ function updateReceiveTotalSummary() {
 export function wireReceiveDialog() {
   $("#receive-cancel").addEventListener("click", () => $("#receive-dialog").close());
   $("#receive-cancel-2").addEventListener("click", () => $("#receive-dialog").close());
+  // Walking away from the dialog cancels whatever it was opened in aid of.
+  // Without this, backing out of a close-out and receiving some other part an
+  // hour later would close the first ticket out of nowhere.
+  $("#receive-dialog").addEventListener("close", () => { state.afterReceive = null; });
   // Picking a vendor by hand drops the note: it explained the app's guess, and
   // once you have overruled it there is nothing left for it to explain.
   $("#receive-vendor").addEventListener("change", () => syncReceiveVendorRow(""));
@@ -272,12 +276,20 @@ export function wireReceiveDialog() {
           tax: parseFloat($("#receive-tax").value || "0"),
           cost_overrides: overrides,
         });
+        // Read before the dialog closes: abandoning it clears this (see the
+        // close handler below), and closing it is how a successful post ends.
+        const next = state.afterReceive;
+        state.afterReceive = null;
         $("#receive-dialog").close();
         // Says out loud when a price was corrected: that edit changes what
         // the car cost, and it should not land silently.
         toast(changed
           ? `Parts received and posted to A/P — ${changed} price${changed === 1 ? "" : "s"} updated from the invoice`
           : "Parts received and posted to A/P");
+        // The step whoever opened this dialog was in the middle of -- closing
+        // a ticket out is the one case today. It reloads the screen itself,
+        // so it stands in for the reload rather than running alongside it.
+        if (next) return void (await next());
         await loadVehicleDetail();
       } catch (err) {
         toast(err.message, true);

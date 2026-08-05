@@ -175,6 +175,27 @@ export function relativeTime(value) {
   return `${days} day${days === 1 ? "" : "s"} ago`;
 }
 
+/* ---------- licence plates ----------
+   A plate is read off the back of a car standing in the lot, so it gets typed
+   "ABC 1234" one day and "abc-1234" the next. Both of these exist so those are
+   one plate everywhere: `plateKey` is the JS half of db.normalize_plate, and
+   `wirePlateFields` makes the boxes show, as they are typed, exactly what the
+   record is going to say. */
+export function plateKey(value) {
+  return String(value ?? "").replace(/[^a-z0-9]/gi, "").toUpperCase();
+}
+
+// Longest real plate is 8 characters; the state box is two letters.
+export function wirePlateFields(plateSelector, stateSelector) {
+  [[plateSelector, /[^A-Z0-9]/g, 8], [stateSelector, /[^A-Z]/g, 2]].forEach(([selector, strip, max]) => {
+    const field = $(selector);
+    if (!field) return; // bare test harness -- a missing box is not worth throwing over
+    field.addEventListener("input", (e) => {
+      e.target.value = e.target.value.toUpperCase().replace(strip, "").slice(0, max);
+    });
+  });
+}
+
 export function todayLocal(date = new Date()) {
   const pad = (n) => String(n).padStart(2, "0");
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;

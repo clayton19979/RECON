@@ -31,6 +31,13 @@
         <label>Trim<input id="vd-recon-trim"></label>
         <label>Color<input id="vd-recon-color"></label>
       </div>
+      <!-- Every segment has a plate: the lot's own cars wear a dealer tag, a
+           we-owe car wears the customer's. It is the identifier you can read
+           from across the lot, and the search bar looks it up. -->
+      <div class="form-row">
+        <label style="flex:2">Plate<input id="vd-recon-plate" maxlength="8" autocapitalize="characters" autocomplete="off" spellcheck="false"></label>
+        <label style="flex:1">Plate state<input id="vd-recon-plate-state" maxlength="2" placeholder="IN" autocapitalize="characters" autocomplete="off" spellcheck="false"></label>
+      </div>
       <!-- Recon only: a we-owe car was sold long before the shop saw it, so
            it has no arrival date to keep. Hidden rather than disabled for the
            other segments -- see renderDetailHead. -->

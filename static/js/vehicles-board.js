@@ -1,5 +1,5 @@
 import { $, $$, get } from "./core.js";
-import { esc, fmtDay, money } from "./shortcuts.js";
+import { esc, fmtDay, money, plateKey } from "./shortcuts.js";
 import { emptyRow, emptyState } from "./empty-states.js";
 import { BOARD_COLUMNS, showPlaceholders, skeletonCards } from "./skeletons.js";
 import { STATUS_LABEL, STATUS_PILL_CLASS, state } from "./state.js";
@@ -346,8 +346,16 @@ export function resetVehicleView() {
 // whether a car is findable, which is the bug this whole section is about.
 export function matchesVehicleSearch(v, query) {
   const q = query.toLowerCase();
+  // The plate is what someone standing at the window can actually read off a
+  // car, and often the only thing they have -- no stock number on the glass,
+  // no VIN without opening a door. Matched on letters and digits only, so
+  // "abc 1234", "ABC-1234" and "abc1234" are the one plate they obviously are.
+  // A blank query would strip to "" and match every car, so it's guarded.
+  const plate = plateKey(v.plate);
+  const plateQuery = plateKey(q);
   return (v.stock_number || "").toLowerCase().includes(q)
     || (v.vin || "").toLowerCase().includes(q)
+    || (plateQuery ? plate.includes(plateQuery) : false)
     || (v.customer_name || "").toLowerCase().includes(q)
     || (v.vehicle || "").toLowerCase().includes(q)
     // The number on the paper ticket in your hand. Both forms: the short one
@@ -1359,6 +1367,45 @@ function partsCellHtml(v) {
       ${n}</span>`;
 }
 
+/* How far through its repairs a car is, drawn instead of said: one segment
+   per repair, filling in as they're ticked off on the ticket. The count is
+   already inside the needs sentence -- "(1 of 3 done)" -- but a sentence has
+   to be read card by card, and this is answerable across a whole column from
+   arm's length, the same way the ticket page's own progress bar is answerable
+   from across the desk. Same jobs_done/jobs_total the ticket reads, so the
+   card and the ticket cannot disagree about how far along a car is.
+
+   Nothing at all on a car whose ticket has no jobs -- most simple tickets
+   don't -- and nothing in History or the settled pile, where the work is over
+   and "how far along" is a question nobody is asking anymore. */
+function jobsProgressHtml(v) {
+  const total = v.jobs_total || 0;
+  if (!total || historyMode() || v.lot_bucket === LOT_SETTLED) return "";
+  const done = v.jobs_done || 0;
+  const label = done === total
+    ? `All ${total} repair${total === 1 ? "" : "s"} finished`
+    : `${done} of ${total} repair${total === 1 ? "" : "s"} finished`;
+  // One segment per repair only reads while the segments are big enough to
+  // count; past a dozen the same bar becomes one continuous fill.
+  const bar = total <= 12
+    ? Array.from({ length: total }, (_, i) => `<span class="seg${i < done ? " done" : ""}"></span>`).join("")
+    : `<span class="seg-track"><span class="seg-fill" style="width:${Math.round((done / total) * 100)}%"></span></span>`;
+  return `<div class="veh-card-jobs${done === total ? " all-done" : ""}" title="${label}" role="img" aria-label="${label}">${bar}</div>`;
+}
+
+/* The same fact in the list layout, where a bar would fight the table's
+   grid: a short count under the status pill, since "In Progress" on a
+   four-repair ticket says nothing about whether one is done or three. */
+function jobsSubHtml(v) {
+  const total = v.jobs_total || 0;
+  if (!total || historyMode() || v.lot_bucket === LOT_SETTLED) return "";
+  const done = v.jobs_done || 0;
+  const label = done === total
+    ? `All ${total} repair${total === 1 ? "" : "s"} finished`
+    : `${done} of ${total} repair${total === 1 ? "" : "s"} finished`;
+  return `<div class="veh-sub jobs-sub${done === total ? " all-done" : ""}" title="${esc(label)}">${done}/${total} repairs</div>`;
+}
+
 /* ---------- promised dates ----------
 
    A we-owe is a promise a salesman made to close a car deal, and the date the
@@ -1421,16 +1468,16 @@ function vehicleRowHtml(v) {
       <td class="num col-stock"><span class="stock-no">${esc(v.stock_number || "—")}</span><div class="veh-sub">${roTagHtml(v)}</div></td>
       <td class="col-vehicle">
         <div class="veh-name" title="${esc(v.vehicle)}">${esc(v.vehicle)}</div>
-        <div class="veh-sub">${v.segment === "we_owe"
+        <div class="veh-sub">${[plateTagHtml(v), v.segment === "we_owe"
           ? `<span class="veh-customer"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-7 8-7s8 3 8 7"/></svg>${esc(v.customer_name || "—")}</span>`
           : (v.vin
             // Nobody scans a full 17-character VIN -- the last 8 identify
             // the car; the full value stays one hover away.
             ? `<span title="${esc(v.vin)}">VIN …${esc(String(v.vin).slice(-8))}</span>`
-            : `<span class="muted-dash">—</span>`)}</div>
+            : `<span class="muted-dash">—</span>`)].filter(Boolean).join(" · ")}</div>
       </td>
       <td class="col-type"><span class="pill ${v.segment === "recon" ? "pill-recon" : "pill-weowe"}">${v.segment === "recon" ? "Recon" : "We-Owe"}</span></td>
-      <td class="col-status"><span class="pill ${vehicleStatusPillClass(v)}">${esc(STATUS_LABEL[v.status] || v.status)}</span></td>
+      <td class="col-status"><span class="pill ${vehicleStatusPillClass(v)}">${esc(STATUS_LABEL[v.status] || v.status)}</span>${jobsSubHtml(v)}</td>
       <td class="col-tech">${v.technicians.length ? `<span class="tech"><span class="tech-dot"></span><span class="tech-names">${esc(v.technicians.join(", "))}</span></span>` : `<span class="muted-dash">—</span>`}</td>
       <td class="col-parts">${partsCellHtml(v)}</td>
       <td class="num-col age-col ${historyMode() ? "age-ok" : ageClass(v.age_days)}">${ageCellHtml(v)}</td>
@@ -1444,7 +1491,7 @@ function vehicleRowHtml(v) {
 // as-is -- see renderVehiclesTable.
 function vehicleRowSignature(v) {
   return [
-    v.stock_number, v.vehicle, v.vin, v.customer_name, v.segment, v.status, v.status_bucket,
+    v.stock_number, v.vehicle, v.vin, v.plate, v.plate_state, v.customer_name, v.segment, v.status, v.status_bucket,
     // The row prints the ticket's number, so writing the first ticket on a
     // car has to rebuild it -- otherwise the card keeps saying "no ticket"
     // until something else about the car happens to change.
@@ -1457,6 +1504,10 @@ function vehicleRowSignature(v) {
     v.archived_at, v.days_on_lot, historyMode() ? "h" : "",
     v.actual_cost, v.parts_pending, v.parts_pending_value,
     v.unreceived_closed_cost, v.unreceived_closed_parts,
+    // Both layouts draw the repair progress, so ticking a job off on the
+    // ticket has to redraw the car here too. lot_bucket rides along in the
+    // card signature already; the row needs the counts themselves.
+    v.jobs_done, v.jobs_total,
     state.vehicleSelection.has(vehicleKey(v)) ? 1 : 0,
   ].join("");
 }
@@ -1648,14 +1699,27 @@ function columnSummary(rows) {
   return bits.join(" · ");
 }
 
+// The plate, when the car has one. Leads the identity line because it is the
+// half of it anybody can check without walking to the car -- and because a
+// plate search that produces a row saying only "VIN …12345678" leaves you
+// staring at a match you cannot confirm.
+function plateTagHtml(v) {
+  if (!v.plate) return "";
+  const label = `${v.plate}${v.plate_state ? ` (${v.plate_state})` : ""}`;
+  return `<span class="veh-plate" title="Licence plate">${esc(label)}</span>`;
+}
+
 function cardSubHtml(v) {
+  const plate = plateTagHtml(v);
   if (v.segment === "we_owe") {
-    return `<span class="veh-customer"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-7 8-7s8 3 8 7"/></svg>${esc(v.customer_name || "—")}</span>`;
+    const customer = `<span class="veh-customer"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-7 8-7s8 3 8 7"/></svg>${esc(v.customer_name || "—")}</span>`;
+    return plate ? `${plate} · ${customer}` : customer;
   }
   // Nobody scans a full 17-character VIN -- the last 8 identify the car.
-  return v.vin
+  const vin = v.vin
     ? `<span title="${esc(v.vin)}">VIN …${esc(String(v.vin).slice(-8))}</span>`
     : `<span class="muted-dash">No VIN on file</span>`;
+  return plate ? `${plate} · ${vin}` : vin;
 }
 
 function vehicleCardHtml(v) {
@@ -1682,6 +1746,7 @@ function vehicleCardHtml(v) {
     <div class="veh-card-name" title="${esc(v.vehicle)}">${esc(v.vehicle)}</div>
     <div class="veh-card-sub">${cardSubHtml(v)}</div>
     <div class="veh-card-needs" title="${esc(v.needs || "")}">${esc(v.needs || "")}</div>
+    ${jobsProgressHtml(v)}
     <div class="veh-card-foot">
       <span class="veh-card-facts">
         ${idleCellHtml(v, { spelled: true })}

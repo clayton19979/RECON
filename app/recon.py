@@ -187,6 +187,25 @@ LOT_SETTLED_STATUSES = ("sold", "fulfilled", "waived")
 # How each of those reads in a sentence on the sheet.
 SETTLED_WORD = {"sold": "Sold", "fulfilled": "Fulfilled", "waived": "Waived"}
 
+# The board statuses that are not repair-ticket statuses, in the words the
+# screen shows them in: recon's "acquired" (no ticket written yet) and "sold",
+# and a we-owe promise's own open/fulfilled/waived. A board row's status is one
+# of these OR one of workflow.STATUS_LABEL's, depending on whether a ticket is
+# driving it -- so anything rendering a board row needs both maps.
+#
+# The exports had only the ticket half and fell through to the raw column value
+# for these five, so a downloaded lot sheet read "acquired", "sold", "waived"
+# in lower case beside "Complete" and "In Progress" from the very same column.
+# static/js/state.js::STATUS_LABEL is the browser's copy of the pair and
+# tests/test_export.py holds the two to the same words.
+BOARD_STATUS_LABEL = {
+    "acquired": "Acquired",
+    "sold": "Sold",
+    "open": "Open",
+    "fulfilled": "Fulfilled",
+    "waived": "Waived",
+}
+
 
 def open_jobs_text(row: dict) -> str:
     """The repairs this car is still owed, by name.

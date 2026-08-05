@@ -237,7 +237,9 @@ def profit_row(client, stock_number):
 def csv_rows(client, path):
     res = client.get(path)
     assert res.status_code == 200, res.text
-    return list(csv.reader(io.StringIO(res.text)))
+    # utf-8-sig, so the byte-order mark every export leads with (see
+    # test_export.py) doesn't stay stuck to the first column's name.
+    return list(csv.reader(io.StringIO(res.content.decode("utf-8-sig"))))
 
 
 def test_the_spend_report_carries_the_shortfall_it_is_short_by(client):

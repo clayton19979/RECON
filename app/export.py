@@ -10,9 +10,33 @@ from typing import Literal
 from fastapi import APIRouter, Response
 
 from .db import normalize_vin
-from .recon import vehicle_board_rows
+from .recon import BOARD_STATUS_LABEL, vehicle_board_rows
 from .reports import LOT_GROUP_LABEL, lot_rows, technician_productivity_rows, vehicle_profit_rows
 from .workflow import STATUS_LABEL
+
+# A vehicle row's status is a repair-ticket status on a car with a ticket and a
+# board status ("acquired", "sold", "open"…) on one without, and a single file
+# holds both kinds in one column. Merging the two maps is what stops the five
+# board statuses falling through to the raw lower-case column value beside
+# properly worded ticket ones.
+VEHICLE_STATUS_LABEL = {**STATUS_LABEL, **BOARD_STATUS_LABEL}
+
+
+def _status_word(row: dict) -> str:
+    status = str(row["status"] or "")
+    return VEHICLE_STATUS_LABEL.get(status, status)
+
+
+def _stock_and_customer(row: dict) -> tuple[str, str]:
+    """A vehicle row's two identifying columns, kept apart.
+
+    These used to be one column headed "Stock #" holding a stock number on a
+    recon car and a customer's name on a we-owe. That column is the first thing
+    anyone sorts a downloaded sheet by, and sorting it interleaved four people's
+    names into the middle of the R-numbers -- while the customer, which the
+    screen shows on every we-owe row, was in no column at all to filter by.
+    """
+    return row["stock_number"] or "", row.get("customer_name") or ""
 
 
 def _covered(start: str | None, end: str | None) -> str:
@@ -38,6 +62,25 @@ def _covered(start: str | None, end: str | None) -> str:
     return f"all-time-{today}"
 
 
+def _excel_bytes(text: str) -> bytes:
+    """A CSV encoded the one way Excel on Windows reads correctly.
+
+    Every one of these files is written to be double-clicked, and double-click
+    on Windows opens Excel, which reads a .csv with no byte-order mark in the
+    machine's ANSI code page rather than as UTF-8. The sheets are full of
+    characters that are not in it -- the em dash in "Ready to go - but 1 part
+    never marked received", the middle dots separating the clauses of every
+    "Still Needs" sentence -- and each one arrived as two or three pieces of
+    line noise. Walt reads these files; a report full of "aEUR"" is a report
+    that looks broken.
+
+    utf-8-sig is UTF-8 with that mark in front. Nothing else about the file
+    changes, and every other reader (Sheets, LibreOffice, Python's own csv)
+    already skips the mark.
+    """
+    return text.encode("utf-8-sig")
+
+
 def _csv_response(
     header: list[str], rows: list[list], slug: str, covering: tuple[str | None, str | None] | None = None
 ) -> Response:
@@ -50,7 +93,7 @@ def _csv_response(
     stamp = _covered(*covering) if covering else f"{date.today():%Y-%m-%d}"
     filename = f"discount-auto-ops-{slug}-{stamp}.csv"
     return Response(
-        content=buffer.getvalue(),
+        content=_excel_bytes(buffer.getvalue()),
         media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
@@ -87,7 +130,8 @@ def build_export_router(connect: Callable[[], sqlite3.Connection], now_fn: Calla
             writer = csv.writer(buffer)
             writer.writerow(
                 [
-                    "Stock #/Customer",
+                    "Stock #",
+                    "Customer",
                     "Vehicle",
                     "VIN",
                     "Segment",
@@ -99,14 +143,15 @@ def build_export_router(connect: Callable[[], sqlite3.Connection], now_fn: Calla
                 ]
             )
             for row, order_ids in zip(rows, order_ids_by_row):
-                label = row["stock_number"] or row.get("customer_name", "")
+                stock, customer = _stock_and_customer(row)
                 writer.writerow(
                     [
-                        label,
+                        stock,
+                        customer,
                         row["vehicle"],
                         row.get("vin", ""),
                         "Recon" if row["segment"] == "recon" else "We-Owe",
-                        STATUS_LABEL.get(row["status"], row["status"]),
+                        _status_word(row),
                         row["age_days"],
                         f"{row['actual_cost']:.2f}",
                         _linked_invoices(db, order_ids),
@@ -116,7 +161,7 @@ def build_export_router(connect: Callable[[], sqlite3.Connection], now_fn: Calla
 
         filename = f"discount-auto-ops-export-{date.today():%Y-%m-%d}.csv"
         return Response(
-            content=buffer.getvalue(),
+            content=_excel_bytes(buffer.getvalue()),
             media_type="text/csv",
             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
@@ -141,6 +186,10 @@ def build_export_router(connect: Callable[[], sqlite3.Connection], now_fn: Calla
         return _csv_response(
             [
                 "Stock #",
+                # Blank on a recon car and the promise's customer on a we-owe.
+                # Its own column rather than sharing the one above, which is
+                # what this file gets sorted by -- see _stock_and_customer.
+                "Customer",
                 "Vehicle",
                 "VIN",
                 "Type",
@@ -164,11 +213,11 @@ def build_export_router(connect: Callable[[], sqlite3.Connection], now_fn: Calla
             ],
             [
                 [
-                    row["stock_number"] or row.get("customer_name", ""),
+                    *_stock_and_customer(row),
                     row["vehicle"],
                     row.get("vin", ""),
                     "Recon" if row["segment"] == "recon" else "We-Owe",
-                    STATUS_LABEL.get(row["status"], row["status"]),
+                    _status_word(row),
                     ", ".join(row.get("technicians") or []),
                     f"{row.get('quoted_cost') or 0:.2f}",
                     f"{row['actual_cost']:.2f}",
@@ -193,6 +242,9 @@ def build_export_router(connect: Callable[[], sqlite3.Connection], now_fn: Calla
             [
                 "Group",
                 "Stock #",
+                # The name the screen shows under every we-owe row, which this
+                # file did not carry at all -- see _stock_and_customer.
+                "Customer",
                 "Vehicle",
                 "VIN",
                 "Type",
@@ -220,11 +272,11 @@ def build_export_router(connect: Callable[[], sqlite3.Connection], now_fn: Calla
             [
                 [
                     LOT_GROUP_LABEL[row["lot_bucket"]],
-                    row["stock_number"] or row.get("customer_name", ""),
+                    *_stock_and_customer(row),
                     row["vehicle"],
                     row.get("vin", ""),
                     "Recon" if row["segment"] == "recon" else "We-Owe",
-                    STATUS_LABEL.get(row["status"], row["status"]),
+                    _status_word(row),
                     ", ".join(row.get("technicians") or []),
                     row["needs"],
                     f"{row['actual_cost']:.2f}",

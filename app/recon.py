@@ -156,14 +156,36 @@ def live_orders(orders: list[dict]) -> list[dict]:
     return [o for o in orders if not o.get("voided")]
 
 
-# The three piles Walt sorts the lot into, and the only three the app knows
-# about. They live here rather than in reports.py because the Vehicles screen
-# groups its columns by them and the Lot Report groups its sections by them --
-# and because vehicle_board_rows below stamps every row with its pile, which
+# The piles Walt sorts the lot into, and the only ones the app knows about.
+# They live here rather than in reports.py because the Vehicles screen groups
+# its columns by them and the Lot Report groups its sections by them -- and
+# because vehicle_board_rows below stamps every row with its pile, which
 # reports.py (an importer of this module) could not do without a cycle.
 LOT_READY = "ready"
 LOT_WORKING = "working"
 LOT_WAITING = "waiting"
+# The fourth pile, and the only one that is not about work: a car whose lot
+# life is over. A sold recon car and a settled we-owe promise both used to
+# land in "Ready to go", which is the one place they make the answer wrong --
+# Walt asks that column how many cars he can sell, and it was counting cars
+# already sold and promises settled weeks ago on customers' cars that drove
+# away. Nothing ever takes those rows off the live board either, so the count
+# only drifts further from the truth the longer the shop uses the app.
+#
+# They are not hidden, because the record still needs filing and a row that
+# vanishes is a row nobody files. They get their own pile, last, where they
+# read as housekeeping instead of inventory.
+LOT_SETTLED = "settled"
+
+# The display statuses that mean the car's lot life is over: sold on the recon
+# side, fulfilled or waived on the we-owe side. Both are already settled
+# facts by the time they reach a board row -- "sold" only survives
+# recon_sold_and_settled (no ticket still open), and fulfilled/waived is the
+# advisor's own word for a promise that is closed.
+LOT_SETTLED_STATUSES = ("sold", "fulfilled", "waived")
+
+# How each of those reads in a sentence on the sheet.
+SETTLED_WORD = {"sold": "Sold", "fulfilled": "Fulfilled", "waived": "Waived"}
 
 
 def open_jobs_text(row: dict) -> str:
@@ -215,16 +237,21 @@ def lot_needs_text(row: dict) -> str:
         else ""
     )
 
+    if row["lot_bucket"] == LOT_SETTLED:
+        # This car's lot life is over; the one thing left is to file it away
+        # -- unless it already has been, in which case History must not nudge
+        # anyone toward a step that is done. The unreceipted-parts warning
+        # still outranks either wording: the car's cost is wrong until that
+        # part is received, settled or not.
+        #
+        # The word is the advisor's own -- Sold, Fulfilled, Waived -- because
+        # "settled" is this file's shorthand and nobody in the shop says it.
+        word = SETTLED_WORD.get(row.get("status") or "", "Finished")
+        if missing_text:
+            return f"{word} — but {missing_text}"
+        return word if row.get("archived") else f"{word} — send to History"
+
     if row["lot_bucket"] == LOT_READY:
-        # A sold car's lot life is over; the one thing left is to file it
-        # away -- unless it already has been, in which case History must not
-        # nudge anyone toward a step that is done. The unreceipted-parts
-        # warning still outranks either wording: the car's cost is wrong
-        # until that part is received, sold or not.
-        if row.get("status") == "sold":
-            if missing_text:
-                return f"Sold — but {missing_text}"
-            return "Sold" if row.get("archived") else "Sold — send to History"
         if missing_text:
             return f"Ready to go — but {missing_text}"
         return "Nothing — ready to go"
@@ -296,7 +323,7 @@ def lot_needs_text(row: dict) -> str:
 
 
 def lot_bucket(row: dict) -> str:
-    """Which of Walt's three piles this car is in.
+    """Which pile this car is in.
 
     Driven by the repair ticket, same as the board -- the recon record has a
     status field of its own but nobody maintains it, and a report that reads
@@ -310,6 +337,12 @@ def lot_bucket(row: dict) -> str:
     the same line. What has actually happened to the car wins over what the
     ticket was last set to.
     """
+    # Ahead of everything else, because it is not a question about work. A
+    # sold car and a settled promise are finished in a way "Ready to go"
+    # cannot describe: there is nothing to sell and nobody to hand it back
+    # to. See LOT_SETTLED.
+    if row["status"] in LOT_SETTLED_STATUSES:
+        return LOT_SETTLED
     if row["status_bucket"] == "finished":
         return LOT_READY
     if row["status"] in ("in_progress", "pending_approval"):
@@ -324,7 +357,7 @@ def add_lot_status(row: dict) -> dict:
     and the plain sentence describing what it is waiting on.
 
     Applied to every vehicle-board row, not just the Lot Report's, because the
-    Vehicles screen groups its columns by exactly these three piles -- two
+    Vehicles screen groups its columns by exactly these piles -- two
     screens reading one rule, so a car cannot be "In the shop" on one and "Not
     started" on the other.
     """
@@ -338,7 +371,7 @@ def add_lot_status(row: dict) -> dict:
     # Zero on a finished car, whatever is still open on its ticket -- nothing
     # more is going to be spent on it, and a car whose Needs cell reads
     # "Nothing -- ready to go" must not also claim money still to come.
-    row["remaining_cost"] = 0.0 if row["lot_bucket"] == LOT_READY else max(row.get("open_cost") or 0, 0)
+    row["remaining_cost"] = 0.0 if row["lot_bucket"] in (LOT_READY, LOT_SETTLED) else max(row.get("open_cost") or 0, 0)
     row["needs"] = lot_needs_text(row)
     return row
 

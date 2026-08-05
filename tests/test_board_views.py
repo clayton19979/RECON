@@ -1,4 +1,4 @@
-"""Three separate piles on the Vehicles board, and a finished we-owe landing
+"""Separate piles on the Vehicles board, and a finished we-owe landing
 in the right one.
 
 Two problems, both of which put a car under a heading that contradicts it.
@@ -192,3 +192,20 @@ def test_the_segment_chips_still_work_inside_a_view(client):
     assert {r["segment"] for r in recon_only} == {"recon"}
     we_owe_only = board(client, view="active", segment="we_owe")
     assert {r["segment"] for r in we_owe_only} == {"we_owe"}
+
+
+def test_a_settled_promise_gets_its_own_pile_on_the_board(client):
+    """The board and the Lot Report read one rule (app/recon.py::lot_bucket),
+    so a promise the advisor has marked fulfilled has to be out of the "Ready
+    to go" column here too -- otherwise the column Clayton looks at all day
+    and the sheet Walt is handed give different answers about the same car."""
+    promise = make_we_owe(client, customer_name="Marcus Doyle", description="Tie rod")
+    assert we_owe_row(client, promise["id"])["lot_bucket"] == "waiting"
+
+    res = client.patch(f"/api/we-owe/{promise['id']}", json={"status": "fulfilled"})
+    assert res.status_code == 200, res.text
+
+    row = we_owe_row(client, promise["id"])
+    assert row["status_bucket"] == "finished"
+    assert row["lot_bucket"] == "settled", f"a settled promise is filed under {row['lot_bucket']}"
+    assert row["needs"] == "Fulfilled — send to History", row["needs"]

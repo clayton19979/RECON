@@ -699,11 +699,20 @@ table.sticky-head thead th {
    The three piles the owner asks about, left to right in the direction a car
    travels through the shop. Each column scrolls on its own so a lot with
    thirty cars in the shop doesn't push "Ready to go" off the bottom of the
-   screen -- the whole point is seeing all three at once. */
-.veh-columns { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; align-items: start; }
+   screen -- the whole point is seeing all of them at once. */
+/* auto-fit rather than a fixed count: with four piles, a fixed four-across
+   squeezed every card to ~240px on a 1280px screen, and a fixed three left
+   the fourth pile hanging alone under an empty half-row on a wide one. The
+   300px floor is the width the three-column layout already gave a card, so
+   nothing here is ever narrower than it was -- the shop's own screen fits
+   three across and wraps the fourth, a wide monitor fits all four. */
+.veh-columns {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 14px; align-items: start;
+}
 
 /* One tone per pile, shared with the Lot Report's group bands so the board
-   and the sheet Walt reads are visibly the same three piles: quiet slate for
+   and the sheet Walt reads are visibly the same piles: quiet slate for
    "not started" (nothing happening is not an alarm -- Stalled is the alarm,
    and it has its own card), the theme's accent for "in the shop" (work is
    moving), green for "ready to go" (the answer he came for). Set as custom
@@ -712,6 +721,9 @@ table.sticky-head thead th {
 [data-lot-column], [data-lot-group] { --stage: var(--ink-faint); --stage-tint: var(--paper-raise); }
 [data-lot-column="working"], [data-lot-group="working"] { --stage: var(--accent); --stage-tint: var(--accent-tint); }
 [data-lot-column="ready"], [data-lot-group="ready"] { --stage: var(--good); --stage-tint: var(--good-tint); }
+/* "Finished -- file away" keeps the default slate on purpose. It is the one
+   pile that is not shop work, and giving it a colour would have it competing
+   for attention with the green column it was just taken out of. */
 
 .veh-col {
   background: var(--paper-raise); border: 1px solid var(--line); border-radius: var(--radius);
@@ -805,8 +817,10 @@ table.sticky-head thead th {
   font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--ink);
 }
 
-/* Three columns need the width; below that they stack, which is still a
-   better read on a narrow window than three 190px columns of ellipsis. */
+/* Below this the piles stack outright, which is still a better read on a
+   narrow window than columns of ellipsis. The grid above would get there on
+   its own; this also drops the per-column scroll, which only earns its keep
+   while the columns sit side by side. */
 @media (max-width: 1100px) {
   .veh-columns { grid-template-columns: 1fr; }
   .veh-col-body { max-height: none; }

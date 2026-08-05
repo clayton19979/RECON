@@ -105,7 +105,7 @@ const REPORT_ENDPOINT = {
    is left wondering why clicking them does nothing. */
 const IGNORES_DATE_RANGE = new Set(["lot"]);
 
-/* The three piles, and what to say about each one.
+/* The piles, and what to say about each one.
 
    `blurb` is the short form the screen's group bar uses; `sentence` is the
    full one the printed sheet gets. The sheet is read by the owner on his own,
@@ -134,6 +134,15 @@ const LOT_GROUPS = [
     blurb: "nothing done yet",
     sentence: "Nothing has been done to these yet.",
     empty: "Every car has been started.",
+  },
+  {
+    key: "settled",
+    label: "Finished — file away",
+    blurb: "sold or settled — only the paperwork is left",
+    sentence:
+      "These are done with. The car has been sold, or the promise was kept or waived. "
+      + "Sending them to History takes them off this sheet.",
+    empty: "Nothing is waiting to be filed.",
   },
 ];
 
@@ -439,8 +448,24 @@ function lotStatCards(rows) {
   // second copy of the rule is a second answer waiting to happen.
   const stalled = rows.filter(isStalled).length;
   const waiting = count("waiting");
+  const ready = count("ready");
+  // Cars whose lot life is over but whose record is still on the live board.
+  // They used to be counted as Ready To Go, which is the one place it makes
+  // the answer wrong: Walt reads that number as "cars I can sell", and it was
+  // including cars already sold and promises settled weeks ago. They are
+  // still part of "on the lot" -- the record is here until somebody files it
+  // -- so the sub-line says how many of the total they are rather than
+  // pretending they are gone.
+  const settled = count("settled");
   return [
-    { label: "Ready To Go", value: String(count("ready")), sub: `of ${rows.length} on the lot`, tone: count("ready") ? "good" : "" },
+    {
+      label: "Ready To Go",
+      value: String(ready),
+      sub: settled
+        ? `of ${rows.length} on the lot · ${settled} finished, to be filed`
+        : `of ${rows.length} on the lot`,
+      tone: ready ? "good" : "",
+    },
     { label: "In The Shop", value: String(count("working")), sub: "being worked on now" },
     {
       label: "Not Started",

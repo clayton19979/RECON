@@ -154,6 +154,42 @@ if (returnedRow) {
   ok(!cells.includes("$500.00"), `a returned part still prints its cost: ${JSON.stringify(cells)}`);
 }
 
+/* ---------- the technician copy carries no money at all ----------
+   The same sheet, chosen at the printer, for handing across the counter:
+   what a part cost is the office's business, not something to pass around
+   the floor. Every dollar figure is off it -- line prices, job subtotals,
+   the totals block -- and the space they took goes to a tick box per line
+   and ruled lines for writing down what was found. Fees and vendor credits
+   are money bookkeeping with no wrench behind them, so they drop off the
+   list; the returned part stays, because "the first alternator went back"
+   is something the person under the hood needs to know. */
+w.renderPrintTicket("tech");
+const techPrint = doc.querySelector("#print-report");
+ok(!/\$/.test(techPrint.textContent),
+   "the technician copy still has a dollar figure on it somewhere");
+ok(techPrint.textContent.includes("Technician Copy"),
+   "the technician copy doesn't say which copy it is");
+const techRows = [...techPrint.querySelectorAll("table.ticket tbody tr")]
+  .filter((r) => !r.classList.contains("print-job-head") && !r.classList.contains("print-kind-head"));
+ok(techRows.length === 3, `expected the 3 part lines, got ${techRows.length} rows`);
+ok(!techPrint.textContent.includes("Shop supplies") && !techPrint.textContent.includes("Warranty credit"),
+   "a fee or credit line is on the technician copy -- bookkeeping, not work");
+ok(techRows.some((r) => r.textContent.includes("Alternator (wrong one)") && r.textContent.includes("Returned")),
+   "the returned part fell off the technician copy, or lost its Returned status");
+ok(techPrint.querySelectorAll(".print-tick").length === techRows.length,
+   "not every line on the technician copy has a box to tick");
+ok(!techPrint.querySelector(".print-totals"), "the totals block is on the technician copy");
+ok(!!techPrint.querySelector(".print-writein"),
+   "the technician copy has nowhere to write down what was found");
+ok(techPrint.textContent.includes("Technician Sign-Off"),
+   "the technician copy lost its sign-off line");
+
+// ...and calling it the way every existing caller does still prints the
+// full shop copy, money and all.
+w.renderPrintTicket();
+ok(doc.querySelector("#print-report").textContent.includes("$665.00"),
+   "the no-argument call stopped printing the shop copy");
+
 ok(rejections.length === 0, `unhandled rejections: ${rejections.map((e) => e && e.message).join(", ")}`);
 
 finish("ticket money agrees on screen and on paper");

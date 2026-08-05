@@ -1460,6 +1460,44 @@ textarea { min-height: 70px; resize: vertical; font-family: inherit; }
 .cost-line span:last-child { font-family: "IBM Plex Mono", "Cascadia Mono", Consolas, monospace; font-weight: 600; }
 .cost-line.total { border-top: 1px solid var(--line); padding-top: 8px; font-weight: 700; font-size: 14.5px; }
 
+/* ---------- where a ticket's money stands ----------
+   The This Ticket card, upgraded from two bare figures to the same three-way
+   cut the board's summary cards already make: landed money in green, money on
+   order with a vendor in amber, and money written up that nobody has ordered
+   yet as a hollow tail. The bar and the rows are one reading -- each row's dot
+   repeats its segment's colour, so the bar never needs a legend of its own. */
+.money-standing { gap: 7px; }
+.money-bar {
+  display: flex; height: 9px; border-radius: 999px; overflow: hidden;
+  background: var(--paper-raise); box-shadow: inset 0 0 0 1px var(--line-soft);
+  margin-bottom: 4px;
+}
+.money-bar[hidden] { display: none; }
+.money-seg { height: 100%; }
+.money-seg[hidden] { display: none; }
+/* The hairline between segments matches the card, so two touching colours
+   read as two amounts instead of one striped blob. */
+.money-seg + .money-seg:not([hidden]) { border-left: 2px solid var(--surface); }
+.seg-spent { background: var(--good); }
+.seg-order { background: var(--warn); }
+/* Not-ordered is the absence of anything happening -- it stays the quiet
+   track colour rather than earning a colour of its own. */
+.seg-quoted { background: var(--line); }
+.money-dot {
+  display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+  margin-right: 8px; vertical-align: 0;
+}
+.dot-spent { background: var(--good); }
+.dot-order { background: var(--warn); }
+.dot-quoted { background: var(--line); box-shadow: inset 0 0 0 1px var(--ink-faint); }
+.dot-credit { background: transparent; box-shadow: inset 0 0 0 1.5px var(--good); }
+/* A $0 row keeps its place so the card never jumps as parts land; it just
+   steps back so the rows with money on them read first. */
+.money-row.zero { color: var(--ink-faint); }
+.money-row.zero span:last-child { color: var(--ink-faint); font-weight: 500; }
+.money-row.zero .money-dot { opacity: .45; }
+.money-credit span:last-child { color: var(--good); }
+
 /* ---------- receive parts lines ----------
    Description / qty / an editable price / that line's total. The price is a
    real input rather than a printed figure because the vendor's invoice is

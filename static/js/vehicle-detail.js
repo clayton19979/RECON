@@ -1128,7 +1128,7 @@ function renderEstimate(order) {
   if (!order) {
     box.classList.remove("has-jobs");
     box.innerHTML = "";
-    applyTicketTotals(0, 0);
+    applyTicketTotals(0, 0, []);
     return;
   }
   const items = order.estimate ? order.estimate.items : [];
@@ -1382,15 +1382,66 @@ function updateReceiveButtonState() {
 const coreOwing = (i) => i.kind === "part" && !i.part_returned && !i.core_return_invoice_number ? (i.core_charge || 0) : 0;
 function renderEstimateTotals(order) {
   const items = order.estimate ? order.estimate.items : [];
-  applyTicketTotals(ticketTotal(items), actualTotal(items));
+  applyTicketTotals(ticketTotal(items), actualTotal(items), items);
 }
 
-// One writer for both elements the ticket's cost card is made of, shared by
-// the post-save render and the live-typing recompute below, so the two figures
+/* Where the not-yet-landed money on a ticket stands. The spent figure is
+   actualTotal's (parts at what the bills said, labor and fees as written);
+   what this adds is the rest of the written-up money cut by whether anyone
+   has actually ordered it. A partially received line splits by quantity:
+   3 of 4 brake pads in leaves one pad's worth still on order. Credits are
+   already inside the written-up total (lineTotal subtracts them); they're
+   carried out separately here only so the card can say so in words. */
+function moneyStanding(items) {
+  let onOrder = 0, notOrdered = 0, credit = 0;
+  for (const i of items || []) {
+    if (i.kind === "credit") { credit += lineTotal(i); continue; }
+    if (i.kind !== "part" || isReturnedPart(i)) continue;
+    const q = Number(i.quantity) || 0;
+    if (q <= 0) continue;
+    const undelivered = Math.max(0, q - (Number(i.received_quantity) || 0));
+    const remainder = lineTotal(i) * (undelivered / q);
+    // A line still marked "received" with quantity outstanding has been
+    // ordered by definition -- only a plain quote counts as not ordered.
+    if ((i.status || "quoted") === "quoted") notOrdered += remainder;
+    else onOrder += remainder;
+  }
+  return { onOrder, notOrdered, credit };
+}
+
+// One writer for everything the ticket's cost card is made of, shared by
+// the post-save render and the live-typing recompute below, so the figures
 // can never be written from different readings of the grid.
-function applyTicketTotals(written, actual) {
+function applyTicketTotals(written, actual, items) {
   $("#vd-ticket-total").textContent = money(written);
   $("#vd-actual-cost").textContent = money(actual);
+
+  const { onOrder, notOrdered, credit } = moneyStanding(items);
+  $("#vd-money-on-order").textContent = money(onOrder);
+  $("#vd-money-not-ordered").textContent = money(notOrdered);
+  const creditRow = $("#vd-money-row-credit");
+  creditRow.hidden = !credit;
+  if (credit) $("#vd-money-credit").textContent = money(credit);
+
+  // The rows stay put at $0 (dimmed, so the live money reads first); the bar
+  // only exists while there is money to cut up. Segment widths are shares of
+  // the three figures beside them, and a sliver under 2% is drawn at 2% --
+  // a $12 part on a $2,000 ticket should still be findable on the bar.
+  const spent = Math.max(0, actual);
+  const total = spent + Math.max(0, onOrder) + Math.max(0, notOrdered);
+  $("#vd-money-bar").hidden = total <= 0;
+  const seg = (id, value) => {
+    const el = $(id);
+    const share = total > 0 ? Math.max(0, value) / total : 0;
+    el.hidden = share <= 0;
+    el.style.width = `${Math.max(2, share * 100).toFixed(2)}%`;
+  };
+  seg("#vd-money-seg-spent", spent);
+  seg("#vd-money-seg-order", onOrder);
+  seg("#vd-money-seg-quoted", notOrdered);
+  $("#vd-money-row-spent").classList.toggle("zero", !spent);
+  $("#vd-money-row-order").classList.toggle("zero", !(onOrder > 0));
+  $("#vd-money-row-quoted").classList.toggle("zero", !(notOrdered > 0));
 }
 
 // Debounce handle for keystroke-driven autosave (wired in wireEstimateGrid).
@@ -1412,6 +1463,8 @@ function rowAsEstimateItem(row) {
   };
   return {
     kind: row.querySelector(".ei-kind")?.value || "part",
+    // Ordered-or-not feeds the money bar's amber/hollow split, nothing else.
+    status: row.querySelector(".ei-status")?.value || "quoted",
     quantity: num(".ei-qty"),
     // A returned part's cost input renders as a disabled 0; part_returned
     // below is what actually drops it, so either reading gives the same
@@ -1461,7 +1514,7 @@ function updateEstimateTotalsFromDom() {
   const box = $("#vd-estimate-items");
   if (!box) return;
   const rows = $$(".part-row:not(.head)", box).map(rowAsEstimateItem);
-  applyTicketTotals(ticketTotal(rows), actualTotal(rows));
+  applyTicketTotals(ticketTotal(rows), actualTotal(rows), rows);
   writeLineTotals(box);
   // Job subtotals live in each group's header; keep them moving too.
   for (const group of $$(".job-group", box)) {

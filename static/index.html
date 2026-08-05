@@ -529,14 +529,43 @@
                    quoted up front -- the shop buys what the car needs -- so
                    there is no estimate to be over or under. What's useful is
                    what has actually been spent, and how much of what's written
-                   on the ticket hasn't landed yet. -->
+                   on the ticket hasn't landed yet.
+
+                   The bar between the figures says where the rest of the
+                   money stands: green has landed (parts received at what the
+                   bills said, labor and fees the moment they're written),
+                   amber is on order with a vendor, and the hollow tail is
+                   written up but not ordered from anyone yet. The three rows
+                   under it are the same numbers in words, so the bar never
+                   has to be decoded -- and the rows keep their place at $0 so
+                   the card doesn't jump around as parts land. -->
               <div class="card">
                 <div class="card-head">
                   <p class="section-eyebrow">This Ticket</p>
                 </div>
-                <div class="cost-summary">
-                  <div class="cost-line"><span>Written up (all lines)</span><span id="vd-ticket-total">$0.00</span></div>
-                  <div class="cost-line total"><span>Spent so far (received)</span><span id="vd-actual-cost">$0.00</span></div>
+                <div class="cost-summary money-standing">
+                  <div class="money-bar" id="vd-money-bar" aria-hidden="true" hidden>
+                    <span class="money-seg seg-spent" id="vd-money-seg-spent"></span>
+                    <span class="money-seg seg-order" id="vd-money-seg-order"></span>
+                    <span class="money-seg seg-quoted" id="vd-money-seg-quoted"></span>
+                  </div>
+                  <div class="cost-line money-row" id="vd-money-row-spent">
+                    <span><span class="money-dot dot-spent" aria-hidden="true"></span>Spent so far (received)</span>
+                    <span id="vd-actual-cost">$0.00</span>
+                  </div>
+                  <div class="cost-line money-row" id="vd-money-row-order">
+                    <span><span class="money-dot dot-order" aria-hidden="true"></span>On order — not here yet</span>
+                    <span id="vd-money-on-order">$0.00</span>
+                  </div>
+                  <div class="cost-line money-row" id="vd-money-row-quoted">
+                    <span><span class="money-dot dot-quoted" aria-hidden="true"></span>Written up — not ordered yet</span>
+                    <span id="vd-money-not-ordered">$0.00</span>
+                  </div>
+                  <div class="cost-line money-row money-credit" id="vd-money-row-credit" hidden>
+                    <span><span class="money-dot dot-credit" aria-hidden="true"></span>Vendor credits — in the total below</span>
+                    <span id="vd-money-credit">$0.00</span>
+                  </div>
+                  <div class="cost-line total"><span>Written up (all lines)</span><span id="vd-ticket-total">$0.00</span></div>
                 </div>
               </div>
 

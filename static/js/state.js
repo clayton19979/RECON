@@ -75,6 +75,10 @@ export const state = {
   returnsSearch: "",
   returnsSelected: new Set(),
   postReturnItem: null,
+  // What to do once the Receive Parts dialog has posted, when it was opened
+  // in the middle of something else -- closing a ticket out is the one case
+  // today. Cleared when the dialog is abandoned, so it can never fire late.
+  afterReceive: null,
   vehicleSelection: new Set(), // "segment:id" strings, cleared on filter change/reload
   // Customers screen: the list, its search/filter, which row is expanded,
   // and a per-open cache of /api/customers/{id} details so re-expanding the

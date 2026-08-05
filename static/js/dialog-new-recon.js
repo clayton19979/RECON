@@ -1,6 +1,6 @@
 import { $, get, post } from "./core.js";
 import { toast } from "./notify.js";
-import { todayLocal, withLoading } from "./shortcuts.js";
+import { todayLocal, wirePlateFields, withLoading } from "./shortcuts.js";
 import { state } from "./state.js";
 import { loadVehiclesView } from "./vehicles-board.js";
 import { openVehicleDetail } from "./vehicle-detail.js";
@@ -82,6 +82,7 @@ export function openReconDialog() {
 export function wireReconDialog() {
   $("#recon-cancel").addEventListener("click", () => $("#recon-dialog").close());
   $("#recon-cancel-2").addEventListener("click", () => $("#recon-dialog").close());
+  wirePlateFields("#recon-plate", "#recon-plate-state");
   $("#recon-stock").addEventListener("blur", () => checkForExistingCar());
   $("#recon-vin").addEventListener("blur", () => checkForExistingCar());
   $("#recon-match-open").addEventListener("click", () => {
@@ -138,6 +139,11 @@ export function wireReconDialog() {
           trim: $("#recon-trim").value.trim(),
           engine: $("#recon-engine").value.trim(),
           color: $("#recon-color").value.trim(),
+          // The form has always asked for these two and used to throw both
+          // away at Save, so a lot car never had a plate on file and the
+          // search bar could never find one by it.
+          plate: $("#recon-plate").value.trim(),
+          plate_state: $("#recon-plate-state").value.trim(),
           mileage: Number($("#recon-mileage").value || 0),
           odometer_broken: $("#recon-odo-broken").checked,
           acquisition_source: $("#recon-source").value.trim(),

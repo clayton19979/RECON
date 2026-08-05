@@ -676,6 +676,14 @@ table.sticky-head thead th {
   height: 17px; line-height: 17px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+/* The plate, wherever a car's identity line is drawn. Read out loud and typed
+   into the search bar character by character, so it gets the same tabular
+   digits and letter spacing the stock number has -- an O and a 0 have to be
+   tellable apart at 11px. */
+.veh-plate {
+  font-variant-numeric: tabular-nums; letter-spacing: .04em;
+  font-weight: 600; color: var(--ink-soft);
+}
 .board-table .veh-customer { display: inline-flex; vertical-align: top; align-items: center; gap: 4px; color: var(--ink-soft); font-weight: 500; }
 .board-table .veh-customer svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 2; opacity: .8; }
 .board-table tbody tr.selected { background: var(--accent-tint); }

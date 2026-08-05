@@ -676,6 +676,10 @@ table.sticky-head thead th {
   height: 17px; line-height: 17px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+/* The list layout's reading of the card's repair-progress bar: a count under
+   the status pill. Green once every repair is ticked off, same as the bar. */
+.board-table .jobs-sub { font-variant-numeric: tabular-nums; }
+.board-table .jobs-sub.all-done { color: var(--good); font-weight: 600; }
 .board-table .veh-customer { display: inline-flex; vertical-align: top; align-items: center; gap: 4px; color: var(--ink-soft); font-weight: 500; }
 .board-table .veh-customer svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 2; opacity: .8; }
 .board-table tbody tr.selected { background: var(--accent-tint); }
@@ -818,6 +822,28 @@ table.sticky-head thead th {
   font-size: 12px; color: var(--ink-soft); margin-top: 1px;
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
 }
+/* How far through its repairs the car is: one segment per repair, filled as
+   they're ticked off on the ticket. Accent while under way and green once
+   every repair is done -- the same two colors the ticket page's own progress
+   bar uses, so the card is a small copy of it rather than a third meaning of
+   the same colors. Segments rather than a smooth fill because repair counts
+   are small: three boxes with one filled reads as "1 of 3" from arm's
+   length, which a 33%-full bar does not. */
+.veh-card-jobs { display: flex; align-items: center; gap: 3px; margin-top: 2px; }
+.veh-card-jobs .seg {
+  flex: 1 1 0; height: 5px; border-radius: 999px;
+  background: var(--paper); border: 1px solid var(--line-soft);
+}
+.veh-card-jobs .seg.done { background: var(--accent); border-color: var(--accent); }
+.veh-card-jobs.all-done .seg.done { background: var(--good); border-color: var(--good); }
+/* The over-a-dozen-repairs fallback: one continuous track, same colors. */
+.veh-card-jobs .seg-track {
+  flex: 1 1 auto; height: 5px; border-radius: 999px; overflow: hidden;
+  background: var(--paper); border: 1px solid var(--line-soft);
+}
+.veh-card-jobs .seg-fill { display: block; height: 100%; border-radius: 999px; background: var(--accent); }
+.veh-card-jobs.all-done .seg-fill { background: var(--good); }
+
 .veh-card-foot {
   display: flex; align-items: flex-end; gap: 8px; margin-top: 3px;
   padding-top: 7px; border-top: 1px solid var(--line-soft);

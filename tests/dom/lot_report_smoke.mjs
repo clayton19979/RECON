@@ -142,6 +142,37 @@ ok(readyCard.querySelector(".stat-value").textContent.trim() === "2",
 ok(/1 finished, to be filed/.test(readyCard.textContent.replace(/\s+/g, " ")),
    `the Ready To Go card doesn't account for the settled cars: "${readyCard.textContent.replace(/\s+/g, " ").trim()}"`);
 
+/* ---------- the cards point at the piles they count ----------
+   The three pile cards are buttons that jump to their band on the sheet, and
+   each wears its pile's stage dot -- the same colour system the bands and
+   the board's columns read from. The money card counts no pile, so it stays
+   a plain div: a card you can't usefully click shouldn't look like one. */
+ok(readyCard.tagName === "BUTTON" && readyCard.dataset.lotJump === "ready",
+   "the Ready To Go card isn't a button that jumps to its pile");
+ok(!!readyCard.querySelector(".stage-dot"), "the Ready To Go card lost its pile dot");
+ok(readyCard.dataset.lotGroup === "ready",
+   "the card doesn't carry data-lot-group, so the stage colours can't reach it");
+click(w, readyCard);
+const readyBandRow = doc.querySelector('#report-output tr.lot-group-head[data-lot-group="ready"]');
+ok(readyBandRow?.classList.contains("lot-jump-flash"),
+   "clicking a pile card doesn't flash the band it jumped to");
+
+/* ---------- the lot as one strip ----------
+   A segment per non-empty pile, sized by car count: ready 2, working 2,
+   settled 1 — and no segment for the empty Not Started pile. Each segment
+   jumps like the cards do. */
+const stripSegs = [...doc.querySelectorAll("#report-chart .lot-strip-seg")];
+ok(stripSegs.length === 3,
+   `expected 3 strip segments (the empty pile drops out), got ${stripSegs.length}`);
+const segByKey = Object.fromEntries(stripSegs.map((s) => [s.dataset.lotJump, s]));
+ok(segByKey.ready?.style.flexGrow === "2" && segByKey.working?.style.flexGrow === "2"
+   && segByKey.settled?.style.flexGrow === "1",
+   `strip widths don't match the pile counts: ${stripSegs.map((s) => `${s.dataset.lotJump}:${s.style.flexGrow}`).join(", ")}`);
+ok(!segByKey.waiting, "an empty pile drew a segment on the strip");
+click(w, segByKey.settled);
+ok(doc.querySelector('#report-output tr.lot-group-head[data-lot-group="settled"]')?.classList.contains("lot-jump-flash"),
+   "clicking a strip segment doesn't flash the band it jumped to");
+
 /* ---------- money already spent that this sheet doesn't count ----------
    "Spent so far" only counts parts somebody marked received, and on recon
    work receiving is the step that gets skipped. A sheet that answers "what

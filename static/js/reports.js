@@ -427,12 +427,22 @@ function reportSortHeader(shape, key, extraClass = "") {
    same range, same segment -- so there's nothing to reconcile. */
 function renderReportStats(rows, shape, totals) {
   const cards = (REPORT_STAT_CARDS[shape] || REPORT_STAT_CARDS["vehicle-spend"])(rows, totals);
-  $("#report-stats").innerHTML = cards.map((c) => `
-      <div class="stat">
-        <div class="stat-label">${esc(c.label)}</div>
+  // A card with a `group` is counting one pile of the sheet below, so it is a
+  // real <button> that jumps there, and it carries the pile's data-lot-group
+  // so the stylesheet's stage colours reach it -- the dot on the card, the
+  // band on the sheet and the column on the board all read from the same
+  // custom property and cannot drift apart. A card without one (the money
+  // card, every card on the other reports) stays the plain div it was.
+  $("#report-stats").innerHTML = cards.map((c) => {
+    const inner = `
+        <div class="stat-label">${c.group ? `<span class="stage-dot" aria-hidden="true"></span>` : ""}${esc(c.label)}</div>
         <div class="stat-value${c.tone ? ` ${c.tone}` : ""}">${esc(c.value)}</div>
-        <div class="stat-sub">${esc(c.sub)}</div>
-      </div>`).join("");
+        <div class="stat-sub">${esc(c.sub)}</div>`;
+    return c.group
+      ? `<button type="button" class="stat stat-action stat-pile" data-lot-jump="${c.group}" data-lot-group="${c.group}"
+          title="Jump to this pile on the sheet below">${inner}</button>`
+      : `<div class="stat">${inner}</div>`;
+  }).join("");
 }
 
 /* Walt's four questions as four numbers: what can go out, what's moving,
@@ -457,18 +467,24 @@ function lotStatCards(rows) {
   // -- so the sub-line says how many of the total they are rather than
   // pretending they are gone.
   const settled = count("settled");
+  // The three pile cards carry their pile's key (`group`), which does two
+  // things at once: the card wears the pile's stage colour, and clicking it
+  // jumps to that pile's band on the sheet below -- on a 40-car lot the
+  // section a card is counting can be three screens down.
   return [
     {
       label: "Ready To Go",
+      group: "ready",
       value: String(ready),
       sub: settled
         ? `of ${rows.length} on the lot · ${settled} finished, to be filed`
         : `of ${rows.length} on the lot`,
       tone: ready ? "good" : "",
     },
-    { label: "In The Shop", value: String(count("working")), sub: "being worked on now" },
+    { label: "In The Shop", group: "working", value: String(count("working")), sub: "being worked on now" },
     {
       label: "Not Started",
+      group: "waiting",
       value: String(waiting),
       sub: stalled ? `${stalled} untouched ${STALLED_AFTER_DAYS}+ days` : "nothing stalled",
       tone: stalled ? "warn" : "",
@@ -758,6 +774,56 @@ export function barChart({ title, note, legend = "", items, rowAttrs = null, row
 
 const CHART_LIMIT = 12;
 
+/* The lot as one strip: a segment per pile, sized by how many cars are in
+   it, in the pile's own stage colour. The cards above already say the
+   counts; what they can't say is proportion -- "most of the lot hasn't been
+   started" is a shape, not a number, and this is the shape. Each segment
+   jumps to its pile's band on the sheet, same as the cards.
+
+   Nothing renders for an empty lot, and nothing for a lot that is all one
+   pile -- a strip with one segment is a rectangle saying what a card
+   already said. */
+function lotMixStrip(rows) {
+  if (!rows.length) return "";
+  const piles = LOT_GROUPS
+    .map((g) => ({ ...g, count: rows.filter((r) => r.lot_bucket === g.key).length }))
+    .filter((p) => p.count > 0);
+  if (piles.length < 2) return "";
+  const seg = (p) => `<button type="button" class="lot-strip-seg" data-lot-jump="${p.key}" data-lot-group="${p.key}"
+      style="flex-grow:${p.count}"
+      title="${esc(`${p.label} — ${p.count} car${p.count === 1 ? "" : "s"} · ${p.blurb}. Click to jump to that pile.`)}">
+      <span class="lot-strip-count">${p.count}</span><span class="lot-strip-name">${esc(p.label)}</span>
+    </button>`;
+  return `<div class="panel chart-panel lot-strip-panel">
+    <div class="chart-head">
+      <h3 class="chart-title">The lot at a glance</h3>
+      <span class="chart-note">Widths are car counts — click a pile to jump to it</span>
+    </div>
+    <div class="lot-strip" role="group" aria-label="The lot, split by where each car is up to">${piles.map(seg).join("")}</div>
+  </div>`;
+}
+
+/* Scroll the sheet to a pile's band and flash it once in the pile's own
+   colour, so the eye lands on the right section instead of somewhere in the
+   middle of a scroll. The band exists even when its pile is empty ("no cars
+   are finished right now" is an answer), so every jump has somewhere to go.
+   scrollIntoView is feature-checked for the jsdom the smoke tests run in. */
+function jumpToLotGroup(key) {
+  const band = $(`#report-output tr.lot-group-head[data-lot-group="${key}"]`);
+  if (!band) return;
+  if (typeof band.scrollIntoView === "function") {
+    const reduced = typeof window.matchMedia === "function"
+      && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    band.scrollIntoView({ behavior: reduced ? "auto" : "smooth", block: "start" });
+  }
+  // Remove-then-re-add (with a reflow between) restarts the flash when the
+  // same band is jumped to twice in a row.
+  band.classList.remove("lot-jump-flash");
+  void band.offsetWidth;
+  band.classList.add("lot-jump-flash");
+  band.addEventListener("animationend", () => band.classList.remove("lot-jump-flash"), { once: true });
+}
+
 function renderReportChart(rows, shape) {
   const target = $("#report-chart");
   if (shape === "technicians") {
@@ -814,7 +880,11 @@ function renderReportChart(rows, shape) {
     items,
     rowAttrs: (i) => (i.refId != null ? `role="button" tabindex="0" data-seg="${esc(i.seg)}" data-ref-id="${i.refId}"` : ""),
   }) || chartNothingToPlot(rows.length, "cost");
-  target.innerHTML = chart ? `<div class="board-chart">${chart}</div>` : "";
+  // The lot snapshot leads with its own shape -- the pile strip -- and keeps
+  // the cost bars under it. An empty lot still leaves this slot empty rather
+  // than drawing an empty shell.
+  const strip = shape === "lot" ? lotMixStrip(rows) : "";
+  target.innerHTML = strip || chart ? `<div class="board-chart">${strip}${chart}</div>` : "";
 }
 
 /* ---------- table ---------- */
@@ -1409,6 +1479,12 @@ export function wireReportsView() {
     if (nav) {
       const railItem = $(`.rail-item[data-view="${nav.dataset.nav}"]`);
       if (railItem) railItem.click();
+      return;
+    }
+    // A pile card or a strip segment scrolls to its band on the lot sheet.
+    const jump = e.target.closest("[data-lot-jump]");
+    if (jump) {
+      jumpToLotGroup(jump.dataset.lotJump);
       return;
     }
     const chip = e.target.closest("[data-report-range]");

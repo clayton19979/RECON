@@ -1452,6 +1452,25 @@ function promisedCellHtml(v) {
   return `<span class="promise-cell" title="Promised for ${full} — ${-late} day${late === -1 ? "" : "s"} to go">${label}</span>`;
 }
 
+/* The same judgement, on the card's head row. The needs sentence already
+   states the fact in words ("3 days past the promised date"), but it states
+   it in the same quiet grey as "no ticket written yet" -- and a blown
+   customer promise is the one line on the board that has earned its colour.
+   The tag alone, without the date: a card has no Promised column to line a
+   date up under, and the date is one hover (and the drawer) away. Same
+   classes and same wording as the table's tag, so the two layouts raise the
+   same flag rather than teaching two vocabularies. Null covers both "no
+   promise" and "settled", which is exactly when the table goes quiet too. */
+function cardPromiseTagHtml(v) {
+  const late = v.promise_days_late;
+  if (late == null || late < 0 || !v.target_date) return "";
+  const full = esc(fmtDay(v.target_date));
+  if (late === 0) {
+    return `<span class="promise-cell promise-today" title="Promised for ${full} — due today"><span class="promise-tag">due today</span></span>`;
+  }
+  return `<span class="promise-cell promise-late" title="Promised for ${full} — ${late} day${late === 1 ? "" : "s"} past due"><span class="promise-tag">${late}d late</span></span>`;
+}
+
 /* The ticket's short number, as it reads everywhere it appears.
    A car with no live ticket has no number to show, and says so rather than
    printing "RO —" as though one existed. */
@@ -1740,6 +1759,7 @@ function vehicleCardHtml(v) {
     </label>
     <div class="veh-card-head">
       <span class="pill ${vehicleStatusPillClass(v)}">${esc(STATUS_LABEL[v.status] || v.status)}</span>
+      ${cardPromiseTagHtml(v)}
       <span class="veh-card-ref">${esc(ref)}${age ? ` <span class="${ageTone}">· ${esc(age)}</span>` : ""}</span>
       ${roTagHtml(v)}
     </div>
@@ -1750,10 +1770,12 @@ function vehicleCardHtml(v) {
     <div class="veh-card-foot">
       <span class="veh-card-facts">
         ${idleCellHtml(v, { spelled: true })}
+        ${partsCellHtml(v)}
         ${v.technicians.length ? `<span class="tech"><span class="tech-dot"></span>${esc(v.technicians.join(", "))}</span>` : ""}
       </span>
       <span class="veh-card-money">
         <span class="veh-card-cost">${money(v.actual_cost)}</span>
+        ${costMissingHtml(v)}
       </span>
     </div>`;
 }

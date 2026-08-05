@@ -83,6 +83,12 @@ const reset = () => {
   w.state.detail = { segment: "recon", id: 1, item: {}, order: mkOrder() };
   w.state.staff = [];
   w.renderEstimate(w.state.detail.order);
+  // renderEstimate draws the grid but does not re-run the page's
+  // enable/disable pass, and the 409 test below reloads a vehicle with no
+  // repair order on it -- which switches the ticket-only buttons off and
+  // leaves them off. Put them back, because every test here is driving a
+  // ticket that exists.
+  for (const id of ["vd-add-part", "vd-add-labor", "vd-add-job"]) w.document.querySelector(`#${id}`).disabled = false;
 };
 
 /* Answer every request currently in the air and let the .then chains (and any
@@ -106,8 +112,7 @@ ok(posted.length === 1, `expected 1 save in flight, saw ${posted.length}`);
 // The advisor keeps typing while that first save is still posting. Whatever
 // they type has to ride along on the follow-up, so change a value here and
 // check it reaches the server. Focused, because that is where the cursor
-// actually is -- an unfocused field is the one the in-place sync is entitled
-// to overwrite with the server's copy.
+// actually is; test 6 below covers the boxes they have already tabbed past.
 const typing = doc.querySelectorAll("#vd-estimate-items .part-row:not(.head)")[1].querySelector(".ei-cost");
 typing.focus();
 typing.value = "72.25";
@@ -212,5 +217,85 @@ const reloadsAfter = fetchLog.filter((f) => /\/api\/recon\/vehicles\/1$/.test(f.
 ok(reloadsAfter === reloadsBefore + 1,
    `a real conflict reloaded the vehicle ${reloadsAfter - reloadsBefore} times, expected 1`);
 nextStatus = 200;
+
+/* ------------------------------------------------------------------
+   6. The boxes the advisor has already tabbed past are not rolled back by
+      an answer that predates them.
+
+      This is the real entry path, not an edge case. Parts go in
+      spreadsheet-style -- Description, Tab, Qty, Tab, Cost, Tab -- and every
+      Tab starts its own save. On the shop LAN the first answer lands while
+      the cursor is two boxes further along, describing the line as it was
+      before either number was typed. Writing that answer over the grid put
+      the quantity back to 1 and the cost back to $0.00, with "All changes
+      saved" showing underneath: a two-off quantity on a $96 rotor is $96
+      missing from what the shop spent on that car, and nobody was told.
+
+      Only the focused box used to survive, because the in-place sync skips
+      it. Everything behind the cursor is what this covers.
+   ------------------------------------------------------------------ */
+reset();
+const line = doc.querySelectorAll("#vd-estimate-items .part-row:not(.head)")[0];
+const lineCost = line.querySelector(".ei-cost");
+lineCost.focus();
+lineCost.value = "96";
+lineCost.dispatchEvent(new w.Event("input", { bubbles: true }));
+await new Promise((resolve) => setTimeout(resolve, 900));
+await settle();
+ok(posted.length === 1, `the keystroke save never went out (${posted.length} requests)`);
+
+// Tab on: the quantity gets changed from the 2 on file to 3 and left behind,
+// and the cursor moves to the description. Both happen while that first save
+// -- which posted the old quantity -- is still in the air.
+const lineQty = line.querySelector(".ei-qty");
+lineQty.value = "3";
+lineQty.dispatchEvent(new w.Event("change", { bubbles: true }));
+line.querySelector(".ei-desc").focus();
+await settle();
+ok(posted.length === 1, `typing on while a save was posting put ${posted.length} saves in the air at once`);
+
+await answer();
+ok(line.querySelector(".ei-qty").value === "3",
+   `the quantity typed while a save was posting was rolled back on screen to "${line.querySelector(".ei-qty").value}"`);
+ok(line.querySelector(".ei-cost").value === "96",
+   `the cost typed while a save was posting was rolled back on screen to "${line.querySelector(".ei-cost").value}"`);
+await answer();
+const lastLine = posted[posted.length - 1].items.find((i) => i.description === "Front pads");
+ok(lastLine && lastLine.quantity === 3 && lastLine.unit_cost === 96,
+   `the shop PC was left holding quantity ${lastLine && lastLine.quantity} at $${lastLine && lastLine.unit_cost}, not the 3 at $96 that was typed`);
+ok(doc.querySelector("#vd-estimate-save-state").textContent === "All changes saved",
+   `save indicator ended at "${doc.querySelector("#vd-estimate-save-state").textContent}", expected "All changes saved"`);
+
+/* ------------------------------------------------------------------
+   7. A line added while a save is posting is still there afterwards.
+
+      Same cause, worse symptom. Adding a part saves immediately, so a second
+      ＋ Part before the first answer lands leaves a row on screen that the
+      answer knows nothing about -- and the redraw it triggered simply
+      deleted it. Two clicks, one line: the advisor watches a part they just
+      added disappear.
+   ------------------------------------------------------------------ */
+reset();
+const linesBefore = doc.querySelectorAll("#vd-estimate-items .part-row:not(.head)").length;
+doc.querySelector("#vd-add-part").click();
+await settle();
+doc.querySelector("#vd-add-part").click();
+await settle();
+ok(doc.querySelectorAll("#vd-estimate-items .part-row:not(.head)").length === linesBefore + 2,
+   "the second ＋ Part did not put a row on screen");
+await answer();
+await answer();
+await answer();
+ok(doc.querySelectorAll("#vd-estimate-items .part-row:not(.head)").length === linesBefore + 2,
+   `two ＋ Part clicks left ${doc.querySelectorAll("#vd-estimate-items .part-row:not(.head)").length - linesBefore} lines on screen, expected 2`);
+ok(posted[posted.length - 1].items.length === linesBefore + 2,
+   `the shop PC was left holding ${posted[posted.length - 1].items.length} lines, expected ${linesBefore + 2} -- one of the added parts was dropped`);
+
+/* Each row carries the id the server gave its line, so the next save updates
+   that line instead of asking for it to be deleted and written again -- which
+   is what churns the id out from under a receive tick or a vendor invoice. */
+const savedIds = [...doc.querySelectorAll("#vd-estimate-items .part-row:not(.head)")].map((r) => r.dataset.id);
+ok(savedIds.every((id) => id), `a saved line was left with no id on its row: ${JSON.stringify(savedIds)}`);
+ok(new Set(savedIds).size === savedIds.length, `two rows claim the same line: ${JSON.stringify(savedIds)}`);
 
 finish("estimate autosave never fights itself");

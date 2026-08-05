@@ -26,7 +26,7 @@ const car = (over) => ({
   needs: "work under way", ...over,
 });
 
-/* Two piles with cars in them and one deliberately empty.
+/* Three piles with cars in them and one deliberately empty.
 
    The two "In the shop" cars are the load-bearing pair: R-0044 is the cheaper
    and the fresher of the two, so stock order (R-0044 first) is the ONLY one of
@@ -44,7 +44,7 @@ const lot = [
   // much until somebody clears it.
   car({
     lot_bucket: "ready", segment: "we_owe", we_owe_id: 5, vehicle: "2018 Honda Accord",
-    customer_name: "Marcus Doyle", status: "fulfilled", status_bucket: "finished",
+    customer_name: "Marcus Doyle", status: "complete", status_bucket: "finished",
     actual_cost: 0, remaining_cost: 0, idle_days: 21,
     unreceived_closed_cost: 95, unreceived_closed_parts: 1,
     needs: "Ready to go — but 1 part never marked received ($95.00 not in the cost)",
@@ -58,6 +58,14 @@ const lot = [
     lot_bucket: "working", recon_id: 4, stock_number: "R-0044", vehicle: "2020 Kia Soul",
     actual_cost: 100, quoted_cost: 340, remaining_cost: 240, idle_days: 2, parts_pending: 1,
     parts_pending_value: 240, needs: "1 part on order ($240.00) · $240.00 of work left",
+  }),
+  // A car whose lot life is over and whose record is still sitting on the
+  // live board. It is not an answer to "what can I sell" and must not be
+  // counted as one -- it is a filing job, in a pile of its own.
+  car({
+    lot_bucket: "settled", recon_id: 11, stock_number: "R-0981", vehicle: "2015 Chevrolet Malibu",
+    status: "sold", status_bucket: "finished", actual_cost: 0, quoted_cost: 0,
+    remaining_cost: 0, idle_days: 41, needs: "Sold — send to History",
   }),
 ];
 
@@ -98,23 +106,41 @@ ok(doc.querySelector('#report-output th[data-report-sort="stock"]')?.classList.c
    "the report didn't open sorted by Stock #");
 const dataRows = [...doc.querySelectorAll("#report-output tbody tr:not(.lot-group-head)")];
 const stockOf = (tr) => tr.children[0].textContent.trim();
-ok(dataRows.length === 4, `expected 4 car rows, got ${dataRows.length}`);
+ok(dataRows.length === 5, `expected 5 car rows, got ${dataRows.length}`);
 const working = dataRows.filter((tr) => ["R-0044", "R-1002"].includes(stockOf(tr))).map(stockOf);
 ok(JSON.stringify(working) === JSON.stringify(["R-0044", "R-1002"]),
    `In-the-shop cars are in ${JSON.stringify(working)} order — that's dollars or idle days, not stock number`);
 
 /* ---------- each section explains itself, empty ones included ---------- */
 const bands = [...doc.querySelectorAll("#report-output tr.lot-group-head")];
-ok(bands.length === 3, `expected all 3 sections, got ${bands.length} — an empty pile disappeared`);
+ok(bands.length === 4, `expected all 4 sections, got ${bands.length} — an empty pile disappeared`);
 const bandText = bands.map((b) => b.textContent.replace(/\s+/g, " ").trim());
 ok(bandText.some((t) => /Ready to go/.test(t) && /2 cars/.test(t) && /\$380\.00 spent/.test(t)),
    `Ready-to-sell band is wrong: ${JSON.stringify(bandText)}`);
 ok(bandText.some((t) => /In the shop/.test(t) && /\$1,000\.00 spent/.test(t) && /\$240\.00 still to spend/.test(t)),
    `In-the-shop band doesn't carry its money: ${JSON.stringify(bandText)}`);
+// The sold car is under its own heading and NOT inside Ready to go, which is
+// the number Walt reads as "cars I can sell".
+ok(bandText.some((t) => /Finished — file away/.test(t) && /1 car/.test(t)),
+   `the settled pile has no band of its own: ${JSON.stringify(bandText)}`);
+ok(!/3 cars/.test(bandText.find((t) => /Ready to go/.test(t)) || ""),
+   "a sold car is being counted as ready to go");
 const emptyBand = bands.find((b) => b.classList.contains("is-empty"));
 ok(!!emptyBand, "the empty section rendered as a normal band with no rows under it");
 ok(/Every car has been started/.test(emptyBand?.textContent || ""),
    `empty section says "${emptyBand?.textContent.trim()}" instead of explaining itself`);
+
+/* ---------- the headline count says what it is counting ----------
+   "Ready to go" is read as "cars I can sell". The cars that are done with
+   are still on the sheet -- somebody has to file them -- so the card says how
+   many of the total they are rather than quietly folding them in. */
+const readyCard = [...doc.querySelectorAll("#report-stats .stat")]
+  .find((el) => /Ready To Go/i.test(el.querySelector(".stat-label").textContent));
+ok(!!readyCard, "the lot report has no Ready To Go card");
+ok(readyCard.querySelector(".stat-value").textContent.trim() === "2",
+   `Ready To Go counts ${readyCard.querySelector(".stat-value").textContent.trim()} — the sold car is being counted as sellable`);
+ok(/1 finished, to be filed/.test(readyCard.textContent.replace(/\s+/g, " ")),
+   `the Ready To Go card doesn't account for the settled cars: "${readyCard.textContent.replace(/\s+/g, " ").trim()}"`);
 
 /* ---------- money already spent that this sheet doesn't count ----------
    "Spent so far" only counts parts somebody marked received, and on recon
@@ -172,7 +198,7 @@ ok(sittingCells.includes("21 days"), `expected "21 days" among ${JSON.stringify(
 ok(w.reportCountText(4, "lot") === "4 cars on the lot", `lot count reads "${w.reportCountText(4, "lot")}"`);
 ok(w.reportCountText(1, "lot") === "1 car on the lot", `singular lot count reads "${w.reportCountText(1, "lot")}"`);
 ok(w.reportCountText(4, "vehicle-spend") === "4 rows", "the spend report stopped counting rows");
-ok(/4 cars on the lot/.test(doc.querySelector("#report-scope").textContent),
+ok(/5 cars on the lot/.test(doc.querySelector("#report-scope").textContent),
    `scope line reads "${doc.querySelector("#report-scope").textContent}"`);
 
 /* ---------- the sheet that leaves the building ---------- */
@@ -200,9 +226,10 @@ ok(moneyCells.every((td) => td.classList.contains("num-col")),
 // Every section, its sentence, and its own subtotal.
 ok(/Work on these is finished/.test(printText), "the Ready section lost its plain-English sentence");
 ok(/These are in the shop now/.test(printText), "the In-the-shop section lost its sentence");
+ok(/These are done with/.test(printText), "the settled section lost its plain-English sentence");
 ok(/Every car has been started/.test(printText), "the empty section isn't on the printed sheet");
 const foots = [...printed.querySelectorAll(".print-table.report tfoot")];
-ok(foots.length === 2, `expected a subtotal under each of the 2 non-empty sections, got ${foots.length}`);
+ok(foots.length === 3, `expected a subtotal under each of the 3 non-empty sections, got ${foots.length}`);
 ok(/Spent on the whole lot/.test(printText) && /\$1,380\.00/.test(printText),
    "the whole-lot total is missing or wrong (380 + 1000)");
 

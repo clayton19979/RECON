@@ -1520,7 +1520,7 @@ export function renderVehiclesTable() {
 
 /* ---------- the columns layout ----------
 
-   The same filtered, sorted rows the table shows, dealt into the three piles
+   The same filtered, sorted rows the table shows, dealt into the piles
    Walt actually asks about: what hasn't been started, what's in the shop, and
    what can go out. Left to right is the direction a car travels, which is the
    shape everyone who has used a shop job board already reads without being
@@ -1537,11 +1537,17 @@ export function renderVehiclesTable() {
 const LOT_WAITING = "waiting";
 const LOT_WORKING = "working";
 const LOT_READY = "ready";
+const LOT_SETTLED = "settled";
 
 export const LOT_COLUMNS = [
   { key: LOT_WAITING, label: "Not started", blank: "Nothing waiting to be started." },
   { key: LOT_WORKING, label: "In the shop", blank: "Nothing in the shop right now." },
   { key: LOT_READY, label: "Ready to go", blank: "Nothing finished yet." },
+  // Last, and past the end of the left-to-right journey the other three
+  // describe: these cars have already left it. Sold cars and settled we-owe
+  // promises used to sit in "Ready to go" and quietly inflate the one number
+  // Walt reads off this board -- see app/recon.py::LOT_SETTLED.
+  { key: LOT_SETTLED, label: "Finished — file away", blank: "Nothing waiting to be filed." },
 ];
 
 const LOT_COLUMN_KEYS = new Set(LOT_COLUMNS.map((c) => c.key));

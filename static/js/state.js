@@ -26,7 +26,7 @@ export const state = {
   vehicleLateOnly: false,                 // "Past Promised" card toggle -- we-owe promises past their date
   vehicleIdleBucket: "",                  // "" == any; else an IDLE_SELECTIONS key (a chart bar, or "stalled" from the card)
   vehicleChartOpen: true,                 // the idle-bucket chart above the table
-  // "columns" (cards grouped into the three piles) | "list" (sortable table).
+  // "columns" (cards grouped into the lot piles) | "list" (sortable table).
   // Columns is the default because "where is everything up to" is the
   // question the board is opened for first thing in the morning; the table is
   // one click away and is the better answer once you want it sorted by cost.

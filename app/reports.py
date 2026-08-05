@@ -9,6 +9,7 @@ from fastapi import APIRouter
 from .db import normalize_vin
 from .recon import (
     LOT_READY,
+    LOT_SETTLED,
     LOT_WAITING,
     LOT_WORKING,
     idle_days,
@@ -168,10 +169,11 @@ def technician_productivity_rows(db: sqlite3.Connection, start: str | None, end:
     return result
 
 
-# The three groups the lot report sorts cars into, in the order Walt reads
-# them: what can go out, what is being worked, what has not been touched yet.
-# Which pile a car is in is decided in recon.py, next to the board rows it is
-# stamped onto; only the wording is a report concern.
+# The groups the lot report sorts cars into, in the order Walt reads them:
+# what can go out, what is being worked, what has not been touched yet, and
+# last the cars whose lot life is already over. Which pile a car is in is
+# decided in recon.py, next to the board rows it is stamped onto; only the
+# wording is a report concern.
 LOT_GROUP_LABEL = {
     # "Ready to sell" was only ever true of Walt's lot cars. Half this board
     # is we-owe work on cars a customer already owns and is waiting on, and
@@ -180,6 +182,11 @@ LOT_GROUP_LABEL = {
     LOT_READY: "Ready to go",
     LOT_WORKING: "In the shop",
     LOT_WAITING: "Not started",
+    # Deliberately not "Sold": half this pile is we-owe promises that were
+    # fulfilled or waived on a customer's own car, which was never the lot's
+    # to sell. What all of them have in common is that the shop is done and
+    # the record is still sitting on the live board.
+    LOT_SETTLED: "Finished — file away",
 }
 
 
@@ -199,7 +206,9 @@ def lot_rows(db: sqlite3.Connection) -> list[dict]:
     and what each one is waiting on. All this adds is Walt's reading order.
     """
     rows = vehicle_board_rows(db)
-    order = {LOT_READY: 0, LOT_WORKING: 1, LOT_WAITING: 2}
+    # Settled cars last: they are the only pile that is not asking anybody to
+    # do shop work, so they belong under the three that are.
+    order = {LOT_READY: 0, LOT_WORKING: 1, LOT_WAITING: 2, LOT_SETTLED: 3}
     # Within a group, the longest-idle car first: the one most likely to have
     # been forgotten is the one Walt most needs to be asked about.
     rows.sort(key=lambda r: (order[r["lot_bucket"]], -r["idle_days"]))

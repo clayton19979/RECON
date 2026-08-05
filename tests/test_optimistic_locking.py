@@ -10,7 +10,7 @@ APP = Path(__file__).resolve().parent.parent / "app"
 # Every statement that bumps an edit_version counter. Listed explicitly so
 # adding a new versioned table is a deliberate decision that lands here too,
 # rather than quietly shipping a seventh unguarded write.
-BUMP_SITES = 7
+BUMP_SITES = 8
 
 
 def test_every_edit_version_bump_carries_the_version_in_its_own_where_clause():

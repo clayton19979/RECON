@@ -525,6 +525,11 @@ export function renderVehicleStatusOptions() {
   sel.value = state.vehicleStatus;
 }
 
+// "1 part" / "3 parts". Only ever used in the tooltips the cards carry, where
+// the sentence has to read as English rather than as a label with a number
+// stuck on the front.
+const countOf = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
 /* ---------- board summary cards ----------
 
    These summarize the rows that are actually on screen, not the whole lot.
@@ -569,10 +574,24 @@ function boardStats(rows, idlePool = rows) {
     cost: rows.reduce((s, v) => s + (v.actual_cost || 0), 0),
     partsWaiting: rows.filter((v) => (v.parts_pending || 0) > 0).length,
     partsValue: rows.reduce((s, v) => s + (v.parts_pending_value || 0), 0),
-    // Written-up parts money that has never been marked received, so it is
-    // missing from the Cost total. Real spending the card cannot see -- the
-    // sub below says so instead of letting the total quietly read low.
-    unreceived: rows.reduce((s, v) => s + (v.unreceived_cost || 0), 0),
+    // Parts money on tickets the shop has already closed and never marked
+    // received: real spending the Cost total cannot see, so the sub below
+    // says so instead of letting the total quietly read low.
+    //
+    // Closed tickets only, which is the same rule the car's own badge uses
+    // (costMissingHtml), the Lot Status sheet uses, and the spend, profit and
+    // exported sheets use (missingReceiptTotals in reports.js). Counting every
+    // unreceived line instead put money on OPEN tickets in here -- parts
+    // ordered and simply not delivered yet -- which is not spending at all and
+    // is already reported one card to the left as "on order". The board was
+    // the only surface reading it that way, so it was also the only one whose
+    // figure disagreed with every sheet Walt gets handed.
+    unreceived: rows.reduce((s, v) => s + (v.unreceived_closed_cost || 0), 0),
+    // Per car and per part as well as in dollars: "$380.00" alone doesn't say
+    // whether that is one forgotten windshield or a habit, and the number of
+    // cars is what tells somebody how long clearing it will take.
+    unreceivedCars: rows.filter((v) => (v.unreceived_closed_cost || 0) > 0).length,
+    unreceivedParts: rows.reduce((s, v) => s + (v.unreceived_closed_parts || 0), 0),
     stalledCount: stalled.length,
     stalledWorst: stalled.reduce((worst, v) => Math.max(worst, v.idle_days || 0), 0),
     ...historyStats(rows),
@@ -646,19 +665,25 @@ function renderStats(rows) {
   // what the car needs -- so an "against estimate" figure would be inventing a
   // number nobody agreed to. Walt's question is "how much did we spend on it".
   setValue("#stat-actual-total", money(s.cost));
-  // What the visible cars have cost, full stop. There is deliberately nothing
-  // to compare it against: recon work isn't quoted up front -- the shop buys
-  // what the car needs -- so an "against estimate" figure would be inventing a
-  // number nobody agreed to. The one caveat worth a line: parts that were
-  // bought and never marked received are real spending the total cannot see,
-  // so when any exist the sub says that -- it is the fact that can be acted
-  // on, on the card the manager trusts most.
+  // The one caveat worth a line under it: parts that were bought, fitted and
+  // never marked received are real spending the total cannot see, so when any
+  // exist the sub says so -- the fact that can be acted on, on the card the
+  // manager trusts most. Word for word what the Lot Status sheet says about
+  // the same money, because somebody who has read it on one screen must not
+  // have to work out that it means the same thing on the other.
+  //
+  // The tooltip carries the follow-up -- how many parts, on how many cars, and
+  // where the list of them lives -- so the card itself stays one short line.
   const costSub = $("#stat-cost-sub");
   if (s.unreceived >= 0.005) {
-    costSub.textContent = `${money(s.unreceived)} of parts not marked received`;
+    costSub.textContent = `${money(s.unreceived)} spent but never marked received`;
+    costSub.title = `${countOf(s.unreceivedParts, "part")} on ${countOf(s.unreceivedCars, "car")} `
+      + `whose ticket is closed. That money isn't in the total above. `
+      + `Parts & Cores lists every one of them under Missing Receipts.`;
     costSub.style.color = "var(--warn)";
   } else {
     costSub.textContent = s.count ? "received parts + labor" : "nothing spent yet";
+    costSub.title = "";
     costSub.style.color = "";
   }
 
@@ -1584,22 +1609,42 @@ export function displayedVehicles() {
 }
 
 /* "$1,240.00 spent" plus, where there is any, what finishing the column's
-   cars should still cost. The same two numbers the Lot Report prints under
-   each of its groups, so the two screens can be read side by side.
+   cars should still cost and what the spend figure is short by. The same
+   three numbers, in the same order, that the Lot Report prints under each of
+   its groups, so the two screens can be read side by side.
 
-   A column with no money in it either way says nothing at all rather than
-   "$0.00 spent" -- three columns of zeroes across the top of the board is
-   three pieces of furniture, and it makes the one real number harder to spot
-   than if it were alone. */
+   The third one used to be missing here, which mattered most in exactly the
+   pile where it is worst: "Ready to go" is finished cars, so it carries no
+   "still to spend" and its band read "$0.00 spent" flat -- for a column
+   holding a car that had four tires put on it. The Lot Report said so, this
+   column didn't, and this is the one people have open all morning.
+
+   A column with no money in it any of the three ways says nothing at all
+   rather than "$0.00 spent" -- three columns of zeroes across the top of the
+   board is three pieces of furniture, and it makes the one real number harder
+   to spot than if it were alone. */
 function columnSummary(rows) {
   const spent = rows.reduce((s, v) => s + (v.actual_cost || 0), 0);
   const left = rows.reduce((s, v) => s + (v.remaining_cost || 0), 0);
+  // Closed tickets only, the same rule the Cost card and the car's own badge
+  // follow -- see boardStats. A part on an open ticket has not been bought.
+  const missing = rows.reduce((s, v) => s + (v.unreceived_closed_cost || 0), 0);
   const bits = [];
-  if (spent > 0.005) bits.push(`${money(spent)} spent`);
+  // The spend prints whenever there is anything to correct, even at $0.00: a
+  // bare "$380.00 never marked received" doesn't say what it is short of, and
+  // "$0.00 spent · $380.00 never marked received" is the whole point -- a pile
+  // of finished cars the app believes were free. This is what the Lot Report's
+  // band does, which always prints its spend.
+  if (spent > 0.005 || missing > 0.005) bits.push(esc(`${money(spent)} spent`));
   // "$95.00 left" is what finishing these cars should still cost. Nothing is
   // going to be spent on a car that has been filed away, so History says what
   // the month cost and stops there.
-  if (left > 0.005 && !historyMode()) bits.push(`${money(left)} left`);
+  if (left > 0.005 && !historyMode()) bits.push(esc(`${money(left)} left`));
+  // Marked up, unlike the other two: it is a correction to the figure beside
+  // it, not another figure. Word for word what the Lot Report's band says.
+  if (missing > 0.005) {
+    bits.push(`<span class="cost-unreceipted">${esc(`${money(missing)} never marked received`)}</span>`);
+  }
   return bits.join(" · ");
 }
 
@@ -1698,7 +1743,11 @@ function renderVehicleColumns(rows) {
     if (!section) continue;
     const inColumn = rows.filter((v) => columnKey(v) === col.key);
     $("[data-col-count]", section).textContent = String(inColumn.length);
-    $("[data-col-money]", section).textContent = inColumn.length ? columnSummary(inColumn) : "";
+    // innerHTML rather than textContent: the band marks up its "never marked
+    // received" clause, which is a correction to the figure beside it rather
+    // than another figure. Everything columnSummary interpolates is escaped
+    // there and is money() output in any case.
+    $("[data-col-money]", section).innerHTML = inColumn.length ? columnSummary(inColumn) : "";
     const body = $("[data-col-body]", section);
 
     const existing = new Map();

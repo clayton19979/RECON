@@ -14,12 +14,15 @@ import { boot, click } from "./harness.mjs";
 // the role grouping, the active/inactive filters and the stats to all have
 // something real to count. active is 0/1, matching the SQLite rows the
 // server actually returns.
+// open_orders rides along on every row: how many unfinished tickets that
+// person is still on, which is what the deactivate confirm has to say out
+// loud before anybody is pulled off the floor.
 let staffData = [
-  { id: 1, name: "Ray Ortiz", role: "technician", active: 1 },
-  { id: 2, name: "Dana Wu", role: "technician", active: 1 },
-  { id: 3, name: "Sam Patel", role: "advisor", active: 1 },
-  { id: 4, name: "Lee Grant", role: "manager", active: 1 },
-  { id: 5, name: "Wally Burke", role: "technician", active: 0 },
+  { id: 1, name: "Ray Ortiz", role: "technician", active: 1, open_orders: 0 },
+  { id: 2, name: "Dana Wu", role: "technician", active: 1, open_orders: 2 },
+  { id: 3, name: "Sam Patel", role: "advisor", active: 1, open_orders: 1 },
+  { id: 4, name: "Lee Grant", role: "manager", active: 1, open_orders: 0 },
+  { id: 5, name: "Wally Burke", role: "technician", active: 0, open_orders: 0 },
 ];
 
 // Ray: two open, one done (done must not count). Dana+Sam share one open
@@ -260,18 +263,27 @@ await settle();
 ok(row(3)?.querySelector(".stf-role-badge") && !$("#staff-table select.stf-role-select"),
    "blurring the role select without choosing should restore the badge");
 
-/* ---------- deactivate asks first and names the open tasks ---------- */
-// Task assignment is name-keyed, so Dana (still "Dana Wu") owns 1 open task;
-// Ray's rename to "Raymond Ortiz" orphaned his -- his confirm must NOT claim
-// tasks he no longer matches. Both facts get asserted.
+/* ---------- deactivate asks first and says what is being left behind ------ */
+// Two different questions, both answered before the decision. Cars: Dana is
+// still on 2 unfinished tickets (open_orders, straight off /api/staff) --
+// those have to be handed to somebody, and nothing else on this screen says
+// so. Tasks: assignment is name-keyed, so Dana (still "Dana Wu") owns 1 open
+// task, while Ray's rename to "Raymond Ortiz" orphaned his -- his confirm
+// must NOT claim tasks he no longer matches.
 click(w, row(2).querySelector(".stf-toggle"));
 await settle();
 const dlg = $("#confirm-dialog");
 ok(dlg.open, "deactivating should open the confirm dialog");
 ok(/Dana Wu/.test($("#confirm-title").textContent),
    `the confirm should name the person, reads "${$("#confirm-title").textContent}"`);
+ok(/2 unfinished tickets\b/.test($("#confirm-body").textContent),
+   `the confirm should say what cars Dana is still on, reads "${$("#confirm-body").textContent}"`);
 ok(/1 open task\b/.test($("#confirm-body").textContent),
    `the confirm should warn about Dana's open task, reads "${$("#confirm-body").textContent}"`);
+// The promise the whole change exists to make true: what she already holds
+// stays hers and stays editable.
+ok(/keeps their name and stays editable/.test($("#confirm-body").textContent),
+   `the confirm should promise existing work survives, reads "${$("#confirm-body").textContent}"`);
 $("#confirm-cancel").click();
 await settle();
 ok(!patches.some((p) => p.url === "/api/staff/2" && "active" in p.body),

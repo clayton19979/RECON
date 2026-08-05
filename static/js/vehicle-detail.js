@@ -114,6 +114,33 @@ export async function loadVehicleDetail() {
   applyArchivedLockUI(!!item.archived_at);
 }
 
+/* ---------- who can be picked for a ticket or a repair ----------
+
+   state.staff is active-only on purpose: somebody who has left the shop must
+   not be offered new work. But a dropdown can only show what is in it, so on
+   a car whose technician has since been deactivated every one of these
+   pickers quietly fell back to its first option and read "Unassigned" -- two
+   lines under a header still saying "Ray / Dana", about a ticket the database
+   still had Ray on. The screen contradicted itself, and the next save of that
+   popover would have posted the "Unassigned" it was showing and made itself
+   right by wiping him.
+
+   So whoever is actually in the slot is always in the list, marked so nobody
+   mistakes them for someone still on the floor. It is the same rule the
+   server keeps (see assert_assignable): you cannot hand new work to somebody
+   who has gone, and what they already hold stays theirs until a person moves
+   it. */
+function staffOptions({ roles, selectedId, selectedName, blankLabel }) {
+  const people = state.staff.filter((s) => roles.includes(s.role)).map((s) => ({ id: s.id, name: s.name }));
+  if (selectedId && !people.some((p) => p.id === selectedId)) {
+    // The name comes off the ticket itself, which carries it for exactly this
+    // reason. Falling back to the id would put a bare number on screen.
+    people.unshift({ id: selectedId, name: `${selectedName || "No longer on staff"} (inactive)` });
+  }
+  return `<option value="">${esc(blankLabel)}</option>` + people.map((p) =>
+    `<option value="${p.id}" ${p.id === selectedId ? "selected" : ""}>${esc(p.name)}</option>`).join("");
+}
+
 // Only shown once a vehicle actually has more than one RO -- the common
 // single-ticket case looks exactly as clean as it always did.
 function renderOrderHistory(orders, activeId) {
@@ -1302,8 +1329,7 @@ function renderEstimate(order) {
             ${bucketItems.length ? `<span class="job-group-subtotal">${money(jobSubtotal)}</span>` : ""}
             ${isGeneral ? "" : `
               <select class="ei-job-tech job-control" data-job-id="${bucket.id}">
-                <option value="">Use ticket default</option>
-                ${state.staff.filter((s) => s.role === "technician").map((t) => `<option value="${t.id}" ${bucket.technician_id === t.id ? "selected" : ""}>${esc(t.name)}</option>`).join("")}
+                ${staffOptions({ roles: ["technician"], selectedId: bucket.technician_id, selectedName: bucket.technician_name, blankLabel: "Use ticket default" })}
               </select>
               <button type="button" class="job-control job-icon-btn job-edit" data-job-id="${bucket.id}" title="Rename job">✎</button>
               <button type="button" class="job-control job-icon-btn job-delete" data-job-id="${bucket.id}" title="Delete job">×</button>
@@ -2158,9 +2184,12 @@ function openJobDialog(job = null) {
   state.detail.editingJobId = job ? job.id : null;
   $("#job-dialog-title").textContent = job ? "Rename Job" : "Add Job";
   $("#job-title-input").value = job ? job.title : "";
-  const techs = state.staff.filter((s) => s.role === "technician");
-  $("#job-technician-input").innerHTML = `<option value="">Use ticket default</option>` +
-    techs.map((t) => `<option value="${t.id}" ${job && job.technician_id === t.id ? "selected" : ""}>${esc(t.name)}</option>`).join("");
+  $("#job-technician-input").innerHTML = staffOptions({
+    roles: ["technician"],
+    selectedId: job ? job.technician_id : null,
+    selectedName: job ? job.technician_name : "",
+    blankLabel: "Use ticket default",
+  });
   $("#job-dialog").showModal();
 }
 
@@ -2453,7 +2482,6 @@ function renderAssignment(order) {
     emptyLabel.closest("button").title = "";
     return;
   }
-  const techs = state.staff.filter((s) => s.role === "technician");
   const advisors = state.staff.filter((s) => s.role === "advisor" || s.role === "manager");
   const a = order.assignment;
   /* The ticket already knows who you are -- "Working as" is set in the top
@@ -2464,8 +2492,20 @@ function renderAssignment(order) {
      still opens and anyone in it can be picked. */
   const selfAdvisor = advisors.find((s) => s.name === state.currentUser);
   const advisorId = (a && a.advisor_id) || (selfAdvisor ? selfAdvisor.id : null);
-  $("#vd-technician").innerHTML = `<option value="">Unassigned</option>` + techs.map((t) => `<option value="${t.id}" ${a && a.technician_id === t.id ? "selected" : ""}>${esc(t.name)}</option>`).join("");
-  $("#vd-advisor").innerHTML = `<option value="">Unassigned</option>` + advisors.map((t) => `<option value="${t.id}" ${advisorId === t.id ? "selected" : ""}>${esc(t.name)}</option>`).join("");
+  $("#vd-technician").innerHTML = staffOptions({
+    roles: ["technician"],
+    selectedId: (a && a.technician_id) || null,
+    selectedName: a && a.technician_name,
+    blankLabel: "Unassigned",
+  });
+  $("#vd-advisor").innerHTML = staffOptions({
+    roles: ["advisor", "manager"],
+    selectedId: advisorId || null,
+    // Only the ticket's own advisor has a name to fall back on; advisorId can
+    // also be the current user pre-selected, and they are in the list already.
+    selectedName: a && a.advisor_id === advisorId ? a.advisor_name : "",
+    blankLabel: "Unassigned",
+  });
   $("#vd-date-in").value = (a && a.date_in) || "";
   $("#vd-odometer").value = (a && a.odometer_in) || "";
   const promised = $("#vd-promised");

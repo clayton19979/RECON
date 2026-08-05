@@ -30,6 +30,75 @@ class StaffPatch(BaseModel):
 UNASSIGN = -1
 
 
+def open_work_by_staff(db: sqlite3.Connection) -> dict[int, int]:
+    """How many unfinished tickets each person is still on, by staff id.
+
+    Asked before anyone is deactivated. "He doesn't work here anymore" is a
+    normal Monday, but doing it to somebody who is the technician on four cars
+    sitting in the bay is worth knowing about first -- those cars still have
+    to be handed to somebody, and nothing else on the Staff screen says so.
+    The open-task column beside it answers a different question: tasks are
+    notes to a person, this is cars.
+
+    Counted the same way the technician report counts them, so the two screens
+    agree: a ticket is theirs if they are its advisor, its technician, or they
+    own a repair on it, and a voided ticket is work that never happened. One
+    query for the whole list -- the Staff screen is small, but this rides on
+    /api/staff, which nearly every screen in the app fetches.
+    """
+    rows = db.execute(
+        """SELECT staff_id, count(DISTINCT order_id) held FROM (
+               SELECT w.technician_id staff_id, o.id order_id FROM orders o
+                 JOIN order_workflow w ON w.order_id=o.id
+                WHERE o.voided=0 AND o.status!='complete' AND w.technician_id IS NOT NULL
+               UNION ALL
+               SELECT w.advisor_id, o.id FROM orders o
+                 JOIN order_workflow w ON w.order_id=o.id
+                WHERE o.voided=0 AND o.status!='complete' AND w.advisor_id IS NOT NULL
+               UNION ALL
+               SELECT ej.technician_id, o.id FROM orders o
+                 JOIN estimates e ON e.order_id=o.id
+                 JOIN estimate_jobs ej ON ej.estimate_id=e.id
+                WHERE o.voided=0 AND o.status!='complete' AND ej.technician_id IS NOT NULL
+           ) GROUP BY staff_id"""
+    ).fetchall()
+    return {int(row["staff_id"]): int(row["held"]) for row in rows}
+
+
+def assert_assignable(
+    db: sqlite3.Connection,
+    staff_id: int | None,
+    roles: set[str],
+    label: str,
+    current_id: int | None = None,
+) -> None:
+    """Can this person be put in this slot?
+
+    Only a live member of staff in the right role can be *given* work, which
+    is the whole of the check -- except for the one case that made the Staff
+    screen's own promise false. Deactivating somebody is the app's answer to
+    "he doesn't work here anymore" (delete is deliberately not offered), and
+    the confirm says in as many words that work already assigned to them keeps
+    their name. It did not: the person stayed in the database on every ticket
+    and job they owned, but every save that carried their id back -- renaming
+    a repair, changing the advisor, moving a promised date -- was refused with
+    "Technician is not an active technician", about somebody the advisor never
+    touched. A ticket became uneditable because a tech left.
+
+    So an id that is already sitting in this slot is always allowed through.
+    It is not an assignment; it is the assignment that is already there. New
+    work still cannot be handed to somebody who has gone, which is the part
+    the rule was written for.
+    """
+    if staff_id is None:
+        return
+    if current_id is not None and staff_id == current_id:
+        return
+    row = db.execute("SELECT role,active FROM staff WHERE id=?", (staff_id,)).fetchone()
+    if not row or not row["active"] or row["role"] not in roles:
+        raise HTTPException(400, f"{label} is not an active {label.lower()}")
+
+
 class AssignmentIn(BaseModel):
     """A partial save of the ticket's Assigned / Timing card.
 
@@ -389,7 +458,8 @@ def build_workflow_router(connect: Callable[[], sqlite3.Connection], now_fn: Cal
                 if include_inactive
                 else "SELECT * FROM staff WHERE active=1 ORDER BY name"
             )
-            return [dict(row) for row in db.execute(query)]
+            held = open_work_by_staff(db)
+            return [dict(row) | {"open_orders": held.get(row["id"], 0)} for row in db.execute(query)]
 
     def _assert_name_free(db, name: str, exclude_id: int | None = None) -> None:
         # Assignment pickers, task owners and reports all identify staff by
@@ -465,15 +535,22 @@ def build_workflow_router(connect: Callable[[], sqlite3.Connection], now_fn: Cal
     def save_assignment(order_id: int, item: AssignmentIn):
         with connect() as db:
             assert_vehicle_editable(db, order(db, order_id))
-            for staff_id, roles, label in (
-                (item.advisor_id, {"advisor", "manager"}, "Advisor"),
-                (item.technician_id, {"technician"}, "Technician"),
+            # Who is on the ticket right now, so re-sending either of them is
+            # recognised as leaving things alone rather than as a fresh
+            # assignment -- see assert_assignable. The date fields on this
+            # same save are the common way that happens: the whole popover is
+            # posted at once, so typing a promised date on a ticket whose
+            # technician has since left used to be refused.
+            held = db.execute(
+                "SELECT advisor_id, technician_id FROM order_workflow WHERE order_id=?", (order_id,)
+            ).fetchone()
+            for staff_id, roles, label, current_id in (
+                (item.advisor_id, {"advisor", "manager"}, "Advisor", held["advisor_id"] if held else None),
+                (item.technician_id, {"technician"}, "Technician", held["technician_id"] if held else None),
             ):
                 if staff_id is None or staff_id == UNASSIGN:
                     continue
-                staff = db.execute("SELECT role,active FROM staff WHERE id=?", (staff_id,)).fetchone()
-                if not staff or not staff["active"] or staff["role"] not in roles:
-                    raise HTTPException(400, f"{label} is not an active {label.lower()}")
+                assert_assignable(db, staff_id, roles, label, current_id)
             db.execute("INSERT OR IGNORE INTO order_workflow(order_id) VALUES(?)", (order_id,))
 
             # (column, was it sent, what to write). Sent and value have to be

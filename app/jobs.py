@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 
 from .db import inserted_id
 from .recon import assert_vehicle_editable
-from .workflow import assert_estimate_editable, get_or_create_estimate, record_activity
+from .workflow import assert_assignable, assert_estimate_editable, get_or_create_estimate, record_activity
 
 
 class JobIn(BaseModel):
@@ -49,12 +49,13 @@ def build_jobs_router(connect: Callable[[], sqlite3.Connection], now_fn: Callabl
         ).fetchone()
         return dict(row)
 
-    def assert_valid_technician(db: sqlite3.Connection, technician_id: int | None) -> None:
-        if technician_id is None:
-            return
-        staff = db.execute("SELECT role,active FROM staff WHERE id=?", (technician_id,)).fetchone()
-        if not staff or not staff["active"] or staff["role"] != "technician":
-            raise HTTPException(400, "Technician is not an active technician")
+    def assert_valid_technician(
+        db: sqlite3.Connection, technician_id: int | None, current_id: int | None = None
+    ) -> None:
+        """Whoever already owns this repair stays valid on it -- see
+        assert_assignable. Renaming "Front brakes" is not the moment to
+        discover that the tech who had it has left the shop."""
+        assert_assignable(db, technician_id, {"technician"}, "Technician", current_id)
 
     @router.post("/orders/{order_id}/jobs", status_code=201)
     def create_job(order_id: int, item: JobIn):
@@ -83,8 +84,8 @@ def build_jobs_router(connect: Callable[[], sqlite3.Connection], now_fn: Callabl
             order = order_row(db, order_id)
             assert_vehicle_editable(db, order)
             assert_estimate_editable(db, order_id)
-            job_row(db, order_id, job_id)
-            assert_valid_technician(db, item.technician_id)
+            job = job_row(db, order_id, job_id)
+            assert_valid_technician(db, item.technician_id, job["technician_id"])
             db.execute(
                 "UPDATE estimate_jobs SET title=?,technician_id=? WHERE id=?",
                 (item.title.strip(), item.technician_id, job_id),

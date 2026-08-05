@@ -1139,8 +1139,17 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
 
         Scope matches the board's on purpose, so the count here and the count
         on the card can never disagree: part lines still on 'ordered', not sent
-        back, on a ticket that hasn't been voided and a vehicle that hasn't
-        been archived to History.
+        back, on a ticket that is still open and hasn't been voided, and a
+        vehicle that hasn't been archived to History.
+
+        The "still open" half of that was the one this list did not actually
+        apply, and it is what put the same part on two desks with opposite
+        instructions. A closed ticket is the shop saying the work is done, so
+        its unreceived part lines are money already spent that nobody wrote
+        down -- exactly what Missing Receipts below is for. Left in here they
+        also stayed on this desk for good, ageing, telling somebody to ring a
+        vendor about a car that had already gone back on the lot: a chore that
+        could never be cleared, on the list that exists to be cleared.
 
         days_waiting is None, not 0, for a line ordered before ordered_at
         existed -- "we don't know" and "it went on order today" are opposite
@@ -1173,7 +1182,7 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
                    LEFT JOIN customers wc ON wc.id=wi.customer_id
                    LEFT JOIN customers oc ON oc.id=o.customer_id
                    WHERE ei.kind='part' AND ei.status='ordered' AND ei.part_returned=0
-                     AND o.voided=0
+                     AND o.voided=0 AND o.status!='complete'
                      AND coalesce(rv.archived_at,'')='' AND coalesce(wi.archived_at,'')=''
                    -- Longest wait first: the part most likely to have been
                    -- forgotten is the one worth asking about. Lines with no

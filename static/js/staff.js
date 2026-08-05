@@ -245,13 +245,23 @@ function renderStaffTable() {
     const tr = btn.closest("tr");
     const person = state.allStaff.find((s) => s.id === Number(tr.dataset.id));
     const openTasks = openTasksPerson(person);
+    // What the person is still holding, said before the decision rather than
+    // discovered afterwards. Cars first: a technician with four unfinished
+    // tickets is somebody whose work has to be handed to a name, and nothing
+    // else on this screen says so. Tasks are the smaller half of the same
+    // question and keep the wording they had.
+    const held = person.open_orders || 0;
+    const stillOn = [
+      held ? `${held} unfinished ticket${held === 1 ? "" : "s"}` : "",
+      openTasks ? `${openTasks} open task${openTasks === 1 ? "" : "s"}` : "",
+    ].filter(Boolean).join(" and ");
     // Deactivating pulls this person out of every technician/advisor
     // dropdown app-wide -- a bigger consequence than most of the guarded
     // deletes elsewhere, so it asks first too.
     if (person.active && !(await confirmAction({
       eyebrow: "STAFF",
       title: `Deactivate ${person.name}?`,
-      body: `They stop appearing in every technician and advisor dropdown. Work already assigned to them keeps their name.${openTasks ? ` They currently have ${openTasks} open task${openTasks === 1 ? "" : "s"}.` : ""}`,
+      body: `They stop being offered for new work. Everything already assigned to them keeps their name and stays editable.${stillOn ? ` They are still on ${stillOn}.` : ""}`,
       confirmLabel: "Deactivate",
     }))) return;
     try {

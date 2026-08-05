@@ -104,6 +104,9 @@ def test_export_vehicle_spend_report_csv(client):
         "Technicians",
         "Written Up",
         "Cost",
+        # Money out the door on a finished ticket nobody marked received, so
+        # it is in none of the figures beside it -- see test_unreceived_parts.
+        "Never Marked Received",
         "Customer Paid",
         "Net to Shop",
         "Age (days)",
@@ -116,6 +119,9 @@ def test_export_vehicle_spend_report_csv(client):
     assert recon_row[3] == "Recon"
     assert recon_row[6] == "150.00"  # 2 x $45 labor + the $60 rotor, every line in full
     assert recon_row[7] == "90.00"  # only the labor has actually landed
+    # Nothing yet: this ticket is still open, and an unreceived line on an open
+    # ticket is work still ahead rather than a hole in what the car cost.
+    assert recon_row[8] == "0.00"
 
     # The segment filter has to reach the file, or "Recon only" on screen
     # downloads every vehicle in the shop.

@@ -336,6 +336,13 @@ button { font-family: inherit; }
   background: var(--paper-raise); border-color: var(--line-soft);
 }
 .whoami select:focus { box-shadow: none; outline: none; }
+/* Nobody picked yet. Amber rather than red: nothing is broken, but everything
+   done from this computer is about to be filed under nobody, and that is a
+   thing you can only fix before it happens. One click at the start of a shift
+   clears it for good. */
+.whoami-unset { border-color: var(--warn); background: var(--warn-tint); color: var(--warn); }
+.whoami-unset:hover { border-color: var(--warn); }
+.whoami-unset select { color: var(--warn); border-color: var(--warn); }
 
 .content { flex: 1; overflow-y: auto; padding: var(--content-pad-top) 28px 60px; }
 
@@ -557,6 +564,11 @@ td.age-crit { color: var(--crit); font-weight: 700; }
    because the total isn't wrong so much as incomplete -- and a car can be
    missing receipts whatever else is going on with it.
 
+   Unscoped on purpose. It started on the Vehicles board's Cost column and now
+   also sits under Cost on the spend sheet and under Total In on the profit
+   sheet, which is the same fact about the same car; a reader who has learned
+   what it means on one screen must not meet a different badge on the next.
+
    nowrap because the Cost column is sized for "$1,234.56" and this wrapped to
    three lines inside it, which made a flagged row half again as tall as its
    neighbours and the whole board jump as cars came and went. Letting the
@@ -699,11 +711,20 @@ table.sticky-head thead th {
    The three piles the owner asks about, left to right in the direction a car
    travels through the shop. Each column scrolls on its own so a lot with
    thirty cars in the shop doesn't push "Ready to go" off the bottom of the
-   screen -- the whole point is seeing all three at once. */
-.veh-columns { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; align-items: start; }
+   screen -- the whole point is seeing all of them at once. */
+/* auto-fit rather than a fixed count: with four piles, a fixed four-across
+   squeezed every card to ~240px on a 1280px screen, and a fixed three left
+   the fourth pile hanging alone under an empty half-row on a wide one. The
+   300px floor is the width the three-column layout already gave a card, so
+   nothing here is ever narrower than it was -- the shop's own screen fits
+   three across and wraps the fourth, a wide monitor fits all four. */
+.veh-columns {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 14px; align-items: start;
+}
 
 /* One tone per pile, shared with the Lot Report's group bands so the board
-   and the sheet Walt reads are visibly the same three piles: quiet slate for
+   and the sheet Walt reads are visibly the same piles: quiet slate for
    "not started" (nothing happening is not an alarm -- Stalled is the alarm,
    and it has its own card), the theme's accent for "in the shop" (work is
    moving), green for "ready to go" (the answer he came for). Set as custom
@@ -712,6 +733,9 @@ table.sticky-head thead th {
 [data-lot-column], [data-lot-group] { --stage: var(--ink-faint); --stage-tint: var(--paper-raise); }
 [data-lot-column="working"], [data-lot-group="working"] { --stage: var(--accent); --stage-tint: var(--accent-tint); }
 [data-lot-column="ready"], [data-lot-group="ready"] { --stage: var(--good); --stage-tint: var(--good-tint); }
+/* "Finished -- file away" keeps the default slate on purpose. It is the one
+   pile that is not shop work, and giving it a colour would have it competing
+   for attention with the green column it was just taken out of. */
 
 .veh-col {
   background: var(--paper-raise); border: 1px solid var(--line); border-radius: var(--radius);
@@ -805,8 +829,10 @@ table.sticky-head thead th {
   font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--ink);
 }
 
-/* Three columns need the width; below that they stack, which is still a
-   better read on a narrow window than three 190px columns of ellipsis. */
+/* Below this the piles stack outright, which is still a better read on a
+   narrow window than columns of ellipsis. The grid above would get there on
+   its own; this also drops the per-column scroll, which only earns its keep
+   while the columns sit side by side. */
 @media (max-width: 1100px) {
   .veh-columns { grid-template-columns: 1fr; }
   .veh-col-body { max-height: none; }
@@ -3509,14 +3535,26 @@ th.sel-col, td.sel-col { width: 32px; padding-right: 0; }
    for the same reason spelled out up there -- the total isn't wrong so much
    as incomplete -- so one fact keeps one colour wherever it turns up. */
 .cost-unreceipted { color: var(--warn); font-weight: 700; }
-/* The correction row under the whole-lot total. It hangs off the same footer
+/* The correction row under a sheet's own total. It hangs off the same footer
    so it lines up under the column it corrects, but reads as a note rather
-   than a second total -- no top rule, lighter label, same tabular figures. */
-.lot-table tfoot tr.lot-total-missing td { border-top: 0; padding-top: 2px; font-weight: 400; color: var(--ink-soft); font-size: 11.5px; }
+   than a second total -- no top rule, lighter label, same tabular figures.
+   Written against .report-sheet rather than .lot-table: the lot sheet was the
+   first to carry this row, but the spend and profit sheets report the same
+   money and are corrected the same way, and one selector is what keeps the
+   three looking like one habit instead of three decisions. */
+.report-sheet tfoot tr.total-missing td { border-top: 0; padding-top: 2px; font-weight: 400; color: var(--ink-soft); font-size: 11.5px; }
 /* The money on the correction row keeps its own colour and weight: the row
    above sets a muted tone for the label, and at this specificity it would
    otherwise repaint the one figure the row exists to show. */
-.lot-table tfoot tr.lot-total-missing td.cost-unreceipted { color: var(--warn); font-weight: 700; }
+.report-sheet tfoot tr.total-missing td.cost-unreceipted { color: var(--warn); font-weight: 700; }
+/* The per-car badge, where a report sheet carries one. The board lets it stay
+   on one line and lets the Cost column widen by the few pixels it needs; a
+   report sheet is table-layout:fixed, so there is no widening to be had and
+   nowrap simply printed "+$380.00 not received" out over the column beside
+   it. It wraps here instead. Only flagged rows get taller, and a sheet is
+   read down one column rather than scanned across like the board, so the
+   second line costs nothing worth keeping. */
+.report-sheet td .cost-missing { white-space: normal; }
 /* An empty pile still gets its heading -- "no cars are finished right now" is
    an answer. Muted back to the neutral tone, because there is nothing under
    it to read. */

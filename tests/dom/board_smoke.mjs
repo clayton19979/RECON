@@ -1029,7 +1029,8 @@ ok(cardsIn("working").map((c) => c.dataset.key).join(",") === "recon:1,we_owe:5,
 ok(cardsIn("ready").length === 0, "Ready to go has cars in a fixture where nothing is finished");
 ok(allCards().every((c) => board.some((v) => w.vehicleKey(v) === c.dataset.key)),
    "a card appeared for a vehicle that isn't on the board");
-ok(w.LOT_COLUMNS.map((c) => c.key).join(",") === "waiting,working,ready",
+// Travel order, with the cars that have finished travelling last.
+ok(w.LOT_COLUMNS.map((c) => c.key).join(",") === "waiting,working,ready,settled",
    "the columns aren't in the order a car travels through the shop");
 
 // Counts on the headers, and an empty column that says so rather than sitting

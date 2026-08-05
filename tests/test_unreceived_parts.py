@@ -15,6 +15,9 @@ out loud instead of quietly reporting a car as free.
 
 from __future__ import annotations
 
+import csv
+import io
+
 from tests.helpers import (
     make_recon_order,
     make_recon_vehicle,
@@ -206,3 +209,144 @@ def test_a_car_still_in_the_shop_mentions_an_earlier_unreceipted_ticket(client):
     assert row["lot_bucket"] == "working"
     assert "never marked received" in row["needs"]
     assert "$52.00" in row["needs"]
+
+
+# ---------------------------------------------------------------------------
+# The reports.
+#
+# The board and the Lot Status sheet have said this for a while. The two
+# reports that report the same money -- Vehicle Spend and Profit -- did not,
+# and Profit is the worse of the two: a shortfall in what a car cost comes out
+# the other end as profit the lot never made. These pin the figure onto both,
+# and onto the spreadsheet versions, which is where a short total does the
+# most damage -- summing the cost column is the first thing anyone does with
+# the file, and there is no screen beside it to explain itself.
+# ---------------------------------------------------------------------------
+
+
+def spend_row(client, stock_number):
+    rows = client.get("/api/reports/vehicle-spend").json()
+    return next(r for r in rows if r["stock_number"] == stock_number)
+
+
+def profit_row(client, stock_number):
+    rows = client.get("/api/reports/vehicle-profit").json()
+    return next(r for r in rows if r["stock_number"] == stock_number)
+
+
+def csv_rows(client, path):
+    res = client.get(path)
+    assert res.status_code == 200, res.text
+    return list(csv.reader(io.StringIO(res.text)))
+
+
+def test_the_spend_report_carries_the_shortfall_it_is_short_by(client):
+    """The spend report is where a month's spending gets read off. Its rows
+    come from the same board query, so the figure is already there -- this
+    pins it, because a row that quietly drops it reads as a car that cost
+    nothing."""
+    closed_ticket_with_unreceived_part(client, stock_number="R-9101")
+    row = spend_row(client, "R-9101")
+
+    assert row["actual_cost"] == 0
+    assert row["unreceived_closed_cost"] == 380
+    assert row["unreceived_closed_parts"] == 1
+
+
+def test_the_profit_report_says_what_the_profit_is_overstated_by(client):
+    """The one number on any screen that is not merely incomplete but wrong in
+    a flattering direction. $380 of tires that nobody receipted is $380 the
+    car did not cost -- and therefore $380 of margin it did not make."""
+    vehicle, _, _ = closed_ticket_with_unreceived_part(client, stock_number="R-9102")
+    res = client.patch(
+        f"/api/recon/vehicles/{vehicle['id']}",
+        json={"status": "sold", "sale_price": 6000, "sale_date": "2026-07-15"},
+    )
+    assert res.status_code == 200, res.text
+
+    row = profit_row(client, "R-9102")
+    # make_recon_vehicle buys the car for $4,000, so the profit on the books
+    # is 6000 - 4000 - 0 = 2000 with the tires missing, and 1620 with them.
+    assert row["recon_cost"] == 0
+    assert row["total_invested"] == 4000
+    assert row["profit"] == 2000
+    # The correction, carried beside it rather than folded in: what landed is
+    # still what landed. See _unit_lifetime.
+    assert row["unreceived_closed_cost"] == 380
+    assert row["unreceived_closed_parts"] == 1
+
+
+def test_receiving_the_parts_settles_the_profit_report_too(client):
+    vehicle, order, estimate = closed_ticket_with_unreceived_part(client, stock_number="R-9103")
+    client.patch(
+        f"/api/recon/vehicles/{vehicle['id']}",
+        json={"status": "sold", "sale_price": 6000, "sale_date": "2026-07-15"},
+    )
+    receive(client, order["id"], [estimate["items"][0]["id"]])
+
+    row = profit_row(client, "R-9103")
+    assert row["recon_cost"] == 380, "the money landed where it belongs"
+    assert row["profit"] == 1620, "and came straight off the margin"
+    assert row["unreceived_closed_cost"] == 0, "nothing left to warn about"
+
+
+def test_a_we_owe_receipt_gap_counts_against_the_same_car(client):
+    """The profit report is keyed on the physical car, not on the record --
+    a promise kept months after the sale is the same car's money. An
+    unreceipted part on that half has to reach this figure the same way."""
+    we_owe = make_we_owe(client)
+    order = client.post(
+        "/api/orders", json={"concern": "Tie rod", "segment": "we_owe", "we_owe_id": we_owe["id"]}
+    ).json()
+    save_estimate(client, order["id"], [part(description="Tie rod end", unit_cost=64)])
+    client.patch(f"/api/orders/{order['id']}/status", json={"status": "complete"})
+
+    row = next(r for r in client.get("/api/reports/vehicle-profit").json() if r["we_owe_count"])
+    assert row["we_owe_cost"] == 0
+    assert row["unreceived_closed_cost"] == 64
+    assert row["unreceived_closed_parts"] == 1
+
+
+def test_a_car_with_nothing_missing_reports_a_clean_zero(client):
+    """Every row carries the field, so the sheets can total it without
+    checking whether it is there. Absent and zero must not be two answers."""
+    _, order, estimate = closed_ticket_with_unreceived_part(client, stock_number="R-9104")
+    receive(client, order["id"], [estimate["items"][0]["id"]])
+
+    assert spend_row(client, "R-9104")["unreceived_closed_cost"] == 0
+    assert profit_row(client, "R-9104")["unreceived_closed_cost"] == 0
+
+
+def test_the_spend_spreadsheet_has_a_column_for_it(client):
+    closed_ticket_with_unreceived_part(client, stock_number="R-9105")
+    rows = csv_rows(client, "/api/export/report/vehicle-spend.csv")
+    header, body = rows[0], rows[1:]
+
+    assert "Never Marked Received" in header
+    cost = header.index("Cost")
+    missing = header.index("Never Marked Received")
+    assert missing == cost + 1, "beside the column it corrects, not at the far end"
+
+    row = next(r for r in body if r[0] == "R-9105")
+    assert row[cost] == "0.00"
+    assert row[missing] == "380.00"
+
+
+def test_the_profit_spreadsheet_has_a_column_for_it(client):
+    vehicle, _, _ = closed_ticket_with_unreceived_part(client, stock_number="R-9106")
+    client.patch(
+        f"/api/recon/vehicles/{vehicle['id']}",
+        json={"status": "sold", "sale_price": 6000, "sale_date": "2026-07-15"},
+    )
+    rows = csv_rows(client, "/api/export/report/vehicle-profit.csv")
+    header, body = rows[0], rows[1:]
+
+    assert "Never Marked Received" in header
+    invested = header.index("Total Invested")
+    missing = header.index("Never Marked Received")
+    assert missing == invested + 1
+
+    row = next(r for r in body if r[0] == "R-9106")
+    assert row[header.index("Recon Cost")] == "0.00"
+    assert row[header.index("Profit")] == "2000.00"
+    assert row[missing] == "380.00", "the sheet the profit is read off says what it is over by"

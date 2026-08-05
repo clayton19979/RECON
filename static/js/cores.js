@@ -1,7 +1,7 @@
 import { $, $$, get, patch, post } from "./core.js";
 import { toast } from "./notify.js";
 import { confirmAction } from "./confirm.js";
-import { currentActor, esc, fmtDate, money, promptInvoiceNumber, withLoading } from "./shortcuts.js";
+import { esc, fmtDate, money, promptInvoiceNumber, withLoading } from "./shortcuts.js";
 import { emptyRow } from "./empty-states.js";
 import { MISSING_RECEIPT_COLUMNS, ON_ORDER_COLUMNS } from "./skeletons.js";
 import { state } from "./state.js";
@@ -327,11 +327,20 @@ function renderMissingReceiptsTable() {
     ? `${money(total)} missing from ${cars} vehicle${cars === 1 ? "" : "s"}`
     : "";
 
+  // A ticket already billed out to a retail customer is frozen, so this line
+  // cannot be received no matter how many times somebody clicks it. It stays
+  // listed -- the money genuinely isn't in any cost -- but the row says why
+  // rather than inviting a click that comes back "Invoiced estimates are
+  // locked". Clicking still opens the car, which is the only thing left to do
+  // with it.
   $("#missing-table").innerHTML = rows.length ? rows.map((p) => `
-    <tr class="clickable" data-id="${p.id}" title="Open ${esc(p.vehicle_label)} and receive this part">
+    <tr class="clickable" data-id="${p.id}" title="${p.billed_out
+      ? `Open ${esc(p.vehicle_label)} — this ticket is billed out, so the part can't be received`
+      : `Open ${esc(p.vehicle_label)} and receive this part`}">
       <td>${esc(p.description)}<div class="veh-sub">${esc(p.vehicle)}</div></td>
       <td>${p.part_number ? esc(p.part_number) : '<span class="muted-dash">—</span>'}</td>
-      <td>${esc(p.ro_number)} · ${esc(p.vehicle_label)}${p.po_number ? `<div class="veh-sub num">PO ${esc(p.po_number)}</div>` : ""}</td>
+      <td>${esc(p.ro_number)} · ${esc(p.vehicle_label)}${p.po_number ? `<div class="veh-sub num">PO ${esc(p.po_number)}</div>` : ""}${
+        p.billed_out ? `<div class="veh-sub">billed to the customer — can't be received</div>` : ""}</td>
       <td class="num-col">${esc(String(p.missing_quantity))}</td>
       <td class="num-col cost-unreceipted">${money(p.value)}</td>
       <td>${ticketIdleHtml(p)}</td>
@@ -501,7 +510,7 @@ function renderCoresTable() {
       const returned = btn.dataset.returned !== "1";
       try {
         await patch(`/api/orders/${btn.dataset.orderId}/estimate/items/${btn.dataset.itemId}/core-return`,
-          { returned, actor: currentActor() });
+          { returned });
         toast(returned ? "Core marked picked up — record the credit when the vendor's paperwork arrives" : "Back on the shelf");
         await loadCoresView();
       } catch (err) {
@@ -525,7 +534,7 @@ function renderCoresTable() {
       if (answer === null) return;
       try {
         await post(`/api/orders/${btn.dataset.orderId}/estimate/items/${btn.dataset.itemId}/core-credit`,
-          { invoice_number: answer, actor: currentActor() });
+          { invoice_number: answer });
         toast("Core credit recorded");
         await loadCoresView();
       } catch (err) {
@@ -605,7 +614,7 @@ export function wireCoresView() {
     await withLoading(e.currentTarget, "Updating…", async () => {
       const targets = ids.map((id) => state.cores.find((c) => c.id === id)).filter(Boolean);
       const results = await Promise.allSettled(targets.map((c) =>
-        patch(`/api/orders/${c.order_id}/estimate/items/${c.id}/core-return`, { returned: true, actor: currentActor() })
+        patch(`/api/orders/${c.order_id}/estimate/items/${c.id}/core-return`, { returned: true })
       ));
       const failed = results.filter((r) => r.status === "rejected").length;
       toast(failed ? `${targets.length - failed} of ${targets.length} marked picked up` : `${targets.length} core${targets.length === 1 ? "" : "s"} marked picked up`, !!failed);
@@ -710,7 +719,7 @@ function renderReturnsTable() {
       const pickedUp = btn.dataset.pickedUp !== "1";
       try {
         await patch(`/api/orders/${item.order_id}/estimate/items/${item.id}/part-pickup`,
-          { picked_up: pickedUp, actor: currentActor() });
+          { picked_up: pickedUp });
         toast(pickedUp ? "Marked picked up — record the credit when it arrives" : "Back on the shelf");
         await loadCoresView();
       } catch (err) {
@@ -794,7 +803,7 @@ export function wireReturnsView() {
     await withLoading(e.currentTarget, "Updating…", async () => {
       const targets = ids.map((id) => state.returns.find((r) => r.id === id)).filter(Boolean);
       const results = await Promise.allSettled(targets.map((r) =>
-        patch(`/api/orders/${r.order_id}/estimate/items/${r.id}/part-pickup`, { picked_up: true, actor: currentActor() })
+        patch(`/api/orders/${r.order_id}/estimate/items/${r.id}/part-pickup`, { picked_up: true })
       ));
       const failed = results.filter((r) => r.status === "rejected").length;
       toast(failed ? `${targets.length - failed} of ${targets.length} marked picked up` : `${targets.length} part${targets.length === 1 ? "" : "s"} marked picked up`, !!failed);
@@ -824,7 +833,6 @@ async function openPostReturnDialog(item) {
     <div class="cost-line total"><span>Credit Due</span><span class="num">${money(Math.abs(item.credit_total))}</span></div>
   `;
   $("#post-return-dialog").showModal();
-  $("#post-return-credit-number").focus();
 }
 
 export function wirePostReturnDialog() {
@@ -856,7 +864,6 @@ export function wirePostReturnDialog() {
         await post(`/api/orders/${item.order_id}/estimate/items/${item.id}/post-return-credit`, {
           vendor_id: vendorId,
           credit_number: creditNumber,
-          actor: currentActor(),
         });
         dialog.close();
         toast("Credit posted to A/P");

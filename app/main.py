@@ -298,6 +298,10 @@ class OrderIn(BaseModel):
     segment: Literal["retail", "recon", "we_owe"] = "recon"
     recon_vehicle_id: int | None = None
     we_owe_id: int | None = None
+    # Opening a ticket is the first line of the car's story and had nowhere to
+    # put a name: the field simply wasn't here, so every recon car in the shop
+    # read "Ticket opened by ui" no matter who wrote it up.
+    actor: str = Field(default="ui", min_length=1, max_length=120)
 
 
 class RetailVehiclePatch(BaseModel):
@@ -950,15 +954,34 @@ def create_app(db_path: Path = DEFAULT_DB, backups_dir: Path = DEFAULT_BACKUPS_D
 
     @app.get("/api/orders")
     def list_orders(segment: str | None = None):
+        # accepts_parts_bill: can a vendor's parts invoice still be written
+        # onto this ticket? The A/P screen's ticket picker offers exactly the
+        # tickets that say yes, so it can stop hiding finished ones (most
+        # parts bills arrive after the job is closed) without offering ones
+        # the post would refuse. Computed in the query rather than per row --
+        # this list is every ticket the shop has ever written, so two extra
+        # lookups a row is a screen that gets slower every month.
+        #
+        # The three conditions are workflow.parts_bill_block_reason's, and
+        # tests/test_missing_receipts.py holds the two statements of them to
+        # each other so they cannot drift apart.
         query = """SELECT o.*, c.name customer_name, v.year, v.make, v.model, v.mileage,
-                   e.total estimate_total, e.status estimate_status, rv.stock_number
+                   e.total estimate_total, e.status estimate_status, rv.stock_number,
+                   NOT (o.voided
+                        OR coalesce(rv.archived_at,'') != ''
+                        OR coalesce(wi.archived_at,'') != ''
+                        OR EXISTS(SELECT 1 FROM customer_invoices ci WHERE ci.order_id=o.id)
+                       ) accepts_parts_bill
                    FROM orders o JOIN customers c ON c.id=o.customer_id JOIN vehicles v ON v.id=o.vehicle_id
                    LEFT JOIN estimates e ON e.order_id=o.id
                    LEFT JOIN recon_vehicles rv ON rv.id=o.recon_vehicle_id
+                   LEFT JOIN we_owe_items wi ON wi.id=o.we_owe_id
                    WHERE (:segment IS NULL OR o.segment=:segment)
                    ORDER BY o.id DESC"""
         with connect() as db:
-            return [dict(row) for row in db.execute(query, {"segment": segment})]
+            rows = db.execute(query, {"segment": segment})
+            # bool(), not SQLite's 0/1: the screen reads this as a flag.
+            return [dict(row) | {"accepts_parts_bill": bool(row["accepts_parts_bill"])} for row in rows]
 
     @app.get("/api/orders/{order_id}")
     def get_order(order_id: int):
@@ -1058,7 +1081,7 @@ def create_app(db_path: Path = DEFAULT_DB, backups_dir: Path = DEFAULT_BACKUPS_D
             )
             order_id = cur.lastrowid
             assert order_id is not None
-            initialize_order_workflow(db, order_id, now)
+            initialize_order_workflow(db, order_id, now, item.actor)
             return rowdict(db.execute("SELECT * FROM orders WHERE id=?", (order_id,)).fetchone())
 
     @app.post("/api/orders/{order_id}/estimate")
@@ -1128,9 +1151,21 @@ def create_app(db_path: Path = DEFAULT_DB, backups_dir: Path = DEFAULT_BACKUPS_D
                     # editing it (a keyed-wrong invoice price, say) is a
                     # correction to the bill -- it must not quietly rewrite
                     # what the shop said the job would cost.
+                    #
+                    # That same correction has to reach received_cost, which is
+                    # otherwise a running total of bills as they arrived: the
+                    # only thing changing the Cost box on a received line can
+                    # mean is "every unit that landed was at this price". It
+                    # fires only when the number actually moved, so re-saving a
+                    # ticket (which the grid does on every keystroke elsewhere)
+                    # can't flatten a line that was genuinely billed twice at
+                    # two prices. Compared with a tolerance, not with =, since
+                    # both sides are floats that have been through JSON.
                     db.execute(
                         "UPDATE estimate_items SET kind=?,description=?,part_number=?,quantity=?,unit_price=?,unit_cost=?,"
                         "quoted_unit_cost=CASE WHEN received_quantity>0 THEN quoted_unit_cost ELSE ? END,"
+                        "received_cost=CASE WHEN received_quantity>0 AND abs(unit_cost-?)>0.0005"
+                        " THEN round(received_quantity*?,2) ELSE received_cost END,"
                         "line_total=?,review_required=0,reviewed_by=?,reviewed_at=?,sort_order=?,job_id=?,core_charge=? WHERE id=?",
                         (
                             item.kind,
@@ -1138,6 +1173,8 @@ def create_app(db_path: Path = DEFAULT_DB, backups_dir: Path = DEFAULT_BACKUPS_D
                             item.part_number.strip().upper(),
                             item.quantity,
                             item.unit_price,
+                            item.unit_cost,
+                            item.unit_cost,
                             item.unit_cost,
                             item.unit_cost,
                             estimate_line_total(item.kind, item.quantity, item.unit_price),

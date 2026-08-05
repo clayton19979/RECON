@@ -31,14 +31,23 @@ const spend = [
   veh({ recon_id: 3, stock_number: "C007", vehicle: "2015 Chevy Silverado", status: "complete", status_bucket: "finished", technicians: ["Bo"], quoted_cost: 0, actual_cost: 0 }),
 ];
 
-// 3 on the roster, 2 with work; 6 ROs, 3 completed; 25 hours; 3 still open,
-// the quietest of them sitting 9 days. No money: labor here is never charged
-// out, so the report carries no cost field at all.
-const techs = [
-  { technician: "Bo", ro_count: 4, completed_count: 2, open_count: 2, worst_idle_days: 9, labor_hours: 15 },
-  { technician: "Chris", ro_count: 2, completed_count: 1, open_count: 1, worst_idle_days: 0, labor_hours: 10 },
-  { technician: "Dana", ro_count: 0, completed_count: 0, open_count: 0, worst_idle_days: 0, labor_hours: 0 },
-];
+// 3 on the roster, 2 with work; 25 hours; the quietest open ticket sitting 9
+// days. No money: labor here is never charged out, so the report carries no
+// cost field at all.
+//
+// The rows add up to 6 repair orders and the shop only wrote 5, on purpose:
+// Bo and Chris share one ticket (Bo is its assignee, Chris owns a job on it),
+// so it is honestly on both their rows. Every summary figure below is checked
+// against `totals`, so anything that goes back to adding the column up fails
+// here rather than on the shop's screen.
+const techs = {
+  technicians: [
+    { technician: "Bo", ro_count: 4, completed_count: 2, open_count: 2, worst_idle_days: 9, labor_hours: 15 },
+    { technician: "Chris", ro_count: 2, completed_count: 1, open_count: 1, worst_idle_days: 0, labor_hours: 10 },
+    { technician: "Dana", ro_count: 0, completed_count: 0, open_count: 0, worst_idle_days: 0, labor_hours: 0 },
+  ],
+  totals: { ro_count: 5, completed_count: 3, open_count: 2, worst_idle_days: 9, labor_hours: 25 },
+};
 
 let failNextReport = false;
 
@@ -53,7 +62,7 @@ const STALE_PREFS = {
 const { w, doc, fetchLog, settle, ok, finish, rejections } = await boot({
   expose: ["state", "generateReport", "loadReportsView", "sortReportRows", "visibleReportRows",
            "REPORT_SORTS", "REPORT_PREFS_KEY", "loadReportPrefs", "saveReportPrefs", "setReportRange",
-           "computeQuickRange", "reportCsvHref", "syncReportControls"],
+           "computeQuickRange", "reportCsvHref", "syncReportControls", "renderPrintReport"],
   // Staged before the app boots, so the first fetch the screen ever makes is
   // the one under test. REPORT_PREFS_KEY isn't on window yet at this point.
   beforeBoot: (win) => win.localStorage.setItem("dao-report-view", JSON.stringify(STALE_PREFS)),
@@ -199,11 +208,13 @@ ok(doc.querySelector('[data-report-type="vehicle-spend"]').getAttribute("aria-ch
 
 const t = stats();
 ok(t[0].value === "2" && t[0].sub === "of 3 on staff", `technicians working reads ${t[0].value} / "${t[0].sub}"`);
-ok(t[1].value === "6" && t[1].sub === "3 completed · 50%", `repair orders card reads ${t[1].value} / "${t[1].sub}"`);
-ok(t[2].value === "25", `labor hours reads ${t[2].value}, expected 25`);
+// 5, the shop's own count -- not the 6 the ro_count column adds up to. The
+// ticket Bo and Chris share is one ticket however many people touched it.
+ok(t[1].value === "5" && t[1].sub === "3 completed · 60%", `repair orders card reads ${t[1].value} / "${t[1].sub}"`);
+ok(t[2].value === "25" && t[2].sub === "5.0 avg per RO", `labor hours reads ${t[2].value} / "${t[2].sub}"`);
 // The fourth card used to be Labor Cost, which on recon and we-owe work is
 // always $0.00. What is actually actionable is who is still holding a car.
-ok(t[3].label === "Still Open" && t[3].value === "3" && t[3].sub === "worst sitting 9 days",
+ok(t[3].label === "Still Open" && t[3].value === "2" && t[3].sub === "worst sitting 9 days",
    `fourth card reads "${t[3].label}" ${t[3].value} / "${t[3].sub}"`);
 ok(doc.querySelectorAll("#report-stats .stat")[3].querySelector(".stat-value").classList.contains("warn"),
    "9 days of silence should be flagged on the card, the same week boundary the board uses");
@@ -211,6 +222,22 @@ ok(!stats().some((s) => /cost|\$/i.test(s.label) || /\$/.test(s.value)),
    `the technician report is showing money: ${JSON.stringify(stats())}`);
 ok(bars().length === 2, `expected 2 technician bars (Dana logged nothing), got ${bars().length}`);
 ok(doc.querySelector("#report-output tbody tr.row-muted"), "the technician with no work isn't muted");
+
+// The footer says what the shop did, not what the column adds up to. It reads
+// lower than the numbers above it whenever a ticket is shared, and that is the
+// correct answer -- 4 + 2 technician-tickets are 5 real ones.
+const techFoot = [...doc.querySelectorAll("#report-output tfoot td")].map((td) => td.textContent.trim());
+ok(techFoot[0] === "Total (2 working)", `technician footer label reads "${techFoot[0]}"`);
+ok(techFoot[1] === "5" && techFoot[2] === "3" && techFoot[3] === "2",
+   `technician footer reads ${JSON.stringify(techFoot)} — expected the shop's 5/3/2, not the column's 6/3/3`);
+ok(techFoot[4] === "9 days" && techFoot[5] === "25", `technician footer tail reads ${JSON.stringify(techFoot.slice(4))}`);
+
+// The printed sheet is read on its own with nobody beside it, so it has to
+// carry the same figures rather than quietly re-adding the column.
+const techPrint = w.renderPrintReport(w.visibleReportRows(), "technicians", "", "", w.state.report.totals);
+ok(/Report Total \(2 of 3 working\)/.test(techPrint), "the printed technician sheet lost its total line");
+ok(!/>6</.test(techPrint.split("<tfoot>")[1] || ""),
+   "the printed technician sheet is still adding the repair-order column up");
 
 // "stock" doesn't exist on this shape; carrying it over would leave the
 // table sorted by nothing at all, with no header claiming to be sorted.
@@ -389,6 +416,74 @@ ok(doc.querySelectorAll("#report-stats .stat").length === 3, "the summary cards 
 ok(bars().length === 3, "the chart didn't come back after a failed report");
 ok(!doc.querySelector("#report-output .empty-state.error"), "the error message outlived the failure");
 
+/* ---------- money that is already spent and in no total ----------
+   Parts on a finished ticket nobody marked received. The board has carried
+   this per car for a while and the Lot Status sheet totals it; this sheet is
+   the one a month's spending gets read off, and it said nothing at all -- so
+   $3,000.00 of cost sat above four rows that between them had another $475.00
+   already out the door. Nothing here is a rounding question: it is money the
+   shop has spent that no total on the screen contains. */
+spend[0].unreceived_closed_cost = 380;
+spend[0].unreceived_closed_parts = 1;
+spend[2].unreceived_closed_cost = 95;
+spend[2].unreceived_closed_parts = 2;
+await w.loadReportsView();
+await settle();
+
+const costCard = stats()[1];
+ok(costCard.value === "$3,000.00", `the Total Cost figure moved: ${costCard.value}`);
+ok(costCard.sub.includes("$475.00") && costCard.sub.includes("never marked received"),
+   `the Total Cost card doesn't say what it is short by: "${costCard.sub}"`);
+ok(doc.querySelector("#report-stats .stat-value.warn"),
+   "the short total is worded as a warning but not coloured as one");
+
+// Per car, in the same words and the same badge the Vehicles board uses, so
+// somebody who has learned it on one screen doesn't have to learn it twice.
+const badges = [...doc.querySelectorAll("#report-output tbody .cost-missing")];
+ok(badges.length === 2, `expected 2 flagged rows, got ${badges.length}`);
+ok(badges[0].textContent.includes("$380.00"), `the badge reads "${badges[0].textContent}"`);
+ok(badges[0].getAttribute("title").includes("never marked received"),
+   "the badge has no tooltip explaining what to do about it");
+// The badge sits in the Cost cell, not loose in the row -- it is a correction
+// to one number, and under any other column it corrects nothing.
+ok(badges[0].closest("td").textContent.includes("$1,450.00"),
+   "the shortfall badge isn't under the cost figure it corrects");
+
+// The footer is the line somebody writes down or reads out, so it is the last
+// place that can afford to be short without saying so.
+const footMissing = doc.querySelector("#report-output tfoot tr.total-missing");
+ok(footMissing, "the spend sheet's footer total carries no correction row");
+ok(footMissing.textContent.includes("3 parts on 2 cars"),
+   `the correction row miscounts: "${footMissing.textContent.trim()}"`);
+ok(footMissing.textContent.includes("$475.00"),
+   `the correction row's figure is wrong: "${footMissing.textContent.trim()}"`);
+// The figure has to land under Cost. A correction row is only a correction
+// if it lines up with the column it corrects; one cell out and it reads as a
+// number about the technicians.
+const spanBefore = [...footMissing.children]
+  .slice(0, [...footMissing.children].indexOf(footMissing.querySelector(".cost-unreceipted")))
+  .reduce((n, td) => n + (Number(td.getAttribute("colspan")) || 1), 0);
+ok(spanBefore === col("cost"),
+   `the correction figure sits in column ${spanBefore}, but Cost is column ${col("cost")}`);
+
+// The printed copy has to say it too -- on paper there is no colour and
+// nobody standing beside it to explain the number.
+const printed = w.renderPrintReport(w.visibleReportRows(), "vehicle-spend", "", "");
+ok(printed.includes("never marked received") && printed.includes("$475.00"),
+   "the printed spend sheet drops the correction the screen carries");
+
+// Nothing missing, nothing said. A "$0.00 never marked received" line under
+// every clean report trains the eye to skip the row that matters.
+spend[0].unreceived_closed_cost = 0;
+spend[0].unreceived_closed_parts = 0;
+spend[2].unreceived_closed_cost = 0;
+spend[2].unreceived_closed_parts = 0;
+await w.loadReportsView();
+await settle();
+ok(!doc.querySelector("#report-output tfoot tr.total-missing"), "the correction row outlived the shortfall");
+ok(!doc.querySelector("#report-output .cost-missing"), "a per-car badge outlived the shortfall");
+ok(stats()[1].sub === "received parts + labor", `the Total Cost card kept its warning: "${stats()[1].sub}"`);
+
 ok(rejections.length === 0, `unhandled rejections during the run: ${rejections.map((e) => e && e.message).join(" | ")}`);
 
-finish("reports: summary cards, chart scaling, sorting, ranges, CSV link, prefs, empty + error states");
+finish("reports: summary cards, chart scaling, sorting, ranges, CSV link, prefs, unreceipted parts, empty + error states");

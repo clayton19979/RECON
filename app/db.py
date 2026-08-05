@@ -362,6 +362,30 @@ CREATE TABLE IF NOT EXISTS estimate_items (
    */
   quoted_unit_cost REAL,
   received_quantity REAL NOT NULL DEFAULT 0,
+  /* What the shop has actually been billed for the units on this line that
+   * have landed -- the running sum of every vendor invoice posted against it.
+   *
+   * A car's cost used to be read as received_quantity * unit_cost, which is
+   * only true while a line arrives on one invoice at one price. It does not
+   * always: an order gets split, the counter has two of the four in stock, a
+   * junkyard part turns up damaged and the replacement comes off a different
+   * shelf at a different number. Receiving overwrites unit_cost with the
+   * newest invoice's price, so that arithmetic quietly re-priced everything
+   * already received at the last price paid -- one windshield billed at 180
+   * and its replacement at 210 reported the car as having spent 420, while
+   * A/P, holding both real bills, said 390. Neither screen could explain the
+   * other, and the vendor's paper is the one that is true.
+   *
+   * So the money is added up as it is billed, rather than recomputed from a
+   * price that has moved. unit_cost keeps its old meaning -- the most recent
+   * invoice price, and the box an advisor corrects a keyed-wrong one in --
+   * and correcting it re-prices the whole received quantity, which is the
+   * only thing that edit can mean.
+   *
+   * Backfilled to received_quantity * unit_cost, which is exactly the number
+   * every existing row already reported.
+   */
+  received_cost REAL NOT NULL DEFAULT 0,
   line_total REAL NOT NULL,
   status TEXT NOT NULL DEFAULT 'quoted',
   -- When this line was marked ordered. Kept after it's received, so how long
@@ -901,6 +925,19 @@ def _migrate(db: sqlite3.Connection) -> None:
     ):
         if column not in estimate_item_columns:
             db.execute(f"ALTER TABLE estimate_items ADD COLUMN {ddl}")
+
+    # What the vendor has actually billed for the units that landed -- see the
+    # column's comment in SCHEMA. Its own block rather than the list above,
+    # because it is the one estimate_items column that needs a backfill: an
+    # existing row's money has to keep reading exactly as it did before the
+    # upgrade, and received_quantity * unit_cost IS what it read as. Every row
+    # written from here on adds its money up as the invoices arrive instead.
+    if "received_cost" not in estimate_item_columns:
+        db.execute("ALTER TABLE estimate_items ADD COLUMN received_cost REAL NOT NULL DEFAULT 0")
+        db.execute(
+            "UPDATE estimate_items SET received_cost = round(received_quantity * unit_cost, 2)"
+            " WHERE received_quantity > 0"
+        )
 
     task_columns = {row[1] for row in db.execute("PRAGMA table_info(tasks)")}
     if "order_id" not in task_columns:

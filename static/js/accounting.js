@@ -1,7 +1,7 @@
 import { $, $$, get, patch, post } from "./core.js";
 import { toast } from "./notify.js";
 import { confirmAction } from "./confirm.js";
-import { currentActor, esc, fmtDate, money, relativeTime, withLoading } from "./shortcuts.js";
+import { esc, fmtDate, money, relativeTime, withLoading } from "./shortcuts.js";
 import { emptyRow, emptyState } from "./empty-states.js";
 import { state } from "./state.js";
 import { renderViewFailure } from "./error-boundary.js";
@@ -163,12 +163,21 @@ function cancelVendorEdit() {
    a ticket is a statement of fact; guessing from a reference number was not.
    Picking one still fills the PO box with the stock number, because that's
    the reference the vendor was actually given. */
+/* Which tickets are offered is the server's answer, not a status guess made
+   here. This list used to drop every completed ticket, which is the wrong end
+   of the problem: a parts bill usually turns up *after* the job is finished,
+   so the one car the invoice in your hand belongs to was the one car missing
+   from the list. Finished tickets are offered and marked as finished; the
+   ones a post would genuinely refuse -- voided, filed to History, already
+   billed to a retail customer -- are the ones left out. */
 function renderPoSelect() {
-  const open = state.orders.filter((o) => o.status !== "complete");
-  const options = open.map((o) => {
-    const label = o.stock_number
-      ? `${o.stock_number} · ${o.number} · ${o.year} ${o.make} ${o.model}`
-      : `${o.number} · ${o.customer_name} · ${o.year} ${o.make} ${o.model}`;
+  const offered = state.orders.filter((o) => o.accepts_parts_bill !== false);
+  const options = offered.map((o) => {
+    const head = o.stock_number
+      ? `${o.stock_number} · ${o.number}`
+      : `${o.number} · ${o.customer_name}`;
+    const finished = o.status === "complete" ? " · finished" : "";
+    const label = `${head} · ${o.year} ${o.make} ${o.model}${finished}`;
     return `<option value="${o.id}" data-po="${esc(o.stock_number || o.number)}">${esc(label)}</option>`;
   }).join("");
   $("#ap-order").innerHTML = `<option value="">No ticket — general expense</option>` + options;
@@ -289,7 +298,7 @@ function renderApTable(invoices) {
         danger: true,
       }))) return;
       try {
-        const result = await patch(`/api/ap/invoices/${btn.dataset.id}/void`, { actor: currentActor() });
+        const result = await patch(`/api/ap/invoices/${btn.dataset.id}/void`, {});
         toast(voidResultMessage(result));
         await loadApTable();
       } catch (err) {

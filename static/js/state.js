@@ -1,4 +1,4 @@
-import { $, get } from "./core.js";
+import { $, get, setActorSource } from "./core.js";
 import { esc } from "./shortcuts.js";
 
 /* ---------- state ---------- */
@@ -26,7 +26,7 @@ export const state = {
   vehicleLateOnly: false,                 // "Past Promised" card toggle -- we-owe promises past their date
   vehicleIdleBucket: "",                  // "" == any; else an IDLE_SELECTIONS key (a chart bar, or "stalled" from the card)
   vehicleChartOpen: true,                 // the idle-bucket chart above the table
-  // "columns" (cards grouped into the three piles) | "list" (sortable table).
+  // "columns" (cards grouped into the lot piles) | "list" (sortable table).
   // Columns is the default because "where is everything up to" is the
   // question the board is opened for first thing in the morning; the table is
   // one click away and is the better answer once you want it sorted by cost.
@@ -130,15 +130,33 @@ export async function refreshCurrentUserOptions() {
   const select = $("#current-user");
   try {
     const staff = await get("/api/staff");
-    select.innerHTML = `<option value="">Unspecified</option>` + staff.map((s) => `<option value="${esc(s.name)}">${esc(s.name)}</option>`).join("");
+    select.innerHTML = `<option value="">Nobody — pick your name</option>` + staff.map((s) => `<option value="${esc(s.name)}">${esc(s.name)}</option>`).join("");
     select.value = state.currentUser;
+    syncWhoami();
   } catch {}
 }
+/* The control says out loud when nobody has been picked.
+
+   It sat in the corner reading "Unspecified" like a settled answer, so it got
+   read as one and left alone -- and then every note, status change and
+   finished repair on the shop PC was filed under nobody in particular. Two
+   people share these screens; whose hands were on a car is a question that
+   gets asked. Amber until somebody claims it costs one click at the start of
+   a shift and nothing after that. */
+function syncWhoami() {
+  const label = $("#whoami");
+  if (label) label.classList.toggle("whoami-unset", !state.currentUser);
+}
 export function initCurrentUser() {
+  // Before the staff list arrives: whatever this browser remembered is
+  // already in state, and every write from here on carries it.
+  setActorSource(() => state.currentUser);
+  syncWhoami();
   refreshCurrentUserOptions();
   $("#current-user").addEventListener("change", () => {
     state.currentUser = $("#current-user").value;
     localStorage.setItem("dao-current-user", state.currentUser);
+    syncWhoami();
   });
 }
 

@@ -1,6 +1,6 @@
 import { $, get, patch } from "./core.js";
 import { toast } from "./notify.js";
-import { currentActor, esc, withLoading } from "./shortcuts.js";
+import { esc, withLoading } from "./shortcuts.js";
 import { state } from "./state.js";
 import { showView } from "./error-boundary.js";
 
@@ -59,7 +59,6 @@ export function wireMoveSegmentDialog() {
         await patch(`/api/orders/${order.id}/segment`, {
           segment: movingTo,
           [movingTo === "recon" ? "recon_vehicle_id" : "we_owe_id"]: Number(targetId),
-          actor: currentActor(),
         });
         dialog.close();
         toast("Ticket moved");

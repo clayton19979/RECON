@@ -156,14 +156,36 @@ def live_orders(orders: list[dict]) -> list[dict]:
     return [o for o in orders if not o.get("voided")]
 
 
-# The three piles Walt sorts the lot into, and the only three the app knows
-# about. They live here rather than in reports.py because the Vehicles screen
-# groups its columns by them and the Lot Report groups its sections by them --
-# and because vehicle_board_rows below stamps every row with its pile, which
+# The piles Walt sorts the lot into, and the only ones the app knows about.
+# They live here rather than in reports.py because the Vehicles screen groups
+# its columns by them and the Lot Report groups its sections by them -- and
+# because vehicle_board_rows below stamps every row with its pile, which
 # reports.py (an importer of this module) could not do without a cycle.
 LOT_READY = "ready"
 LOT_WORKING = "working"
 LOT_WAITING = "waiting"
+# The fourth pile, and the only one that is not about work: a car whose lot
+# life is over. A sold recon car and a settled we-owe promise both used to
+# land in "Ready to go", which is the one place they make the answer wrong --
+# Walt asks that column how many cars he can sell, and it was counting cars
+# already sold and promises settled weeks ago on customers' cars that drove
+# away. Nothing ever takes those rows off the live board either, so the count
+# only drifts further from the truth the longer the shop uses the app.
+#
+# They are not hidden, because the record still needs filing and a row that
+# vanishes is a row nobody files. They get their own pile, last, where they
+# read as housekeeping instead of inventory.
+LOT_SETTLED = "settled"
+
+# The display statuses that mean the car's lot life is over: sold on the recon
+# side, fulfilled or waived on the we-owe side. Both are already settled
+# facts by the time they reach a board row -- "sold" only survives
+# recon_sold_and_settled (no ticket still open), and fulfilled/waived is the
+# advisor's own word for a promise that is closed.
+LOT_SETTLED_STATUSES = ("sold", "fulfilled", "waived")
+
+# How each of those reads in a sentence on the sheet.
+SETTLED_WORD = {"sold": "Sold", "fulfilled": "Fulfilled", "waived": "Waived"}
 
 
 def open_jobs_text(row: dict) -> str:
@@ -215,16 +237,21 @@ def lot_needs_text(row: dict) -> str:
         else ""
     )
 
+    if row["lot_bucket"] == LOT_SETTLED:
+        # This car's lot life is over; the one thing left is to file it away
+        # -- unless it already has been, in which case History must not nudge
+        # anyone toward a step that is done. The unreceipted-parts warning
+        # still outranks either wording: the car's cost is wrong until that
+        # part is received, settled or not.
+        #
+        # The word is the advisor's own -- Sold, Fulfilled, Waived -- because
+        # "settled" is this file's shorthand and nobody in the shop says it.
+        word = SETTLED_WORD.get(row.get("status") or "", "Finished")
+        if missing_text:
+            return f"{word} — but {missing_text}"
+        return word if row.get("archived") else f"{word} — send to History"
+
     if row["lot_bucket"] == LOT_READY:
-        # A sold car's lot life is over; the one thing left is to file it
-        # away -- unless it already has been, in which case History must not
-        # nudge anyone toward a step that is done. The unreceipted-parts
-        # warning still outranks either wording: the car's cost is wrong
-        # until that part is received, sold or not.
-        if row.get("status") == "sold":
-            if missing_text:
-                return f"Sold — but {missing_text}"
-            return "Sold" if row.get("archived") else "Sold — send to History"
         if missing_text:
             return f"Ready to go — but {missing_text}"
         return "Nothing — ready to go"
@@ -296,7 +323,7 @@ def lot_needs_text(row: dict) -> str:
 
 
 def lot_bucket(row: dict) -> str:
-    """Which of Walt's three piles this car is in.
+    """Which pile this car is in.
 
     Driven by the repair ticket, same as the board -- the recon record has a
     status field of its own but nobody maintains it, and a report that reads
@@ -310,11 +337,27 @@ def lot_bucket(row: dict) -> str:
     the same line. What has actually happened to the car wins over what the
     ticket was last set to.
     """
+    # Ahead of everything else, because it is not a question about work. A
+    # sold car and a settled promise are finished in a way "Ready to go"
+    # cannot describe: there is nothing to sell and nobody to hand it back
+    # to. See LOT_SETTLED.
+    if row["status"] in LOT_SETTLED_STATUSES:
+        return LOT_SETTLED
     if row["status_bucket"] == "finished":
         return LOT_READY
     if row["status"] in ("in_progress", "pending_approval"):
         return LOT_WORKING
-    if (row.get("actual_cost") or 0) > 0 or (row.get("parts_pending") or 0) > 0:
+    # Parts nobody receipted on a ticket that is already closed count as money
+    # spent too. They are not in actual_cost and (deliberately, see
+    # _rollup_from_orders) not in parts_pending either, so without this a car
+    # holding a finished ticket and a freshly written second one -- the "it
+    # came back" case -- could read "Not started" with a closed repair and
+    # real money already behind it.
+    if (
+        (row.get("actual_cost") or 0) > 0
+        or (row.get("parts_pending") or 0) > 0
+        or (row.get("unreceived_closed_cost") or 0) > 0
+    ):
         return LOT_WORKING
     return LOT_WAITING
 
@@ -324,7 +367,7 @@ def add_lot_status(row: dict) -> dict:
     and the plain sentence describing what it is waiting on.
 
     Applied to every vehicle-board row, not just the Lot Report's, because the
-    Vehicles screen groups its columns by exactly these three piles -- two
+    Vehicles screen groups its columns by exactly these piles -- two
     screens reading one rule, so a car cannot be "In the shop" on one and "Not
     started" on the other.
     """
@@ -338,7 +381,7 @@ def add_lot_status(row: dict) -> dict:
     # Zero on a finished car, whatever is still open on its ticket -- nothing
     # more is going to be spent on it, and a car whose Needs cell reads
     # "Nothing -- ready to go" must not also claim money still to come.
-    row["remaining_cost"] = 0.0 if row["lot_bucket"] == LOT_READY else max(row.get("open_cost") or 0, 0)
+    row["remaining_cost"] = 0.0 if row["lot_bucket"] in (LOT_READY, LOT_SETTLED) else max(row.get("open_cost") or 0, 0)
     row["needs"] = lot_needs_text(row)
     return row
 
@@ -626,7 +669,8 @@ def cost_rollups(
     haven't shown up yet (status='ordered'; 'received' means it landed,
     'quoted' means nobody has actually ordered it). Returned parts are
     excluded: a line sent back to the vendor isn't something the shop is
-    still waiting on.
+    still waiting on, and neither is a line on a ticket already closed --
+    see _rollup_from_orders for why the closed ones drop out here.
 
     Answers for many vehicles at once because the vehicle board and every
     report built on it need exactly this for every car on the list. Asking one
@@ -651,7 +695,13 @@ def cost_rollups(
         placeholders = ",".join("?" for _ in chunk)
         rows = db.execute(
             f"""SELECT o.{column} ref_id, o.id, o.number, o.ro_number, o.status, o.voided,
-               coalesce(sum(CASE WHEN ei.kind='part' AND ei.part_returned=0 THEN ei.received_quantity*ei.unit_cost ELSE 0 END),0)
+               -- received_cost, not received_quantity*unit_cost: the money the
+               -- vendor actually billed for the units that landed, added up
+               -- bill by bill. The two only agree while a line arrives on one
+               -- invoice at one price; when it doesn't, the product re-prices
+               -- everything already received at the newest price and the car
+               -- disagrees with A/P. See the column's comment in db.SCHEMA.
+               coalesce(sum(CASE WHEN ei.kind='part' AND ei.part_returned=0 THEN ei.received_cost ELSE 0 END),0)
                  + coalesce(sum(CASE WHEN {core_owing} THEN ei.received_quantity*ei.core_charge ELSE 0 END),0) parts_cost,
                coalesce(sum(CASE WHEN ei.kind='labor' THEN ei.quantity*ei.unit_cost ELSE 0 END),0) labor_cost,
                -- Hours in their own right, not just as an input to cost. On
@@ -729,14 +779,25 @@ def _rollup_from_orders(orders: list[dict]) -> dict:
     # Tickets the shop considers done. Only these turn an unreceived part into
     # a problem: on an open ticket the same line is simply work still ahead.
     closed = [o for o in countable if o["status"] == "complete"]
+    # ...and the other side of that same line: only a ticket that is still
+    # open can be waiting on a vendor. Closing a ticket is the shop saying the
+    # work is finished, and from that moment the app already reads an
+    # unreceived part line as money spent and never receipted (closed, above)
+    # -- so counting it here as well put one part on the board twice with
+    # opposite meanings. A finished car sat in "Ready to go" while the Waiting
+    # on Parts card counted it and the On Order desk told somebody to ring the
+    # vendor about a car that had already gone back on the lot. Same reason
+    # add_lot_status zeroes remaining_cost on a finished car: nothing more is
+    # coming, and a row that says so must not also claim otherwise.
+    awaiting = [o for o in countable if o["status"] != "complete"]
     return {
         "orders": orders,
         "total_cost": round(sum(o["total_cost"] for o in countable), 2),
         "quoted_cost": round(sum(o["quoted_cost"] for o in countable), 2),
         "open_cost": round(sum(o["open_cost"] for o in countable), 2),
         "labor_hours": round(sum(o["labor_hours"] for o in countable), 2),
-        "parts_pending": int(sum(o["parts_pending"] for o in countable)),
-        "parts_pending_value": round(sum(o["parts_pending_value"] for o in countable), 2),
+        "parts_pending": int(sum(o["parts_pending"] for o in awaiting)),
+        "parts_pending_value": round(sum(o["parts_pending_value"] for o in awaiting), 2),
         "unreceived_cost": round(sum(o["unreceived_cost"] for o in countable), 2),
         "unreceived_closed_cost": round(sum(o["unreceived_cost"] for o in closed), 2),
         "unreceived_closed_parts": int(sum(o["unreceived_parts"] for o in closed)),
@@ -973,13 +1034,28 @@ def _unit_lifetime(
     purchase from a real sale price would report the whole sale as margin. A
     missing number has to stay missing rather than become a flattering one.
     Cars from when purchase price *was* entered still get a real profit.
+
+    The costs here are what landed, exactly as everywhere else in the app: a
+    part only counts once somebody marks it received. On recon that step is
+    the one that gets skipped (see cost_rollups), so this car's cost -- and
+    therefore its profit -- can be short by real money that already went out
+    the door. The shortfall is carried alongside rather than folded in, for
+    the same reason total_cost never folds it in: what landed is a fact, and
+    what was bought and never receipted is a different fact the screens are
+    expected to say out loud. Nothing here subtracts it, and nothing should.
     """
+    all_rollups = recon_rollups + we_owe_rollups
     recon_cost = sum(r["total_cost"] for r in recon_rollups)
     we_owe_cost = sum(r["total_cost"] for r in we_owe_rollups)
     # Every hour any tech flagged on this car, across both halves of its life.
     # On recon and we-owe the rate is 0, so this is the only measure of the
     # work that actually went into it.
-    labor_hours = round(sum(r["labor_hours"] for r in recon_rollups + we_owe_rollups), 2)
+    labor_hours = round(sum(r["labor_hours"] for r in all_rollups), 2)
+    # Both halves of the car's life, because the question the profit report
+    # asks spans both -- a car whose we-owe tires were never receipted is
+    # understated by exactly as much as if they had been recon tires.
+    unreceived_closed_cost = round(sum(r["unreceived_closed_cost"] for r in all_rollups), 2)
+    unreceived_closed_parts = int(sum(r["unreceived_closed_parts"] for r in all_rollups))
 
     purchase_price = unit["purchase_price"] or 0.0
     we_owe_net = round(we_owe_cost - customer_paid, 2)
@@ -998,6 +1074,12 @@ def _unit_lifetime(
         "we_owe_customer_paid": round(customer_paid, 2),
         "we_owe_net_cost": we_owe_net,
         "total_invested": total_invested,
+        # Money already spent on this car that none of the figures above
+        # include. Same two field names the board row carries, so the Profit
+        # report's warning and the Vehicles board's badge are one fact said
+        # twice rather than two rules that can drift apart.
+        "unreceived_closed_cost": unreceived_closed_cost,
+        "unreceived_closed_parts": unreceived_closed_parts,
         "sale_price": sale_price,
         "sale_date": unit["sale_date"],
         "profit": profit,
@@ -1086,6 +1168,27 @@ def _assert_not_archived(row: sqlite3.Row) -> None:
         raise HTTPException(409, "This vehicle is archived to History -- reopen it to make changes")
 
 
+def order_vehicle_archived(db: sqlite3.Connection, order_row: sqlite3.Row) -> bool:
+    """Is this ticket's vehicle filed away to History?
+
+    The question assert_vehicle_editable asks, without the exception -- some
+    callers need to *report* that a ticket is frozen rather than refuse a
+    request outright (see workflow.parts_bill_block_reason, and the ticket
+    picker on the A/P screen that reads the same fact off /api/orders).
+    Retail orders have neither a recon_vehicle_id nor a we_owe_id, so they
+    are never archived.
+    """
+    for column, table in (("recon_vehicle_id", "recon_vehicles"), ("we_owe_id", "we_owe_items")):
+        ref_id = order_row[column]
+        if not ref_id:
+            continue
+        # Table name is one of two literals chosen right here, never user text.
+        row = db.execute(f"SELECT archived_at FROM {table} WHERE id=?", (ref_id,)).fetchone()
+        if row and row["archived_at"]:
+            return True
+    return False
+
+
 def assert_vehicle_editable(db: sqlite3.Connection, order_row: sqlite3.Row) -> None:
     """Once a vehicle's ticket is archived to History it's fully frozen --
     reopening it is the only way back to an editable state. Retail orders
@@ -1100,16 +1203,8 @@ def assert_vehicle_editable(db: sqlite3.Connection, order_row: sqlite3.Row) -> N
     cancelled job."""
     if order_row["voided"]:
         raise HTTPException(409, "This repair order has been voided and can no longer be edited")
-    if order_row["recon_vehicle_id"]:
-        row = db.execute(
-            "SELECT archived_at FROM recon_vehicles WHERE id=?", (order_row["recon_vehicle_id"],)
-        ).fetchone()
-        if row:
-            _assert_not_archived(row)
-    if order_row["we_owe_id"]:
-        row = db.execute("SELECT archived_at FROM we_owe_items WHERE id=?", (order_row["we_owe_id"],)).fetchone()
-        if row:
-            _assert_not_archived(row)
+    if order_vehicle_archived(db, order_row):
+        raise HTTPException(409, "This vehicle is archived to History -- reopen it to make changes")
 
 
 def technician_names(db: sqlite3.Connection, order_ids: list[int]) -> list[str]:

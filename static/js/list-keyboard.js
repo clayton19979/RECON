@@ -1,7 +1,6 @@
 import { $, $$, post } from "./core.js";
 import { toast } from "./notify.js";
 import { confirmAction } from "./confirm.js";
-import { currentActor, money } from "./shortcuts.js";
 import { state } from "./state.js";
 import { showView } from "./error-boundary.js";
 import { applyVehicleCursor, bulkTaskTitle, clearGlobalSearch, cssEscape, historyMode, loadSearchElsewhere, loadVehiclesView, moveVehicleCursor, renderVehicleStatusOptions, renderVehiclesTable, resetVehicleView, runSearchReachAction, selectVehicleRange, setBoardView, setVehicleLayout, setVehicleSelected, syncPartsFilterChip, syncSearchChrome, syncSegmentChips, vehicleKey, vehicleNodeFor, visibleVehicles } from "./vehicles-board.js";
@@ -426,7 +425,6 @@ export function wireVehiclesView() {
             recon_vehicle_id: v.segment === "recon" ? v.recon_id : null,
             we_owe_id: v.segment === "we_owe" ? v.we_owe_id : null,
           })),
-          actor: currentActor(),
         });
         created = result.created ?? targets.length;
       } catch (err) {

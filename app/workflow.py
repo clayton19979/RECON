@@ -10,7 +10,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from .db import RECON_SHOP_CUSTOMER_ID
-from .recon import assert_vehicle_editable
+from .recon import assert_vehicle_editable, order_vehicle_archived
 
 
 class StaffIn(BaseModel):
@@ -28,6 +28,75 @@ class StaffPatch(BaseModel):
 #: this model, so clearing an assignment needs a value of its own -- the same
 #: unlink sentinel TaskPatch.order_id uses.
 UNASSIGN = -1
+
+
+def open_work_by_staff(db: sqlite3.Connection) -> dict[int, int]:
+    """How many unfinished tickets each person is still on, by staff id.
+
+    Asked before anyone is deactivated. "He doesn't work here anymore" is a
+    normal Monday, but doing it to somebody who is the technician on four cars
+    sitting in the bay is worth knowing about first -- those cars still have
+    to be handed to somebody, and nothing else on the Staff screen says so.
+    The open-task column beside it answers a different question: tasks are
+    notes to a person, this is cars.
+
+    Counted the same way the technician report counts them, so the two screens
+    agree: a ticket is theirs if they are its advisor, its technician, or they
+    own a repair on it, and a voided ticket is work that never happened. One
+    query for the whole list -- the Staff screen is small, but this rides on
+    /api/staff, which nearly every screen in the app fetches.
+    """
+    rows = db.execute(
+        """SELECT staff_id, count(DISTINCT order_id) held FROM (
+               SELECT w.technician_id staff_id, o.id order_id FROM orders o
+                 JOIN order_workflow w ON w.order_id=o.id
+                WHERE o.voided=0 AND o.status!='complete' AND w.technician_id IS NOT NULL
+               UNION ALL
+               SELECT w.advisor_id, o.id FROM orders o
+                 JOIN order_workflow w ON w.order_id=o.id
+                WHERE o.voided=0 AND o.status!='complete' AND w.advisor_id IS NOT NULL
+               UNION ALL
+               SELECT ej.technician_id, o.id FROM orders o
+                 JOIN estimates e ON e.order_id=o.id
+                 JOIN estimate_jobs ej ON ej.estimate_id=e.id
+                WHERE o.voided=0 AND o.status!='complete' AND ej.technician_id IS NOT NULL
+           ) GROUP BY staff_id"""
+    ).fetchall()
+    return {int(row["staff_id"]): int(row["held"]) for row in rows}
+
+
+def assert_assignable(
+    db: sqlite3.Connection,
+    staff_id: int | None,
+    roles: set[str],
+    label: str,
+    current_id: int | None = None,
+) -> None:
+    """Can this person be put in this slot?
+
+    Only a live member of staff in the right role can be *given* work, which
+    is the whole of the check -- except for the one case that made the Staff
+    screen's own promise false. Deactivating somebody is the app's answer to
+    "he doesn't work here anymore" (delete is deliberately not offered), and
+    the confirm says in as many words that work already assigned to them keeps
+    their name. It did not: the person stayed in the database on every ticket
+    and job they owned, but every save that carried their id back -- renaming
+    a repair, changing the advisor, moving a promised date -- was refused with
+    "Technician is not an active technician", about somebody the advisor never
+    touched. A ticket became uneditable because a tech left.
+
+    So an id that is already sitting in this slot is always allowed through.
+    It is not an assignment; it is the assignment that is already there. New
+    work still cannot be handed to somebody who has gone, which is the part
+    the rule was written for.
+    """
+    if staff_id is None:
+        return
+    if current_id is not None and staff_id == current_id:
+        return
+    row = db.execute("SELECT role,active FROM staff WHERE id=?", (staff_id,)).fetchone()
+    if not row or not row["active"] or row["role"] not in roles:
+        raise HTTPException(400, f"{label} is not an active {label.lower()}")
 
 
 class AssignmentIn(BaseModel):
@@ -252,6 +321,51 @@ def assert_estimate_editable(db: sqlite3.Connection, order_id: int) -> None:
         raise HTTPException(409, "Invoiced estimates are locked")
 
 
+def parts_bill_block_reason(db: sqlite3.Connection, order_row: sqlite3.Row) -> str | None:
+    """Why a vendor's parts bill cannot be written onto this ticket, in a
+    sentence somebody can act on -- or None when it can.
+
+    One rule, because there are two doors into the same act. A part gets
+    received either from the car's own screen (Receive Selected) or from the
+    A/P screen (Post a Vendor Invoice), and the two used to disagree about
+    which tickets would take one. The car's screen allowed a finished ticket;
+    A/P refused every one of them, on a status whitelist that let only
+    estimate / pending approval / in progress through.
+
+    That whitelist was backwards for the way parts are actually bought here.
+    A used alternator gets fetched from the yard, fitted, and the ticket is
+    closed the same afternoon -- the vendor's invoice turns up days later.
+    The app already knows this: the Missing Receipts desk exists to list
+    exactly those parts, and the board prints "Ready to go -- but 1 part
+    never marked received" on the car. Then A/P would not let the bill land,
+    so the only way through was to reopen the ticket, post, and close it
+    again, which moves the car back onto the board mid-morning for everyone
+    else looking at it.
+
+    What the whitelist did catch, it caught by accident: a voided ticket is
+    stored as complete, so it fell out on status rather than on being voided.
+    The three boundaries below are the real ones, and they are the same three
+    the car's own screen enforces -- so both doors now open on the same
+    tickets and close on the same tickets.
+    """
+    number = order_row["number"]
+    if order_row["voided"]:
+        return f"Repair order {number} was voided, so nothing can be received against it"
+    if order_vehicle_archived(db, order_row):
+        return f"Repair order {number} is filed away in History -- reopen the vehicle to receive parts against it"
+    if db.execute("SELECT 1 FROM customer_invoices WHERE order_id=?", (order_row["id"],)).fetchone():
+        return f"Repair order {number} has already been billed to the customer, so its lines are locked"
+    return None
+
+
+def assert_parts_receivable(db: sqlite3.Connection, order_row: sqlite3.Row) -> None:
+    """parts_bill_block_reason as a refusal, for the routes that take a parts
+    receipt directly rather than reporting on one."""
+    reason = parts_bill_block_reason(db, order_row)
+    if reason:
+        raise HTTPException(409, reason)
+
+
 def get_or_create_estimate(db: sqlite3.Connection, order_id: int, now_fn: Callable[[], str]) -> sqlite3.Row:
     """Estimates are created lazily on first write (a line item or now a
     job) -- a ticket with no parts/labor yet has no estimates row at all."""
@@ -344,7 +458,8 @@ def build_workflow_router(connect: Callable[[], sqlite3.Connection], now_fn: Cal
                 if include_inactive
                 else "SELECT * FROM staff WHERE active=1 ORDER BY name"
             )
-            return [dict(row) for row in db.execute(query)]
+            held = open_work_by_staff(db)
+            return [dict(row) | {"open_orders": held.get(row["id"], 0)} for row in db.execute(query)]
 
     def _assert_name_free(db, name: str, exclude_id: int | None = None) -> None:
         # Assignment pickers, task owners and reports all identify staff by
@@ -420,15 +535,22 @@ def build_workflow_router(connect: Callable[[], sqlite3.Connection], now_fn: Cal
     def save_assignment(order_id: int, item: AssignmentIn):
         with connect() as db:
             assert_vehicle_editable(db, order(db, order_id))
-            for staff_id, roles, label in (
-                (item.advisor_id, {"advisor", "manager"}, "Advisor"),
-                (item.technician_id, {"technician"}, "Technician"),
+            # Who is on the ticket right now, so re-sending either of them is
+            # recognised as leaving things alone rather than as a fresh
+            # assignment -- see assert_assignable. The date fields on this
+            # same save are the common way that happens: the whole popover is
+            # posted at once, so typing a promised date on a ticket whose
+            # technician has since left used to be refused.
+            held = db.execute(
+                "SELECT advisor_id, technician_id FROM order_workflow WHERE order_id=?", (order_id,)
+            ).fetchone()
+            for staff_id, roles, label, current_id in (
+                (item.advisor_id, {"advisor", "manager"}, "Advisor", held["advisor_id"] if held else None),
+                (item.technician_id, {"technician"}, "Technician", held["technician_id"] if held else None),
             ):
                 if staff_id is None or staff_id == UNASSIGN:
                     continue
-                staff = db.execute("SELECT role,active FROM staff WHERE id=?", (staff_id,)).fetchone()
-                if not staff or not staff["active"] or staff["role"] not in roles:
-                    raise HTTPException(400, f"{label} is not an active {label.lower()}")
+                assert_assignable(db, staff_id, roles, label, current_id)
             db.execute("INSERT OR IGNORE INTO order_workflow(order_id) VALUES(?)", (order_id,))
 
             # (column, was it sent, what to write). Sent and value have to be

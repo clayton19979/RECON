@@ -19,6 +19,7 @@ from .db import inserted_id, purchase_order_number
 from .recon import age_days, assert_vehicle_editable
 from .workflow import (
     assert_estimate_editable,
+    assert_parts_receivable,
     estimate_line_total,
     get_or_create_estimate,
     purchase_orders_list,
@@ -1138,8 +1139,17 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
 
         Scope matches the board's on purpose, so the count here and the count
         on the card can never disagree: part lines still on 'ordered', not sent
-        back, on a ticket that hasn't been voided and a vehicle that hasn't
-        been archived to History.
+        back, on a ticket that is still open and hasn't been voided, and a
+        vehicle that hasn't been archived to History.
+
+        The "still open" half of that was the one this list did not actually
+        apply, and it is what put the same part on two desks with opposite
+        instructions. A closed ticket is the shop saying the work is done, so
+        its unreceived part lines are money already spent that nobody wrote
+        down -- exactly what Missing Receipts below is for. Left in here they
+        also stayed on this desk for good, ageing, telling somebody to ring a
+        vendor about a car that had already gone back on the lot: a chore that
+        could never be cleared, on the list that exists to be cleared.
 
         days_waiting is None, not 0, for a line ordered before ordered_at
         existed -- "we don't know" and "it went on order today" are opposite
@@ -1172,7 +1182,7 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
                    LEFT JOIN customers wc ON wc.id=wi.customer_id
                    LEFT JOIN customers oc ON oc.id=o.customer_id
                    WHERE ei.kind='part' AND ei.status='ordered' AND ei.part_returned=0
-                     AND o.voided=0
+                     AND o.voided=0 AND o.status!='complete'
                      AND coalesce(rv.archived_at,'')='' AND coalesce(wi.archived_at,'')=''
                    -- Longest wait first: the part most likely to have been
                    -- forgotten is the one worth asking about. Lines with no
@@ -1245,6 +1255,13 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
                        o.id order_id, o.number ro_number, o.segment,
                        o.recon_vehicle_id, o.we_owe_id, o.vehicle_id,
                        o.created_at order_created_at, o.last_activity_at,
+                       -- A retail ticket already billed out to the customer
+                       -- is frozen (see workflow.parts_bill_block_reason), so
+                       -- this line can never be receipted. It is still real
+                       -- money that is not in any cost, so it stays on the
+                       -- desk -- but the row has to say so instead of telling
+                       -- somebody to click it and receive it.
+                       EXISTS(SELECT 1 FROM customer_invoices ci WHERE ci.order_id=o.id) billed_out,
                        v.year, v.make, v.model,
                        rv.stock_number, wc.name we_owe_customer_name, oc.name order_customer_name
                    FROM estimate_items ei
@@ -1269,6 +1286,7 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
             result = []
             for row in rows:
                 value = dict(row)
+                value["billed_out"] = bool(row["billed_out"])
                 value["vehicle_label"] = label_vehicle(value)
                 value["vehicle"] = f"{value['year']} {value['make']} {value['model']}"
                 missing = round(float(value["quantity"]) - float(value["received_quantity"]), 4)
@@ -1334,8 +1352,9 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
     def receive_parts(order_id: int, item: ReceivePartsIn):
         with connect() as db:
             current_order = order_row(db, order_id)
-            assert_vehicle_editable(db, current_order)
-            assert_estimate_editable(db, order_id)
+            # The same three boundaries the A/P screen's Post a Vendor Invoice
+            # checks, stated once -- see workflow.parts_bill_block_reason.
+            assert_parts_receivable(db, current_order)
             if not db.execute("SELECT 1 FROM vendors WHERE id=?", (item.vendor_id,)).fetchone():
                 raise HTTPException(404, "Vendor not found")
             estimate = estimate_for_order(db, order_id)
@@ -1407,9 +1426,21 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
             for row in rows:
                 remaining, unit_cost = remaining_by_id[row["id"]]
                 db.execute(
-                    "UPDATE estimate_items SET received_quantity=received_quantity+?,unit_cost=?,status='received',"
+                    # received_cost accumulates rather than being recomputed: a
+                    # line filled by two deliveries at two prices was billed
+                    # both of them, and unit_cost below only remembers the
+                    # newer one. See the column's comment in db.SCHEMA.
+                    "UPDATE estimate_items SET received_quantity=received_quantity+?,"
+                    "received_cost=round(received_cost+?,2),unit_cost=?,status='received',"
                     "received_invoice_number=?,received_vendor_id=? WHERE id=?",
-                    (remaining, unit_cost, item.invoice_number.strip(), item.vendor_id, row["id"]),
+                    (
+                        remaining,
+                        round(remaining * unit_cost, 2),
+                        unit_cost,
+                        item.invoice_number.strip(),
+                        item.vendor_id,
+                        row["id"],
+                    ),
                 )
 
             recompute_estimate_totals(db, estimate["id"])

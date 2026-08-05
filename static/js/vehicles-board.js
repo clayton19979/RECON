@@ -1,5 +1,5 @@
 import { $, $$, get } from "./core.js";
-import { esc, fmtDay, money } from "./shortcuts.js";
+import { esc, fmtDay, money, plateKey } from "./shortcuts.js";
 import { emptyRow, emptyState } from "./empty-states.js";
 import { BOARD_COLUMNS, showPlaceholders, skeletonCards } from "./skeletons.js";
 import { STATUS_LABEL, STATUS_PILL_CLASS, state } from "./state.js";
@@ -346,8 +346,16 @@ export function resetVehicleView() {
 // whether a car is findable, which is the bug this whole section is about.
 export function matchesVehicleSearch(v, query) {
   const q = query.toLowerCase();
+  // The plate is what someone standing at the window can actually read off a
+  // car, and often the only thing they have -- no stock number on the glass,
+  // no VIN without opening a door. Matched on letters and digits only, so
+  // "abc 1234", "ABC-1234" and "abc1234" are the one plate they obviously are.
+  // A blank query would strip to "" and match every car, so it's guarded.
+  const plate = plateKey(v.plate);
+  const plateQuery = plateKey(q);
   return (v.stock_number || "").toLowerCase().includes(q)
     || (v.vin || "").toLowerCase().includes(q)
+    || (plateQuery ? plate.includes(plateQuery) : false)
     || (v.customer_name || "").toLowerCase().includes(q)
     || (v.vehicle || "").toLowerCase().includes(q)
     // The number on the paper ticket in your hand. Both forms: the short one
@@ -1396,13 +1404,13 @@ function vehicleRowHtml(v) {
       <td class="num col-stock"><span class="stock-no">${esc(v.stock_number || "—")}</span><div class="veh-sub">${roTagHtml(v)}</div></td>
       <td class="col-vehicle">
         <div class="veh-name" title="${esc(v.vehicle)}">${esc(v.vehicle)}</div>
-        <div class="veh-sub">${v.segment === "we_owe"
+        <div class="veh-sub">${[plateTagHtml(v), v.segment === "we_owe"
           ? `<span class="veh-customer"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-7 8-7s8 3 8 7"/></svg>${esc(v.customer_name || "—")}</span>`
           : (v.vin
             // Nobody scans a full 17-character VIN -- the last 8 identify
             // the car; the full value stays one hover away.
             ? `<span title="${esc(v.vin)}">VIN …${esc(String(v.vin).slice(-8))}</span>`
-            : `<span class="muted-dash">—</span>`)}</div>
+            : `<span class="muted-dash">—</span>`)].filter(Boolean).join(" · ")}</div>
       </td>
       <td class="col-type"><span class="pill ${v.segment === "recon" ? "pill-recon" : "pill-weowe"}">${v.segment === "recon" ? "Recon" : "We-Owe"}</span></td>
       <td class="col-status"><span class="pill ${vehicleStatusPillClass(v)}">${esc(STATUS_LABEL[v.status] || v.status)}</span></td>
@@ -1419,7 +1427,7 @@ function vehicleRowHtml(v) {
 // as-is -- see renderVehiclesTable.
 function vehicleRowSignature(v) {
   return [
-    v.stock_number, v.vehicle, v.vin, v.customer_name, v.segment, v.status, v.status_bucket,
+    v.stock_number, v.vehicle, v.vin, v.plate, v.plate_state, v.customer_name, v.segment, v.status, v.status_bucket,
     // The row prints the ticket's number, so writing the first ticket on a
     // car has to rebuild it -- otherwise the card keeps saying "no ticket"
     // until something else about the car happens to change.
@@ -1597,14 +1605,27 @@ function columnSummary(rows) {
   return bits.join(" · ");
 }
 
+// The plate, when the car has one. Leads the identity line because it is the
+// half of it anybody can check without walking to the car -- and because a
+// plate search that produces a row saying only "VIN …12345678" leaves you
+// staring at a match you cannot confirm.
+function plateTagHtml(v) {
+  if (!v.plate) return "";
+  const label = `${v.plate}${v.plate_state ? ` (${v.plate_state})` : ""}`;
+  return `<span class="veh-plate" title="Licence plate">${esc(label)}</span>`;
+}
+
 function cardSubHtml(v) {
+  const plate = plateTagHtml(v);
   if (v.segment === "we_owe") {
-    return `<span class="veh-customer"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-7 8-7s8 3 8 7"/></svg>${esc(v.customer_name || "—")}</span>`;
+    const customer = `<span class="veh-customer"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-7 8-7s8 3 8 7"/></svg>${esc(v.customer_name || "—")}</span>`;
+    return plate ? `${plate} · ${customer}` : customer;
   }
   // Nobody scans a full 17-character VIN -- the last 8 identify the car.
-  return v.vin
+  const vin = v.vin
     ? `<span title="${esc(v.vin)}">VIN …${esc(String(v.vin).slice(-8))}</span>`
     : `<span class="muted-dash">No VIN on file</span>`;
+  return plate ? `${plate} · ${vin}` : vin;
 }
 
 function vehicleCardHtml(v) {

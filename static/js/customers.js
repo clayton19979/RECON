@@ -4,7 +4,7 @@ import { toast } from "./notify.js";
 // shared now: the ticket printer needed the same "a day, not a timestamp"
 // answer, and two functions of the same name in two modules become one
 // arbitrary winner in the flattened bundle the DOM tests run against.
-import { esc, fmtDay, withLoading } from "./shortcuts.js";
+import { esc, fmtDay, wirePlateFields, withLoading } from "./shortcuts.js";
 import { emptyRow } from "./empty-states.js";
 import { CUSTOMER_COLUMNS } from "./skeletons.js";
 import { STATUS_LABEL, STATUS_PILL_CLASS, state } from "./state.js";
@@ -548,12 +548,10 @@ export function wireAddVehicleDialog() {
   $("#vehicle-add-cancel-2").addEventListener("click", () => $("#vehicle-add-dialog").close());
   // VIN/plate/plate-state uppercase as you type, same shapes the backend
   // normalizes to -- so what the form shows is what the record will say.
-  [["#vehicle-add-vin", /[^A-Z0-9]/g, 17], ["#vehicle-add-plate", /[^A-Z0-9]/g, 8], ["#vehicle-add-plate-state", /[^A-Z]/g, 2]]
-    .forEach(([sel, strip, max]) => {
-      $(sel).addEventListener("input", (e) => {
-        e.target.value = e.target.value.toUpperCase().replace(strip, "").slice(0, max);
-      });
-    });
+  $("#vehicle-add-vin").addEventListener("input", (e) => {
+    e.target.value = e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 17);
+  });
+  wirePlateFields("#vehicle-add-plate", "#vehicle-add-plate-state");
   $("#vehicle-add-form").addEventListener("submit", async (e) => {
     e.preventDefault();
     if (!addVehicleTarget) return;

@@ -1,7 +1,7 @@
 import { $, $$, api, fmtHours, get, patch, post, put } from "./core.js";
 import { toast } from "./notify.js";
 import { confirmAction } from "./confirm.js";
-import { currentActor, esc, fmtDate, fmtDay, money, relativeTime, todayLocal, withLoading } from "./shortcuts.js";
+import { currentActor, esc, fmtDate, fmtDay, money, relativeTime, todayLocal, wirePlateFields, withLoading } from "./shortcuts.js";
 import { emptyState } from "./empty-states.js";
 import { actualTotal, isReturnedPart, lineTotal, ticketTotal } from "./estimate-money.js";
 import { AUTH_METHOD_LABEL, ITEM_STATUS_LABEL, KIND_GROUP_LABEL, KIND_GROUP_ORDER, PAY_METHOD_LABEL, STATUS_LABEL, STATUS_OPTIONS, STATUS_PILL_CLASS, fieldLabels, state } from "./state.js";
@@ -373,6 +373,13 @@ function specTagsHtml(parts) {
   return parts.filter(Boolean).map((p) => `<span class="spec">${esc(p)}</span>`).join("");
 }
 
+// "ABC1234 (IN)", or nothing at all when no plate is on file. Sits in the
+// header beside the VIN because it is the identifier someone walking back in
+// from the lot actually has in their head.
+function plateTag(item) {
+  return item.plate ? `${item.plate}${item.plate_state ? ` (${item.plate_state})` : ""}` : "";
+}
+
 function renderDetailHead() {
   const { segment, item } = state.detail;
   // The band's left edge names the side, same colour rule as the board's
@@ -406,6 +413,8 @@ function renderDetailHead() {
   $("#vd-recon-model").value = item.model;
   $("#vd-recon-trim").value = item.trim || "";
   $("#vd-recon-color").value = item.color || "";
+  $("#vd-recon-plate").value = item.plate || "";
+  $("#vd-recon-plate-state").value = item.plate_state || "";
   // Arrival date is a recon-only fact: a we-owe car was bought and sold long
   // before this shop wrote it down, so there is no lot arrival to record.
   $("#vd-acquired-row").hidden = segment !== "recon";
@@ -415,7 +424,7 @@ function renderDetailHead() {
   $("#vd-recon-stock").value = segment === "recon" ? item.stock_number || "" : "";
   if (segment === "recon") {
     $("#vd-title").textContent = `${item.stock_number} — ${item.year} ${item.make} ${item.model}`;
-    $("#vd-sub").innerHTML = specTagsHtml([item.vin, item.mileage ? `${item.mileage.toLocaleString()} mi` : "", item.trim]);
+    $("#vd-sub").innerHTML = specTagsHtml([plateTag(item), item.vin, item.mileage ? `${item.mileage.toLocaleString()} mi` : "", item.trim]);
     $("#vd-customer-line").hidden = true;
     $("#vd-customer-info-card").style.display = "none";
     $("#vd-other-vehicles-card").style.display = "none";
@@ -425,7 +434,7 @@ function renderDetailHead() {
     // we_owe and retail share the customer-owned-car layout; only we_owe has
     // the promise machinery (status/category/target, dealer-paid deposits).
     $("#vd-title").textContent = `${item.year} ${item.make} ${item.model}`;
-    $("#vd-sub").innerHTML = specTagsHtml([item.vin, item.mileage ? `${item.mileage.toLocaleString()} mi` : "", item.description]);
+    $("#vd-sub").innerHTML = specTagsHtml([plateTag(item), item.vin, item.mileage ? `${item.mileage.toLocaleString()} mi` : "", item.description]);
     // Customer name gets its own prominent line in the header rather than
     // being buried mid-subtitle -- whose car it is is the first thing the
     // advisor needs.
@@ -504,6 +513,9 @@ function renderVehicleInfoSummary() {
     ["Mileage", item.odometer_broken
       ? `<span title="Recorded as unreadable at intake">Odometer broken</span>`
       : item.mileage ? item.mileage.toLocaleString() : "—"],
+    // Same reason as the VIN above, minus the copy button: nobody retypes a
+    // plate into a catalogue, they read it off a car and type it into search.
+    ["Plate", esc(plateTag(item) || "—")],
     ["Year/Make/Model", esc([item.year, item.make, item.model].filter(Boolean).join(" "))],
     ["Trim", esc(item.trim || "—")],
     // Decoding a VIN fills this in and the printed ticket has always shown it,
@@ -800,7 +812,8 @@ function applyArchivedLockUI(archived) {
   ];
   const vehicleIds = [
     "vd-edit-vehicle", "vd-recon-info-save", "vd-decode-vin", "vd-recon-vin", "vd-recon-mileage", "vd-recon-year",
-    "vd-recon-make", "vd-recon-model", "vd-recon-trim", "vd-recon-color", "vd-recon-acquired",
+    "vd-recon-make", "vd-recon-model", "vd-recon-trim", "vd-recon-color",
+    "vd-recon-plate", "vd-recon-plate-state", "vd-recon-acquired",
     "vd-edit-customer", "vd-we-owe-save", "vd-we-owe-description", "vd-we-owe-category", "vd-we-owe-target", "vd-we-owe-status",
     "vd-take-payment", "vd-deposit-add", "vd-deposit-amount", "vd-deposit-method", "vd-deposit-note",
   ];
@@ -3066,6 +3079,8 @@ export function wireVehicleDetail() {
     });
   });
 
+  wirePlateFields("#vd-recon-plate", "#vd-recon-plate-state");
+
   $("#vehicle-edit-form").addEventListener("submit", async (e) => {
     e.preventDefault();
     const { segment, id, item } = state.detail;
@@ -3079,6 +3094,8 @@ export function wireVehicleDetail() {
           model: $("#vd-recon-model").value.trim(),
           trim: $("#vd-recon-trim").value.trim(),
           color: $("#vd-recon-color").value.trim(),
+          plate: $("#vd-recon-plate").value.trim(),
+          plate_state: $("#vd-recon-plate-state").value.trim(),
           expected_version: item.edit_version,
         };
         if (segment === "recon") {

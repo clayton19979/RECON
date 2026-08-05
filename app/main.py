@@ -19,7 +19,16 @@ from . import paths
 from .accounting import build_accounting_router
 from .agent_routes import build_agent_router
 from .backup_routes import build_backup_router
-from .db import RECON_SHOP_CUSTOMER_ID, init_db, inserted_id, next_ro_number, now, pulse_revision, vin_check_digit_ok
+from .db import (
+    RECON_SHOP_CUSTOMER_ID,
+    init_db,
+    inserted_id,
+    next_ro_number,
+    normalize_plate,
+    now,
+    pulse_revision,
+    vin_check_digit_ok,
+)
 from .db import connect as db_connect
 from .export import build_export_router
 from .jobs import build_jobs_router
@@ -753,7 +762,7 @@ def create_app(db_path: Path = DEFAULT_DB, backups_dir: Path = DEFAULT_BACKUPS_D
                     item.vin.strip().upper(),
                     item.mileage,
                     int(item.odometer_broken),
-                    item.plate.replace(" ", "").upper(),
+                    normalize_plate(item.plate),
                     item.plate_state.strip().upper(),
                     item.trim.strip(),
                     item.engine.strip(),
@@ -937,7 +946,7 @@ def create_app(db_path: Path = DEFAULT_DB, backups_dir: Path = DEFAULT_BACKUPS_D
                 ("engine", item.engine.strip() if item.engine is not None else None),
                 ("color", item.color.strip() if item.color is not None else None),
                 ("mileage", item.mileage),
-                ("plate", item.plate.strip().upper() if item.plate is not None else None),
+                ("plate", normalize_plate(item.plate) if item.plate is not None else None),
                 ("plate_state", item.plate_state.strip().upper() if item.plate_state is not None else None),
             ):
                 if value is not None:

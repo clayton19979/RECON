@@ -8,7 +8,7 @@ from typing import Any, Literal
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from .db import RECON_SHOP_CUSTOMER_ID, inserted_id, normalize_stock_number, normalize_vin
+from .db import RECON_SHOP_CUSTOMER_ID, inserted_id, normalize_plate, normalize_stock_number, normalize_vin
 from .db import now as db_now
 
 
@@ -476,6 +476,12 @@ class RecondVehicleIn(BaseModel):
     vin: str = ""
     mileage: int = Field(default=0, ge=0)
     odometer_broken: bool = False
+    # The one identifier you can read from across the lot without opening a
+    # door. The write-up form has always asked for it; until now the answer was
+    # dropped on the floor, so no lot car had a plate on file and no lot car
+    # could be looked up by one.
+    plate: str = Field(default="", max_length=12)
+    plate_state: str = Field(default="", max_length=2)
     trim: str = ""
     engine: str = ""
     color: str = ""
@@ -514,6 +520,11 @@ class RecondVehiclePatch(BaseModel):
     trim: str | None = None
     engine: str | None = None
     color: str | None = None
+    # Correctable like every other identifier here: a plate is misread off a
+    # dirty car as often as a VIN is, and a lot car's plate changes outright
+    # when the dealer tag comes off it.
+    plate: str | None = Field(default=None, max_length=12)
+    plate_state: str | None = Field(default=None, max_length=2)
     mileage: int | None = Field(default=None, ge=0)
     odometer_broken: bool | None = None
     expected_version: int | None = None
@@ -550,6 +561,8 @@ class WeOwePatch(BaseModel):
     trim: str | None = None
     engine: str | None = None
     color: str | None = None
+    plate: str | None = Field(default=None, max_length=12)
+    plate_state: str | None = Field(default=None, max_length=2)
     mileage: int | None = Field(default=None, ge=0)
     odometer_broken: bool | None = None
     purchase_price: float | None = Field(default=None, ge=0)
@@ -1198,7 +1211,7 @@ def vehicle_board_rows(
     result = []
     if segment in (None, "recon"):
         rows = db.execute(
-            """SELECT rv.*, v.year, v.make, v.model, v.vin, v.mileage, v.unit_id,
+            """SELECT rv.*, v.year, v.make, v.model, v.vin, v.mileage, v.plate, v.plate_state, v.unit_id,
                       u.purchase_price unit_purchase_price, u.sale_price unit_sale_price
                FROM recon_vehicles rv
                JOIN vehicles v ON v.id=rv.vehicle_id
@@ -1244,6 +1257,11 @@ def vehicle_board_rows(
                     "stock_number": row["stock_number"],
                     "vehicle": f"{row['year']} {row['make']} {row['model']}",
                     "vin": row["vin"],
+                    # Carried on every board row because the search bar filters
+                    # this list in the browser -- a plate the row doesn't hold
+                    # is a plate nobody can find the car by.
+                    "plate": row["plate"],
+                    "plate_state": row["plate_state"],
                     "status": display_status,
                     "status_bucket": "finished" if sold else order_status_bucket(rollup["orders"]),
                     # From the unit, not recon_vehicles' legacy column of the same
@@ -1301,7 +1319,8 @@ def vehicle_board_rows(
             )
     if segment in (None, "we_owe"):
         rows = db.execute(
-            """SELECT w.*, c.name customer_name, v.year, v.make, v.model, v.vin, v.unit_id,
+            """SELECT w.*, c.name customer_name, v.year, v.make, v.model, v.vin,
+                      v.plate, v.plate_state, v.unit_id,
                       u.purchase_price unit_purchase_price, u.sale_price unit_sale_price
                FROM we_owe_items w
                JOIN customers c ON c.id=w.customer_id JOIN vehicles v ON v.id=w.vehicle_id
@@ -1349,6 +1368,8 @@ def vehicle_board_rows(
                     "stock_number": row["lot_stock_number"] or None,
                     "vehicle": f"{row['year']} {row['make']} {row['model']}",
                     "vin": row["vin"],
+                    "plate": row["plate"],
+                    "plate_state": row["plate_state"],
                     "customer_name": row["customer_name"],
                     "description": row["description"],
                     "status": display_status,
@@ -1444,7 +1465,7 @@ def build_recon_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
     def recon_row(db: sqlite3.Connection, recon_id: int) -> sqlite3.Row:
         row = db.execute(
             """SELECT rv.*, v.year, v.make, v.model, v.vin, v.mileage, v.odometer_broken,
-                      v.trim, v.engine, v.color, v.unit_id
+                      v.trim, v.engine, v.color, v.plate, v.plate_state, v.unit_id
                FROM recon_vehicles rv JOIN vehicles v ON v.id=rv.vehicle_id WHERE rv.id=?""",
             (recon_id,),
         ).fetchone()
@@ -1499,7 +1520,7 @@ def build_recon_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
                       c.address_line1 customer_address_line1, c.address_line2 customer_address_line2,
                       c.city customer_city, c.state customer_state, c.postal_code customer_postal_code,
                       v.year, v.make, v.model, v.vin, v.mileage, v.odometer_broken,
-                      v.trim, v.engine, v.color, v.unit_id
+                      v.trim, v.engine, v.color, v.plate, v.plate_state, v.unit_id
                FROM we_owe_items w JOIN customers c ON c.id=w.customer_id JOIN vehicles v ON v.id=w.vehicle_id
                WHERE w.id=?""",
             (we_owe_id,),
@@ -1609,8 +1630,8 @@ def build_recon_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
                     item.vin.strip().upper(),
                     item.mileage,
                     int(item.odometer_broken),
-                    "",
-                    "",
+                    normalize_plate(item.plate),
+                    item.plate_state.strip().upper(),
                     item.trim.strip(),
                     item.engine.strip(),
                     item.color.strip(),
@@ -1743,6 +1764,9 @@ def build_recon_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
                 ("trim", item.trim.strip() if item.trim is not None else None),
                 ("engine", item.engine.strip() if item.engine is not None else None),
                 ("color", item.color.strip() if item.color is not None else None),
+                # Stored the way the search looks for it -- see normalize_plate.
+                ("plate", normalize_plate(item.plate) if item.plate is not None else None),
+                ("plate_state", item.plate_state.strip().upper() if item.plate_state is not None else None),
                 ("mileage", item.mileage),
             ):
                 if value is not None:
@@ -1922,6 +1946,8 @@ def build_recon_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
                 ("trim", item.trim.strip() if item.trim is not None else None),
                 ("engine", item.engine.strip() if item.engine is not None else None),
                 ("color", item.color.strip() if item.color is not None else None),
+                ("plate", normalize_plate(item.plate) if item.plate is not None else None),
+                ("plate_state", item.plate_state.strip().upper() if item.plate_state is not None else None),
                 ("mileage", item.mileage),
                 ("odometer_broken", int(item.odometer_broken) if item.odometer_broken is not None else None),
             ):

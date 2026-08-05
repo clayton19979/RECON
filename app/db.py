@@ -87,6 +87,21 @@ def normalize_stock_number(stock_number: str | None) -> str | None:
     return cleaned or None
 
 
+def normalize_plate(plate: str | None) -> str:
+    """A licence plate reduced to the form two spellings of it share.
+
+    Same rule as the stock number, and for the same reason: the plate gets read
+    off the back of a car standing in the lot, so it arrives as "ABC 1234" one
+    day and "abc-1234" the next. Only letters and digits survive, upper-cased,
+    which is what makes the plate something the search bar can actually find a
+    car by.
+
+    Returns "" rather than None for empty input: unlike a VIN, a plate is not a
+    key anything joins on, and the column it goes in is NOT NULL DEFAULT ''.
+    """
+    return "".join(ch for ch in (plate or "") if ch.isalnum()).upper()
+
+
 # A vendor's word for "purchase order" written any of the ways they write it,
 # but only when a reference actually follows -- the lookahead is what stops
 # this eating the start of a stock number like ROB-4, which is not one.

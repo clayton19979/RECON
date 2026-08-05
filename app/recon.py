@@ -807,7 +807,17 @@ def _rollup_from_orders(orders: list[dict]) -> dict:
         "orders": orders,
         "total_cost": round(sum(o["total_cost"] for o in countable), 2),
         "quoted_cost": round(sum(o["quoted_cost"] for o in countable), 2),
-        "open_cost": round(sum(o["open_cost"] for o in countable), 2),
+        # Only an open ticket can still cost anything. A part left unreceived
+        # on a closed one is money that has already gone out of the door --
+        # that is precisely what unreceived_closed_cost below says about it --
+        # so counting it here as well put the same dollars on the same row
+        # twice with opposite meanings: "$380.00 of work left" beside "$380.00
+        # not in the cost". add_lot_status hid it on a car whose every ticket
+        # was closed, by zeroing remaining_cost on a finished car; the moment
+        # a second ticket was written -- the everyday "it came back" case --
+        # the car left the finished pile and the old ticket's spent money
+        # reappeared as a bill still to come.
+        "open_cost": round(sum(o["open_cost"] for o in awaiting), 2),
         "labor_hours": round(sum(o["labor_hours"] for o in countable), 2),
         "parts_pending": int(sum(o["parts_pending"] for o in awaiting)),
         "parts_pending_value": round(sum(o["parts_pending_value"] for o in awaiting), 2),
@@ -824,8 +834,10 @@ def _rollup_from_orders(orders: list[dict]) -> dict:
 NEEDS_JOB_LIMIT = 3
 
 
-def job_progress(db: sqlite3.Connection, column: str, ref_id: int, segment: str | None = None) -> dict:
-    """Which repairs on this car are done and which are still owed.
+def job_progress_map(
+    db: sqlite3.Connection, column: str, ref_ids: Sequence[int], segment: str | None = None
+) -> dict[int, dict]:
+    """Which repairs this car is still owed, and how far through them it is.
 
     A ticket's status is one flag for the whole car, so on its own it can only
     say "in progress" -- it cannot tell Walt that the brakes are finished and
@@ -834,38 +846,27 @@ def job_progress(db: sqlite3.Connection, column: str, ref_id: int, segment: str 
     titles of the ones that haven't so the answer can be given in words
     instead of in dollars.
 
-    One query for the whole vehicle rather than one per ticket: a car with
-    several ROs is the normal case, and the board builds this for every row.
-
     Voided tickets are excluded for the same reason cost_rollup excludes them
-    -- that work was cancelled, so its jobs are not outstanding work.
+    -- that work was cancelled, so its jobs are not outstanding work -- and
+    **closed tickets** are excluded for the reason right beside it: closing a
+    ticket is the shop saying the work is done. Ticking each repair off is a
+    habit not everybody has, so a closed ticket routinely carries repairs that
+    were never ticked; left in, they were the car's answer to "what does it
+    still need" forever. A car sitting in Ready to go drew "0 of 2 repairs
+    finished" on its card, and a car that came back on a second ticket was
+    listed as still needing the windshield it had already had.
+
+    Counting them as *finished* instead of dropping them would be the same
+    wrong answer wearing a different hat: it empties jobs_open while leaving
+    jobs_total set, which is the exact shape open_jobs_text reads as "all 2
+    jobs ticked off -- close the ticket", said about a ticket that is already
+    closed. What is true is that a finished ticket is asking for nothing, so
+    it contributes nothing here.
+
+    One query for the whole board rather than one per car -- same contract as
+    technician_names_map: every id passed in comes back, cars with no
+    outstanding repairs getting the all-zero shape.
     """
-    rows = db.execute(
-        """SELECT ej.title, ej.completed_at
-           FROM estimate_jobs ej
-           JOIN estimates e ON e.id=ej.estimate_id
-           JOIN orders o ON o.id=e.order_id
-           WHERE o."""
-        + column
-        + "=? AND o.voided=0"
-        + (" AND o.segment=?" if segment else "")
-        + " ORDER BY o.id, ej.sort_order, ej.id",
-        (ref_id, segment) if segment else (ref_id,),
-    ).fetchall()
-    open_titles = [row["title"] for row in rows if not row["completed_at"]]
-    return {
-        "jobs_total": len(rows),
-        "jobs_done": sum(1 for row in rows if row["completed_at"]),
-        "jobs_open": open_titles,
-    }
-
-
-def job_progress_map(
-    db: sqlite3.Connection, column: str, ref_ids: Sequence[int], segment: str | None = None
-) -> dict[int, dict]:
-    """job_progress for the whole board in one query -- same contract as
-    technician_names_map: every id passed in comes back, cars with no jobs
-    getting the all-zero shape."""
     result = {ref_id: {"jobs_total": 0, "jobs_done": 0, "jobs_open": []} for ref_id in ref_ids}
     ids = _unique_ids(ref_ids)
     if not ids:
@@ -877,7 +878,7 @@ def job_progress_map(
                   FROM estimate_jobs ej
                   JOIN estimates e ON e.id=ej.estimate_id
                   JOIN orders o ON o.id=e.order_id
-                 WHERE o.{column} IN ({placeholders}) AND o.voided=0"""
+                 WHERE o.{column} IN ({placeholders}) AND o.voided=0 AND o.status!='complete'"""
             + (" AND o.segment=?" if segment else "")
             + " ORDER BY o.id, ej.sort_order, ej.id",
             (*chunk, segment) if segment else tuple(chunk),

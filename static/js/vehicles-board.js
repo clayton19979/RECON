@@ -1372,12 +1372,19 @@ function partsCellHtml(v) {
    already inside the needs sentence -- "(1 of 3 done)" -- but a sentence has
    to be read card by card, and this is answerable across a whole column from
    arm's length, the same way the ticket page's own progress bar is answerable
-   from across the desk. Same jobs_done/jobs_total the ticket reads, so the
-   card and the ticket cannot disagree about how far along a car is.
+   from across the desk.
 
    Nothing at all on a car whose ticket has no jobs -- most simple tickets
    don't -- and nothing in History or the settled pile, where the work is over
-   and "how far along" is a question nobody is asking anymore. */
+   and "how far along" is a question nobody is asking anymore.
+
+   Nothing on a car whose tickets are all closed either, and that one is
+   decided on the server: recon.job_progress_map counts only the repairs on
+   tickets still open, so a finished car arrives here with no jobs at all
+   rather than with a bar reading "0 of 2 repairs finished" underneath a
+   Ready to go heading. The ticket page still shows its own tick boxes, which
+   is the record of what happened on that ticket; this bar is only ever about
+   work the car is still waiting for. */
 function jobsProgressHtml(v) {
   const total = v.jobs_total || 0;
   if (!total || historyMode() || v.lot_bucket === LOT_SETTLED) return "";

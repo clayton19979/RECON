@@ -347,7 +347,17 @@ def lot_bucket(row: dict) -> str:
         return LOT_READY
     if row["status"] in ("in_progress", "pending_approval"):
         return LOT_WORKING
-    if (row.get("actual_cost") or 0) > 0 or (row.get("parts_pending") or 0) > 0:
+    # Parts nobody receipted on a ticket that is already closed count as money
+    # spent too. They are not in actual_cost and (deliberately, see
+    # _rollup_from_orders) not in parts_pending either, so without this a car
+    # holding a finished ticket and a freshly written second one -- the "it
+    # came back" case -- could read "Not started" with a closed repair and
+    # real money already behind it.
+    if (
+        (row.get("actual_cost") or 0) > 0
+        or (row.get("parts_pending") or 0) > 0
+        or (row.get("unreceived_closed_cost") or 0) > 0
+    ):
         return LOT_WORKING
     return LOT_WAITING
 
@@ -659,7 +669,8 @@ def cost_rollups(
     haven't shown up yet (status='ordered'; 'received' means it landed,
     'quoted' means nobody has actually ordered it). Returned parts are
     excluded: a line sent back to the vendor isn't something the shop is
-    still waiting on.
+    still waiting on, and neither is a line on a ticket already closed --
+    see _rollup_from_orders for why the closed ones drop out here.
 
     Answers for many vehicles at once because the vehicle board and every
     report built on it need exactly this for every car on the list. Asking one
@@ -762,14 +773,25 @@ def _rollup_from_orders(orders: list[dict]) -> dict:
     # Tickets the shop considers done. Only these turn an unreceived part into
     # a problem: on an open ticket the same line is simply work still ahead.
     closed = [o for o in countable if o["status"] == "complete"]
+    # ...and the other side of that same line: only a ticket that is still
+    # open can be waiting on a vendor. Closing a ticket is the shop saying the
+    # work is finished, and from that moment the app already reads an
+    # unreceived part line as money spent and never receipted (closed, above)
+    # -- so counting it here as well put one part on the board twice with
+    # opposite meanings. A finished car sat in "Ready to go" while the Waiting
+    # on Parts card counted it and the On Order desk told somebody to ring the
+    # vendor about a car that had already gone back on the lot. Same reason
+    # add_lot_status zeroes remaining_cost on a finished car: nothing more is
+    # coming, and a row that says so must not also claim otherwise.
+    awaiting = [o for o in countable if o["status"] != "complete"]
     return {
         "orders": orders,
         "total_cost": round(sum(o["total_cost"] for o in countable), 2),
         "quoted_cost": round(sum(o["quoted_cost"] for o in countable), 2),
         "open_cost": round(sum(o["open_cost"] for o in countable), 2),
         "labor_hours": round(sum(o["labor_hours"] for o in countable), 2),
-        "parts_pending": int(sum(o["parts_pending"] for o in countable)),
-        "parts_pending_value": round(sum(o["parts_pending_value"] for o in countable), 2),
+        "parts_pending": int(sum(o["parts_pending"] for o in awaiting)),
+        "parts_pending_value": round(sum(o["parts_pending_value"] for o in awaiting), 2),
         "unreceived_cost": round(sum(o["unreceived_cost"] for o in countable), 2),
         "unreceived_closed_cost": round(sum(o["unreceived_cost"] for o in closed), 2),
         "unreceived_closed_parts": int(sum(o["unreceived_parts"] for o in closed)),

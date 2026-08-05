@@ -2374,6 +2374,68 @@ dialog::backdrop { background: var(--backdrop); backdrop-filter: blur(3px); }
    for, and Save -- rather than a card whose head, label, five-line box and
    button between them stood between the advisor and the repair list every
    single time a ticket was opened. */
+/* ---------- the stage strip ----------
+   The ticket's four stages walked left to right. Each stage is a real
+   button: passed ones carry a green check, the current one is lit in the
+   same colour the board's pill uses for that status (so the board and the
+   page agree from a distance), and the connecting line fills green as far
+   as the work has come. The strip replaces the old status dropdown -- the
+   whole journey is on the table now, not just the current word. */
+.stage-strip {
+  display: flex; align-items: center; gap: 4px;
+  background: var(--surface); border: 1px solid var(--line);
+  border-radius: var(--radius); padding: 8px 12px; margin-bottom: 16px;
+}
+.stage-step {
+  display: inline-flex; align-items: center; gap: 8px;
+  background: none; border: 1px solid transparent; border-radius: 999px;
+  padding: 6px 13px 6px 7px; margin: 0;
+  font-family: inherit; font-size: 12.5px; font-weight: 600;
+  color: var(--ink-faint); cursor: pointer; white-space: nowrap;
+}
+.stage-dot {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 21px; height: 21px; border-radius: 50%; flex-shrink: 0;
+  border: 1.5px solid var(--line); color: var(--ink-faint);
+}
+.stage-num { font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.stage-dot svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 2.6; }
+/* A stage already walked: quiet text, green check. Not louder than the
+   current one -- what's done is context, where the car IS is the answer. */
+.stage-step.done { color: var(--ink-soft); }
+.stage-step.done .stage-dot { background: var(--good); border-color: var(--good); color: var(--ink-on-fill); }
+/* The current stage takes its status's own colour -- the same map the board
+   pills use, so the column a car sits in and the lit step on its ticket can
+   never disagree. */
+.stage-step.current[data-status="estimate"] { --st: var(--recon); --st-tint: var(--recon-tint); }
+.stage-step.current[data-status="pending_approval"] { --st: var(--warn); --st-tint: var(--warn-tint); }
+.stage-step.current[data-status="in_progress"] { --st: var(--accent); --st-tint: var(--accent-tint); }
+.stage-step.current[data-status="complete"] { --st: var(--good); --st-tint: var(--good-tint); }
+.stage-step.current {
+  --st: var(--accent); --st-tint: var(--accent-tint);
+  background: var(--st-tint); border-color: var(--st); color: var(--st);
+  font-weight: 700; cursor: default;
+}
+.stage-step.current .stage-dot { background: var(--st); border-color: var(--st); color: var(--ink-on-fill); }
+/* Any step you could press reads as pressable under the mouse. The current
+   one and a frozen (archived) ticket's steps don't answer hover at all. */
+.stage-step:hover:not(:disabled):not(.current) {
+  border-color: var(--accent); color: var(--accent); background: var(--accent-tint);
+}
+.stage-step:hover:not(:disabled):not(.current) .stage-dot { border-color: var(--accent); color: var(--accent); }
+.stage-step:disabled:not(.current) { cursor: default; }
+/* The line between stages fills green exactly as far as the car has come,
+   so the strip reads as progress even from across the shop. */
+.stage-sep { flex: 1; min-width: 10px; height: 2px; border-radius: 1px; background: var(--line); }
+.stage-sep.walked { background: var(--good); }
+/* Tight windows: the stages that aren't current fold down to their dots --
+   the checks and numbers still tell the whole story, and the one label that
+   matters keeps its words. */
+@media (max-width: 700px) {
+  .stage-step { padding: 5px; }
+  .stage-step:not(.current) .stage-name { display: none; }
+}
+
 .concern-strip {
   display: flex; align-items: flex-start; gap: 14px;
   background: var(--surface); border: 1px solid var(--line);
@@ -2426,58 +2488,16 @@ dialog::backdrop { background: var(--backdrop); backdrop-filter: blur(3px); }
    gets a plain edge so it doesn't read as outstanding work. */
 .job-group[data-job-id=""] { box-shadow: inset 3px 0 0 var(--line); }
 
-/* Status picker: a plain select styled as a pill -- directly changes status
-   on selection, no extra popover step. Assign picker (technician/advisor)
-   keeps the popover pattern since it's a real multi-field form. */
+/* Status pickers: the popover pattern the assign control uses. (The ticket's
+   own status moved onto the stage strip above the concern; what remains here
+   is the shared shell -- toggle button plus dropdown menu.) */
 .status-picker { position: relative; display: inline-flex; align-items: center; gap: 7px; }
-.status-picker-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); flex-shrink: 0; }
-.status-picker-select {
-  background: var(--accent-tint); border: 1px solid var(--accent); color: var(--accent);
-  border-radius: 8px; padding: 9px 13px; font-size: 12.5px; font-weight: 700; cursor: pointer; font-family: inherit;
-}
 .status-picker-toggle {
   display: inline-flex; align-items: center; gap: 7px;
   background: var(--accent-tint); border: 1px solid var(--accent); color: var(--accent);
   border-radius: 8px; padding: 9px 13px; font-size: 12.5px; font-weight: 700; cursor: pointer; font-family: inherit;
 }
 .status-picker-toggle svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 2.4; }
-
-/* ---------- the status takes the status's own colour ----------
-   The board already paints these four -- grey while it's still an estimate,
-   amber while it waits on somebody, accent while it's being worked, green
-   when it's done -- and the ticket page didn't: this control was the same
-   accent blue on every car. So the one word on the page that says where the
-   car stands was the last thing you could read from a distance, and the board
-   you clicked through from and the page you landed on disagreed about colour.
-
-   One class from the render carries the status; the dot, the field and its
-   edge all read it from here, which is also why the dot no longer gets an
-   inline colour of its own from the drawer module. A status with no rule
-   below keeps the plain accent control rather than borrowing another
-   status's colour. */
-.status-picker.st-estimate { --st: var(--recon); --st-tint: var(--recon-tint); }
-.status-picker.st-pending_approval { --st: var(--warn); --st-tint: var(--warn-tint); }
-.status-picker.st-in_progress { --st: var(--accent); --st-tint: var(--accent-tint); }
-.status-picker.st-complete { --st: var(--good); --st-tint: var(--good-tint); }
-/* A voided ticket is not a stage of the work -- it goes flat, not coloured. */
-.status-picker.st-voided { --st: var(--ink-faint); --st-tint: var(--paper-raise); }
-.status-picker.st-estimate .status-picker-select,
-.status-picker.st-pending_approval .status-picker-select,
-.status-picker.st-in_progress .status-picker-select,
-.status-picker.st-complete .status-picker-select,
-.status-picker.st-voided .status-picker-select {
-  background: var(--st-tint); border-color: var(--st); color: var(--st);
-}
-.status-picker.st-estimate .status-picker-dot,
-.status-picker.st-pending_approval .status-picker-dot,
-.status-picker.st-in_progress .status-picker-dot,
-.status-picker.st-complete .status-picker-dot,
-.status-picker.st-voided .status-picker-dot {
-  /* Grown and given a halo of its own colour: this is the thing that answers
-     "where's that car at" from the other side of the counter. */
-  width: 9px; height: 9px; background: var(--st);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--st) 22%, transparent);
-}
 
 /* ---------- who has the car ----------
    The assignment control was painted in exactly the same accent-tinted style

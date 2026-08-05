@@ -282,9 +282,9 @@ const HELP_TOPICS = [
     title: "Changing a vehicle's status",
     view: "vehicles",
     aliases: ["status", "change status", "in progress", "waiting", "done", "complete", "move it along", "stage"],
-    summary: "The status picker at the top of a vehicle moves it through the shop's stages.",
+    summary: "The row of stages across the top of a ticket moves it through the shop's stages.",
     steps: [
-      "Open the vehicle and use the status dropdown at the top right.",
+      "Open the vehicle — its ticket shows the four stages in a row, with the current one lit. Click the stage the car has reached.",
       "The board's Status filter lets you see everything sitting at one stage.",
       "Changing status counts as activity, so it resets the vehicle's Idle clock.",
     ],

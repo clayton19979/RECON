@@ -410,11 +410,10 @@
                  hidden and nothing moved behind a menu -- every one of these is
                  still exactly one click in the same place it always was. -->
             <div class="detail-actions" id="vd-actions">
-            <span class="pill" id="vd-status-pill" style="display:none"></span>
-            <div class="status-picker" id="vd-status-picker" style="display:none">
-              <span class="status-picker-dot"></span>
-              <select id="vd-status-select" class="status-picker-select"></select>
-            </div>
+            <!-- Where the car stands, readable from the doorway. Changing it
+                 moved down to the stage strip on the ticket itself; this tag
+                 only states the answer, in the same colours the board uses. -->
+            <span class="pill" id="vd-status-pill" hidden></span>
             <div class="status-picker assign-picker" id="vd-assign-picker" style="display:none">
               <button type="button" class="status-picker-toggle" id="vd-assign-picker-toggle">
                 <svg class="assign-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="3.4"/><path d="M4.5 20c1-3.6 4-5.6 7.5-5.6s6.5 2 7.5 5.6"/></svg>
@@ -478,6 +477,15 @@
             </div>
 
             <div id="vd-order-content" style="display:none">
+              <!-- The ticket's journey, walked left to right: Estimate,
+                   Pending Approval, In Progress, Complete. The old control was
+                   a dropdown in the header -- one word, and the three stages
+                   the car wasn't in were behind a click. Drawn as steps, where
+                   the car is and what comes next are the same glance, and
+                   moving it along is one press on the next step. Buttons are
+                   rendered per ticket (renderStatusCardBase); clicks land on
+                   the strip so the handler survives the rebuild. -->
+              <div class="stage-strip" id="vd-stage-strip" role="radiogroup" aria-label="Where this ticket stands" hidden></div>
               <!-- The ticket's subject line, not a card. What a repair order is
                    for is one sentence that gets typed once and read for weeks,
                    and a full card's worth of chrome around it pushed the repair

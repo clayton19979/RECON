@@ -835,7 +835,7 @@ function applyArchivedLockUI(archived) {
   // still perfectly editable on a car nobody has written up yet, and is
   // often the only thing there is to edit.
   const ticketIds = [
-    "vd-status-select", "vd-concern", "vd-concern-save",
+    "vd-concern", "vd-concern-save",
     "vd-add-job", "vd-add-part", "vd-add-labor", "vd-order-parts",
     "vd-add-note", "vd-note-text", "vd-note-visibility",
     "vd-save-assignment", "vd-technician", "vd-advisor",
@@ -860,6 +860,10 @@ function applyArchivedLockUI(archived) {
   // archived car's ticket is frozen, and a supplier box that takes typing and
   // then answers with an error is worse than one that plainly won't.
   $$(".po-chip-vendor", $("#vd-po-strip")).forEach((el) => { el.disabled = archived; });
+  // Same story for the stage steps: rebuilt each render, disabled here. An
+  // archived car keeps showing where its ticket ended up -- the steps just
+  // stop being pressable.
+  $$(".stage-step", $("#vd-stage-strip")).forEach((el) => { el.disabled = archived || noTicket; });
   if (archived) {
     $("#vd-void-order").style.display = "none";
     $("#vd-receive-parts").disabled = true;
@@ -993,35 +997,54 @@ function renderOrderPanel() {
 
 function renderStatusCardBase(order) {
   const pill = $("#vd-status-pill");
+  const strip = $("#vd-stage-strip");
   // No ticket, nothing to say about its status. The pill is emptied rather
-  // than left reading the last car's -- drawer.js keys the picker's own
-  // visibility off this text, so blanking it is what puts the whole control
+  // than left reading the last car's -- drawer.js keys the assign control's
+  // visibility off this text, so blanking it is what puts that control
   // away, and the save-state caption goes with it for the same reason.
   if (!order) {
     pill.className = "pill";
     pill.textContent = "";
-    const picker = $("#vd-status-picker");
-    if (picker) picker.className = "status-picker";
-    $("#vd-status-select").innerHTML = "";
+    pill.hidden = true;
+    if (strip) { strip.innerHTML = ""; strip.hidden = true; }
     $("#vd-concern").value = "";
     const saveState = $("#vd-estimate-save-state");
     if (saveState) { saveState.className = "save-state"; saveState.textContent = ""; }
     return;
   }
-  pill.className = `pill ${STATUS_PILL_CLASS[order.status] || ""}`;
+  pill.className = `pill ${order.voided ? "" : (STATUS_PILL_CLASS[order.status] || "")}`;
   pill.textContent = order.voided ? "Voided" : (STATUS_LABEL[order.status] || order.status);
-  /* The board paints each status its own colour and this control did not --
-     it was accent-blue on every ticket, so the one word that says where the
-     car stands was the same colour whether the car was waiting on a customer
-     or finished. The class carries the status through to the stylesheet; a
-     status nobody has styled falls through to the plain control rather than
-     to some other status's colour. */
-  const picker = $("#vd-status-picker");
-  if (picker) picker.className = `status-picker st-${order.voided ? "voided" : (order.status || "")}`;
-  const select = $("#vd-status-select");
-  select.innerHTML = STATUS_OPTIONS.map((s) => `<option value="${s}" ${s === order.status ? "selected" : ""}>${STATUS_LABEL[s]}</option>`).join("");
+  pill.hidden = false;
+  renderStageStrip(order);
   $("#vd-concern").value = order.concern || "";
   sizeConcernBox();
+}
+
+/* The four stages of a ticket, drawn as the journey rather than offered as a
+   dropdown. Every stage is a button: the ones already walked show a check,
+   the current one is lit in the same colour the board pill uses, and pressing
+   any other one moves the ticket there -- forward when the car moves along,
+   backward when it was pressed too soon. A voided ticket has left the journey
+   entirely, so the strip goes away and the header's grey tag says so. */
+function renderStageStrip(order) {
+  const strip = $("#vd-stage-strip");
+  if (!strip) return;
+  if (order.voided) { strip.innerHTML = ""; strip.hidden = true; return; }
+  const cur = STATUS_OPTIONS.indexOf(order.status);
+  const check = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 13l4 4L19 7"/></svg>`;
+  strip.innerHTML = STATUS_OPTIONS.map((s, i) => {
+    const stage = i < cur ? "done" : i === cur ? "current" : "todo";
+    const title = i === cur ? `The ticket is at ${STATUS_LABEL[s]}`
+      : i < cur ? `Move the ticket back to ${STATUS_LABEL[s]}`
+      : `Move the ticket to ${STATUS_LABEL[s]}`;
+    const sep = i ? `<span class="stage-sep${i <= cur ? " walked" : ""}" aria-hidden="true"></span>` : "";
+    return `${sep}<button type="button" class="stage-step ${stage}" data-status="${s}" role="radio"
+      aria-checked="${i === cur}" title="${title}">
+      <span class="stage-dot">${i < cur ? check : `<span class="stage-num">${i + 1}</span>`}</span>
+      <span class="stage-name">${STATUS_LABEL[s]}</span>
+    </button>`;
+  }).join("");
+  strip.hidden = false;
 }
 
 /* The concern strip is one line tall and grows to fit what's actually in it.
@@ -1451,20 +1474,22 @@ function openCloseoutReceive(missing) {
   openReceiveDialog();
 }
 
-// One writer for the status change, shared by the dropdown and by the
+// One writer for the status change, shared by the stage strip and by the
 // close-out flow above, so a ticket closed either way lands identically.
 async function setTicketStatus(status) {
-  const select = $("#vd-status-select");
-  // Re-enabled by renderDetailPermissions on the reload below; only the
-  // failure path has to put it back itself.
-  if (select) select.disabled = true;
+  // The whole strip goes quiet while the change is in flight -- a second
+  // press during the round-trip would race the first. Re-enabled by
+  // renderDetailPermissions on the reload below; only the failure path has
+  // to put the buttons back itself.
+  const steps = $$(".stage-step", $("#vd-stage-strip"));
+  steps.forEach((b) => { b.disabled = true; });
   try {
     await patch(`/api/orders/${state.detail.order.id}/status`, { status, actor: currentActor() });
     toast(`Status set to ${STATUS_LABEL[status]}`);
     await loadVehicleDetail();
   } catch (err) {
     toast(err.message, true);
-    if (select) select.disabled = false;
+    steps.forEach((b) => { b.disabled = false; });
   }
 }
 
@@ -2932,17 +2957,18 @@ export function wireVehicleDetail() {
     }
   });
 
-  $("#vd-status-select").addEventListener("change", async (e) => {
-    const select = e.target;
-    const status = select.value;
+  // One listener on the strip itself -- the step buttons are rebuilt with
+  // every render, the strip they sit in never is. Pressing the stage the
+  // ticket is already at does nothing; unlike the old dropdown there is no
+  // control left "reading Complete" when the close-out is backed out of,
+  // because the lit step never moved.
+  $("#vd-stage-strip").addEventListener("click", async (e) => {
+    const btn = e.target instanceof Element && e.target.closest(".stage-step");
+    if (!btn || btn.disabled || btn.classList.contains("current")) return;
+    const status = btn.dataset.status;
     const order = state.detail.order;
-    if (status === "complete" && !(await confirmTicketCloseout(order))) {
-      // Put the dropdown back to what the ticket actually says. A control
-      // reading "Complete" on a ticket that is still in progress is the kind
-      // of lie that gets acted on from across the room.
-      select.value = order.status;
-      return;
-    }
+    if (!order) return;
+    if (status === "complete" && !(await confirmTicketCloseout(order))) return;
     await setTicketStatus(status);
   });
 

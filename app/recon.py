@@ -695,7 +695,13 @@ def cost_rollups(
         placeholders = ",".join("?" for _ in chunk)
         rows = db.execute(
             f"""SELECT o.{column} ref_id, o.id, o.number, o.ro_number, o.status, o.voided,
-               coalesce(sum(CASE WHEN ei.kind='part' AND ei.part_returned=0 THEN ei.received_quantity*ei.unit_cost ELSE 0 END),0)
+               -- received_cost, not received_quantity*unit_cost: the money the
+               -- vendor actually billed for the units that landed, added up
+               -- bill by bill. The two only agree while a line arrives on one
+               -- invoice at one price; when it doesn't, the product re-prices
+               -- everything already received at the newest price and the car
+               -- disagrees with A/P. See the column's comment in db.SCHEMA.
+               coalesce(sum(CASE WHEN ei.kind='part' AND ei.part_returned=0 THEN ei.received_cost ELSE 0 END),0)
                  + coalesce(sum(CASE WHEN {core_owing} THEN ei.received_quantity*ei.core_charge ELSE 0 END),0) parts_cost,
                coalesce(sum(CASE WHEN ei.kind='labor' THEN ei.quantity*ei.unit_cost ELSE 0 END),0) labor_cost,
                -- Hours in their own right, not just as an input to cost. On

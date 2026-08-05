@@ -1160,7 +1160,7 @@ function renderEstimate(order) {
     const isPart = item.kind === "part";
     const L = fieldLabels(item.kind);
     return `
-    <div class="part-row" draggable="true" data-index="${i}" data-id="${item.id || ""}" data-source="${item.source || "manual"}" data-received-quantity="${item.received_quantity ?? 0}" data-quoted-unit-cost="${item.quoted_unit_cost ?? ""}" data-part-returned="${isReturnedPart(item) ? "1" : "0"}" data-po="${esc(item.po_number || "")}">
+    <div class="part-row" draggable="true" data-index="${i}" data-id="${item.id || ""}" data-source="${item.source || "manual"}" data-received-quantity="${item.received_quantity ?? 0}" data-received-cost="${item.received_cost ?? ""}" data-billed-unit-cost="${item.unit_cost ?? ""}" data-quoted-unit-cost="${item.quoted_unit_cost ?? ""}" data-part-returned="${isReturnedPart(item) ? "1" : "0"}" data-po="${esc(item.po_number || "")}">
       ${cell("handle", "", `<span class="row-drag-handle" title="Drag to reorder">⋮⋮</span>`)}
       ${cell("check", "", receivable ? `<input type="checkbox" class="ei-receive-check" data-id="${item.id}" title="Select to receive against a vendor invoice">` : "")}
       ${cell("kind", "Kind", `<select class="ei-kind">
@@ -1427,8 +1427,31 @@ function rowAsEstimateItem(row) {
       ? parseFloat(row.dataset.quotedUnitCost)
       : null,
     received_quantity: parseFloat(row.dataset.receivedQuantity || "0") || 0,
+    // What the vendor has actually billed for the units that landed. Carried
+    // on the row rather than recomputed, because on a line filled by two
+    // deliveries at two prices no single cost box can reproduce it.
+    //
+    // Typing in the Cost box on a received line is a correction to the bill --
+    // "every unit that landed was at this price" -- and the server re-prices
+    // the received quantity when it saves. Mirrored here so the figure under
+    // the cursor is the one that comes back, instead of jumping on save.
+    received_cost: receivedCostFromRow(row, num(".ei-cost")),
     part_returned: row.dataset.partReturned === "1",
   };
+}
+
+/* The running received total to use while the grid is being typed in: the
+   stored one normally, or the re-priced quantity once the cost box has moved
+   off what the last invoice billed. Same 0.0005 tolerance the server compares
+   with, so the two can't decide differently about the same edit. */
+function receivedCostFromRow(row, typedCost) {
+  const receivedQuantity = parseFloat(row.dataset.receivedQuantity || "0") || 0;
+  if (receivedQuantity <= 0) return 0;
+  const stored = parseFloat(row.dataset.receivedCost);
+  const billed = parseFloat(row.dataset.billedUnitCost);
+  if (!Number.isFinite(stored)) return receivedQuantity * typedCost;
+  if (Number.isFinite(billed) && Math.abs(billed - typedCost) > 0.0005) return receivedQuantity * typedCost;
+  return stored;
 }
 
 // The live-typing counterpart to renderEstimateTotals: same math, but read
@@ -1512,6 +1535,8 @@ function syncEstimateInPlace(order) {
     const row = $(`.part-row[data-id="${item.id}"]`, box);
     if (!row) return false; // DOM drifted from what we think we rendered -- redraw
     row.dataset.receivedQuantity = item.received_quantity ?? 0;
+    row.dataset.receivedCost = item.received_cost ?? "";
+    row.dataset.billedUnitCost = item.unit_cost ?? "";
     // Never write into the control the user is standing in; that's the whole
     // point of this path.
     const set = (sel, value) => {

@@ -19,6 +19,7 @@ from .db import inserted_id, purchase_order_number
 from .recon import age_days, assert_vehicle_editable
 from .workflow import (
     assert_estimate_editable,
+    assert_parts_receivable,
     estimate_line_total,
     get_or_create_estimate,
     purchase_orders_list,
@@ -1245,6 +1246,13 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
                        o.id order_id, o.number ro_number, o.segment,
                        o.recon_vehicle_id, o.we_owe_id, o.vehicle_id,
                        o.created_at order_created_at, o.last_activity_at,
+                       -- A retail ticket already billed out to the customer
+                       -- is frozen (see workflow.parts_bill_block_reason), so
+                       -- this line can never be receipted. It is still real
+                       -- money that is not in any cost, so it stays on the
+                       -- desk -- but the row has to say so instead of telling
+                       -- somebody to click it and receive it.
+                       EXISTS(SELECT 1 FROM customer_invoices ci WHERE ci.order_id=o.id) billed_out,
                        v.year, v.make, v.model,
                        rv.stock_number, wc.name we_owe_customer_name, oc.name order_customer_name
                    FROM estimate_items ei
@@ -1269,6 +1277,7 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
             result = []
             for row in rows:
                 value = dict(row)
+                value["billed_out"] = bool(row["billed_out"])
                 value["vehicle_label"] = label_vehicle(value)
                 value["vehicle"] = f"{value['year']} {value['make']} {value['model']}"
                 missing = round(float(value["quantity"]) - float(value["received_quantity"]), 4)
@@ -1334,8 +1343,9 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
     def receive_parts(order_id: int, item: ReceivePartsIn):
         with connect() as db:
             current_order = order_row(db, order_id)
-            assert_vehicle_editable(db, current_order)
-            assert_estimate_editable(db, order_id)
+            # The same three boundaries the A/P screen's Post a Vendor Invoice
+            # checks, stated once -- see workflow.parts_bill_block_reason.
+            assert_parts_receivable(db, current_order)
             if not db.execute("SELECT 1 FROM vendors WHERE id=?", (item.vendor_id,)).fetchone():
                 raise HTTPException(404, "Vendor not found")
             estimate = estimate_for_order(db, order_id)

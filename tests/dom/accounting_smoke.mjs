@@ -20,13 +20,16 @@ const VENDORS = [
   { id: 2, name: "NAPA", aliases: [], account_number: null },
 ];
 
-// One open recon RO, one open we-owe, one *complete* recon (must not be
-// offered as a PO), one open retail (offered -- retail can buy parts too,
-// it just has no vehicle page to jump to from the table).
+// One open recon RO, one open we-owe (retail buys parts too, it just has no
+// vehicle page to jump to from the table), one *finished* recon that can still
+// take a late parts bill, and one finished recon the server says it cannot
+// (voided / filed to History / already billed out -- accepts_parts_bill is the
+// server's single answer, so the screen never has to guess which).
 const ORDERS = [
-  { id: 42, segment: "recon", status: "in_progress", stock_number: "R-1042", number: "RO-2607-0001", year: 2019, make: "Ford", model: "Edge", customer_name: null },
-  { id: 55, segment: "we_owe", status: "authorized", stock_number: null, number: "RO-2607-0002", year: 2021, make: "Kia", model: "Sorento", customer_name: "Maria Soto" },
-  { id: 60, segment: "recon", status: "complete", stock_number: "R-0999", number: "RO-2607-0003", year: 2018, make: "Honda", model: "Civic", customer_name: null },
+  { id: 42, segment: "recon", status: "in_progress", stock_number: "R-1042", number: "RO-2607-0001", year: 2019, make: "Ford", model: "Edge", customer_name: null, accepts_parts_bill: true },
+  { id: 55, segment: "we_owe", status: "authorized", stock_number: null, number: "RO-2607-0002", year: 2021, make: "Kia", model: "Sorento", customer_name: "Maria Soto", accepts_parts_bill: true },
+  { id: 60, segment: "recon", status: "complete", stock_number: "R-0999", number: "RO-2607-0003", year: 2018, make: "Honda", model: "Civic", customer_name: null, accepts_parts_bill: true },
+  { id: 61, segment: "recon", status: "complete", stock_number: "R-0888", number: "RO-2607-0004", year: 2017, make: "Mazda", model: "3", customer_name: null, accepts_parts_bill: false },
 ];
 
 const AUDITS = [
@@ -136,7 +139,17 @@ const ticketRefs = ticketOptions.map((o) => o.dataset.po);
 ok(ticketIds.includes("42"), `the open recon ticket isn't offered: ${JSON.stringify(ticketIds)}`);
 ok(ticketRefs.includes("R-1042"), `the recon ticket's reference isn't its stock number: ${JSON.stringify(ticketRefs)}`);
 ok(ticketRefs.includes("RO-2607-0002"), "the we-owe ticket (no stock number) doesn't fall back to its RO number");
-ok(!ticketIds.includes("60"), "a completed RO is still being offered as a ticket");
+// This assertion used to read the other way round -- it required every
+// completed ticket to be hidden. That was the bug, not the contract: most
+// parts bills arrive after the job is closed, so hiding finished tickets hid
+// the one car the invoice in your hand belongs to. A finished ticket is
+// offered and says it is finished; only one the server won't take is left out.
+ok(ticketIds.includes("60"), `a finished ticket that can still take a bill isn't offered: ${JSON.stringify(ticketIds)}`);
+const finishedLabel = ticketOptions.find((o) => o.value === "60").textContent;
+ok(/finished/.test(finishedLabel), `the finished ticket isn't marked as finished: "${finishedLabel}"`);
+ok(!/finished/.test(ticketOptions.find((o) => o.value === "42").textContent),
+   "an open ticket is being labelled finished");
+ok(!ticketIds.includes("61"), "a ticket the server won't take a parts bill for is still being offered");
 
 /* ---------- table rows: clickable, voided, retail ---------- */
 const apRows = $$("#ap-table tr");

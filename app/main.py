@@ -950,15 +950,34 @@ def create_app(db_path: Path = DEFAULT_DB, backups_dir: Path = DEFAULT_BACKUPS_D
 
     @app.get("/api/orders")
     def list_orders(segment: str | None = None):
+        # accepts_parts_bill: can a vendor's parts invoice still be written
+        # onto this ticket? The A/P screen's ticket picker offers exactly the
+        # tickets that say yes, so it can stop hiding finished ones (most
+        # parts bills arrive after the job is closed) without offering ones
+        # the post would refuse. Computed in the query rather than per row --
+        # this list is every ticket the shop has ever written, so two extra
+        # lookups a row is a screen that gets slower every month.
+        #
+        # The three conditions are workflow.parts_bill_block_reason's, and
+        # tests/test_missing_receipts.py holds the two statements of them to
+        # each other so they cannot drift apart.
         query = """SELECT o.*, c.name customer_name, v.year, v.make, v.model, v.mileage,
-                   e.total estimate_total, e.status estimate_status, rv.stock_number
+                   e.total estimate_total, e.status estimate_status, rv.stock_number,
+                   NOT (o.voided
+                        OR coalesce(rv.archived_at,'') != ''
+                        OR coalesce(wi.archived_at,'') != ''
+                        OR EXISTS(SELECT 1 FROM customer_invoices ci WHERE ci.order_id=o.id)
+                       ) accepts_parts_bill
                    FROM orders o JOIN customers c ON c.id=o.customer_id JOIN vehicles v ON v.id=o.vehicle_id
                    LEFT JOIN estimates e ON e.order_id=o.id
                    LEFT JOIN recon_vehicles rv ON rv.id=o.recon_vehicle_id
+                   LEFT JOIN we_owe_items wi ON wi.id=o.we_owe_id
                    WHERE (:segment IS NULL OR o.segment=:segment)
                    ORDER BY o.id DESC"""
         with connect() as db:
-            return [dict(row) for row in db.execute(query, {"segment": segment})]
+            rows = db.execute(query, {"segment": segment})
+            # bool(), not SQLite's 0/1: the screen reads this as a flag.
+            return [dict(row) | {"accepts_parts_bill": bool(row["accepts_parts_bill"])} for row in rows]
 
     @app.get("/api/orders/{order_id}")
     def get_order(order_id: int):

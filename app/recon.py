@@ -1086,6 +1086,27 @@ def _assert_not_archived(row: sqlite3.Row) -> None:
         raise HTTPException(409, "This vehicle is archived to History -- reopen it to make changes")
 
 
+def order_vehicle_archived(db: sqlite3.Connection, order_row: sqlite3.Row) -> bool:
+    """Is this ticket's vehicle filed away to History?
+
+    The question assert_vehicle_editable asks, without the exception -- some
+    callers need to *report* that a ticket is frozen rather than refuse a
+    request outright (see workflow.parts_bill_block_reason, and the ticket
+    picker on the A/P screen that reads the same fact off /api/orders).
+    Retail orders have neither a recon_vehicle_id nor a we_owe_id, so they
+    are never archived.
+    """
+    for column, table in (("recon_vehicle_id", "recon_vehicles"), ("we_owe_id", "we_owe_items")):
+        ref_id = order_row[column]
+        if not ref_id:
+            continue
+        # Table name is one of two literals chosen right here, never user text.
+        row = db.execute(f"SELECT archived_at FROM {table} WHERE id=?", (ref_id,)).fetchone()
+        if row and row["archived_at"]:
+            return True
+    return False
+
+
 def assert_vehicle_editable(db: sqlite3.Connection, order_row: sqlite3.Row) -> None:
     """Once a vehicle's ticket is archived to History it's fully frozen --
     reopening it is the only way back to an editable state. Retail orders
@@ -1100,16 +1121,8 @@ def assert_vehicle_editable(db: sqlite3.Connection, order_row: sqlite3.Row) -> N
     cancelled job."""
     if order_row["voided"]:
         raise HTTPException(409, "This repair order has been voided and can no longer be edited")
-    if order_row["recon_vehicle_id"]:
-        row = db.execute(
-            "SELECT archived_at FROM recon_vehicles WHERE id=?", (order_row["recon_vehicle_id"],)
-        ).fetchone()
-        if row:
-            _assert_not_archived(row)
-    if order_row["we_owe_id"]:
-        row = db.execute("SELECT archived_at FROM we_owe_items WHERE id=?", (order_row["we_owe_id"],)).fetchone()
-        if row:
-            _assert_not_archived(row)
+    if order_vehicle_archived(db, order_row):
+        raise HTTPException(409, "This vehicle is archived to History -- reopen it to make changes")
 
 
 def technician_names(db: sqlite3.Connection, order_ids: list[int]) -> list[str]:

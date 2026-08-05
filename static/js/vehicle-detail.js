@@ -1,7 +1,7 @@
 import { $, $$, api, fmtHours, get, patch, post, put, withActorParam } from "./core.js";
 import { toast } from "./notify.js";
 import { confirmAction } from "./confirm.js";
-import { actorLabel, byActor, esc, fmtDate, fmtDay, money, relativeTime, todayLocal, withLoading } from "./shortcuts.js";
+import { actorLabel, byActor, currentActor, esc, fmtDate, fmtDay, money, relativeTime, todayLocal, wirePlateFields, withLoading } from "./shortcuts.js";
 import { emptyState } from "./empty-states.js";
 import { actualTotal, isReturnedPart, lineTotal, ticketTotal, unreceivedPartLines, unreceivedPartTotal } from "./estimate-money.js";
 import { AUTH_METHOD_LABEL, ITEM_STATUS_LABEL, KIND_GROUP_LABEL, KIND_GROUP_ORDER, PAY_METHOD_LABEL, STATUS_LABEL, STATUS_OPTIONS, STATUS_PILL_CLASS, fieldLabels, state } from "./state.js";
@@ -2935,14 +2935,13 @@ export function wireVehicleDetail() {
   $("#vd-status-select").addEventListener("change", async (e) => {
     const select = e.target;
     const status = select.value;
-    select.disabled = true;
-    try {
-      await patch(`/api/orders/${state.detail.order.id}/status`, { status });
-      toast(`Status set to ${STATUS_LABEL[status]}`);
-      await loadVehicleDetail();
-    } catch (err) {
-      toast(err.message, true);
-      select.disabled = false;
+    const order = state.detail.order;
+    if (status === "complete" && !(await confirmTicketCloseout(order))) {
+      // Put the dropdown back to what the ticket actually says. A control
+      // reading "Complete" on a ticket that is still in progress is the kind
+      // of lie that gets acted on from across the room.
+      select.value = order.status;
+      return;
     }
     await setTicketStatus(status);
   });

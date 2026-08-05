@@ -1247,6 +1247,50 @@ textarea { min-height: 70px; resize: vertical; font-family: inherit; }
 /* The caption only materialises in the stacked layout. */
 .pr-cell::before { content: attr(data-label); display: none; }
 .pr-handle, .pr-check, .pr-move, .pr-remove { justify-content: center; }
+
+/* ---------- quiet fields ----------
+   Every cell on a ticket line is an input, and forty bordered boxes made the
+   ticket read as a form to fill in rather than a sheet to read -- most visits
+   to this grid are reads (what's on this car, what did it cost), not edits.
+   So at rest the boxes disappear and a line reads like a printed line item;
+   the boxes come back for exactly the row under the mouse (which already
+   raises via :hover above) and whichever row owns the keyboard.
+
+   The border stays 1px and only changes color, so nothing shifts when a row
+   wakes up. Checkboxes are excluded (a bare tick with no box reads as a
+   glyph), and the status <select> is excluded because it is drawn as a
+   colored pill, not a box. Both selects the rule does catch (.ei-kind,
+   .ei-job) lose their native arrow below, so a resting line isn't studded
+   with dropdown chrome. */
+.part-row:not(.head) .pr-cell > input:not([type="checkbox"]),
+.part-row:not(.head) .pr-cell > select {
+  background-color: transparent; border-color: transparent;
+}
+.part-row:not(.head):hover .pr-cell > input:not([type="checkbox"]),
+.part-row:not(.head):hover .pr-cell > select,
+.part-row:not(.head):focus-within .pr-cell > input:not([type="checkbox"]),
+.part-row:not(.head):focus-within .pr-cell > select {
+  background-color: var(--surface); border-color: var(--line);
+}
+/* The focused box itself keeps the accent border the whole app uses. Same
+   specificity as the reveal rules above, so it has to come after them. */
+.part-row:not(.head) .pr-cell > input:not([type="checkbox"]):focus,
+.part-row:not(.head) .pr-cell > select:focus {
+  background-color: var(--surface); border-color: var(--accent);
+}
+/* A caret the theme can color (two gradient triangles), in place of the
+   native arrow -- appearance:none takes that arrow away so a resting sheet
+   shows no widget chrome, but a select with no marker at all is
+   indistinguishable from a dead label, so a faint one is always there. */
+.part-row:not(.head) .pr-cell > select {
+  appearance: none; -webkit-appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, var(--ink-faint) 50%),
+                    linear-gradient(135deg, var(--ink-faint) 50%, transparent 50%);
+  background-position: calc(100% - 12px) 55%, calc(100% - 8px) 55%;
+  background-size: 4px 4px, 4px 4px;
+  background-repeat: no-repeat;
+  padding-right: 20px;
+}
 /* Numbers line up on the decimal and read as numbers -- these three columns
    are the ones anyone actually scans down when checking a ticket's cost. */
 .pr-qty > input, .pr-cost > input, .pr-core > input, .pr-part > input {
@@ -1375,6 +1419,18 @@ textarea { min-height: 70px; resize: vertical; font-family: inherit; }
   /* A cell with nothing in it (no core on a labor line, no move button on an
      unsaved row) has no caption worth the vertical space down here. */
   .part-row .pr-spacer { display: none; }
+  /* Stacked, every field is a caption over a value -- a value with no box
+     under it floats loose of its caption, so the quiet-at-rest treatment
+     stops here and the boxes stay on. Same :not(.head) as the quiet rules,
+     purely to match their specificity. */
+  .part-row:not(.head) .pr-cell > input:not([type="checkbox"]),
+  .part-row:not(.head) .pr-cell > select {
+    background-color: var(--surface); border-color: var(--line);
+  }
+  .part-row:not(.head) .pr-cell > input:not([type="checkbox"]):focus,
+  .part-row:not(.head) .pr-cell > select:focus {
+    border-color: var(--accent);
+  }
 }
 
 @supports not (container-type: inline-size) {
@@ -1391,6 +1447,15 @@ textarea { min-height: 70px; resize: vertical; font-family: inherit; }
     .part-row .pr-total { border-left: none; padding-left: 0; }
     .part-row .pr-total > .ei-line-total { text-align: left; }
     .part-row .pr-spacer { display: none; }
+    /* Same stacked-layout box restore as the container-query version above. */
+    .part-row:not(.head) .pr-cell > input:not([type="checkbox"]),
+    .part-row:not(.head) .pr-cell > select {
+      background-color: var(--surface); border-color: var(--line);
+    }
+    .part-row:not(.head) .pr-cell > input:not([type="checkbox"]):focus,
+    .part-row:not(.head) .pr-cell > select:focus {
+      border-color: var(--accent);
+    }
   }
 }
 
@@ -2394,6 +2459,15 @@ dialog::backdrop { background: var(--backdrop); backdrop-filter: blur(3px); }
   min-height: 0; height: 34px; resize: none; overflow: hidden;
   padding: 7px 11px; line-height: 1.35;
 }
+/* Same quiet-at-rest treatment as the ticket grid below it: the concern is
+   read on every visit and retyped almost never, so at rest it's the ticket's
+   subject line, not a box inside a box. The strip is already a bordered
+   surface, which is what makes the inner border droppable at all. */
+.concern-strip textarea { background-color: transparent; border-color: transparent; }
+.concern-strip:hover textarea, .concern-strip:focus-within textarea {
+  background-color: var(--paper-raise); border-color: var(--line);
+}
+.concern-strip textarea:focus { background-color: var(--paper-raise); border-color: var(--accent); }
 .concern-strip .btn { flex-shrink: 0; margin-top: 1px; }
 @media (max-width: 700px) {
   .concern-strip { flex-wrap: wrap; }

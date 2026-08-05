@@ -1,6 +1,6 @@
 import { $, $$, get, post } from "./core.js";
 import { toast } from "./notify.js";
-import { currentActor, esc, money, withLoading } from "./shortcuts.js";
+import { esc, money, withLoading } from "./shortcuts.js";
 import { state } from "./state.js";
 import { loadVehicleDetail } from "./vehicle-detail.js";
 
@@ -271,7 +271,6 @@ export function wireReceiveDialog() {
           invoice_number: invoiceNumber,
           tax: parseFloat($("#receive-tax").value || "0"),
           cost_overrides: overrides,
-          actor: currentActor(),
         });
         $("#receive-dialog").close();
         // Says out loud when a price was corrected: that edit changes what

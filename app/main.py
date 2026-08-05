@@ -298,6 +298,10 @@ class OrderIn(BaseModel):
     segment: Literal["retail", "recon", "we_owe"] = "recon"
     recon_vehicle_id: int | None = None
     we_owe_id: int | None = None
+    # Opening a ticket is the first line of the car's story and had nowhere to
+    # put a name: the field simply wasn't here, so every recon car in the shop
+    # read "Ticket opened by ui" no matter who wrote it up.
+    actor: str = Field(default="ui", min_length=1, max_length=120)
 
 
 class RetailVehiclePatch(BaseModel):
@@ -1077,7 +1081,7 @@ def create_app(db_path: Path = DEFAULT_DB, backups_dir: Path = DEFAULT_BACKUPS_D
             )
             order_id = cur.lastrowid
             assert order_id is not None
-            initialize_order_workflow(db, order_id, now)
+            initialize_order_workflow(db, order_id, now, item.actor)
             return rowdict(db.execute("SELECT * FROM orders WHERE id=?", (order_id,)).fetchone())
 
     @app.post("/api/orders/{order_id}/estimate")

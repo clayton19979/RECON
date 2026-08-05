@@ -336,6 +336,13 @@ button { font-family: inherit; }
   background: var(--paper-raise); border-color: var(--line-soft);
 }
 .whoami select:focus { box-shadow: none; outline: none; }
+/* Nobody picked yet. Amber rather than red: nothing is broken, but everything
+   done from this computer is about to be filed under nobody, and that is a
+   thing you can only fix before it happens. One click at the start of a shift
+   clears it for good. */
+.whoami-unset { border-color: var(--warn); background: var(--warn-tint); color: var(--warn); }
+.whoami-unset:hover { border-color: var(--warn); }
+.whoami-unset select { color: var(--warn); border-color: var(--warn); }
 
 .content { flex: 1; overflow-y: auto; padding: var(--content-pad-top) 28px 60px; }
 

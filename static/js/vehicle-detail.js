@@ -1,7 +1,7 @@
-import { $, $$, api, fmtHours, get, patch, post, put } from "./core.js";
+import { $, $$, api, fmtHours, get, patch, post, put, withActorParam } from "./core.js";
 import { toast } from "./notify.js";
 import { confirmAction } from "./confirm.js";
-import { currentActor, esc, fmtDate, fmtDay, money, relativeTime, todayLocal, withLoading } from "./shortcuts.js";
+import { actorLabel, byActor, esc, fmtDate, fmtDay, money, relativeTime, todayLocal, withLoading } from "./shortcuts.js";
 import { emptyState } from "./empty-states.js";
 import { actualTotal, isReturnedPart, lineTotal, ticketTotal } from "./estimate-money.js";
 import { AUTH_METHOD_LABEL, ITEM_STATUS_LABEL, KIND_GROUP_LABEL, KIND_GROUP_ORDER, PAY_METHOD_LABEL, STATUS_LABEL, STATUS_OPTIONS, STATUS_PILL_CLASS, fieldLabels, state } from "./state.js";
@@ -232,7 +232,11 @@ function renderLastWorked() {
   // detail payload the board's rows carry it on.
   const stalled = isStalled({ idle_days: days, status_bucket: state.detail.item.status_bucket });
   const when = days === 0 ? "today" : relativeTime(la.at);
-  const who = la.action ? `${activityLabel(la.action)}${la.actor ? ` by ${la.actor}` : ""}` : "";
+  // byActor, not `la.actor ? ...`: an actor of "ui" is truthy and is the
+  // server's placeholder for a request that never said who, so the truthiness
+  // check printed "— Assignment changed by ui" on a line whose own comment
+  // above says naming nobody beats naming a nobody.
+  const who = la.action ? `${activityLabel(la.action)}${byActor(la.actor)}` : "";
   el.className = `detail-worked${stalled ? " stalled" : ""}`;
   el.title = `Last activity ${String(la.at).slice(0, 10)}`;
   // The nudge only appears on a car that's actually stalled, and points at the
@@ -742,7 +746,7 @@ function renderPaymentDialogList() {
       <div>${money(p.amount)} · ${esc(p.method)} ${p.note ? `— ${esc(p.note)}` : ""}
         <button type="button" class="rm-btn deposit-rm" data-id="${p.id}" title="Remove">×</button>
       </div>
-      <div class="mi-meta">${esc(p.actor || "Unspecified")} · ${fmtDate(p.created_at)}</div>
+      <div class="mi-meta">${esc(actorLabel(p.actor) ? `${actorLabel(p.actor)} · ` : "")}${fmtDate(p.created_at)}</div>
     </div>
   `).join("") : emptyState({ icon: "invoice", title: "No deposits recorded", hint: "Money taken from the customer up front is recorded here and counted against what they owe.", compact: true });
   $$(".deposit-rm", $("#vd-deposits-list")).forEach((btn) => {
@@ -1284,8 +1288,10 @@ function renderEstimate(order) {
                  a repair somebody can finish. */""}
             ${/* "by Unspecified" is worse than saying nothing: that's the
                  placeholder the Working-as picker uses when nobody has
-                 chosen a name, not somebody's answer. */""}
-            ${isGeneral ? "" : `<label class="job-done-toggle" title="${bucket.completed_at ? `Finished${bucket.completed_by && bucket.completed_by !== "Unspecified" ? ` by ${esc(bucket.completed_by)}` : ""} — click to reopen` : "Tick when this repair is finished"}">
+                 chosen a name, not somebody's answer. byActor knows the whole
+                 family of those -- this used to name only that one and let
+                 "Finished by ui" through. */""}
+            ${isGeneral ? "" : `<label class="job-done-toggle" title="${bucket.completed_at ? `Finished${esc(byActor(bucket.completed_by))} — click to reopen` : "Tick when this repair is finished"}">
               ${/* job-control rides on the input, not the label: that's the
                    class the archived-vehicle pass disables, and disabling a
                    <label> does nothing at all. */""}
@@ -1816,7 +1822,7 @@ async function onEstimateStatusChange(sel) {
   const itemId = sel.closest(".part-row")?.dataset.id;
   if (!order || !itemId) return;
   try {
-    await patch(`/api/orders/${order.id}/estimate/items/${itemId}/status`, { status: sel.value, actor: currentActor() });
+    await patch(`/api/orders/${order.id}/estimate/items/${itemId}/status`, { status: sel.value });
     sel.dataset.prev = sel.value;
     toast("Status updated");
     await loadVehicleDetail();
@@ -1849,7 +1855,7 @@ async function onEstimatePartReturn(btn) {
     confirmLabel: "Mark Returned",
   }))) return;
   try {
-    await patch(`/api/orders/${order.id}/estimate/items/${btn.dataset.id}/part-return`, { returned, actor: currentActor() });
+    await patch(`/api/orders/${order.id}/estimate/items/${btn.dataset.id}/part-return`, { returned });
     toast(returned ? "Marked returned — it's waiting for pickup in Parts & Cores" : "Return undone");
     await loadVehicleDetail();
   } catch (err) {
@@ -1865,7 +1871,6 @@ async function onJobTechnicianChange(sel) {
     await put(`/api/orders/${order.id}/jobs/${job.id}`, {
       title: job.title,
       technician_id: sel.value ? Number(sel.value) : null,
-      actor: currentActor(),
     });
     toast("Job technician updated");
     await loadVehicleDetail();
@@ -1884,7 +1889,7 @@ async function onJobDoneChange(box) {
   if (!order || !job) return;
   const done = box.checked;
   try {
-    await patch(`/api/orders/${order.id}/jobs/${job.id}/done`, { done, actor: currentActor() });
+    await patch(`/api/orders/${order.id}/jobs/${job.id}/done`, { done });
     toast(done ? `“${job.title}” ticked off` : `“${job.title}” reopened`);
     await loadVehicleDetail();
   } catch (err) {
@@ -1910,7 +1915,7 @@ async function onJobDelete(btn) {
     danger: true,
   }))) return;
   try {
-    await api(`/api/orders/${order.id}/jobs/${btn.dataset.jobId}`, { method: "DELETE" });
+    await api(withActorParam(`/api/orders/${order.id}/jobs/${btn.dataset.jobId}`), { method: "DELETE" });
     toast("Job deleted");
     await loadVehicleDetail();
   } catch (err) {
@@ -2056,7 +2061,7 @@ async function sendEstimate() {
   const expectedVersion = order.estimate ? order.estimate.edit_version : null;
   setEstimateSaveState("saving");
   try {
-    const estimate = await post(`/api/orders/${order.id}/estimate`, { labor_rate: 0, tax_rate: 0, actor: currentActor(), items, expected_version: expectedVersion });
+    const estimate = await post(`/api/orders/${order.id}/estimate`, { labor_rate: 0, tax_rate: 0, items, expected_version: expectedVersion });
     order.estimate = estimate;
     applyEstimateResponse(order);
     setEstimateSaveState("saved");
@@ -2169,7 +2174,7 @@ export function wireJobDialog() {
     const technicianId = $("#job-technician-input").value ? Number($("#job-technician-input").value) : null;
     const editingId = state.detail.editingJobId;
     try {
-      const body = { title, technician_id: technicianId, actor: currentActor() };
+      const body = { title, technician_id: technicianId };
       if (editingId) {
         await put(`/api/orders/${state.detail.order.id}/jobs/${editingId}`, body);
       } else {
@@ -2242,7 +2247,7 @@ export function wireMoveItemDialog() {
     const { movingItemId, movingFromOrderId } = state.detail;
     const reassignInvoice = $("#move-item-reassign-invoice").checked;
     try {
-      await patch(`/api/orders/${movingFromOrderId}/estimate/items/${movingItemId}/move`, { target_order_id: targetOrderId, reassign_invoice: reassignInvoice, actor: currentActor() });
+      await patch(`/api/orders/${movingFromOrderId}/estimate/items/${movingItemId}/move`, { target_order_id: targetOrderId, reassign_invoice: reassignInvoice });
       $("#move-item-dialog").close();
       toast("Line moved to the other ticket");
       await loadVehicleDetail();
@@ -2281,7 +2286,7 @@ function renderNotes(order) {
       <div class="note-text">${esc(n.text)}</div>
       <div class="note-meta">
         <span class="note-tag">${n.visibility === "customer" ? "Customer" : "Internal"}</span>
-        <span class="note-by">${esc(n.actor)} · ${fmtDate(n.created_at)}</span>
+        <span class="note-by">${esc(actorLabel(n.actor) ? `${actorLabel(n.actor)} · ` : "")}${fmtDate(n.created_at)}</span>
       </div>
     </div>
   `).join("") : emptyState({ icon: "idea", title: "No notes yet", hint: "Anything worth remembering about this vehicle -- what the customer said, what you found.", compact: true });
@@ -2423,7 +2428,7 @@ function renderActivity(order) {
         <span class="tl-dot" aria-hidden="true"></span>
         <span class="tl-what">${esc(activityLabel(a.action))}</span>
         <span class="tl-when">${esc(activityTime(a.created_at))}</span>
-        <span class="tl-who">${esc(a.actor)}</span>
+        <span class="tl-who">${esc(actorLabel(a.actor))}</span>
       </div>`;
   }).join("");
 }
@@ -2693,7 +2698,7 @@ export function wireVehicleDetail() {
     const status = select.value;
     select.disabled = true;
     try {
-      await patch(`/api/orders/${state.detail.order.id}/status`, { status, actor: currentActor() });
+      await patch(`/api/orders/${state.detail.order.id}/status`, { status });
       toast(`Status set to ${STATUS_LABEL[status]}`);
       await loadVehicleDetail();
     } catch (err) {
@@ -2707,7 +2712,7 @@ export function wireVehicleDetail() {
     if (!concern) return toast("Concern can't be empty", true);
     await withLoading(e.target, "Saving…", async () => {
       try {
-        await patch(`/api/orders/${state.detail.order.id}/concern`, { concern, actor: currentActor() });
+        await patch(`/api/orders/${state.detail.order.id}/concern`, { concern });
         toast("Concern updated");
         await loadVehicleDetail();
       } catch (err) {
@@ -2751,7 +2756,7 @@ export function wireVehicleDetail() {
     const concern = $("#vd-concern").value.trim();
     if (!concern || concern === (order.concern || "").trim()) return;
     try {
-      await patch(`/api/orders/${order.id}/concern`, { concern, actor: currentActor() });
+      await patch(`/api/orders/${order.id}/concern`, { concern });
       order.concern = concern;
       toast("Concern updated");
     } catch (err) {
@@ -2810,7 +2815,7 @@ export function wireVehicleDetail() {
       danger: true,
     }))) return;
     try {
-      await post(`/api/orders/${state.detail.order.id}/void`, { actor: currentActor() });
+      await post(`/api/orders/${state.detail.order.id}/void`, {});
       toast("Ticket voided");
       await loadVehicleDetail();
     } catch (err) {
@@ -2835,7 +2840,7 @@ export function wireVehicleDetail() {
       confirmLabel: "Mark Ordered",
     }))) return;
     try {
-      const res = await patch(`/api/orders/${state.detail.order.id}/estimate/order-parts`, { actor: currentActor() });
+      const res = await patch(`/api/orders/${state.detail.order.id}/estimate/order-parts`, {});
       // The PO number is the thing needed next, so it goes in the toast and
       // onto the clipboard rather than making the advisor hunt for it.
       if (res.updated && res.purchase_order) {
@@ -2856,7 +2861,7 @@ export function wireVehicleDetail() {
      morning. */
   $("#vd-new-po").addEventListener("click", async () => {
     try {
-      const po = await post(`/api/orders/${state.detail.order.id}/purchase-orders`, { actor: currentActor() });
+      const po = await post(`/api/orders/${state.detail.order.id}/purchase-orders`, {});
       await copyText(po.number, `PO ${po.number} —`);
       await loadVehicleDetail();
     } catch (err) {
@@ -2907,7 +2912,7 @@ export function wireVehicleDetail() {
     if (name === input.dataset.was) return;
     try {
       await patch(`/api/orders/${state.detail.order.id}/purchase-orders/${input.dataset.poId}`, {
-        vendor_name: name, actor: currentActor(),
+        vendor_name: name,
       });
       // A name typed here can create a vendor, so the cached list is stale.
       state.vendors = [];
@@ -2925,7 +2930,7 @@ export function wireVehicleDetail() {
     const text = $("#vd-note-text").value.trim();
     if (!text) return;
     try {
-      await post(`/api/orders/${state.detail.order.id}/notes`, { text, visibility: $("#vd-note-visibility").value, actor: currentActor() });
+      await post(`/api/orders/${state.detail.order.id}/notes`, { text, visibility: $("#vd-note-visibility").value });
       $("#vd-note-text").value = "";
       toast("Note added");
       await loadVehicleDetail();
@@ -2956,7 +2961,6 @@ export function wireVehicleDetail() {
         await put(`/api/orders/${state.detail.order.id}/assignment`, {
           ...fields,
           expected_version: state.detail.order.assignment?.version ?? null,
-          actor: currentActor(),
         });
         toast("Saved");
         // Close the popover so the save visibly took -- it used to stay
@@ -3011,7 +3015,6 @@ export function wireVehicleDetail() {
           amount,
           method: $("#vd-deposit-method").value,
           note: $("#vd-deposit-note").value.trim(),
-          actor: currentActor(),
         });
         $("#vd-deposit-amount").value = "";
         $("#vd-deposit-note").value = "";

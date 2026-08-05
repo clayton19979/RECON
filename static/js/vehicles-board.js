@@ -1367,6 +1367,45 @@ function partsCellHtml(v) {
       ${n}</span>`;
 }
 
+/* How far through its repairs a car is, drawn instead of said: one segment
+   per repair, filling in as they're ticked off on the ticket. The count is
+   already inside the needs sentence -- "(1 of 3 done)" -- but a sentence has
+   to be read card by card, and this is answerable across a whole column from
+   arm's length, the same way the ticket page's own progress bar is answerable
+   from across the desk. Same jobs_done/jobs_total the ticket reads, so the
+   card and the ticket cannot disagree about how far along a car is.
+
+   Nothing at all on a car whose ticket has no jobs -- most simple tickets
+   don't -- and nothing in History or the settled pile, where the work is over
+   and "how far along" is a question nobody is asking anymore. */
+function jobsProgressHtml(v) {
+  const total = v.jobs_total || 0;
+  if (!total || historyMode() || v.lot_bucket === LOT_SETTLED) return "";
+  const done = v.jobs_done || 0;
+  const label = done === total
+    ? `All ${total} repair${total === 1 ? "" : "s"} finished`
+    : `${done} of ${total} repair${total === 1 ? "" : "s"} finished`;
+  // One segment per repair only reads while the segments are big enough to
+  // count; past a dozen the same bar becomes one continuous fill.
+  const bar = total <= 12
+    ? Array.from({ length: total }, (_, i) => `<span class="seg${i < done ? " done" : ""}"></span>`).join("")
+    : `<span class="seg-track"><span class="seg-fill" style="width:${Math.round((done / total) * 100)}%"></span></span>`;
+  return `<div class="veh-card-jobs${done === total ? " all-done" : ""}" title="${label}" role="img" aria-label="${label}">${bar}</div>`;
+}
+
+/* The same fact in the list layout, where a bar would fight the table's
+   grid: a short count under the status pill, since "In Progress" on a
+   four-repair ticket says nothing about whether one is done or three. */
+function jobsSubHtml(v) {
+  const total = v.jobs_total || 0;
+  if (!total || historyMode() || v.lot_bucket === LOT_SETTLED) return "";
+  const done = v.jobs_done || 0;
+  const label = done === total
+    ? `All ${total} repair${total === 1 ? "" : "s"} finished`
+    : `${done} of ${total} repair${total === 1 ? "" : "s"} finished`;
+  return `<div class="veh-sub jobs-sub${done === total ? " all-done" : ""}" title="${esc(label)}">${done}/${total} repairs</div>`;
+}
+
 /* ---------- promised dates ----------
 
    A we-owe is a promise a salesman made to close a car deal, and the date the
@@ -1438,7 +1477,7 @@ function vehicleRowHtml(v) {
             : `<span class="muted-dash">—</span>`)].filter(Boolean).join(" · ")}</div>
       </td>
       <td class="col-type"><span class="pill ${v.segment === "recon" ? "pill-recon" : "pill-weowe"}">${v.segment === "recon" ? "Recon" : "We-Owe"}</span></td>
-      <td class="col-status"><span class="pill ${vehicleStatusPillClass(v)}">${esc(STATUS_LABEL[v.status] || v.status)}</span></td>
+      <td class="col-status"><span class="pill ${vehicleStatusPillClass(v)}">${esc(STATUS_LABEL[v.status] || v.status)}</span>${jobsSubHtml(v)}</td>
       <td class="col-tech">${v.technicians.length ? `<span class="tech"><span class="tech-dot"></span><span class="tech-names">${esc(v.technicians.join(", "))}</span></span>` : `<span class="muted-dash">—</span>`}</td>
       <td class="col-parts">${partsCellHtml(v)}</td>
       <td class="num-col age-col ${historyMode() ? "age-ok" : ageClass(v.age_days)}">${ageCellHtml(v)}</td>
@@ -1465,6 +1504,10 @@ function vehicleRowSignature(v) {
     v.archived_at, v.days_on_lot, historyMode() ? "h" : "",
     v.actual_cost, v.parts_pending, v.parts_pending_value,
     v.unreceived_closed_cost, v.unreceived_closed_parts,
+    // Both layouts draw the repair progress, so ticking a job off on the
+    // ticket has to redraw the car here too. lot_bucket rides along in the
+    // card signature already; the row needs the counts themselves.
+    v.jobs_done, v.jobs_total,
     state.vehicleSelection.has(vehicleKey(v)) ? 1 : 0,
   ].join("");
 }
@@ -1703,6 +1746,7 @@ function vehicleCardHtml(v) {
     <div class="veh-card-name" title="${esc(v.vehicle)}">${esc(v.vehicle)}</div>
     <div class="veh-card-sub">${cardSubHtml(v)}</div>
     <div class="veh-card-needs" title="${esc(v.needs || "")}">${esc(v.needs || "")}</div>
+    ${jobsProgressHtml(v)}
     <div class="veh-card-foot">
       <span class="veh-card-facts">
         ${idleCellHtml(v, { spelled: true })}

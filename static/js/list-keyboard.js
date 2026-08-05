@@ -1,6 +1,7 @@
 import { $, $$, post } from "./core.js";
 import { toast } from "./notify.js";
 import { confirmAction } from "./confirm.js";
+import { money } from "./shortcuts.js";
 import { state } from "./state.js";
 import { showView } from "./error-boundary.js";
 import { applyVehicleCursor, bulkTaskTitle, clearGlobalSearch, cssEscape, historyMode, loadSearchElsewhere, loadVehiclesView, moveVehicleCursor, renderVehicleStatusOptions, renderVehiclesTable, resetVehicleView, runSearchReachAction, selectVehicleRange, setBoardView, setVehicleLayout, setVehicleSelected, syncPartsFilterChip, syncSearchChrome, syncSegmentChips, vehicleKey, vehicleNodeFor, visibleVehicles } from "./vehicles-board.js";

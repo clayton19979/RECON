@@ -3665,6 +3665,20 @@ th.sel-col, td.sel-col { width: 32px; padding-right: 0; }
 .supplier-name { color: var(--ink); }
 .supplier-unknown { color: var(--ink-faint); font-style: italic; }
 .supplier-together { color: var(--warn); font-weight: 600; }
+/* Expected, on the same desk: the day the vendor said it would land, typed
+   straight into the list while they are still on the phone. Deliberately
+   quiet until it matters -- a plain box that only takes on the warning
+   colour once the promised day has actually passed. */
+.eta-col { white-space: nowrap; }
+.eta-input {
+  font: inherit; font-size: 12px; color: var(--ink);
+  background: var(--surface); border: 1px solid var(--line);
+  border-radius: 5px; padding: 2px 5px; width: 8.6rem; max-width: 100%;
+}
+.eta-input:hover { border-color: var(--accent); }
+.eta-input:focus { outline: none; border-color: var(--accent); }
+.eta-input.late { border-color: var(--crit); color: var(--crit); font-weight: 600; }
+.eta-col .veh-sub.crit { color: var(--crit); font-weight: 600; }
 /* The batch stamp on a part's own row. */
 .po-badge {
   font-family: "IBM Plex Mono", "Cascadia Mono", Consolas, monospace;

@@ -2576,6 +2576,7 @@ const ACTIVITY_LABEL = {
   estimate_item_moved_out: "Line moved to another ticket",
   purchase_order_created: "PO number taken",
   purchase_order_vendor_set: "Supplier recorded on a PO",
+  purchase_order_expected_set: "Vendor's delivery day recorded",
   parts_ordered: "Parts marked ordered",
   parts_order_undone: "Part put back to quoted",
   parts_received: "Parts received",

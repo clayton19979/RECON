@@ -3215,6 +3215,10 @@ div.field-note > .btn { flex: none; }
 
 /* Voided invoices: struck identity, readable money, neutral pill. */
 .pill-void { background: var(--ink-faint); }
+/* A live bill whose ticket was voided is the opposite of neutral: the money
+   is owed and no car is carrying it, so it gets the warn colour rather than
+   the grey the voided rows above wear. */
+.pill-stranded { background: var(--warn); color: var(--ink-on-fill); margin-left: 6px; }
 tbody tr.voided-row { opacity: .65; text-decoration: none; }
 tbody tr.voided-row td:nth-child(-n+3) { text-decoration: line-through; }
 

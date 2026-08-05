@@ -418,9 +418,9 @@ button { font-family: inherit; }
    colours, same click targets, in a strip about a third of the height that
    keeps all five side by side down to a much narrower window (see the board's
    own breakpoints at the foot of this file). */
-.stats-board { gap: 10px; }
-.stats-board .stat { padding: 9px 13px 10px; }
-.stats-board .stat-value { font-size: 21px; margin-top: 1px; line-height: 1.2; }
+.stats-board { gap: 10px; margin-bottom: 14px; }
+.stats-board .stat { padding: 7px 12px 8px; }
+.stats-board .stat-value { font-size: 19px; margin-top: 1px; line-height: 1.2; }
 .stats-board .stat-sub { font-size: 11px; margin-top: 1px; }
 
 /* Three of the board's cards are buttons that filter to what they count.
@@ -457,7 +457,7 @@ button { font-family: inherit; }
 /* Says in words which rows the cards above are counting -- "4 vehicles" is
    only meaningful next to what's included. */
 .stats-scope {
-  margin: -12px 0 16px; font-size: 11.5px; color: var(--ink-faint);
+  margin: -8px 0 12px; font-size: 11.5px; color: var(--ink-faint);
 }
 
 /* ---------- filters ---------- */
@@ -2825,38 +2825,59 @@ tbody tr.skeleton-row:hover { background: none; }
 .chart-panel.chart-empty { padding: 18px; text-align: center; font-size: 12.5px; color: var(--ink-faint); }
 
 /* ---------- the board's clickable chart ----------
-   Same bar chart, but every row is a filter button. The affordance has to be
-   obvious enough that people try clicking and clear enough afterwards that
-   they know a filter is on -- hence a hover lift plus a hard outline and a
-   full-strength label on the selected bucket, rather than relying on the
-   scope line under the cards to be read. */
+   One horizontal strip, a segment per idle bucket, in the Lot Status
+   report's idiom: flex-grow carries the count, so the widths are the
+   proportions and the whole thing spends ~70px of height where the old
+   stacked bars spent 250 -- the difference is a row of cars visible
+   without scrolling. Every segment is still a filter button: hover lift,
+   hard outline and a full tint on the selected bucket, so an applied
+   filter is visible without reading the scope line under the cards. */
 .board-chart .chart-panel { margin-bottom: 16px; }
-.board-chart .bar-row {
-  padding: 3px 8px; margin: 0 -8px; border-radius: 6px;
-  cursor: pointer; border: 1px solid transparent;
-  /* The label column is tuned for Reports' long stock+model labels; the
-     board's buckets are four-character words, so the bars get the room. */
-  grid-template-columns: minmax(0, 110px) 1fr 56px;
+.idle-strip-panel { padding: 10px 14px 12px; }
+.idle-strip-panel .chart-head { justify-content: flex-start; gap: 12px; margin-bottom: 8px; }
+.idle-strip-panel .chart-legend { margin: 0 0 0 auto; flex-wrap: wrap; }
+.idle-strip { display: flex; flex-wrap: wrap; gap: 6px; }
+.idle-seg {
+  display: inline-flex; align-items: center; gap: 7px; min-width: 0; flex: 1 1 0;
+  padding: 5px 10px; border-radius: 7px;
+  cursor: pointer; background: var(--surface); border: 1px solid var(--line);
+  transition: border-color .12s ease, background .12s ease, transform .12s ease;
 }
-.board-chart .bar-row:hover { background: var(--accent-tint); }
-.board-chart .bar-row:focus-visible { outline: 2px solid var(--accent-strong); outline-offset: 1px; }
-.board-chart .bar-row[aria-pressed="true"] {
+.idle-seg:hover { background: var(--accent-tint); border-color: var(--accent); transform: translateY(-1px); }
+.idle-seg:focus-visible { outline: 2px solid var(--accent-strong); outline-offset: 1px; }
+.idle-seg[aria-pressed="true"] {
   background: var(--accent-tint); border-color: var(--accent);
 }
-.board-chart .bar-row[aria-pressed="true"] .bar-label { color: var(--ink); font-weight: 700; }
-.board-chart .bar-fill.selected { box-shadow: inset 0 0 0 1px var(--ink); }
+.idle-seg[aria-pressed="true"] .bar-label { color: var(--ink); font-weight: 700; }
+/* The tone chip: same .bar-fill classes the old bars wore (warn / over /
+   selected), shrunk from a bar to a swatch that says how bad the bucket is. */
+.idle-seg .bar-fill {
+  flex: none; width: 8px; height: 16px; border-radius: 3px;
+  background: var(--accent); opacity: .85;
+}
+.idle-seg .bar-fill.warn { background: var(--warn); }
+.idle-seg .bar-fill.over { background: var(--crit); }
+.idle-seg .bar-fill.selected { box-shadow: inset 0 0 0 1px var(--ink); }
+.idle-seg .bar-value {
+  font-family: "IBM Plex Mono", "Cascadia Mono", Consolas, monospace;
+  font-size: 13.5px; font-weight: 700; font-variant-numeric: tabular-nums;
+}
+.idle-seg .bar-label {
+  font-size: 11px; font-weight: 600; color: var(--ink-soft);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
 /* An empty bucket is kept on screen while a filter is on -- dropping it would
-   reflow the chart out from under the click that emptied it -- but it isn't
+   reflow the strip out from under the click that emptied it -- but it isn't
    worth drawing attention to, and it can't produce rows, so it stops being
    a pointer target too. */
 .board-chart .bar-row-muted { opacity: .5; cursor: default; pointer-events: none; }
-.board-chart .bar-row-muted:hover { background: none; }
-/* The Stalled card selects a span covering the last two buckets. Those bars
-   are part of what's being shown but aren't themselves the filter (clicking
-   one narrows to it rather than clearing the span), so they get a marker
-   instead of the pressed treatment -- deliberately quieter than
+.board-chart .bar-row-muted:hover { background: var(--surface); transform: none; }
+/* The Stalled card selects a span covering the last two buckets. Those
+   segments are part of what's being shown but aren't themselves the filter
+   (clicking one narrows to it rather than clearing the span), so they get a
+   marker instead of the pressed treatment -- deliberately quieter than
    aria-pressed's tint and border, and on the left edge where the pressed
-   card's own rule sits, so the card and its bars read as the same selection. */
+   card's own rule sits, so the card and its segments read as one selection. */
 .board-chart .bar-row-in-span { box-shadow: inset 2px 0 0 var(--crit); }
 .board-chart .bar-row-in-span .bar-label { color: var(--ink); font-weight: 600; }
 

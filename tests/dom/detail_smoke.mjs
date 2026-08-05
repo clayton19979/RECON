@@ -21,6 +21,7 @@ const daysAgo = (n) => new Date(NOW - n * 86400000).toISOString().slice(0, 19);
 let vehicle = {
   id: 7, stock_number: "R-0997", year: 2018, make: "Honda", model: "Accord",
   vin: "1HGCV1F34JA123456", mileage: 52300, trim: "EX-L", color: "Grey",
+  plate: "TK7Q419", plate_state: "IN",
   purchase_price: 4200, sale_price: null, status: "in_repair", archived_at: "",
   edit_version: 3, created_at: daysAgo(30), updated_at: new Date(NOW - 120000).toISOString().slice(0, 19),
   // status_bucket is what tells this page a car has gone quiet rather than
@@ -546,6 +547,36 @@ ok(toastEl.classList.contains("error") && /reload/.test(toastEl.textContent),
    `a stale save should surface the reload message, toast reads "${toastEl.textContent}"`);
 assignmentStale = false;
 
+/* ---------- the plate, on the page and in the editor ----------
+
+   The write-up form has always asked for a plate; nothing ever showed one
+   back, and there was no way to correct one. Both halves are checked here: the
+   header and the Vehicle Info card say it, and the Edit Vehicle dialog loads
+   it, tidies what gets typed into it, and puts it on the wire. */
+ok(doc.querySelector("#vd-sub").textContent.includes("TK7Q419 (IN)"),
+   `the header should carry the plate, reads "${doc.querySelector("#vd-sub").textContent}"`);
+ok(doc.querySelector("#vd-vehicle-info-summary").textContent.includes("TK7Q419 (IN)"),
+   "the Vehicle Info card should list the plate alongside the VIN");
+
+doc.querySelector("#vd-edit-vehicle").click();
+await settle();
+ok(doc.querySelector("#vd-recon-plate").value === "TK7Q419",
+   `the editor should open holding the plate on file, held "${doc.querySelector("#vd-recon-plate").value}"`);
+ok(doc.querySelector("#vd-recon-plate-state").value === "IN", "the editor lost the plate's state");
+
+// Typed off a bumper with the punctuation the reader felt like, in lower case.
+const plateField = doc.querySelector("#vd-recon-plate");
+plateField.value = "bb2-9x40";
+plateField.dispatchEvent(new w.Event("input", { bubbles: true }));
+ok(plateField.value === "BB29X40",
+   `the box should show what the record will say, shows "${plateField.value}"`);
+
+doc.querySelector("#vd-recon-info-save").click();
+await settle();
+const saved = reconPatchBodies.at(-1);
+ok(saved && saved.plate === "BB29X40", `the plate never reached the server: ${JSON.stringify(saved)}`);
+ok(saved && saved.plate_state === "IN", `the plate's state never reached the server: ${JSON.stringify(saved)}`);
+
 ok(rejections.length === 0, `unhandled rejections during the run: ${rejections.map((e) => e && e.message).join(" | ")}`);
 
-finish("vehicle detail: last-worked-on line, stalled nudge, activity labels, address autocomplete + validation, assigned-card saves");
+finish("vehicle detail: last-worked-on line, stalled nudge, activity labels, address autocomplete + validation, assigned-card saves, plate display + editing");

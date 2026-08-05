@@ -420,7 +420,6 @@ button { font-family: inherit; }
    own breakpoints at the foot of this file). */
 .stats-board { gap: 10px; }
 .stats-board .stat { padding: 9px 13px 10px; }
-.stats-board .stat-label { font-size: 10px; }
 .stats-board .stat-value { font-size: 21px; margin-top: 1px; line-height: 1.2; }
 .stats-board .stat-sub { font-size: 11px; margin-top: 1px; }
 
@@ -672,14 +671,18 @@ table.sticky-head thead th {
    two pixels taller than the plain VIN text on the recon rows -- which is why
    half the board came out 62px tall and the other half 59px. */
 .board-table .veh-sub {
-  font-size: 11.5px; color: var(--ink-faint);
+  font-size: 12px; color: var(--ink-faint);
   height: 17px; line-height: 17px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-/* The list layout's reading of the card's repair-progress bar: a count under
-   the status pill. Green once every repair is ticked off, same as the bar. */
-.board-table .jobs-sub { font-variant-numeric: tabular-nums; }
-.board-table .jobs-sub.all-done { color: var(--good); font-weight: 600; }
+/* The plate, wherever a car's identity line is drawn. Read out loud and typed
+   into the search bar character by character, so it gets the same tabular
+   digits and letter spacing the stock number has -- an O and a 0 have to be
+   tellable apart at 11px. */
+.veh-plate {
+  font-variant-numeric: tabular-nums; letter-spacing: .04em;
+  font-weight: 600; color: var(--ink-soft);
+}
 .board-table .veh-customer { display: inline-flex; vertical-align: top; align-items: center; gap: 4px; color: var(--ink-soft); font-weight: 500; }
 .board-table .veh-customer svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 2; opacity: .8; }
 .board-table tbody tr.selected { background: var(--accent-tint); }
@@ -797,7 +800,10 @@ table.sticky-head thead th {
    until you go looking for it -- bulk selection is an occasional job, and a
    permanent box on every card competes with the status pill for the eye. */
 .veh-card-select { position: absolute; top: 8px; right: 9px; padding: 3px; line-height: 0; cursor: pointer; }
-.veh-card-head { display: flex; align-items: center; gap: 8px; padding-right: 22px; }
+/* Wraps rather than squeezes: a crowded head (long status + old age + an RO
+   tag) used to crush its last item into a two-line smear inside the row.
+   Whole pieces now step down to a tidy second line instead. */
+.veh-card-head { display: flex; align-items: center; gap: 2px 8px; padding-right: 22px; flex-wrap: wrap; }
 .veh-card-ref {
   margin-left: auto; font-family: "IBM Plex Mono", "Cascadia Mono", Consolas, monospace;
   font-size: 11px; color: var(--ink-faint); white-space: nowrap;
@@ -811,7 +817,7 @@ table.sticky-head thead th {
   font-size: 15px; font-weight: 600; color: var(--ink); letter-spacing: -.01em;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.veh-card-sub { font-size: 11.5px; color: var(--ink-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.veh-card-sub { font-size: 12px; color: var(--ink-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .veh-card-sub .veh-customer { display: inline-flex; align-items: center; gap: 4px; color: var(--ink-soft); font-weight: 500; }
 .veh-card-sub .veh-customer svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 2; opacity: .8; }
 /* The one line answering "what does this car still need?" -- the server's
@@ -883,11 +889,20 @@ table.sticky-head thead th {
 }
 .filters-select:hover { border-color: var(--accent); }
 
-/* ---------- pills / status badges ---------- */
+/* ---------- pills / status badges ----------
+   Every colored tag in the app sits on this 11px size -- .pill here, and
+   .status-pill / .seg-tag / .role-badge / .task-flag.on further down. They
+   were the smallest print on the busiest screens (10-10.5px, and mixed), and
+   a status word is read from further away than the row it sits in. One even
+   size, one notch up. */
 .pill {
-  display: inline-flex; align-items: center; gap: 5px; padding: 4px 11px;
-  border-radius: 6px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
+  display: inline-flex; align-items: center; gap: 5px; padding: 4px 9px;
+  border-radius: 6px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
   color: var(--ink-on-fill);
+  /* A status word never breaks in half inside its own capsule -- when a row
+     runs out of room the pill moves as one piece instead. The board table's
+     Status column re-allows wrapping below; its column is fixed-width. */
+  white-space: nowrap;
 }
 .pill-recon { background: var(--recon); }
 /* Outline, not filled: Type sits directly beside a filled Status pill
@@ -899,7 +914,7 @@ table.sticky-head thead th {
 .pill-progress { background: var(--warn); }
 .pill-done { background: var(--good); }
 
-.status-pill { display: inline-flex; padding: 3px 10px; border-radius: 6px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--ink-on-fill); }
+.status-pill { display: inline-flex; padding: 3px 10px; border-radius: 6px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--ink-on-fill); }
 .sp-quoted { background: var(--ink-faint); }
 .sp-ordered { background: var(--warn); }
 .sp-received { background: var(--good); }
@@ -1096,7 +1111,7 @@ table.sticky-head thead th {
 /* display:flex would otherwise beat the hidden attribute. */
 .detail-cost[hidden] { display: none; }
 .detail-cost-label {
-  font-size: 10px; font-weight: 700; text-transform: uppercase;
+  font-size: 11px; font-weight: 700; text-transform: uppercase;
   letter-spacing: .06em; color: var(--ink-faint);
 }
 .detail-cost-value {
@@ -1693,7 +1708,6 @@ td.ap-coverage { padding-top: 6px; padding-bottom: 6px; }
    (see the strip's own breakpoints at the foot of this file). */
 .stats-tasks { gap: 10px; margin-bottom: 16px; }
 .stats-tasks .stat { padding: 9px 13px 10px; }
-.stats-tasks .stat-label { font-size: 10px; }
 .stats-tasks .stat-value { font-size: 21px; margin-top: 1px; line-height: 1.2; }
 .stats-tasks .stat-sub { font-size: 11px; margin-top: 1px; }
 
@@ -1800,7 +1814,7 @@ td.ap-coverage { padding-top: 6px; padding-bottom: 6px; }
 .task-flag:hover { color: var(--crit); border-color: var(--crit); border-style: solid; }
 .task-flag.on {
   background: var(--crit-tint); color: var(--crit); border: 1px solid transparent;
-  font-weight: 700; text-transform: uppercase; letter-spacing: .03em; font-size: 10px;
+  font-weight: 700; text-transform: uppercase; letter-spacing: .03em; font-size: 11px;
 }
 .task-order-link {
   padding: 2px 9px; border-radius: 999px; background: var(--accent-tint); color: var(--accent);
@@ -3107,7 +3121,7 @@ button.cust-ro-chip:hover { border-color: var(--accent-strong); color: var(--acc
 
 .role-badge {
   display: inline-flex; align-items: center; padding: 3px 10px; border-radius: 999px;
-  font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
+  font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
   border: none; cursor: pointer; font-family: inherit;
 }
 .role-badge.role-technician { background: var(--accent-tint); color: var(--accent-strong); }
@@ -3233,6 +3247,10 @@ div.field-note > .btn { flex: none; }
 
 /* Voided invoices: struck identity, readable money, neutral pill. */
 .pill-void { background: var(--ink-faint); }
+/* A live bill whose ticket was voided is the opposite of neutral: the money
+   is owed and no car is carrying it, so it gets the warn colour rather than
+   the grey the voided rows above wear. */
+.pill-stranded { background: var(--warn); color: var(--ink-on-fill); margin-left: 6px; }
 tbody tr.voided-row { opacity: .65; text-decoration: none; }
 tbody tr.voided-row td:nth-child(-n+3) { text-decoration: line-through; }
 
@@ -3709,7 +3727,7 @@ th.sel-col, td.sel-col { width: 32px; padding-right: 0; }
    badges side by side read as one badge printed twice. */
 .seg-tag {
   display: inline-flex; align-items: center; padding: 3px 9px; border-radius: 999px;
-  font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
+  font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
   white-space: nowrap;
 }
 .seg-tag.seg-recon { background: var(--recon-tint); color: var(--recon); }
@@ -3779,5 +3797,5 @@ input.overdue { border-color: var(--crit); color: var(--crit); }
 .mini-item .ro-tag { font-size: 12px; }
 /* The RO tag as it appears on the board -- small enough to sit under a stock
    number without competing with it, monospace so a column of them scans. */
-.veh-sub .ro-tag, .veh-card-head .ro-tag { font-size: 11px; font-weight: 700; }
-.ro-none-sm { font-size: 11px; color: var(--ink-faint); font-style: italic; }
+.veh-sub .ro-tag, .veh-card-head .ro-tag { font-size: 12px; font-weight: 700; white-space: nowrap; }
+.ro-none-sm { font-size: 11px; color: var(--ink-faint); font-style: italic; white-space: nowrap; }

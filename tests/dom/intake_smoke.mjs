@@ -25,6 +25,7 @@ const IN_HISTORY = { recon_id: 3, stock_number: "R-0904", vehicle: "2015 Ford Fo
 const key = (value) => value.replace(/[^A-Za-z0-9]/g, "").toUpperCase();
 
 const opened = [];
+const saved = []; // what Save Recon Vehicle actually put on the wire
 
 const { w, doc, settle, ok, finish, rejections } = await boot({
   expose: ["openReconDialog", "openVehicleDetail"],
@@ -41,6 +42,10 @@ const { w, doc, settle, ok, finish, rejections } = await boot({
     if (url.startsWith("/api/recon/vehicles/") && opts.method === "GET") {
       opened.push(url);
       return { id: 7, stock_number: "R-1042", year: 2018, make: "Kia", model: "Sorento", orders: [], archived_at: "" };
+    }
+    if (url === "/api/recon/vehicles" && opts.method === "POST") {
+      saved.push(JSON.parse(opts.body));
+      return { id: 7, stock_number: "R-2200" };
     }
     if (url === "/api/vehicles-board" || url.startsWith("/api/vehicles-board?")) return [];
     if (url === "/api/staff") return [];
@@ -106,6 +111,25 @@ await settle();
 ok(note().hidden, "last car's warning must not greet the next one");
 ok($("#recon-stock").value === "", "the form should be empty again");
 
+/* ---------- the plate box actually saves ----------
+
+   It sat on this form from the beginning and the save simply left it out, so
+   every lot car went in with no plate on file -- and the plate is the one
+   identifier you can read off a car standing in the lot. */
+$("#recon-stock").value = "R-2200";
+$("#recon-make").value = "Kia";
+$("#recon-model").value = "Sorento";
+const plateBox = $("#recon-plate");
+plateBox.value = "tk7-q419";
+plateBox.dispatchEvent(new w.Event("input", { bubbles: true }));
+ok(plateBox.value === "TK7Q419", `the box should show what will be stored, shows "${plateBox.value}"`);
+$("#recon-plate-state").value = "IN";
+$("#recon-form").dispatchEvent(new w.Event("submit", { bubbles: true, cancelable: true }));
+await settle();
+ok(saved.length === 1, `the form should have saved once, saved ${saved.length} times`);
+ok(saved[0].plate === "TK7Q419", `the plate never reached the server: ${JSON.stringify(saved[0])}`);
+ok(saved[0].plate_state === "IN", `the plate's state never reached the server: ${JSON.stringify(saved[0])}`);
+
 ok(rejections.length === 0, `unhandled rejections during the run: ${rejections.map((r) => r && r.message).join("; ")}`);
 
-finish("recon intake: duplicate stock number and VIN caught before the form is typed, History told apart from the lot");
+finish("recon intake: duplicate stock number and VIN caught before the form is typed, History told apart from the lot, plate saved");

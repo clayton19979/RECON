@@ -75,6 +75,9 @@ function renderApStats() {
   const total = live.reduce((s, a) => s + (a.total || 0), 0);
   const held = state.apAudits.filter((a) => a.status === "review_required").length;
   const voided = state.apInvoices.length - live.length;
+  // Bills the shop still owes whose ticket was voided, so the money is in this
+  // total and in no vehicle's cost. Normally zero -- see strandedNote.
+  const stranded = live.reduce((s, a) => s + (a.stranded_total || 0), 0);
   $("#ap-stats").innerHTML = `
     <div class="stat">
       <div class="stat-label">Invoices</div>
@@ -84,7 +87,9 @@ function renderApStats() {
     <div class="stat">
       <div class="stat-label">Total Posted</div>
       <div class="stat-value num">${money(total)}</div>
-      <div class="stat-sub">excluding voided</div>
+      <div class="stat-sub">${stranded
+        ? `${money(stranded)} of it is on voided tickets — no car is carrying it`
+        : "excluding voided"}</div>
     </div>
     <div class="stat">
       <div class="stat-label">Held for Review</div>
@@ -201,6 +206,20 @@ function voidResultMessage(result) {
   return `Invoice voided — ${bits.join(", ")}`;
 }
 
+// A bill can outlive the ticket it was posted against. Voiding a ticket with
+// a live bill on it is refused now, but tickets voided before that rule
+// existed still have theirs -- and a voided ticket's cost counts toward no
+// vehicle, so that is money the shop owes that no car is carrying. This
+// screen is the only place it can be found from.
+// A voided bill is owed nothing, so a voided ticket under one strands no
+// money and must not be flagged -- that pairing is the ordinary end state of
+// a mistake being cleaned up, and marking it would put a permanent warning on
+// exactly the rows where somebody did the right thing.
+function strandedNote(invoice, cover) {
+  if (!cover.ticket_voided || invoice.status === "voided") return "";
+  return `<span class="pill pill-stranded" title="This ticket was voided, so ${esc(money(cover.amount || 0))} of this bill is not counted against any vehicle">not on any car</span>`;
+}
+
 // One vendor invoice routinely covers parts for several cars. The cell lists
 // every car on it with its share of the bill, because "which car did this
 // $515 go to" is the whole reason anyone opens this screen with a vendor
@@ -208,11 +227,11 @@ function voidResultMessage(result) {
 function apVehicleCell(invoice) {
   const covers = invoice.coverage || [];
   if (!covers.length) return `<td class="muted">No ticket</td>`;
-  if (covers.length === 1) return `<td>${esc(covers[0].vehicle_label)}</td>`;
+  if (covers.length === 1) return `<td>${esc(covers[0].vehicle_label)}${strandedNote(invoice, covers[0])}</td>`;
   return `<td class="ap-coverage">${covers.map((c) => {
     const open = coverageOpenable(c);
     return `<span class="ap-cover-line${open ? " clickable" : ""}"${open ? ` data-segment="${esc(c.segment)}" data-ref-id="${coverageRefId(c)}" role="button" tabindex="0" title="Open ${esc(c.vehicle_label)}"` : ""}>
-      <span class="ap-cover-name">${esc(c.vehicle_label)}</span><span class="ap-cover-amount num">${money(c.amount)}</span></span>`;
+      <span class="ap-cover-name">${esc(c.vehicle_label)}${strandedNote(invoice, c)}</span><span class="ap-cover-amount num">${money(c.amount)}</span></span>`;
   }).join("")}</td>`;
 }
 

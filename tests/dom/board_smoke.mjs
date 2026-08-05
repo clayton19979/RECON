@@ -17,7 +17,7 @@ import { boot, press, click } from "./harness.mjs";
 // The fixture supplies them the way the API does, verbatim.
 const veh = (over) => ({
   segment: "recon", recon_id: null, we_owe_id: null, stock_number: "", vehicle: "",
-  vin: "", customer_name: "", status: "in_progress", status_bucket: "in_progress",
+  vin: "", plate: "", plate_state: "", customer_name: "", status: "in_progress", status_bucket: "in_progress",
   purchase_price: 0, actual_cost: 0, quoted_cost: 0, technicians: [], updated_at: "2026-07-01T09:00:00",
   // Blank is the common case and the awkward one: most cars have no arrival
   // date on file, and the cell has to say so rather than passing the write-up
@@ -53,7 +53,7 @@ const veh = (over) => ({
    same-order fixture, and fails this one. */
 let board = [
   veh({ recon_id: 1, stock_number: "B204", vehicle: "2019 Ford F-150", vin: "1FTEW1E5XKF", status: "in_progress", technicians: ["Dana"], acquired_at: "2026-06-09", age_days: 22, quoted_cost: 900, actual_cost: 1450, parts_pending: 2, parts_pending_value: 340, idle_days: 0, last_activity_at: "2026-07-25T08:15:00", needs: "2 parts on order ($340.00)" }),
-  veh({ recon_id: 2, stock_number: "A118", vehicle: "2021 Honda Civic", vin: "2HGFC2F69MH", status: "estimate", technicians: [], age_days: 3, quoted_cost: 600, actual_cost: 0, idle_days: 2, last_activity_at: "2026-07-23T11:00:00", lot_bucket: "waiting", remaining_cost: 600, needs: "No ticket written yet · $600.00 of work left" }),
+  veh({ recon_id: 2, stock_number: "A118", vehicle: "2021 Honda Civic", vin: "2HGFC2F69MH", plate: "TK7Q419", plate_state: "IN", status: "estimate", technicians: [], age_days: 3, quoted_cost: 600, actual_cost: 0, idle_days: 2, last_activity_at: "2026-07-23T11:00:00", lot_bucket: "waiting", remaining_cost: 600, needs: "No ticket written yet · $600.00 of work left" }),
   veh({ segment: "we_owe", we_owe_id: 5, stock_number: "", vehicle: "2017 Toyota Camry", customer_name: "R. Alvarez", status: "pending_approval", status_bucket: "in_progress", technicians: ["Chris", "Dana"], age_days: 41, quoted_cost: 300, actual_cost: 310, parts_pending: 1, parts_pending_value: 85, idle_days: 4, last_activity_at: "2026-07-21T09:30:00", needs: "Waiting on approval · 1 part on order ($85.00)" }),
   // The two stalled cars carry real ticket ids: they're what "Make Tasks"
   // acts on, and the id is what gives the resulting task its jump-to-vehicle
@@ -875,6 +875,30 @@ ok(w.state.vehicleCursor === null || w.state.vehicleCursor === "recon:2",
 press(w, "Escape", { target: search });
 ok(dataRows().length === 5, "Escape in the search box didn't clear it");
 
+/* ---------- finding a car by the plate on the back of it ----------
+
+   The plate is what somebody walking back in from the lot actually has: no
+   stock number on the glass, no VIN without opening a door. It is also read
+   out loud and typed in whatever punctuation the reader feels like, so the
+   match has to ignore spaces and dashes on both sides -- and the row has to
+   show the plate, or a match is one you cannot confirm. */
+for (const typed of ["TK7Q419", "tk7q419", "TK7 Q419", "tk7-q419"]) {
+  search.value = typed;
+  search.dispatchEvent(new w.Event("input", { bubbles: true }));
+  ok(dataRows().length === 1 && dataRows()[0].dataset.key === "recon:2",
+     `"${typed}" should have found the Civic by its plate, got ${dataRows().length} rows`);
+}
+ok(dataRows()[0].children[1].textContent.includes("A118"), "the plate match lost the stock number");
+ok(dataRows()[0].children[2].textContent.includes("TK7Q419"),
+   "a row found by plate doesn't show the plate, so the match can't be confirmed");
+// A blank plate must not become a wildcard: every row's plateKey("") is "",
+// and "".includes("") is true, so an unguarded match would return the board.
+search.value = "9999999";
+search.dispatchEvent(new w.Event("input", { bubbles: true }));
+ok(dataRows().length === 0, `a plate nobody has should match nothing, got ${dataRows().length} rows`);
+press(w, "Escape", { target: search });
+ok(dataRows().length === 5, "Escape after the plate search didn't clear it");
+
 // enter opens the cursor row
 press(w, "ArrowDown");
 press(w, "Enter");
@@ -1305,6 +1329,40 @@ ok(dataRows().length === 5 && cellText("C007", ".idle-cell") === "9d",
    "the board came back showing History's wording");
 w.state.vehicleSort = { key: "", dir: "desc" };
 w.renderVehiclesTable();
+
+/* ---------- filing cars away says what money the app can't see ----------
+
+   Sending twenty cars to History at once is exactly where a part nobody
+   marked received gets buried, because nobody opens twenty tickets to check.
+   The rows already carry the figure; the confirmation has to use it. Its own
+   little board, so the hand-checked fixture above stays untouched. */
+const archiveBtn = doc.querySelector("#vehicles-bulk-archive");
+const confirmBody = () => doc.querySelector("#confirm-body").textContent;
+w.state.vehicles = [
+  veh({ recon_id: 21, stock_number: "E100", vehicle: "2016 Ford Fusion", unreceived_cost: 380 }),
+  veh({ recon_id: 22, stock_number: "E200", vehicle: "2018 Kia Sorento", unreceived_cost: 140 }),
+  veh({ recon_id: 23, stock_number: "E300", vehicle: "2017 Hyundai Elantra" }),
+];
+w.renderVehiclesTable();
+w.state.vehicleSelection = new Set(["recon:21", "recon:22", "recon:23"]);
+archiveBtn.click();
+await settle();
+ok(/2 of them have parts that were never marked received/.test(confirmBody()),
+   `filing three cars away said nothing about the two that are short: ${confirmBody()}`);
+ok(/\$520\.00/.test(confirmBody()), `the shortfall across the selection is wrong: ${confirmBody()}`);
+doc.querySelector("#confirm-cancel").click();
+await settle();
+
+// The car that is fully receipted gets the plain wording back -- a warning
+// printed over every archive is a warning nobody reads.
+w.state.vehicleSelection = new Set(["recon:23"]);
+archiveBtn.click();
+await settle();
+ok(!/never marked received/.test(confirmBody()),
+   `a fully receipted car was warned about anyway: ${confirmBody()}`);
+doc.querySelector("#confirm-cancel").click();
+await settle();
+w.state.vehicleSelection.clear();
 
 /* ---------- escaping ---------- */
 w.state.vehicles = [veh({ recon_id: 9, stock_number: '<img src=x onerror="window.__pwned=1">', vehicle: "X" })];

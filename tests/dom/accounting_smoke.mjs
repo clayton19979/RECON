@@ -41,25 +41,33 @@ const AUDITS = [
 // -- there is no vehicle page behind it), and one covering two cars at once.
 // `coverage` is what the row is actually built from: which cars the invoice's
 // lines paid for, and how much went to each.
-const covers = (o) => ({ recon_vehicle_id: null, we_owe_id: null, vehicle_id: null, stock_number: null, ...o });
+const covers = (o) => ({ recon_vehicle_id: null, we_owe_id: null, vehicle_id: null, stock_number: null, ticket_voided: false, ...o });
 let invoices = [
   { id: 1, invoice_number: "INV-8990", posted_at: "2026-07-20T10:00:00", vendor_name: "WorldPac", po_number: "R-1042",
     vehicle_label: "R-1042", total: 250, status: "posted", segment: "recon", recon_vehicle_id: 7, we_owe_id: null,
     coverage: [covers({ order_id: 42, ro_number: "RO-2607-0001", segment: "recon", recon_vehicle_id: 7, vehicle_label: "R-1042", amount: 250 })] },
+  // Voided bill on a voided ticket -- a mistake cleaned up properly. Nothing
+  // is owed and nothing is stranded, so this row must stay unmarked.
   { id: 2, invoice_number: "INV-7777", posted_at: "2026-07-18T10:00:00", vendor_name: "NAPA", po_number: "R-1042",
     vehicle_label: "R-1042", total: 90, status: "voided", segment: "recon", recon_vehicle_id: 7, we_owe_id: null,
-    coverage: [covers({ order_id: 42, ro_number: "RO-2607-0001", segment: "recon", recon_vehicle_id: 7, vehicle_label: "R-1042", amount: 90 })] },
+    stranded_total: 90,
+    coverage: [covers({ order_id: 42, ro_number: "RO-2607-0001", segment: "recon", recon_vehicle_id: 7, vehicle_label: "R-1042", amount: 90, ticket_voided: true })] },
   { id: 3, invoice_number: "INV-6001", posted_at: "2026-07-19T10:00:00", vendor_name: "NAPA", po_number: "RO-2607-0009",
     vehicle_label: "Retail: Walk-in", total: 40, status: "posted", segment: "retail", recon_vehicle_id: null, we_owe_id: null,
     coverage: [covers({ order_id: 90, ro_number: "RO-2607-0009", segment: "retail", vehicle_label: "Retail: Walk-in", amount: 40 })] },
   // The shared invoice. order_id/ro_number/segment are null on purpose -- once
   // an invoice covers two tickets it belongs to neither, and the screen used
   // to read that null and print "No ticket" over $100 of real parts.
+  // The we-owe half of this one hangs off a ticket somebody voided before the
+  // server started refusing that. The shop still owes NAPA the $30 and no car
+  // is carrying it, so the row has to say so -- there is nowhere else it can
+  // be found from.
   { id: 4, invoice_number: "INV-5567", posted_at: "2026-07-21T10:00:00", vendor_name: "NAPA", po_number: "RO-2607-0001",
     vehicle_label: "R-1042 +1 more", total: 100, status: "posted", segment: null, recon_vehicle_id: null, we_owe_id: null,
+    stranded_total: 30,
     coverage: [
       covers({ order_id: 42, ro_number: "RO-2607-0001", segment: "recon", recon_vehicle_id: 7, vehicle_label: "R-1042", amount: 70 }),
-      covers({ order_id: 55, ro_number: "RO-2607-0002", segment: "we_owe", we_owe_id: 9, vehicle_label: "We-Owe: Maria Soto", amount: 30 }),
+      covers({ order_id: 55, ro_number: "RO-2607-0002", segment: "we_owe", we_owe_id: 9, vehicle_label: "We-Owe: Maria Soto", amount: 30, ticket_voided: true }),
     ] },
 ];
 
@@ -179,6 +187,21 @@ const coverLines = [...shared.querySelectorAll(".ap-cover-line.clickable")];
 ok(coverLines.length === 2, `expected both cars to be openable, got ${coverLines.length}`);
 ok(coverLines[1].dataset.segment === "we_owe" && coverLines[1].dataset.refId === "9",
    "the second car's link doesn't point at that car");
+
+/* ---------- a bill left behind by a voided ticket says so ---------- */
+// Voiding a ticket stops its cost counting toward the car, but the vendor's
+// bill is still owed. The server refuses that void now; what is already in
+// the books can only be found here.
+const stranded = [...doc.querySelectorAll("#ap-table .pill-stranded")];
+ok(stranded.length === 1, `expected exactly one stranded marker, got ${stranded.length}`);
+ok(/Maria Soto/.test(stranded[0].closest(".ap-cover-line, td").textContent),
+   "the marker landed on the wrong car of the shared bill");
+ok(!/not on any car/i.test(rowByInv("INV-8990").textContent),
+   "a bill whose ticket is alive is being flagged as stranded");
+ok(!/not on any car/i.test(rowByInv("INV-7777").textContent),
+   "a voided bill on a voided ticket strands nothing, but is being flagged anyway");
+ok(/\$30\.00 of it is on voided tickets/.test($("#ap-stats").textContent),
+   `Total Posted doesn't call out the stranded money: "${$("#ap-stats").textContent.replace(/\s+/g, " ").trim()}"`);
 
 /* ---------- search narrows, empty state offers the way back ---------- */
 input($("#ap-search"), "worldpac");

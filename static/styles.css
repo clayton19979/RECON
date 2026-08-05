@@ -3559,6 +3559,59 @@ th.sel-col, td.sel-col { width: 32px; padding-right: 0; }
    an answer. Muted back to the neutral tone, because there is nothing under
    it to read. */
 .lot-group-head.is-empty { --stage: var(--ink-faint); --stage-tint: var(--paper-raise); }
+
+/* The three pile cards above the lot sheet. Each is a button that jumps to
+   its band below, and each wears its pile's dot -- the same 8px dot the
+   band's heading and the board's column titles wear, painted from the same
+   --stage property, so the card, the band and the column are recognisably
+   one pile in three places. Hover tints in the pile's colour rather than the
+   accent every other stat-action uses: the accent is "in the shop" blue on
+   this screen, and a green card lighting up blue reads as changing piles. */
+.stat-pile .stat-label { display: inline-flex; align-items: center; gap: 6px; }
+.stat-pile .stage-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--stage); flex-shrink: 0;
+}
+.stat-pile:hover:not(:disabled) { background: var(--stage-tint); }
+
+/* The lot as one strip, a segment per pile. flex-grow is set inline to the
+   pile's car count, so the widths ARE the proportions; flex-basis 0 keeps
+   the arithmetic honest (content width would otherwise be added under it).
+   Wraps rather than crushes when the panel gets narrow -- a squeezed segment
+   with its count clipped off answers nothing. */
+.lot-strip { display: flex; flex-wrap: wrap; gap: 6px; }
+.lot-strip-seg {
+  appearance: none; font: inherit; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 8px; min-width: 0; flex: 1 1 0;
+  padding: 8px 12px; border-radius: 8px;
+  background: var(--stage-tint);
+  border: 1px solid color-mix(in srgb, var(--stage) 35%, var(--line));
+  color: var(--ink);
+  transition: border-color .12s ease, transform .12s ease;
+}
+.lot-strip-seg:hover { border-color: var(--stage); transform: translateY(-1px); }
+.lot-strip-count {
+  font-family: "IBM Plex Mono", "Cascadia Mono", Consolas, monospace;
+  font-size: 14px; font-weight: 700; font-variant-numeric: tabular-nums;
+  color: var(--stage);
+}
+.lot-strip-name {
+  font-size: 11.5px; font-weight: 600; color: var(--ink-soft);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* Where a jump lands: clear of the sticky header the band parks under, and
+   one fading flash in the pile's colour so the eye finds the right section.
+   The flash is a background animation with no fill mode, so the band ends up
+   exactly the colour its own rules say. */
+tr.lot-group-head { scroll-margin-top: 44px; }
+@keyframes lot-jump-flash {
+  from { background-color: color-mix(in srgb, var(--stage) 26%, var(--paper)); }
+}
+.lot-group-head.lot-jump-flash td { animation: lot-jump-flash 1.4s ease-out; }
+@media (prefers-reduced-motion: reduce) {
+  .lot-group-head.lot-jump-flash td { animation: none; }
+}
 /* Every report is a sheet, and a sheet sets its own column widths. The lot
    report was given them; the other four were still letting the browser hand
    the spare width out across every column, and each caught the same disease

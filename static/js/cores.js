@@ -833,7 +833,6 @@ async function openPostReturnDialog(item) {
     <div class="cost-line total"><span>Credit Due</span><span class="num">${money(Math.abs(item.credit_total))}</span></div>
   `;
   $("#post-return-dialog").showModal();
-  $("#post-return-credit-number").focus();
 }
 
 export function wirePostReturnDialog() {

@@ -48,6 +48,56 @@ def test_assembly_produces_every_dialog_exactly_once():
     assert DIALOG_MARKER not in page, "the marker survived assembly"
 
 
+# The two dialogs with nothing to type in them. confirm-dialog is two buttons
+# and a sentence, and picks which button to focus by how dangerous the answer
+# is (see confirm.js); shortcuts-dialog is a read-only cheat sheet. Everything
+# else is a form somebody fills in, and has to open ready for them to type.
+NOTHING_TO_TYPE = {"confirm-dialog", "shortcuts-dialog"}
+
+FIELD = re.compile(r"<(input|select|textarea)\b[^>]*>", re.IGNORECASE)
+
+
+def test_every_dialog_with_fields_opens_on_one_of_them():
+    """Open a box, start typing, and the typing has to land in the box.
+
+    showModal() focuses the first element carrying `autofocus`, and with none
+    it falls back to the first focusable thing in the dialog -- which in every
+    one of these is the "x" close button in the corner. So the whole app
+    opened its forms with the keyboard pointed at Cancel: the first thing
+    Clayton or Antonio typed at a new car went nowhere, and every single
+    write-up cost a mouse trip to the first field before it could start.
+
+    Declaring it in the markup rather than calling .focus() after each
+    showModal() is what keeps it true. Four of the fifteen dialogs used to do
+    it by hand and the other eleven were simply forgotten -- there was no one
+    place to forget it in.
+    """
+    for path in dialog_files(STATIC):
+        body = path.read_text(encoding="utf-8")
+        focused = [m.group(0) for m in FIELD.finditer(body) if re.search(r"\bautofocus\b", m.group(0))]
+        if path.stem in NOTHING_TO_TYPE:
+            assert not FIELD.search(body), f"{path.name} grew a field -- take it out of NOTHING_TO_TYPE"
+            assert not focused, f"{path.name} has nothing to type in, so nothing to focus"
+            continue
+        assert FIELD.search(body), f"{path.name} has no fields -- add it to NOTHING_TO_TYPE"
+        assert len(focused) == 1, (
+            f"{path.name} declares {len(focused)} autofocus fields; it needs exactly one, "
+            "or it opens with the keyboard on the close button"
+        )
+
+
+def test_the_focused_field_is_never_hidden_or_disabled():
+    """A dialog pointed at a field the browser can't focus is the bug again,
+    just harder to see: focus falls straight back to the close button."""
+    for path in dialog_files(STATIC):
+        for match in FIELD.finditer(path.read_text(encoding="utf-8")):
+            tag = match.group(0)
+            if not re.search(r"\bautofocus\b", tag):
+                continue
+            for dead in ("disabled", "hidden", 'type="hidden"'):
+                assert dead not in tag, f"{path.name} autofocuses a {dead} field: {tag}"
+
+
 def test_dialogs_land_between_the_views_and_the_scripts():
     """Position isn't arbitrary: the app's wiring runs on DOMContentLoaded and
     queries these by id, so they have to be parsed before the module script."""

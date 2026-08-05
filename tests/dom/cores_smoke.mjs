@@ -119,9 +119,13 @@ const MISSING = [
     missing_quantity: 2, value: 128, days_idle: 3,
     segment: "we_owe", recon_vehicle_id: null, we_owe_id: 9, vehicle_id: 6, stock_number: null,
     we_owe_customer_name: "Maria Soto" },
+  // billed_out: the ticket has already gone out to the retail customer, so
+  // its lines are frozen and this part can never be receipted. Still real
+  // money that is in no cost figure, so it stays listed -- but the row has to
+  // say so rather than inviting a click that comes back refused.
   { id: 43, order_id: 6, description: "Oil filter", part_number: null, ro_number: "RO-2607-0006",
     po_number: null, vehicle_label: "Retail: Dee Winters", vehicle: "2016 Toyota Camry",
-    missing_quantity: 1, value: 6, days_idle: null,
+    missing_quantity: 1, value: 6, days_idle: null, billed_out: true,
     segment: "retail", recon_vehicle_id: null, we_owe_id: null, vehicle_id: 8, stock_number: null,
     we_owe_customer_name: null },
 ];
@@ -289,6 +293,18 @@ ok(!/PO/.test(missingRow(42).textContent), "a line with no PO is inventing one")
 ok(/41d/.test(missingRow(41).textContent), "the row doesn't say how long the finished ticket has sat");
 ok(!/null/.test(missingRow(43).textContent), "a null part number renders as the string null");
 ok(!/0d/.test(missingRow(43).textContent), "a line with no known idle count is claiming zero days");
+
+// A frozen ticket's line says why it is stuck. Without this the desk sends
+// somebody to a car, tells them to receive the part, and the receipt is
+// refused -- and the row comes back tomorrow looking exactly the same.
+ok(/billed to the customer/.test(missingRow(43).textContent),
+   `a line on a billed-out ticket doesn't say it can't be received: "${missingRow(43).textContent.replace(/\s+/g, " ").trim()}"`);
+ok(/can't be received/.test(missingRow(43).title),
+   `the billed-out row's tooltip still promises a receipt: "${missingRow(43).title}"`);
+ok(!/billed to the customer/.test(missingRow(41).textContent),
+   "a receivable line is being marked as billed out");
+ok(/receive this part/.test(missingRow(41).title),
+   `a receivable row lost its "open and receive" tooltip: "${missingRow(41).title}"`);
 
 // Lot Cars Only: what the Lot Status sheet totals. Retail work is real
 // missing money and stays in the default view, but its books are Tekmetric's,

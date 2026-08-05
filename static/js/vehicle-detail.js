@@ -1,9 +1,9 @@
-import { $, $$, api, fmtHours, get, patch, post, put } from "./core.js";
+import { $, $$, api, fmtHours, get, patch, post, put, withActorParam } from "./core.js";
 import { toast } from "./notify.js";
 import { confirmAction } from "./confirm.js";
-import { currentActor, esc, fmtDate, fmtDay, money, relativeTime, todayLocal, wirePlateFields, withLoading } from "./shortcuts.js";
+import { actorLabel, byActor, esc, fmtDate, fmtDay, money, relativeTime, todayLocal, withLoading } from "./shortcuts.js";
 import { emptyState } from "./empty-states.js";
-import { actualTotal, isReturnedPart, lineTotal, ticketTotal } from "./estimate-money.js";
+import { actualTotal, isReturnedPart, lineTotal, ticketTotal, unreceivedPartLines, unreceivedPartTotal } from "./estimate-money.js";
 import { AUTH_METHOD_LABEL, ITEM_STATUS_LABEL, KIND_GROUP_LABEL, KIND_GROUP_ORDER, PAY_METHOD_LABEL, STATUS_LABEL, STATUS_OPTIONS, STATUS_PILL_CLASS, fieldLabels, state } from "./state.js";
 import { showView } from "./error-boundary.js";
 import { isStalled } from "./vehicles-board.js";
@@ -112,6 +112,33 @@ export async function loadVehicleDetail() {
   }
   renderOrderPanel();
   applyArchivedLockUI(!!item.archived_at);
+}
+
+/* ---------- who can be picked for a ticket or a repair ----------
+
+   state.staff is active-only on purpose: somebody who has left the shop must
+   not be offered new work. But a dropdown can only show what is in it, so on
+   a car whose technician has since been deactivated every one of these
+   pickers quietly fell back to its first option and read "Unassigned" -- two
+   lines under a header still saying "Ray / Dana", about a ticket the database
+   still had Ray on. The screen contradicted itself, and the next save of that
+   popover would have posted the "Unassigned" it was showing and made itself
+   right by wiping him.
+
+   So whoever is actually in the slot is always in the list, marked so nobody
+   mistakes them for someone still on the floor. It is the same rule the
+   server keeps (see assert_assignable): you cannot hand new work to somebody
+   who has gone, and what they already hold stays theirs until a person moves
+   it. */
+function staffOptions({ roles, selectedId, selectedName, blankLabel }) {
+  const people = state.staff.filter((s) => roles.includes(s.role)).map((s) => ({ id: s.id, name: s.name }));
+  if (selectedId && !people.some((p) => p.id === selectedId)) {
+    // The name comes off the ticket itself, which carries it for exactly this
+    // reason. Falling back to the id would put a bare number on screen.
+    people.unshift({ id: selectedId, name: `${selectedName || "No longer on staff"} (inactive)` });
+  }
+  return `<option value="">${esc(blankLabel)}</option>` + people.map((p) =>
+    `<option value="${p.id}" ${p.id === selectedId ? "selected" : ""}>${esc(p.name)}</option>`).join("");
 }
 
 // Only shown once a vehicle actually has more than one RO -- the common
@@ -232,7 +259,11 @@ function renderLastWorked() {
   // detail payload the board's rows carry it on.
   const stalled = isStalled({ idle_days: days, status_bucket: state.detail.item.status_bucket });
   const when = days === 0 ? "today" : relativeTime(la.at);
-  const who = la.action ? `${activityLabel(la.action)}${la.actor ? ` by ${la.actor}` : ""}` : "";
+  // byActor, not `la.actor ? ...`: an actor of "ui" is truthy and is the
+  // server's placeholder for a request that never said who, so the truthiness
+  // check printed "— Assignment changed by ui" on a line whose own comment
+  // above says naming nobody beats naming a nobody.
+  const who = la.action ? `${activityLabel(la.action)}${byActor(la.actor)}` : "";
   el.className = `detail-worked${stalled ? " stalled" : ""}`;
   el.title = `Last activity ${String(la.at).slice(0, 10)}`;
   // The nudge only appears on a car that's actually stalled, and points at the
@@ -754,7 +785,7 @@ function renderPaymentDialogList() {
       <div>${money(p.amount)} · ${esc(p.method)} ${p.note ? `— ${esc(p.note)}` : ""}
         <button type="button" class="rm-btn deposit-rm" data-id="${p.id}" title="Remove">×</button>
       </div>
-      <div class="mi-meta">${esc(p.actor || "Unspecified")} · ${fmtDate(p.created_at)}</div>
+      <div class="mi-meta">${esc(actorLabel(p.actor) ? `${actorLabel(p.actor)} · ` : "")}${fmtDate(p.created_at)}</div>
     </div>
   `).join("") : emptyState({ icon: "invoice", title: "No deposits recorded", hint: "Money taken from the customer up front is recorded here and counted against what they owe.", compact: true });
   $$(".deposit-rm", $("#vd-deposits-list")).forEach((btn) => {
@@ -1142,7 +1173,7 @@ function renderEstimate(order) {
     const isPart = item.kind === "part";
     const L = fieldLabels(item.kind);
     return `
-    <div class="part-row" draggable="true" data-index="${i}" data-id="${item.id || ""}" data-source="${item.source || "manual"}" data-received-quantity="${item.received_quantity ?? 0}" data-quoted-unit-cost="${item.quoted_unit_cost ?? ""}" data-part-returned="${isReturnedPart(item) ? "1" : "0"}" data-po="${esc(item.po_number || "")}">
+    <div class="part-row" draggable="true" data-index="${i}" data-id="${item.id || ""}" data-source="${item.source || "manual"}" data-received-quantity="${item.received_quantity ?? 0}" data-received-cost="${item.received_cost ?? ""}" data-billed-unit-cost="${item.unit_cost ?? ""}" data-quoted-unit-cost="${item.quoted_unit_cost ?? ""}" data-part-returned="${isReturnedPart(item) ? "1" : "0"}" data-po="${esc(item.po_number || "")}">
       ${cell("handle", "", `<span class="row-drag-handle" title="Drag to reorder">⋮⋮</span>`)}
       ${cell("check", "", receivable ? `<input type="checkbox" class="ei-receive-check" data-id="${item.id}" title="Select to receive against a vendor invoice">` : "")}
       ${cell("kind", "Kind", `<select class="ei-kind">
@@ -1297,8 +1328,10 @@ function renderEstimate(order) {
                  a repair somebody can finish. */""}
             ${/* "by Unspecified" is worse than saying nothing: that's the
                  placeholder the Working-as picker uses when nobody has
-                 chosen a name, not somebody's answer. */""}
-            ${isGeneral ? "" : `<label class="job-done-toggle" title="${bucket.completed_at ? `Finished${bucket.completed_by && bucket.completed_by !== "Unspecified" ? ` by ${esc(bucket.completed_by)}` : ""} — click to reopen` : "Tick when this repair is finished"}">
+                 chosen a name, not somebody's answer. byActor knows the whole
+                 family of those -- this used to name only that one and let
+                 "Finished by ui" through. */""}
+            ${isGeneral ? "" : `<label class="job-done-toggle" title="${bucket.completed_at ? `Finished${esc(byActor(bucket.completed_by))} — click to reopen` : "Tick when this repair is finished"}">
               ${/* job-control rides on the input, not the label: that's the
                    class the archived-vehicle pass disables, and disabling a
                    <label> does nothing at all. */""}
@@ -1309,8 +1342,7 @@ function renderEstimate(order) {
             ${bucketItems.length ? `<span class="job-group-subtotal">${money(jobSubtotal)}</span>` : ""}
             ${isGeneral ? "" : `
               <select class="ei-job-tech job-control" data-job-id="${bucket.id}">
-                <option value="">Use ticket default</option>
-                ${state.staff.filter((s) => s.role === "technician").map((t) => `<option value="${t.id}" ${bucket.technician_id === t.id ? "selected" : ""}>${esc(t.name)}</option>`).join("")}
+                ${staffOptions({ roles: ["technician"], selectedId: bucket.technician_id, selectedName: bucket.technician_name, blankLabel: "Use ticket default" })}
               </select>
               <button type="button" class="job-control job-icon-btn job-edit" data-job-id="${bucket.id}" title="Rename job">✎</button>
               <button type="button" class="job-control job-icon-btn job-delete" data-job-id="${bucket.id}" title="Delete job">×</button>
@@ -1347,6 +1379,114 @@ function updateReceiveButtonState() {
   // Say how many -- on a 20-line estimate you should know what you're about
   // to post before the dialog opens.
   btn.textContent = checked.length ? `Receive ${checked.length} Line${checked.length === 1 ? "" : "s"}` : "Receive Selected";
+}
+
+/* ---------- closing a ticket without losing what it cost ----------
+
+   The parts get picked up at the counter and thrown on the car; marking them
+   received in the app is a separate step, and on a busy morning it is the
+   step that gets skipped. Nothing used to ask. The ticket closed, the car
+   dropped to READY, and its Cost read $0.00 for a car that had just had four
+   tires put on it -- the board says so afterwards, and so does the Lot sheet,
+   but by then the invoice is in a pile and nobody remembers what it said.
+
+   Closing the ticket is the last moment anyone is looking at that car's
+   parts with the paperwork still in reach, so that is where the app asks.
+   Three answers, because there are genuinely three: receive them now (the
+   normal case -- the parts are on the car), close anyway (the part got
+   cancelled, or the bill really hasn't turned up), or back out. Escape and
+   the backdrop mean back out, never "close anyway"; see confirm.js.
+
+   Nothing here blocks anything. "Close Anyway" is one click and the ticket
+   closes exactly as it always did. */
+
+// The names of the parts, so the question is about something recognisable
+// rather than a count. Three of them fits the dialog; past that it counts.
+const CLOSEOUT_NAME_LIMIT = 3;
+function missingPartsSentence(lines, total) {
+  const names = lines.slice(0, CLOSEOUT_NAME_LIMIT).map((i) => (i.description || "").trim() || "no description");
+  const rest = lines.length - names.length;
+  return `${money(total)} — ${names.join(", ")}${rest ? ` and ${rest} more` : ""}.`;
+}
+
+/* Returns true to go ahead and close the ticket.
+   False means leave it exactly where it is -- which includes the case where
+   the receive dialog has just been opened, because posting that invoice is
+   what closes the ticket (see state.afterReceive). */
+async function confirmTicketCloseout(order) {
+  const items = order?.estimate?.items || [];
+  const missing = unreceivedPartLines(items);
+  if (!missing.length) return true;
+  const many = missing.length !== 1;
+  const choice = await confirmAction({
+    eyebrow: "PARTS",
+    title: `${missing.length} part${many ? "s" : ""} on this ticket ${many ? "were" : "was"} never marked received`,
+    body: `${missingPartsSentence(missing, unreceivedPartTotal(items))}`
+      + ` Close the ticket now and that money stays out of what this car cost.`,
+    confirmLabel: "Receive Them Now",
+    altLabel: "Close Anyway",
+  });
+  if (choice === "alt") return true;
+  if (choice === true) openCloseoutReceive(missing);
+  return false;
+}
+
+// Tick exactly those lines in the grid and hand them to the dialog that
+// already knows how to price and post them -- one flow for receiving, not a
+// second one that could drift from it.
+function openCloseoutReceive(missing) {
+  const wanted = new Set(missing.map((i) => String(i.id)));
+  let ticked = 0;
+  for (const cb of $$(".ei-receive-check", $("#vd-estimate-items"))) {
+    cb.checked = wanted.has(String(cb.dataset.id));
+    if (cb.checked) ticked += 1;
+  }
+  updateReceiveButtonState();
+  // A line with no id yet (typed but never saved) has no checkbox to tick and
+  // nothing the server could receive. Saying so beats an empty dialog.
+  if (!ticked) return void toast("Those parts aren't saved yet — save the ticket, then receive them", true);
+  // The invoice post is the real close-out, so the status change waits for it
+  // rather than being asked for a second time afterwards.
+  state.afterReceive = () => setTicketStatus("complete");
+  openReceiveDialog();
+}
+
+// One writer for the status change, shared by the dropdown and by the
+// close-out flow above, so a ticket closed either way lands identically.
+async function setTicketStatus(status) {
+  const select = $("#vd-status-select");
+  // Re-enabled by renderDetailPermissions on the reload below; only the
+  // failure path has to put it back itself.
+  if (select) select.disabled = true;
+  try {
+    await patch(`/api/orders/${state.detail.order.id}/status`, { status, actor: currentActor() });
+    toast(`Status set to ${STATUS_LABEL[status]}`);
+    await loadVehicleDetail();
+  } catch (err) {
+    toast(err.message, true);
+    if (select) select.disabled = false;
+  }
+}
+
+/* What this car's tickets say was bought and never marked received.
+   Summed off the vehicle's own ticket list rather than the one ticket on
+   screen, because filing a car away is a statement about the whole car.
+   Voided tickets are left out here for the same reason cost_rollup leaves
+   them out of the money: that work never happened. */
+function vehicleUnreceived(item) {
+  const orders = ((item && item.orders) || []).filter((o) => !o.voided);
+  return {
+    cost: orders.reduce((sum, o) => sum + (Number(o.unreceived_cost) || 0), 0),
+    parts: orders.reduce((sum, o) => sum + (Number(o.unreceived_parts) || 0), 0),
+  };
+}
+
+/* The sentence appended to this car's Send-to-History confirmation. Returns
+   "" when there is nothing to warn about, so the caller can append it
+   unconditionally rather than branching around it. */
+function missingReceiptWarning({ cost, parts }) {
+  if (!parts || !cost) return "";
+  return ` ${parts} part${parts === 1 ? " was" : "s were"} never marked received, so ${money(cost)} of what this car cost isn't counted.`;
 }
 
 // The arithmetic itself lives in estimate-money.js, which mirrors the
@@ -1408,8 +1548,31 @@ function rowAsEstimateItem(row) {
       ? parseFloat(row.dataset.quotedUnitCost)
       : null,
     received_quantity: parseFloat(row.dataset.receivedQuantity || "0") || 0,
+    // What the vendor has actually billed for the units that landed. Carried
+    // on the row rather than recomputed, because on a line filled by two
+    // deliveries at two prices no single cost box can reproduce it.
+    //
+    // Typing in the Cost box on a received line is a correction to the bill --
+    // "every unit that landed was at this price" -- and the server re-prices
+    // the received quantity when it saves. Mirrored here so the figure under
+    // the cursor is the one that comes back, instead of jumping on save.
+    received_cost: receivedCostFromRow(row, num(".ei-cost")),
     part_returned: row.dataset.partReturned === "1",
   };
+}
+
+/* The running received total to use while the grid is being typed in: the
+   stored one normally, or the re-priced quantity once the cost box has moved
+   off what the last invoice billed. Same 0.0005 tolerance the server compares
+   with, so the two can't decide differently about the same edit. */
+function receivedCostFromRow(row, typedCost) {
+  const receivedQuantity = parseFloat(row.dataset.receivedQuantity || "0") || 0;
+  if (receivedQuantity <= 0) return 0;
+  const stored = parseFloat(row.dataset.receivedCost);
+  const billed = parseFloat(row.dataset.billedUnitCost);
+  if (!Number.isFinite(stored)) return receivedQuantity * typedCost;
+  if (Number.isFinite(billed) && Math.abs(billed - typedCost) > 0.0005) return receivedQuantity * typedCost;
+  return stored;
 }
 
 // The live-typing counterpart to renderEstimateTotals: same math, but read
@@ -1493,6 +1656,8 @@ function syncEstimateInPlace(order) {
     const row = $(`.part-row[data-id="${item.id}"]`, box);
     if (!row) return false; // DOM drifted from what we think we rendered -- redraw
     row.dataset.receivedQuantity = item.received_quantity ?? 0;
+    row.dataset.receivedCost = item.received_cost ?? "";
+    row.dataset.billedUnitCost = item.unit_cost ?? "";
     // Never write into the control the user is standing in; that's the whole
     // point of this path.
     const set = (sel, value) => {
@@ -1829,7 +1994,7 @@ async function onEstimateStatusChange(sel) {
   const itemId = sel.closest(".part-row")?.dataset.id;
   if (!order || !itemId) return;
   try {
-    await patch(`/api/orders/${order.id}/estimate/items/${itemId}/status`, { status: sel.value, actor: currentActor() });
+    await patch(`/api/orders/${order.id}/estimate/items/${itemId}/status`, { status: sel.value });
     sel.dataset.prev = sel.value;
     toast("Status updated");
     await loadVehicleDetail();
@@ -1862,7 +2027,7 @@ async function onEstimatePartReturn(btn) {
     confirmLabel: "Mark Returned",
   }))) return;
   try {
-    await patch(`/api/orders/${order.id}/estimate/items/${btn.dataset.id}/part-return`, { returned, actor: currentActor() });
+    await patch(`/api/orders/${order.id}/estimate/items/${btn.dataset.id}/part-return`, { returned });
     toast(returned ? "Marked returned — it's waiting for pickup in Parts & Cores" : "Return undone");
     await loadVehicleDetail();
   } catch (err) {
@@ -1878,7 +2043,6 @@ async function onJobTechnicianChange(sel) {
     await put(`/api/orders/${order.id}/jobs/${job.id}`, {
       title: job.title,
       technician_id: sel.value ? Number(sel.value) : null,
-      actor: currentActor(),
     });
     toast("Job technician updated");
     await loadVehicleDetail();
@@ -1897,7 +2061,7 @@ async function onJobDoneChange(box) {
   if (!order || !job) return;
   const done = box.checked;
   try {
-    await patch(`/api/orders/${order.id}/jobs/${job.id}/done`, { done, actor: currentActor() });
+    await patch(`/api/orders/${order.id}/jobs/${job.id}/done`, { done });
     toast(done ? `“${job.title}” ticked off` : `“${job.title}” reopened`);
     await loadVehicleDetail();
   } catch (err) {
@@ -1923,7 +2087,7 @@ async function onJobDelete(btn) {
     danger: true,
   }))) return;
   try {
-    await api(`/api/orders/${order.id}/jobs/${btn.dataset.jobId}`, { method: "DELETE" });
+    await api(withActorParam(`/api/orders/${order.id}/jobs/${btn.dataset.jobId}`), { method: "DELETE" });
     toast("Job deleted");
     await loadVehicleDetail();
   } catch (err) {
@@ -2069,7 +2233,7 @@ async function sendEstimate() {
   const expectedVersion = order.estimate ? order.estimate.edit_version : null;
   setEstimateSaveState("saving");
   try {
-    const estimate = await post(`/api/orders/${order.id}/estimate`, { labor_rate: 0, tax_rate: 0, actor: currentActor(), items, expected_version: expectedVersion });
+    const estimate = await post(`/api/orders/${order.id}/estimate`, { labor_rate: 0, tax_rate: 0, items, expected_version: expectedVersion });
     order.estimate = estimate;
     applyEstimateResponse(order);
     setEstimateSaveState("saved");
@@ -2166,9 +2330,12 @@ function openJobDialog(job = null) {
   state.detail.editingJobId = job ? job.id : null;
   $("#job-dialog-title").textContent = job ? "Rename Job" : "Add Job";
   $("#job-title-input").value = job ? job.title : "";
-  const techs = state.staff.filter((s) => s.role === "technician");
-  $("#job-technician-input").innerHTML = `<option value="">Use ticket default</option>` +
-    techs.map((t) => `<option value="${t.id}" ${job && job.technician_id === t.id ? "selected" : ""}>${esc(t.name)}</option>`).join("");
+  $("#job-technician-input").innerHTML = staffOptions({
+    roles: ["technician"],
+    selectedId: job ? job.technician_id : null,
+    selectedName: job ? job.technician_name : "",
+    blankLabel: "Use ticket default",
+  });
   $("#job-dialog").showModal();
 }
 
@@ -2182,7 +2349,7 @@ export function wireJobDialog() {
     const technicianId = $("#job-technician-input").value ? Number($("#job-technician-input").value) : null;
     const editingId = state.detail.editingJobId;
     try {
-      const body = { title, technician_id: technicianId, actor: currentActor() };
+      const body = { title, technician_id: technicianId };
       if (editingId) {
         await put(`/api/orders/${state.detail.order.id}/jobs/${editingId}`, body);
       } else {
@@ -2255,7 +2422,7 @@ export function wireMoveItemDialog() {
     const { movingItemId, movingFromOrderId } = state.detail;
     const reassignInvoice = $("#move-item-reassign-invoice").checked;
     try {
-      await patch(`/api/orders/${movingFromOrderId}/estimate/items/${movingItemId}/move`, { target_order_id: targetOrderId, reassign_invoice: reassignInvoice, actor: currentActor() });
+      await patch(`/api/orders/${movingFromOrderId}/estimate/items/${movingItemId}/move`, { target_order_id: targetOrderId, reassign_invoice: reassignInvoice });
       $("#move-item-dialog").close();
       toast("Line moved to the other ticket");
       await loadVehicleDetail();
@@ -2294,7 +2461,7 @@ function renderNotes(order) {
       <div class="note-text">${esc(n.text)}</div>
       <div class="note-meta">
         <span class="note-tag">${n.visibility === "customer" ? "Customer" : "Internal"}</span>
-        <span class="note-by">${esc(n.actor)} · ${fmtDate(n.created_at)}</span>
+        <span class="note-by">${esc(actorLabel(n.actor) ? `${actorLabel(n.actor)} · ` : "")}${fmtDate(n.created_at)}</span>
       </div>
     </div>
   `).join("") : emptyState({ icon: "idea", title: "No notes yet", hint: "Anything worth remembering about this vehicle -- what the customer said, what you found.", compact: true });
@@ -2436,7 +2603,7 @@ function renderActivity(order) {
         <span class="tl-dot" aria-hidden="true"></span>
         <span class="tl-what">${esc(activityLabel(a.action))}</span>
         <span class="tl-when">${esc(activityTime(a.created_at))}</span>
-        <span class="tl-who">${esc(a.actor)}</span>
+        <span class="tl-who">${esc(actorLabel(a.actor))}</span>
       </div>`;
   }).join("");
 }
@@ -2461,7 +2628,6 @@ function renderAssignment(order) {
     emptyLabel.closest("button").title = "";
     return;
   }
-  const techs = state.staff.filter((s) => s.role === "technician");
   const advisors = state.staff.filter((s) => s.role === "advisor" || s.role === "manager");
   const a = order.assignment;
   /* The ticket already knows who you are -- "Working as" is set in the top
@@ -2472,8 +2638,20 @@ function renderAssignment(order) {
      still opens and anyone in it can be picked. */
   const selfAdvisor = advisors.find((s) => s.name === state.currentUser);
   const advisorId = (a && a.advisor_id) || (selfAdvisor ? selfAdvisor.id : null);
-  $("#vd-technician").innerHTML = `<option value="">Unassigned</option>` + techs.map((t) => `<option value="${t.id}" ${a && a.technician_id === t.id ? "selected" : ""}>${esc(t.name)}</option>`).join("");
-  $("#vd-advisor").innerHTML = `<option value="">Unassigned</option>` + advisors.map((t) => `<option value="${t.id}" ${advisorId === t.id ? "selected" : ""}>${esc(t.name)}</option>`).join("");
+  $("#vd-technician").innerHTML = staffOptions({
+    roles: ["technician"],
+    selectedId: (a && a.technician_id) || null,
+    selectedName: a && a.technician_name,
+    blankLabel: "Unassigned",
+  });
+  $("#vd-advisor").innerHTML = staffOptions({
+    roles: ["advisor", "manager"],
+    selectedId: advisorId || null,
+    // Only the ticket's own advisor has a name to fall back on; advisorId can
+    // also be the current user pre-selected, and they are in the list already.
+    selectedName: a && a.advisor_id === advisorId ? a.advisor_name : "",
+    blankLabel: "Unassigned",
+  });
   $("#vd-date-in").value = (a && a.date_in) || "";
   $("#vd-odometer").value = (a && a.odometer_in) || "";
   const promised = $("#vd-promised");
@@ -2706,13 +2884,14 @@ export function wireVehicleDetail() {
     const status = select.value;
     select.disabled = true;
     try {
-      await patch(`/api/orders/${state.detail.order.id}/status`, { status, actor: currentActor() });
+      await patch(`/api/orders/${state.detail.order.id}/status`, { status });
       toast(`Status set to ${STATUS_LABEL[status]}`);
       await loadVehicleDetail();
     } catch (err) {
       toast(err.message, true);
       select.disabled = false;
     }
+    await setTicketStatus(status);
   });
 
   $("#vd-concern-save").addEventListener("click", async (e) => {
@@ -2720,7 +2899,7 @@ export function wireVehicleDetail() {
     if (!concern) return toast("Concern can't be empty", true);
     await withLoading(e.target, "Saving…", async () => {
       try {
-        await patch(`/api/orders/${state.detail.order.id}/concern`, { concern, actor: currentActor() });
+        await patch(`/api/orders/${state.detail.order.id}/concern`, { concern });
         toast("Concern updated");
         await loadVehicleDetail();
       } catch (err) {
@@ -2764,7 +2943,7 @@ export function wireVehicleDetail() {
     const concern = $("#vd-concern").value.trim();
     if (!concern || concern === (order.concern || "").trim()) return;
     try {
-      await patch(`/api/orders/${order.id}/concern`, { concern, actor: currentActor() });
+      await patch(`/api/orders/${order.id}/concern`, { concern });
       order.concern = concern;
       toast("Concern updated");
     } catch (err) {
@@ -2787,7 +2966,9 @@ export function wireVehicleDetail() {
     if (!(await confirmAction({
       eyebrow: "ARCHIVE",
       title: "Send this vehicle to History?",
-      body: "It becomes read-only until reopened. Nothing is deleted.",
+      // A car filed away stops being looked at, so this is the last chance
+      // anyone has to notice money the app can't see.
+      body: "It becomes read-only until reopened. Nothing is deleted." + missingReceiptWarning(vehicleUnreceived(item)),
       confirmLabel: "Send to History",
     }))) return;
     try {
@@ -2823,7 +3004,7 @@ export function wireVehicleDetail() {
       danger: true,
     }))) return;
     try {
-      await post(`/api/orders/${state.detail.order.id}/void`, { actor: currentActor() });
+      await post(`/api/orders/${state.detail.order.id}/void`, {});
       toast("Ticket voided");
       await loadVehicleDetail();
     } catch (err) {
@@ -2848,7 +3029,7 @@ export function wireVehicleDetail() {
       confirmLabel: "Mark Ordered",
     }))) return;
     try {
-      const res = await patch(`/api/orders/${state.detail.order.id}/estimate/order-parts`, { actor: currentActor() });
+      const res = await patch(`/api/orders/${state.detail.order.id}/estimate/order-parts`, {});
       // The PO number is the thing needed next, so it goes in the toast and
       // onto the clipboard rather than making the advisor hunt for it.
       if (res.updated && res.purchase_order) {
@@ -2869,7 +3050,7 @@ export function wireVehicleDetail() {
      morning. */
   $("#vd-new-po").addEventListener("click", async () => {
     try {
-      const po = await post(`/api/orders/${state.detail.order.id}/purchase-orders`, { actor: currentActor() });
+      const po = await post(`/api/orders/${state.detail.order.id}/purchase-orders`, {});
       await copyText(po.number, `PO ${po.number} —`);
       await loadVehicleDetail();
     } catch (err) {
@@ -2920,7 +3101,7 @@ export function wireVehicleDetail() {
     if (name === input.dataset.was) return;
     try {
       await patch(`/api/orders/${state.detail.order.id}/purchase-orders/${input.dataset.poId}`, {
-        vendor_name: name, actor: currentActor(),
+        vendor_name: name,
       });
       // A name typed here can create a vendor, so the cached list is stale.
       state.vendors = [];
@@ -2938,7 +3119,7 @@ export function wireVehicleDetail() {
     const text = $("#vd-note-text").value.trim();
     if (!text) return;
     try {
-      await post(`/api/orders/${state.detail.order.id}/notes`, { text, visibility: $("#vd-note-visibility").value, actor: currentActor() });
+      await post(`/api/orders/${state.detail.order.id}/notes`, { text, visibility: $("#vd-note-visibility").value });
       $("#vd-note-text").value = "";
       toast("Note added");
       await loadVehicleDetail();
@@ -2969,7 +3150,6 @@ export function wireVehicleDetail() {
         await put(`/api/orders/${state.detail.order.id}/assignment`, {
           ...fields,
           expected_version: state.detail.order.assignment?.version ?? null,
-          actor: currentActor(),
         });
         toast("Saved");
         // Close the popover so the save visibly took -- it used to stay
@@ -3024,7 +3204,6 @@ export function wireVehicleDetail() {
           amount,
           method: $("#vd-deposit-method").value,
           note: $("#vd-deposit-note").value.trim(),
-          actor: currentActor(),
         });
         $("#vd-deposit-amount").value = "";
         $("#vd-deposit-note").value = "";

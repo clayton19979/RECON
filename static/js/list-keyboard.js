@@ -1,7 +1,6 @@
 import { $, $$, post } from "./core.js";
 import { toast } from "./notify.js";
 import { confirmAction } from "./confirm.js";
-import { currentActor } from "./shortcuts.js";
 import { state } from "./state.js";
 import { showView } from "./error-boundary.js";
 import { applyVehicleCursor, bulkTaskTitle, clearGlobalSearch, cssEscape, historyMode, loadSearchElsewhere, loadVehiclesView, moveVehicleCursor, renderVehicleStatusOptions, renderVehiclesTable, resetVehicleView, runSearchReachAction, selectVehicleRange, setBoardView, setVehicleLayout, setVehicleSelected, syncPartsFilterChip, syncSearchChrome, syncSegmentChips, vehicleKey, vehicleNodeFor, visibleVehicles } from "./vehicles-board.js";
@@ -426,7 +425,6 @@ export function wireVehiclesView() {
             recon_vehicle_id: v.segment === "recon" ? v.recon_id : null,
             we_owe_id: v.segment === "we_owe" ? v.we_owe_id : null,
           })),
-          actor: currentActor(),
         });
         created = result.created ?? targets.length;
       } catch (err) {
@@ -449,12 +447,22 @@ export function wireVehiclesView() {
       return { segment, id };
     });
     const plural = `${targets.length} vehicle${targets.length === 1 ? "" : "s"}`;
+    // Filing twenty cars away at once is exactly where an unreceipted part
+    // gets buried, because nobody opens twenty tickets to check. The board
+    // rows already carry the figure, so the confirmation can say it.
+    const byKey = new Map(state.vehicles.map((v) => [vehicleKey(v), v]));
+    const picked = [...state.vehicleSelection].map((k) => byKey.get(k)).filter(Boolean);
+    const short = picked.filter((v) => (v.unreceived_cost || 0) > 0);
+    const shortTotal = short.reduce((sum, v) => sum + (v.unreceived_cost || 0), 0);
     if (!(await confirmAction({
       eyebrow: reopening ? "REOPEN" : "ARCHIVE",
       title: reopening ? `Reopen ${plural}?` : `Send ${plural} to History?`,
       body: reopening
         ? "They come back onto the active board and become editable again."
-        : "Archived vehicles are read-only until reopened. Nothing is deleted.",
+        : "Archived vehicles are read-only until reopened. Nothing is deleted."
+          + (short.length
+            ? ` ${short.length} of them ${short.length === 1 ? "has" : "have"} parts that were never marked received, so ${money(shortTotal)} of what they cost isn't counted.`
+            : ""),
       confirmLabel: reopening ? "Reopen" : "Send to History",
     }))) return;
     const results = await Promise.allSettled(targets.map(({ segment, id }) =>

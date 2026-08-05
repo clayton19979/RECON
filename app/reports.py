@@ -9,6 +9,7 @@ from fastapi import APIRouter
 from .db import normalize_vin
 from .recon import (
     LOT_READY,
+    LOT_SETTLED,
     LOT_WAITING,
     LOT_WORKING,
     idle_days,
@@ -106,6 +107,10 @@ def technician_productivity_rows(db: sqlite3.Connection, start: str | None, end:
     the app. Voiding means the work never happened, and a voided ticket is
     stored as complete (see workflow.void), so leaving them in credited
     whoever was assigned with a finished repair order for a mistake.
+
+    These rows are per technician and cannot be added up into a shop total --
+    a ticket two techs share is honestly on both their rows. technician_totals
+    below is what answers "how many tickets was that".
     """
     end_bound = f"{end}T23:59:59" if end else None
     technicians = db.execute("SELECT * FROM staff WHERE role='technician' ORDER BY name").fetchall()
@@ -168,10 +173,80 @@ def technician_productivity_rows(db: sqlite3.Connection, start: str | None, end:
     return result
 
 
-# The three groups the lot report sorts cars into, in the order Walt reads
-# them: what can go out, what is being worked, what has not been touched yet.
-# Which pile a car is in is decided in recon.py, next to the board rows it is
-# stamped onto; only the wording is a report concern.
+def technician_totals(db: sqlite3.Connection, start: str | None, end: str | None) -> dict:
+    """The shop's own figures for the same window: how many tickets had a
+    technician on them at all, how many of those are finished, and what is
+    still being held.
+
+    Counted over distinct tickets, which is the whole reason this exists.
+    The screen used to add the per-technician rows together, and a ticket is
+    on more than one row whenever a second tech owns one job on it -- the
+    "another tech picks up just the brake job" case the rows above are
+    deliberately built to show. One shared ticket made the shop read four
+    repair orders where it had written three, dragged the completed
+    percentage off with it, and skewed the average hours per ticket. Nothing
+    on the screen could have fixed it: once the rows are per technician, the
+    ticket they share has already been counted twice and cannot be found
+    again.
+
+    Restricted to the same technicians the rows cover, so the total can never
+    describe a ticket no row above accounts for -- a ticket left assigned to
+    somebody who was never a technician belongs in neither.
+
+    Every other rule matches technician_productivity_rows exactly: voided
+    tickets count for nothing, a ticket belongs to a tech by assignment or by
+    owning a job on it, and the idle figure is measured off last_activity_at.
+    """
+    end_bound = f"{end}T23:59:59" if end else None
+    tech_ids = [row["id"] for row in db.execute("SELECT id FROM staff WHERE role='technician'")]
+    empty = {"ro_count": 0, "completed_count": 0, "open_count": 0, "worst_idle_days": 0, "labor_hours": 0.0}
+    if not tech_ids:
+        return empty
+    placeholders = ",".join("?" for _ in tech_ids)
+    orders = db.execute(
+        f"""SELECT DISTINCT o.id, o.status, o.created_at, o.last_activity_at
+              FROM orders o
+              LEFT JOIN order_workflow w ON w.order_id=o.id
+              LEFT JOIN estimates e ON e.order_id=o.id
+              LEFT JOIN estimate_jobs ej ON ej.estimate_id=e.id
+             WHERE o.voided=0
+               AND (w.technician_id IN ({placeholders}) OR ej.technician_id IN ({placeholders}))
+               AND (? IS NULL OR o.created_at>=?)
+               AND (? IS NULL OR o.created_at<=?)""",
+        (*tech_ids, *tech_ids, start, start, end_bound, end_bound),
+    ).fetchall()
+    # Hours need no de-duplicating -- each labor line is attributed to exactly
+    # one technician (see the coalesce above) -- but they are summed here
+    # anyway so the total is rounded once instead of being the sum of several
+    # already-rounded rows.
+    hours = db.execute(
+        f"""SELECT coalesce(sum(ei.quantity),0)
+              FROM estimate_items ei
+              JOIN estimates e ON e.id=ei.estimate_id
+              JOIN orders o ON o.id=e.order_id
+              LEFT JOIN estimate_jobs ej ON ej.id=ei.job_id
+              LEFT JOIN order_workflow w ON w.order_id=o.id
+             WHERE ei.kind='labor' AND o.voided=0
+               AND coalesce(ej.technician_id, w.technician_id) IN ({placeholders})
+               AND (? IS NULL OR o.created_at>=?) AND (? IS NULL OR o.created_at<=?)""",
+        (*tech_ids, start, start, end_bound, end_bound),
+    ).fetchone()
+    open_orders = [row for row in orders if row["status"] != "complete"]
+    idles = [idle_days(row["last_activity_at"] or row["created_at"]) for row in open_orders]
+    return {
+        "ro_count": len(orders),
+        "completed_count": sum(1 for row in orders if row["status"] == "complete"),
+        "open_count": len(open_orders),
+        "worst_idle_days": max(idles) if idles else 0,
+        "labor_hours": round(hours[0], 2),
+    }
+
+
+# The groups the lot report sorts cars into, in the order Walt reads them:
+# what can go out, what is being worked, what has not been touched yet, and
+# last the cars whose lot life is already over. Which pile a car is in is
+# decided in recon.py, next to the board rows it is stamped onto; only the
+# wording is a report concern.
 LOT_GROUP_LABEL = {
     # "Ready to sell" was only ever true of Walt's lot cars. Half this board
     # is we-owe work on cars a customer already owns and is waiting on, and
@@ -180,6 +255,11 @@ LOT_GROUP_LABEL = {
     LOT_READY: "Ready to go",
     LOT_WORKING: "In the shop",
     LOT_WAITING: "Not started",
+    # Deliberately not "Sold": half this pile is we-owe promises that were
+    # fulfilled or waived on a customer's own car, which was never the lot's
+    # to sell. What all of them have in common is that the shop is done and
+    # the record is still sitting on the live board.
+    LOT_SETTLED: "Finished — file away",
 }
 
 
@@ -199,7 +279,9 @@ def lot_rows(db: sqlite3.Connection) -> list[dict]:
     and what each one is waiting on. All this adds is Walt's reading order.
     """
     rows = vehicle_board_rows(db)
-    order = {LOT_READY: 0, LOT_WORKING: 1, LOT_WAITING: 2}
+    # Settled cars last: they are the only pile that is not asking anybody to
+    # do shop work, so they belong under the three that are.
+    order = {LOT_READY: 0, LOT_WORKING: 1, LOT_WAITING: 2, LOT_SETTLED: 3}
     # Within a group, the longest-idle car first: the one most likely to have
     # been forgotten is the one Walt most needs to be asked about.
     rows.sort(key=lambda r: (order[r["lot_bucket"]], -r["idle_days"]))
@@ -235,7 +317,13 @@ def build_reports_router(connect: Callable[[], sqlite3.Connection]) -> APIRouter
 
     @router.get("/reports/technicians")
     def technician_productivity(start: str | None = None, end: str | None = None):
+        # The one report that answers in two shapes rather than one list. Its
+        # rows are per technician and its summary is per ticket, and the two
+        # cannot be derived from each other -- see technician_totals.
         with connect() as db:
-            return technician_productivity_rows(db, start, end)
+            return {
+                "technicians": technician_productivity_rows(db, start, end),
+                "totals": technician_totals(db, start, end),
+            }
 
     return router

@@ -51,10 +51,22 @@ export function lineTotal(item) {
   return item.kind === "credit" ? -total : total;
 }
 
+/** What the shop has actually been billed for the units on this line that have
+ * landed. Not received_quantity * unit_cost: a part that arrived on two bills
+ * at two prices was charged both, and unit_cost only remembers the newer one,
+ * so the product re-prices the earlier delivery at the later price. Lines
+ * written before the app kept a running total carry 0 and fall back to the
+ * product, which is exactly what they always reported. */
+export function receivedCost(item) {
+  const recorded = Number(item.received_cost);
+  if (Number.isFinite(recorded) && recorded !== 0) return recorded;
+  return (Number(item.received_quantity) || 0) * (Number(item.unit_cost) || 0);
+}
+
 /** What one line contributes to what the car has actually cost so far. */
 export function actualLineTotal(item) {
   if (item.kind === "part") {
-    return isReturnedPart(item) ? 0 : (Number(item.received_quantity) || 0) * (Number(item.unit_cost) || 0);
+    return isReturnedPart(item) ? 0 : receivedCost(item);
   }
   // Labour and fees are real the moment they are written down. Anything else
   // -- a credit today, a kind that doesn't exist yet tomorrow -- stays out
@@ -64,6 +76,29 @@ export function actualLineTotal(item) {
     return (Number(item.quantity) || 0) * (Number(item.unit_cost) || 0);
   }
   return 0;
+}
+
+/** How much of a part line has been written down but never marked received. */
+export function unreceivedQuantity(item) {
+  return Math.max(0, (Number(item.quantity) || 0) - (Number(item.received_quantity) || 0));
+}
+
+/** The part lines on a ticket that the shop has bought but never receipted.
+ *
+ * The same rule the server's cost_rollup uses for unreceived_cost: a part
+ * line short of its written quantity, at the price it was written down at. A
+ * returned part is out of it -- that one went back to the vendor, so there is
+ * no money on it for the car's cost to be short by.
+ */
+export function unreceivedPartLines(items) {
+  return (items || []).filter((item) => item.kind === "part" && !isReturnedPart(item) && unreceivedQuantity(item) > 0.001);
+}
+
+/** What those lines come to -- the gap between what the car cost and what
+ * the app can see it cost. */
+export function unreceivedPartTotal(items) {
+  return unreceivedPartLines(items).reduce(
+    (sum, item) => sum + unreceivedQuantity(item) * (Number(writtenUnitCost(item)) || 0), 0);
 }
 
 export function ticketTotal(items) {

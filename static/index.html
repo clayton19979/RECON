@@ -161,11 +161,17 @@
       </div>
       <!-- Whose name lands on every note, status change and finished repair.
            It reads as one control now rather than a stray word beside a bare
-           dropdown, so it stops competing with the search field. -->
-      <label class="whoami">
+           dropdown, so it stops competing with the search field.
+
+           Amber while nobody has been picked (see syncWhoami in state.js). It
+           used to sit here reading "Unspecified" like a settled answer, so it
+           was left alone and the whole shop's work went into the ticket
+           histories under nobody -- one shared PC, two people, and no way
+           afterwards to tell who did what. -->
+      <label class="whoami" id="whoami">
         <svg class="whoami-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="3.4"/><path d="M4.5 20c1-3.6 4-5.6 7.5-5.6s6.5 2 7.5 5.6"/></svg>
         <span class="whoami-label">Working as</span>
-        <select id="current-user"><option value="">Unspecified</option></select>
+        <select id="current-user" title="Whose name goes on everything done from this computer"><option value="">Nobody — pick your name</option></select>
       </label>
     </header>
 

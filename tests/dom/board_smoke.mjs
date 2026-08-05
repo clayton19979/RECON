@@ -1053,7 +1053,8 @@ ok(cardsIn("working").map((c) => c.dataset.key).join(",") === "recon:1,we_owe:5,
 ok(cardsIn("ready").length === 0, "Ready to go has cars in a fixture where nothing is finished");
 ok(allCards().every((c) => board.some((v) => w.vehicleKey(v) === c.dataset.key)),
    "a card appeared for a vehicle that isn't on the board");
-ok(w.LOT_COLUMNS.map((c) => c.key).join(",") === "waiting,working,ready",
+// Travel order, with the cars that have finished travelling last.
+ok(w.LOT_COLUMNS.map((c) => c.key).join(",") === "waiting,working,ready,settled",
    "the columns aren't in the order a car travels through the shop");
 
 // Counts on the headers, and an empty column that says so rather than sitting
@@ -1328,6 +1329,40 @@ ok(dataRows().length === 5 && cellText("C007", ".idle-cell") === "9d",
    "the board came back showing History's wording");
 w.state.vehicleSort = { key: "", dir: "desc" };
 w.renderVehiclesTable();
+
+/* ---------- filing cars away says what money the app can't see ----------
+
+   Sending twenty cars to History at once is exactly where a part nobody
+   marked received gets buried, because nobody opens twenty tickets to check.
+   The rows already carry the figure; the confirmation has to use it. Its own
+   little board, so the hand-checked fixture above stays untouched. */
+const archiveBtn = doc.querySelector("#vehicles-bulk-archive");
+const confirmBody = () => doc.querySelector("#confirm-body").textContent;
+w.state.vehicles = [
+  veh({ recon_id: 21, stock_number: "E100", vehicle: "2016 Ford Fusion", unreceived_cost: 380 }),
+  veh({ recon_id: 22, stock_number: "E200", vehicle: "2018 Kia Sorento", unreceived_cost: 140 }),
+  veh({ recon_id: 23, stock_number: "E300", vehicle: "2017 Hyundai Elantra" }),
+];
+w.renderVehiclesTable();
+w.state.vehicleSelection = new Set(["recon:21", "recon:22", "recon:23"]);
+archiveBtn.click();
+await settle();
+ok(/2 of them have parts that were never marked received/.test(confirmBody()),
+   `filing three cars away said nothing about the two that are short: ${confirmBody()}`);
+ok(/\$520\.00/.test(confirmBody()), `the shortfall across the selection is wrong: ${confirmBody()}`);
+doc.querySelector("#confirm-cancel").click();
+await settle();
+
+// The car that is fully receipted gets the plain wording back -- a warning
+// printed over every archive is a warning nobody reads.
+w.state.vehicleSelection = new Set(["recon:23"]);
+archiveBtn.click();
+await settle();
+ok(!/never marked received/.test(confirmBody()),
+   `a fully receipted car was warned about anyway: ${confirmBody()}`);
+doc.querySelector("#confirm-cancel").click();
+await settle();
+w.state.vehicleSelection.clear();
 
 /* ---------- escaping ---------- */
 w.state.vehicles = [veh({ recon_id: 9, stock_number: '<img src=x onerror="window.__pwned=1">', vehicle: "X" })];

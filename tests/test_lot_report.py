@@ -222,7 +222,8 @@ def test_a_sold_car_is_called_sold_not_untouched(client):
     row = row_for(lot(client), "R-SOLDBARE")
     assert row["status"] == "sold"
     assert row["status_bucket"] == "finished"
-    assert row["lot_bucket"] == "ready"
+    # Not "ready": a car already sold is not one Walt can sell. See LOT_SETTLED.
+    assert row["lot_bucket"] == "settled"
     assert row["needs"] == "Sold — send to History", row["needs"]
     # However long it sits unarchived, a sold car is never a neglected one.
     assert not is_stalled({**row, "idle_days": 41})
@@ -271,7 +272,7 @@ def test_a_sold_car_with_only_a_voided_ticket_is_not_asked_for_a_new_one(client)
 
     row = row_for(lot(client), "R-SOLDVOID")
     assert row["status"] == "sold"
-    assert row["lot_bucket"] == "ready"
+    assert row["lot_bucket"] == "settled"
     assert "needs a new one" not in row["needs"], row["needs"]
 
 
@@ -397,3 +398,124 @@ def test_the_spend_report_carries_the_grouping_too(client):
     row = row_for(rows, "B-SPEND")
     assert row["lot_bucket"] == "waiting"
     assert "no ticket written yet" in row["needs"].lower(), row["needs"]
+
+
+# --- the pile for cars whose lot life is over ------------------------------
+#
+# "Ready to go" is the number Walt reads as "how many can I sell". It used to
+# also hold every car already sold and every promise already settled, and
+# nothing ever nudged those off the live board -- so the count only drifted
+# further from the truth the longer the shop used the app.
+
+
+def we_owe_row(client, we_owe_id: int) -> dict:
+    rows = [r for r in lot(client) if r["we_owe_id"] == we_owe_id]
+    assert len(rows) == 1, f"expected exactly one row for we-owe {we_owe_id}, got {len(rows)}"
+    return rows[0]
+
+
+def settle_promise(client, we_owe_id: int, status: str) -> None:
+    res = client.patch(f"/api/we-owe/{we_owe_id}", json={"status": status})
+    assert res.status_code == 200, res.text
+
+
+def test_a_kept_promise_is_not_counted_as_a_car_ready_to_go(client):
+    """The customer's car went home weeks ago. Counting it under "ready to go"
+    tells Walt he has a car to sell that was never his to sell."""
+    promise = make_we_owe(client, customer_name="Marcus Doyle", description="Tie rod")
+    settle_promise(client, promise["id"], "fulfilled")
+
+    row = we_owe_row(client, promise["id"])
+    assert row["lot_bucket"] == "settled"
+    assert row["needs"] == "Fulfilled — send to History", row["needs"]
+
+
+def test_a_waived_promise_lands_in_the_same_pile(client):
+    """Waiving closes a promise with no work done at all -- just as settled,
+    and just as much a filing job."""
+    promise = make_we_owe(client, customer_name="Iris Chandler", description="Seat belt")
+    settle_promise(client, promise["id"], "waived")
+
+    row = we_owe_row(client, promise["id"])
+    assert row["lot_bucket"] == "settled"
+    assert row["needs"] == "Waived — send to History", row["needs"]
+
+
+def test_history_does_not_tell_you_to_file_a_promise_that_is_already_filed(client):
+    """Same rule the sold car already had: once it IS in History, "send to
+    History" is a nudge toward a step that is done."""
+    promise = make_we_owe(client, customer_name="Renata Silva", description="Mirror")
+    settle_promise(client, promise["id"], "fulfilled")
+    detail = client.get(f"/api/we-owe/{promise['id']}").json()
+    res = client.post(f"/api/we-owe/{promise['id']}/archive", json={"expected_version": detail["edit_version"]})
+    assert res.status_code == 200, res.text
+
+    rows = client.get("/api/vehicles-board?archived=true").json()
+    row = next(r for r in rows if r["we_owe_id"] == promise["id"])
+    assert row["needs"] == "Fulfilled", row["needs"]
+
+
+def test_a_promise_whose_ticket_is_closed_is_still_ready_to_go(client):
+    """The other half of the rule, and the one that must not move. Closing the
+    ticket finishes the work; the promise itself stays open until an advisor
+    says otherwise, and until then the car is genuinely waiting to be handed
+    back rather than filed away."""
+    promise = make_we_owe(client, customer_name="Dana Whitfield", description="Wiper motor")
+    res = client.post("/api/orders", json={"concern": "We-owe", "segment": "we_owe", "we_owe_id": promise["id"]})
+    assert res.status_code == 201, res.text
+    client.patch(f"/api/orders/{res.json()['id']}/status", json={"status": "complete"})
+
+    row = we_owe_row(client, promise["id"])
+    assert row["status_bucket"] == "finished"
+    assert row["lot_bucket"] == "ready", "a promise nobody has settled is not filed away"
+    assert row["needs"] == "Nothing — ready to go", row["needs"]
+
+
+def test_a_settled_car_still_admits_the_money_nobody_receipted(client):
+    """The shortfall warning outranks the filing nudge, exactly as it already
+    did for a sold car: the figure beside this row is wrong until the part is
+    received, settled or not."""
+    promise = make_we_owe(client, customer_name="Jordan Whitfield", description="Bracket")
+    res = client.post("/api/orders", json={"concern": "We-owe", "segment": "we_owe", "we_owe_id": promise["id"]})
+    order = res.json()
+    save_estimate(client, order["id"], [PART])
+    client.patch(f"/api/orders/{order['id']}/estimate/order-parts")
+    client.patch(f"/api/orders/{order['id']}/status", json={"status": "complete"})
+    settle_promise(client, promise["id"], "fulfilled")
+
+    row = we_owe_row(client, promise["id"])
+    assert row["lot_bucket"] == "settled"
+    assert row["needs"].startswith("Fulfilled — but "), row["needs"]
+    assert "never marked received" in row["needs"], row["needs"]
+
+
+def test_settled_cars_read_last_on_the_sheet(client):
+    """Walt reads the sheet top down and the first three piles are all asking
+    somebody to do something. Filing is not shop work, so it goes under them."""
+    ready = make_recon_vehicle(client, stock_number="R-CANSELL", purchase_price=0)
+    order = make_recon_order(client, ready["id"])
+    client.patch(f"/api/orders/{order['id']}/status", json={"status": "complete"})
+    gone = make_recon_vehicle(client, stock_number="R-ALLDONE", purchase_price=0)
+    sell(client, gone["id"])
+
+    rows = lot(client)
+    buckets = [r["lot_bucket"] for r in rows]
+    assert row_for(rows, "R-CANSELL")["lot_bucket"] == "ready"
+    assert row_for(rows, "R-ALLDONE")["lot_bucket"] == "settled"
+    assert buckets.index("settled") > max(i for i, b in enumerate(buckets) if b != "settled"), (
+        f"settled cars are not last: {buckets}"
+    )
+    assert LOT_GROUP_LABEL["settled"] == "Finished — file away"
+
+
+def test_a_settled_car_is_not_owed_any_more_money(client):
+    """Nothing more is going to be spent on a car that is gone, so its "still
+    to spend" has to be zero however its ticket was left."""
+    promise = make_we_owe(client, customer_name="Ken Ibarra", description="Bracket")
+    res = client.post("/api/orders", json={"concern": "We-owe", "segment": "we_owe", "we_owe_id": promise["id"]})
+    save_estimate(client, res.json()["id"], [PART])
+    settle_promise(client, promise["id"], "fulfilled")
+
+    row = we_owe_row(client, promise["id"])
+    assert row["lot_bucket"] == "settled"
+    assert row["remaining_cost"] == 0

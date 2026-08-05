@@ -497,7 +497,6 @@ function openRetailRoDialog(vehicleId) {
     : "";
   $("#retail-ro-concern").value = "";
   $("#retail-ro-dialog").showModal();
-  $("#retail-ro-concern").focus();
 }
 
 export function wireRetailRoDialog() {
@@ -540,7 +539,6 @@ export function openAddVehicleDialog(customerId, customerName, onCreated) {
   ["year", "make", "model", "vin", "mileage", "plate", "plate-state", "color"]
     .forEach((f) => { $(`#vehicle-add-${f}`).value = ""; });
   $("#vehicle-add-dialog").showModal();
-  $("#vehicle-add-year").focus();
 }
 
 export function wireAddVehicleDialog() {

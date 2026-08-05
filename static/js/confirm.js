@@ -9,10 +9,18 @@ import { $ } from "./core.js";
    -- backed by the same <dialog> element as every other modal.
 
    Cancel is the default focus for destructive actions, so hammering Enter
-   can't blow something away. */
+   can't blow something away.
+
+   `altLabel` adds a third button and is what makes a *warning* possible as
+   opposed to a question. A warning has three answers, not two -- fix it, do
+   it anyway, or back out -- and folding "do it anyway" onto Cancel would mean
+   Escape and the backdrop silently chose the risky one. So the third button
+   resolves to the string "alt", Cancel and Escape still resolve to false, and
+   every existing two-button caller (`if (!(await confirmAction(...)))`) is
+   untouched: with no altLabel the button stays hidden and can never fire. */
 let confirmResolve = null;
 
-export function confirmAction({ title, body = "", confirmLabel = "Confirm", cancelLabel = "Cancel", eyebrow = "CONFIRM", danger = false }) {
+export function confirmAction({ title, body = "", confirmLabel = "Confirm", cancelLabel = "Cancel", altLabel = "", eyebrow = "CONFIRM", danger = false }) {
   const dlg = $("#confirm-dialog");
   // No dialog in the DOM (a bare test harness, say) -- fail closed rather
   // than silently performing the destructive action.
@@ -26,6 +34,11 @@ export function confirmAction({ title, body = "", confirmLabel = "Confirm", canc
   accept.textContent = confirmLabel;
   accept.className = `btn ${danger ? "btn-danger" : "btn-primary"}`;
   $("#confirm-cancel").textContent = cancelLabel;
+  const alt = $("#confirm-alt");
+  if (alt) {
+    alt.hidden = !altLabel;
+    alt.textContent = altLabel || "";
+  }
   dlg.classList.toggle("danger", danger);
   return new Promise((resolve) => {
     confirmResolve = resolve;
@@ -47,6 +60,8 @@ export function wireConfirmDialog() {
   if (!dlg) return;
   $("#confirm-accept").addEventListener("click", () => settleConfirm(true));
   $("#confirm-cancel").addEventListener("click", () => settleConfirm(false));
+  const alt = $("#confirm-alt");
+  if (alt) alt.addEventListener("click", () => settleConfirm("alt"));
   // Esc / backdrop-dismiss fire `close` without going through either button.
   dlg.addEventListener("close", () => settleConfirm(false));
   dlg.addEventListener("click", (e) => { if (e.target === dlg) settleConfirm(false); });

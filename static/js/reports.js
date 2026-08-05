@@ -189,7 +189,7 @@ const REPORT_STAT_CARDS = {
   lot: (rows) => lotStatCards(rows),
   "vehicle-spend": (rows) => vehicleSpendStatCards(rows),
   "vehicle-profit": (rows) => vehicleProfitStatCards(rows),
-  technicians: (rows) => technicianStatCards(rows),
+  technicians: (rows, totals) => technicianStatCards(rows, totals),
 };
 
 /* Which set of column widths each shape's table wears. Shared by the real
@@ -425,8 +425,8 @@ function reportSortHeader(shape, key, extraClass = "") {
    The numbers a manager reads a spend report for, above the table rather
    than buried in its footer. They describe exactly the rows below them --
    same range, same segment -- so there's nothing to reconcile. */
-function renderReportStats(rows, shape) {
-  const cards = (REPORT_STAT_CARDS[shape] || REPORT_STAT_CARDS["vehicle-spend"])(rows);
+function renderReportStats(rows, shape, totals) {
+  const cards = (REPORT_STAT_CARDS[shape] || REPORT_STAT_CARDS["vehicle-spend"])(rows, totals);
   $("#report-stats").innerHTML = cards.map((c) => `
       <div class="stat">
         <div class="stat-label">${esc(c.label)}</div>
@@ -672,15 +672,34 @@ function vehicleProfitStatCards(rows) {
   ];
 }
 
-function technicianStatCards(rows) {
-  const active = rows.filter((r) => r.ro_count > 0);
-  const ros = rows.reduce((s, r) => s + r.ro_count, 0);
-  const done = rows.reduce((s, r) => s + r.completed_count, 0);
-  const hours = rows.reduce((s, r) => s + r.labor_hours, 0);
-  const open = rows.reduce((s, r) => s + r.open_count, 0);
-  const worstIdle = rows.reduce((s, r) => Math.max(s, r.open_count ? r.worst_idle_days : 0), 0);
+/* The shop's own figures, as opposed to the per-technician rows below them.
+
+   These come from the server (see technician_totals) and are deliberately
+   NOT added up from the rows. A ticket with a second tech on one of its jobs
+   is honestly on two rows, so summing the column counted it twice: the shop
+   read one more repair order than it had written, the completed percentage
+   moved with it, and the average hours per ticket came out low. The rows
+   cannot be un-double-counted after the fact -- by the time they arrive the
+   ticket they share has no mark on it saying so.
+
+   `technicians` is the one figure that is still a row count, because it is
+   asking about people rather than about tickets. */
+function shopTechnicianTotals(rows, totals) {
+  const t = totals || {};
+  return {
+    technicians: rows.filter((r) => r.ro_count > 0).length,
+    ros: t.ro_count || 0,
+    done: t.completed_count || 0,
+    open: t.open_count || 0,
+    worstIdle: t.open_count ? (t.worst_idle_days || 0) : 0,
+    hours: t.labor_hours || 0,
+  };
+}
+
+function technicianStatCards(rows, totals) {
+  const { technicians: working, ros, done, open, worstIdle, hours } = shopTechnicianTotals(rows, totals);
   return [
-    { label: "Technicians Working", value: String(active.length), sub: `of ${rows.length} on staff` },
+    { label: "Technicians Working", value: String(working), sub: `of ${rows.length} on staff` },
     { label: "Repair Orders", value: String(ros), sub: `${done} completed${ros ? ` · ${Math.round((done / ros) * 100)}%` : ""}` },
     { label: "Labor Hours", value: String(Math.round(hours * 10) / 10), sub: ros ? `${(hours / ros).toFixed(1)} avg per RO` : "no orders in this range" },
     // Replaces a labor-cost card that was structurally $0.00 -- labor on
@@ -1004,15 +1023,15 @@ function renderProfitTable(rows) {
     </table></div></div>`;
 }
 
-function renderReportTable(rows, shape) {
+function renderReportTable(rows, shape, totals) {
   if (!rows.length) return reportEmptyState(shape);
   if (shape === "technicians") {
-    const working = rows.filter((r) => r.ro_count > 0).length;
-    const totRos = rows.reduce((s, r) => s + r.ro_count, 0);
-    const totDone = rows.reduce((s, r) => s + r.completed_count, 0);
-    const totHours = Math.round(rows.reduce((s, r) => s + r.labor_hours, 0) * 100) / 100;
-    const totOpen = rows.reduce((s, r) => s + r.open_count, 0);
-    const worstIdle = rows.reduce((s, r) => Math.max(s, r.open_count ? r.worst_idle_days : 0), 0);
+    // The footer says what the shop did, not what the column adds up to --
+    // see shopTechnicianTotals. On a ticket two techs share, the column above
+    // it deliberately shows a 1 against each of them, so the footer being
+    // lower than the numbers over it is the honest answer, not a slip.
+    const { technicians: working, ros: totRos, done: totDone, open: totOpen, worstIdle, hours } = shopTechnicianTotals(rows, totals);
+    const totHours = Math.round(hours * 100) / 100;
     return `<div class="panel"><div class="table-wrap table-scroll"><table class="sticky-head report-sheet tech-table"><thead><tr>
       ${reportHeaderRow("technicians")}
       </tr></thead>
@@ -1079,14 +1098,14 @@ function reportDateRangeLabel(start, end) {
 // Builds the print-only letterhead + table as its own self-contained markup,
 // independent of whatever the on-screen app chrome looks like, so printing
 // never depends on hiding every other panel correctly.
-function renderPrintReport(rows, type, start, end) {
+function renderPrintReport(rows, type, start, end, totals) {
   const generated = new Date().toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" });
   const rangeLabel = reportScopeLabel(type, start, end);
   const shape = reportShape(type);
   // The printout keeps the screen's reading order: summary numbers first,
   // then the table -- a spend report with no total line is a worse artifact
   // than the screen it came from.
-  const cards = (REPORT_STAT_CARDS[shape] || REPORT_STAT_CARDS["vehicle-spend"])(rows);
+  const cards = (REPORT_STAT_CARDS[shape] || REPORT_STAT_CARDS["vehicle-spend"])(rows, totals);
   const summary = `<div class="print-summary">${cards.map((c) => `
     <div><div class="ps-label">${esc(c.label)}</div><div class="ps-value">${esc(c.value)}</div><div class="ps-sub">${esc(c.sub)}</div></div>`).join("")}</div>`;
   // The paper must say what the screen knew: how much is in the table and in
@@ -1154,12 +1173,10 @@ function renderPrintReport(rows, type, start, end) {
     body = `${sections}<div class="print-totals"><div class="tl-row"><span>Spent on the whole lot</span><span class="num">${money(totalSpent)}</span></div>
       ${missingLine}<div class="tl-row grand"><span>Still to spend</span><span class="num">${money(totalLeft)}</span></div></div>`;
   } else if (shape === "technicians") {
-    const working = rows.filter((r) => r.ro_count > 0).length;
-    const totRos = rows.reduce((s, r) => s + r.ro_count, 0);
-    const totDone = rows.reduce((s, r) => s + r.completed_count, 0);
-    const totalHours = rows.reduce((s, r) => s + r.labor_hours, 0);
-    const totalOpen = rows.reduce((s, r) => s + r.open_count, 0);
-    const worstIdle = rows.reduce((s, r) => Math.max(s, r.open_count ? r.worst_idle_days : 0), 0);
+    // Same shop figures as the screen -- paper and screen have to agree about
+    // how many tickets the shop wrote. See shopTechnicianTotals.
+    const { technicians: working, ros: totRos, done: totDone, open: totalOpen, worstIdle, hours: totalHours } =
+      shopTechnicianTotals(rows, totals);
     body = `
       <table class="print-table report">
         <thead><tr><th>Technician</th><th class="num-col">ROs</th><th class="num-col">Completed</th><th class="num-col">Still Open</th><th class="num-col">Sitting</th><th class="num-col">Hours</th></tr></thead>
@@ -1282,9 +1299,10 @@ function renderReport() {
   if (!state.report) return;
   const shape = reportShape(state.report.type);
   const rows = visibleReportRows();
-  renderReportStats(rows, shape);
+  const totals = state.report.totals;
+  renderReportStats(rows, shape, totals);
   renderReportChart(rows, shape);
-  $("#report-output").innerHTML = renderReportTable(rows, shape);
+  $("#report-output").innerHTML = renderReportTable(rows, shape, totals);
   // The scope line states in words what the cards are counting -- report,
   // range, row count -- so the numbers can't be misread.
   $("#report-scope").textContent =
@@ -1296,7 +1314,7 @@ function renderReport() {
   if (rows.length) $("#report-csv").removeAttribute("aria-disabled");
   else $("#report-csv").setAttribute("aria-disabled", "true");
   state.printSurfaceOwner = "report";
-  $("#print-report").innerHTML = renderPrintReport(rows, state.report.type, state.report.start, state.report.end);
+  $("#print-report").innerHTML = renderPrintReport(rows, state.report.type, state.report.start, state.report.end, totals);
 }
 
 // Rapid chip/segment clicks race their fetches; only the newest request may
@@ -1333,9 +1351,16 @@ async function generateReport() {
   $("#report-csv").href = reportCsvHref();
   showReportPlaceholders();
   const path = REPORT_ENDPOINT[shape];
-  const rows = await get(`/api/reports/${path}?${reportParams()}`);
+  const answer = await get(`/api/reports/${path}?${reportParams()}`);
   if (seq !== reportSeq) return; // superseded by a newer request
-  state.report = { rows, type, start, end };
+  // Every report but one answers with a plain list of rows. The technician
+  // report also carries the shop's own totals, because its rows are per
+  // person and a ticket two people share is on both of them -- adding the
+  // rows up here would count that ticket twice, and there is no way to tell
+  // from the rows that it happened. See technician_totals in reports.py.
+  const rows = Array.isArray(answer) ? answer : answer.technicians;
+  const totals = Array.isArray(answer) ? null : answer.totals;
+  state.report = { rows, totals, type, start, end };
   renderReport();
   saveReportPrefs();
 }
@@ -1429,7 +1454,7 @@ export function wireReportsView() {
   // with the summary report mid-print (see renderPrintTicket).
   window.addEventListener("beforeprint", () => {
     if (state.report && state.printSurfaceOwner === "report") {
-      $("#print-report").innerHTML = renderPrintReport(visibleReportRows(), state.report.type, state.report.start, state.report.end);
+      $("#print-report").innerHTML = renderPrintReport(visibleReportRows(), state.report.type, state.report.start, state.report.end, state.report.totals);
     }
   });
 

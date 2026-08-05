@@ -31,14 +31,23 @@ const spend = [
   veh({ recon_id: 3, stock_number: "C007", vehicle: "2015 Chevy Silverado", status: "complete", status_bucket: "finished", technicians: ["Bo"], quoted_cost: 0, actual_cost: 0 }),
 ];
 
-// 3 on the roster, 2 with work; 6 ROs, 3 completed; 25 hours; 3 still open,
-// the quietest of them sitting 9 days. No money: labor here is never charged
-// out, so the report carries no cost field at all.
-const techs = [
-  { technician: "Bo", ro_count: 4, completed_count: 2, open_count: 2, worst_idle_days: 9, labor_hours: 15 },
-  { technician: "Chris", ro_count: 2, completed_count: 1, open_count: 1, worst_idle_days: 0, labor_hours: 10 },
-  { technician: "Dana", ro_count: 0, completed_count: 0, open_count: 0, worst_idle_days: 0, labor_hours: 0 },
-];
+// 3 on the roster, 2 with work; 25 hours; the quietest open ticket sitting 9
+// days. No money: labor here is never charged out, so the report carries no
+// cost field at all.
+//
+// The rows add up to 6 repair orders and the shop only wrote 5, on purpose:
+// Bo and Chris share one ticket (Bo is its assignee, Chris owns a job on it),
+// so it is honestly on both their rows. Every summary figure below is checked
+// against `totals`, so anything that goes back to adding the column up fails
+// here rather than on the shop's screen.
+const techs = {
+  technicians: [
+    { technician: "Bo", ro_count: 4, completed_count: 2, open_count: 2, worst_idle_days: 9, labor_hours: 15 },
+    { technician: "Chris", ro_count: 2, completed_count: 1, open_count: 1, worst_idle_days: 0, labor_hours: 10 },
+    { technician: "Dana", ro_count: 0, completed_count: 0, open_count: 0, worst_idle_days: 0, labor_hours: 0 },
+  ],
+  totals: { ro_count: 5, completed_count: 3, open_count: 2, worst_idle_days: 9, labor_hours: 25 },
+};
 
 let failNextReport = false;
 
@@ -199,11 +208,13 @@ ok(doc.querySelector('[data-report-type="vehicle-spend"]').getAttribute("aria-ch
 
 const t = stats();
 ok(t[0].value === "2" && t[0].sub === "of 3 on staff", `technicians working reads ${t[0].value} / "${t[0].sub}"`);
-ok(t[1].value === "6" && t[1].sub === "3 completed · 50%", `repair orders card reads ${t[1].value} / "${t[1].sub}"`);
-ok(t[2].value === "25", `labor hours reads ${t[2].value}, expected 25`);
+// 5, the shop's own count -- not the 6 the ro_count column adds up to. The
+// ticket Bo and Chris share is one ticket however many people touched it.
+ok(t[1].value === "5" && t[1].sub === "3 completed · 60%", `repair orders card reads ${t[1].value} / "${t[1].sub}"`);
+ok(t[2].value === "25" && t[2].sub === "5.0 avg per RO", `labor hours reads ${t[2].value} / "${t[2].sub}"`);
 // The fourth card used to be Labor Cost, which on recon and we-owe work is
 // always $0.00. What is actually actionable is who is still holding a car.
-ok(t[3].label === "Still Open" && t[3].value === "3" && t[3].sub === "worst sitting 9 days",
+ok(t[3].label === "Still Open" && t[3].value === "2" && t[3].sub === "worst sitting 9 days",
    `fourth card reads "${t[3].label}" ${t[3].value} / "${t[3].sub}"`);
 ok(doc.querySelectorAll("#report-stats .stat")[3].querySelector(".stat-value").classList.contains("warn"),
    "9 days of silence should be flagged on the card, the same week boundary the board uses");
@@ -211,6 +222,22 @@ ok(!stats().some((s) => /cost|\$/i.test(s.label) || /\$/.test(s.value)),
    `the technician report is showing money: ${JSON.stringify(stats())}`);
 ok(bars().length === 2, `expected 2 technician bars (Dana logged nothing), got ${bars().length}`);
 ok(doc.querySelector("#report-output tbody tr.row-muted"), "the technician with no work isn't muted");
+
+// The footer says what the shop did, not what the column adds up to. It reads
+// lower than the numbers above it whenever a ticket is shared, and that is the
+// correct answer -- 4 + 2 technician-tickets are 5 real ones.
+const techFoot = [...doc.querySelectorAll("#report-output tfoot td")].map((td) => td.textContent.trim());
+ok(techFoot[0] === "Total (2 working)", `technician footer label reads "${techFoot[0]}"`);
+ok(techFoot[1] === "5" && techFoot[2] === "3" && techFoot[3] === "2",
+   `technician footer reads ${JSON.stringify(techFoot)} — expected the shop's 5/3/2, not the column's 6/3/3`);
+ok(techFoot[4] === "9 days" && techFoot[5] === "25", `technician footer tail reads ${JSON.stringify(techFoot.slice(4))}`);
+
+// The printed sheet is read on its own with nobody beside it, so it has to
+// carry the same figures rather than quietly re-adding the column.
+const techPrint = w.renderPrintReport(w.visibleReportRows(), "technicians", "", "", w.state.report.totals);
+ok(/Report Total \(2 of 3 working\)/.test(techPrint), "the printed technician sheet lost its total line");
+ok(!/>6</.test(techPrint.split("<tfoot>")[1] || ""),
+   "the printed technician sheet is still adding the repair-order column up");
 
 // "stock" doesn't exist on this shape; carrying it over would leave the
 // table sorted by nothing at all, with no header claiming to be sorted.

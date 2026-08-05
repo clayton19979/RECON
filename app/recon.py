@@ -973,13 +973,28 @@ def _unit_lifetime(
     purchase from a real sale price would report the whole sale as margin. A
     missing number has to stay missing rather than become a flattering one.
     Cars from when purchase price *was* entered still get a real profit.
+
+    The costs here are what landed, exactly as everywhere else in the app: a
+    part only counts once somebody marks it received. On recon that step is
+    the one that gets skipped (see cost_rollups), so this car's cost -- and
+    therefore its profit -- can be short by real money that already went out
+    the door. The shortfall is carried alongside rather than folded in, for
+    the same reason total_cost never folds it in: what landed is a fact, and
+    what was bought and never receipted is a different fact the screens are
+    expected to say out loud. Nothing here subtracts it, and nothing should.
     """
+    all_rollups = recon_rollups + we_owe_rollups
     recon_cost = sum(r["total_cost"] for r in recon_rollups)
     we_owe_cost = sum(r["total_cost"] for r in we_owe_rollups)
     # Every hour any tech flagged on this car, across both halves of its life.
     # On recon and we-owe the rate is 0, so this is the only measure of the
     # work that actually went into it.
-    labor_hours = round(sum(r["labor_hours"] for r in recon_rollups + we_owe_rollups), 2)
+    labor_hours = round(sum(r["labor_hours"] for r in all_rollups), 2)
+    # Both halves of the car's life, because the question the profit report
+    # asks spans both -- a car whose we-owe tires were never receipted is
+    # understated by exactly as much as if they had been recon tires.
+    unreceived_closed_cost = round(sum(r["unreceived_closed_cost"] for r in all_rollups), 2)
+    unreceived_closed_parts = int(sum(r["unreceived_closed_parts"] for r in all_rollups))
 
     purchase_price = unit["purchase_price"] or 0.0
     we_owe_net = round(we_owe_cost - customer_paid, 2)
@@ -998,6 +1013,12 @@ def _unit_lifetime(
         "we_owe_customer_paid": round(customer_paid, 2),
         "we_owe_net_cost": we_owe_net,
         "total_invested": total_invested,
+        # Money already spent on this car that none of the figures above
+        # include. Same two field names the board row carries, so the Profit
+        # report's warning and the Vehicles board's badge are one fact said
+        # twice rather than two rules that can drift apart.
+        "unreceived_closed_cost": unreceived_closed_cost,
+        "unreceived_closed_parts": unreceived_closed_parts,
         "sale_price": sale_price,
         "sale_date": unit["sale_date"],
         "profit": profit,

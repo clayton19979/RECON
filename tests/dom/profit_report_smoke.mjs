@@ -89,6 +89,59 @@ const print = doc.querySelector("#print-report").textContent;
 ok(print.includes("4 vehicles, 2 sold"), `the printed footer disagrees with the screen: "${print.slice(-200)}"`);
 ok(print.includes("R-1") && print.includes("2017 Toyota Camry"), "the printed copy is missing rows");
 
+/* ---------- profit the lot never made ----------
+   A part bought at the counter, thrown on the car and never marked received
+   is money that is in no cost figure -- and on this sheet a shortfall in cost
+   comes out the other end as profit. R-1 sold for $8,000 against $5,800 in,
+   reading $2,200 of margin; if $300 of that recon was never receipted, $300
+   of the margin is imaginary. This is the only number on any screen in the
+   app that is not merely incomplete but wrong in a flattering direction, so
+   the card says so instead of the margin rather than after it. */
+profit[0].unreceived_closed_cost = 300;
+profit[0].unreceived_closed_parts = 2;
+// ...and one on an unsold car, which understates what is in that car without
+// touching any profit figure. It belongs in Total Invested and nowhere else.
+profit[2].unreceived_closed_cost = 45;
+profit[2].unreceived_closed_parts = 1;
+await w.loadReportsView();
+await settle();
+
+const m = stats();
+ok(m[1].value === "$6,800.00", `Total Invested moved: ${m[1].value} -- what landed is still what landed`);
+ok(m[1].sub.includes("$345.00") && m[1].sub.includes("never marked received"),
+   `Total Invested doesn't say what it is short by: "${m[1].sub}"`);
+ok(m[2].value === "$2,200.00", `Profit On Sold moved: ${m[2].value}`);
+ok(m[2].sub.includes("overstated by $300.00"),
+   `the profit card doesn't own up to the margin it never made: "${m[2].sub}"`);
+ok(!m[2].sub.includes("margin on"),
+   `the margin percentage is still in front of the correction: "${m[2].sub}" -- it is what stops the correction being read`);
+ok(m[2].sub.includes("$300.00") && !m[2].sub.includes("$345.00"),
+   `the profit card counted an unsold car's shortfall as overstated margin: "${m[2].sub}"`);
+
+// Per car, under Total In -- the column the money is missing from.
+const flagged = [...doc.querySelectorAll("#report-output tbody .cost-missing")];
+ok(flagged.length === 2, `expected 2 flagged rows, got ${flagged.length}`);
+ok(flagged[0].closest("td").textContent.includes("$5,800.00"),
+   "the shortfall badge isn't under the Total In figure it corrects");
+
+const footRow = doc.querySelector("#report-output tfoot tr.total-missing");
+ok(footRow, "the profit sheet's footer carries no correction row");
+ok(footRow.textContent.includes("3 parts on 2 cars") && footRow.textContent.includes("$345.00"),
+   `the correction row reads "${footRow.textContent.trim()}"`);
+const heads = [...doc.querySelectorAll("#report-output thead th")];
+const investedCol = heads.findIndex((h) => h.dataset.reportSort === "cost");
+const before = [...footRow.children]
+  .slice(0, [...footRow.children].indexOf(footRow.querySelector(".cost-unreceipted")))
+  .reduce((n, td) => n + (Number(td.getAttribute("colspan")) || 1), 0);
+ok(before === investedCol,
+   `the correction figure sits in column ${before}, but Total In is column ${investedCol}`);
+
+// The printed copy is what gets emailed out as a PDF, so it has to carry the
+// same sentence -- there is no colour on the printer and nobody beside it.
+const printedProfit = doc.querySelector("#print-report").textContent;
+ok(printedProfit.includes("never marked received") && printedProfit.includes("$345.00"),
+   "the printed profit sheet drops the correction the screen carries");
+
 ok(rejections.length === 0, `unhandled rejections during the run: ${rejections.map((e) => e && e.message).join(" | ")}`);
 
-finish("profit report: stock count excludes we-owe cars, sold count survives a missing purchase price");
+finish("profit report: stock count excludes we-owe cars, sold count survives a missing purchase price, margin owns up to unreceipted parts");

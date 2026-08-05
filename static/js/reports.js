@@ -433,7 +433,7 @@ function lotStatCards(rows) {
   const count = (key) => rows.filter((r) => r.lot_bucket === key).length;
   const spent = rows.reduce((s, r) => s + (r.actual_cost || 0), 0);
   const left = rows.reduce((s, r) => s + (r.remaining_cost || 0), 0);
-  const missing = lotMissingReceipts(rows);
+  const missing = missingReceiptTotals(rows);
   // The same isStalled the board's card counts by, imported rather than
   // restated -- this screen and the board are two views of one lot, and a
   // second copy of the rule is a second answer waiting to happen.
@@ -466,31 +466,76 @@ function lotStatCards(rows) {
   ];
 }
 
-/* Money on these cars that has already gone out and is in no cost figure:
-   parts on a finished ticket that nobody marked received. The per-car numbers
-   come from the same rollup the board's warning is drawn from, so this total
-   and the sentences in the Still Needs column can never tell different
-   stories. Counted per car rather than per part here, because that is what
-   the rows on this sheet are. */
-/* The same correction on the printed sheet's per-pile total. Spelled out in
-   words rather than colour, and only when there is something to say: an extra
-   footer row reading "$0.00 never marked received" under every group would
-   train the eye to skip the row that matters. */
-function printMissingFootRow(groupRows) {
-  const missing = lotMissingReceipts(groupRows);
-  if (!missing.total) return "";
-  return `<tr class="print-foot-note">
-    <td colspan="3">Not in that total — ${missing.parts} part${missing.parts === 1 ? "" : "s"} on ${missing.cars} car${missing.cars === 1 ? "" : "s"} never marked received</td>
-    <td class="num-col">${money(missing.total)}</td><td class="num-col"></td><td></td></tr>`;
-}
+/* ---------- money that is already spent and in no total ----------
 
-function lotMissingReceipts(rows) {
+   Parts on a finished ticket that nobody marked received. The shop buys the
+   part at the counter, throws it on the car and closes the ticket; receiving
+   it in the app is a separate step that gets skipped on a busy morning. Until
+   it happens the money is out the door and in no cost figure anywhere, so
+   every sheet that reports what a car cost is short by exactly this much --
+   and the Profit report is worse than short, because a shortfall in cost
+   comes out the other end as profit the lot never made.
+
+   The Vehicles board has said this per car for a while and the Lot Status
+   sheet says it per pile; these helpers are what let the spend and profit
+   sheets say it in the same words, off the same two fields, on screen, on
+   paper and in the exported file. One fact, one wording, every surface. */
+
+function missingReceiptTotals(rows) {
   const affected = rows.filter((r) => (r.unreceived_closed_cost || 0) > 0);
   return {
     total: affected.reduce((s, r) => s + (r.unreceived_closed_cost || 0), 0),
+    // Counted per car as well as per part, because a row on these sheets is
+    // a car and "4 parts" without "on 3 cars" reads as one car's problem.
     cars: affected.length,
     parts: affected.reduce((s, r) => s + (r.unreceived_closed_parts || 0), 0),
   };
+}
+
+const pluralCount = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
+/* The sentence itself, in one place. `noun` lets the caller say "finished
+   car" where the sheet has already narrowed to finished ones and plain "car"
+   where it hasn't -- naming a pile the reader isn't looking at is how a
+   correction stops being believed. */
+function missingReceiptsText(missing, noun = "car") {
+  return `Not in that total — ${pluralCount(missing.parts, "part")} on ${pluralCount(missing.cars, noun)} never marked received`;
+}
+
+/* The correction row under a sheet's own footer total. A row rather than a
+   footnote: it has to line up under the column it corrects. Only drawn when
+   there is something to say -- a "$0.00 never marked received" line under
+   every sheet would train the eye to skip the row that matters. */
+function missingFootRow(rows, { labelSpan, before = 0, after = 0, noun = "car" }) {
+  const missing = missingReceiptTotals(rows);
+  if (!missing.total) return "";
+  const blanks = (n) => `<td class="num-col"></td>`.repeat(n);
+  return `<tr class="total-missing"><td colspan="${labelSpan}">${esc(missingReceiptsText(missing, noun))}</td>
+    ${blanks(before)}<td class="num-col cost-unreceipted">${money(missing.total)}</td>${blanks(after)}</tr>`;
+}
+
+/* The same correction on a printed sheet. Spelled out in words rather than
+   colour, because there is no colour on the printer Walt uses. */
+function printMissingFootRow(rows, { labelSpan = 3, before = 0, after = 2, noun = "car" } = {}) {
+  const missing = missingReceiptTotals(rows);
+  if (!missing.total) return "";
+  const blanks = (n) => `<td class="num-col"></td>`.repeat(n);
+  return `<tr class="print-foot-note">
+    <td colspan="${labelSpan}">${esc(missingReceiptsText(missing, noun))}</td>
+    ${blanks(before)}<td class="num-col">${money(missing.total)}</td>${blanks(after)}</tr>`;
+}
+
+/* The per-car badge, under the number it corrects. Word for word what the
+   Vehicles board puts on the same car (see costMissingHtml there): somebody
+   who has seen it on one screen must not have to work out that it means the
+   same thing on another. */
+function costMissingBadge(row) {
+  const missing = row.unreceived_closed_cost || 0;
+  if (!missing) return "";
+  const n = row.unreceived_closed_parts || 0;
+  const label = `Ticket is closed but ${n} part${n === 1 ? " was" : "s were"} never marked received — `
+    + `${money(missing)} of this car's cost isn't counted. Open the ticket and receive them.`;
+  return `<span class="cost-missing" title="${esc(label)}">+${money(missing)} not received</span>`;
 }
 
 function vehicleSpendStatCards(rows) {
@@ -500,6 +545,7 @@ function vehicleSpendStatCards(rows) {
   // is finished work. Without it the count reads as the size of the lot today,
   // which it deliberately isn't.
   const filed = rows.filter((r) => r.archived_at).length;
+  const missing = missingReceiptTotals(rows);
   return [
     {
       label: "Vehicles",
@@ -508,7 +554,18 @@ function vehicleSpendStatCards(rows) {
         ? `${recon} recon · ${rows.length - recon} we-owe · ${filed} in History`
         : `${recon} recon · ${rows.length - recon} we-owe`,
     },
-    { label: "Total Cost", value: money(total), sub: "received parts + labor" },
+    // The headline number, and the one place a reader would never find out
+    // it is short. The Lot Status card has said this for a while; this sheet
+    // is the one somebody actually reads a month's spending off, so it is
+    // where a quiet shortfall does the most damage.
+    {
+      label: "Total Cost",
+      value: money(total),
+      tone: missing.total ? "warn" : "",
+      sub: missing.total
+        ? `${money(missing.total)} more was spent but never marked received`
+        : "received parts + labor",
+    },
     // Averaged over every vehicle in the report, including the ones nothing
     // has been spent on yet -- that's what the label says, and it's the only
     // denominator someone reading the row count above can check.
@@ -542,6 +599,13 @@ function vehicleProfitStatCards(rows) {
   const revenue = withProfit.reduce((s, r) => s + (r.sale_price || 0), 0);
   const weOwe = rows.reduce((s, r) => s + (r.we_owe_net_cost || 0), 0);
   const unpriced = sold.length - withProfit.length;
+  const missing = missingReceiptTotals(rows);
+  // Only the cars whose profit is actually in the figure beside it. A part
+  // nobody receipted on an unsold car understates what is in that car; on a
+  // sold one it comes straight out the other end as profit the lot did not
+  // make, which is a different and worse sentence, so the two are counted
+  // separately and said in different places.
+  const missingOnSold = missingReceiptTotals(withProfit);
   return [
     {
       label: "Vehicles",
@@ -552,14 +616,27 @@ function vehicleProfitStatCards(rows) {
         ...(weOweOnly ? [`${weOweOnly} we-owe`] : []),
       ].join(" · "),
     },
-    { label: "Total Invested", value: money(invested), sub: "what the shop spent: recon + we-owe" },
+    {
+      label: "Total Invested",
+      value: money(invested),
+      tone: missing.total ? "warn" : "",
+      sub: missing.total
+        ? `${money(missing.total)} more was spent but never marked received`
+        : "what the shop spent: recon + we-owe",
+    },
     {
       label: "Profit On Sold",
       value: withProfit.length ? money(profit) : "—",
       sub: !withProfit.length
         ? (unpriced ? `${unpriced} sold — profit needs a purchase price` : "nothing sold in this range")
-        : `${(profit / revenue * 100).toFixed(1)}% margin on ${money(revenue)}${unpriced ? ` · ${unpriced} without a purchase price` : ""}`,
-      tone: withProfit.length && profit < 0 ? "crit" : "",
+        : missingOnSold.total
+          // Said instead of the margin, not after it. This card is the one
+          // number on the screen that is not merely incomplete but wrong in a
+          // flattering direction, and a margin percentage sitting in front of
+          // that sentence is what stops it being read.
+          ? `overstated by ${money(missingOnSold.total)} — parts bought and never marked received`
+          : `${(profit / revenue * 100).toFixed(1)}% margin on ${money(revenue)}${unpriced ? ` · ${unpriced} without a purchase price` : ""}`,
+      tone: withProfit.length && profit < 0 ? "crit" : missingOnSold.total ? "warn" : "",
     },
     {
       label: "We-Owe Cost",
@@ -812,7 +889,7 @@ function renderLotTable(rows) {
     // Same three kinds of money as the headline card, in the same order and
     // the same words. A pile whose spend figure is short says so on its own
     // band rather than making the reader carry the total down from the top.
-    const missing = lotMissingReceipts(inGroup);
+    const missing = missingReceiptTotals(inGroup);
     const cash = inGroup.length
       ? `<span class="lot-group-money">${money(spent)} spent${left ? ` · ${money(left)} still to spend` : ""}${
           missing.total ? ` · <span class="cost-unreceipted">${money(missing.total)} never marked received</span>` : ""
@@ -832,14 +909,11 @@ function renderLotTable(rows) {
   }).join("");
   const totalSpent = rows.reduce((s, r) => s + (r.actual_cost || 0), 0);
   const totalLeft = rows.reduce((s, r) => s + (r.remaining_cost || 0), 0);
-  const missing = lotMissingReceipts(rows);
   // The footer is the number somebody writes down or reads out, so it is the
-  // last place that can afford to be short without saying so. A second row
-  // rather than a footnote: it has to line up under the column it corrects.
-  const missingRow = missing.total
-    ? `<tr class="lot-total-missing"><td colspan="3">Not in that total — ${missing.parts} part${missing.parts === 1 ? "" : "s"} on ${missing.cars} finished car${missing.cars === 1 ? "" : "s"} never marked received</td>
-        <td class="num-col cost-unreceipted">${money(missing.total)}</td><td class="num-col"></td><td></td></tr>`
-    : "";
+  // last place that can afford to be short without saying so. "finished car"
+  // rather than plain "car" here: on this sheet the reader is looking at all
+  // three piles, and only the finished ones can be missing a receipt.
+  const missingRow = missingFootRow(rows, { labelSpan: 3, after: 2, noun: "finished car" });
   return `<div class="panel"><div class="table-wrap table-scroll"><table class="sticky-head report-sheet lot-table"><thead><tr>
     ${reportHeaderRow("lot")}
     </tr></thead>
@@ -879,7 +953,7 @@ function renderProfitTable(rows) {
       <td class="num cell-vin">${r.vin ? `${esc(r.vin)} <button type="button" class="copy-btn" data-copy="${esc(r.vin)}" data-copy-label="VIN" title="Copy VIN" aria-label="Copy VIN">⧉</button>` : "—"}</td>
       <td class="num-col" title="Hours flagged by techs on this car">${r.labor_hours ? fmtHours(r.labor_hours) : "—"}</td>
       <td class="num-col">${money(r.purchase_price)}</td>
-      <td class="num-col" title="${esc(`${money(r.purchase_price)} purchase + ${money(r.recon_cost)} recon + ${money(r.we_owe_net_cost)} we-owe`)}">${money(r.total_invested)}</td>
+      <td class="num-col" title="${esc(`${money(r.purchase_price)} purchase + ${money(r.recon_cost)} recon + ${money(r.we_owe_net_cost)} we-owe`)}">${money(r.total_invested)}${costMissingBadge(r)}</td>
       <td class="num-col">${r.sale_price != null ? money(r.sale_price) : "—"}</td>
       <td${tone}>${unsold ? "—" : money(r.profit)}</td>
       <td class="num-col">${r.margin_pct != null ? `${r.margin_pct}%` : "—"}</td>
@@ -897,7 +971,11 @@ function renderProfitTable(rows) {
       <td class="num-col">${money(sum((r) => r.sale_price))}</td>
       <td class="num-col">${money(totalProfit)}</td>
       <td class="num-col">—</td>
-    </tr></tfoot>
+    </tr>
+    ${/* Under Total In, the column it is missing from -- the same money is
+         also what the Profit column is over by, and the card above says so in
+         words. Putting one figure under two columns would read as two. */ ""}
+    ${missingFootRow(rows, { labelSpan: 5, after: 3 })}</tfoot>
     </table></div></div>`;
 }
 
@@ -942,9 +1020,10 @@ function renderReportTable(rows, shape) {
       const cls = ["clickable", filed ? "row-filed" : ""].filter(Boolean).join(" ");
       return `<tr${clickable ? ` class="${cls}" data-seg="${esc(r.segment)}" data-ref-id="${refId}" tabindex="0" title="Open this vehicle"` : ""}><td class="num cell-code">${esc(r.stock_number || "—")}</td><td class="cell-name">${esc(r.vehicle)}${r.customer_name ? `<span class="cell-sub">${esc(r.customer_name)}</span>` : ""}</td>
     <td>${segmentTag(r.segment)}</td><td><span class="pill ${vehicleStatusPillClass(r)}">${esc(STATUS_LABEL[r.status] || r.status)}</span>${filed ? ` <span class="pill pill-filed" title="Filed to History on ${esc(r.archived_at.slice(0, 10))}">History</span>` : ""}</td>
-    <td class="cell-tech">${esc((r.technicians || []).join(", ")) || "—"}</td><td class="num-col">${money(r.actual_cost)}</td>${hasDeposits ? `<td class="num-col">${r.customer_paid ? money(r.customer_paid) : "—"}</td><td class="num-col">${r.customer_paid ? money(r.net_cost) : "—"}</td>` : ""}</tr>`;
+    <td class="cell-tech">${esc((r.technicians || []).join(", ")) || "—"}</td><td class="num-col">${money(r.actual_cost)}${costMissingBadge(r)}</td>${hasDeposits ? `<td class="num-col">${r.customer_paid ? money(r.customer_paid) : "—"}</td><td class="num-col">${r.customer_paid ? money(r.net_cost) : "—"}</td>` : ""}</tr>`;
     }).join("")}</tbody>
-    <tfoot><tr><td colspan="5">Total (${rows.length} vehicle${rows.length === 1 ? "" : "s"})</td><td class="num-col">${money(totalActual)}</td>${hasDeposits ? `<td class="num-col">${money(totalPaid)}</td><td class="num-col">${money(totalActual - totalPaid)}</td>` : ""}</tr></tfoot>
+    <tfoot><tr><td colspan="5">Total (${rows.length} vehicle${rows.length === 1 ? "" : "s"})</td><td class="num-col">${money(totalActual)}</td>${hasDeposits ? `<td class="num-col">${money(totalPaid)}</td><td class="num-col">${money(totalActual - totalPaid)}</td>` : ""}</tr>
+    ${missingFootRow(rows, { labelSpan: 5, after: hasDeposits ? 2 : 0 })}</tfoot>
     </table></div></div>`;
 }
 
@@ -1043,7 +1122,7 @@ function renderPrintReport(rows, type, start, end) {
     // has to be a sentence in the totals block rather than a red number. It
     // sits directly under the figure it corrects, before "still to spend",
     // because it is part of what the lot has already cost.
-    const missing = lotMissingReceipts(rows);
+    const missing = missingReceiptTotals(rows);
     const missingLine = missing.total
       ? `<div class="tl-row"><span>Spent but never marked received — not in the figure above</span><span class="num">${money(missing.total)}</span></div>`
       : "";
@@ -1084,6 +1163,7 @@ function renderPrintReport(rows, type, start, end) {
             <td class="num-col">${fmtHours(sum((r) => r.labor_hours))}</td>
             <td class="num-col">${money(sum((r) => r.purchase_price))}</td><td class="num-col">${money(sum((r) => r.total_invested))}</td>
             <td class="num-col">${money(sum((r) => r.sale_price))}</td><td class="num-col">${money(sum((r) => r.profit))}</td><td class="num-col"></td></tr>
+          ${printMissingFootRow(rows, { labelSpan: 5, after: 3 })}
           <tr class="tfoot-space" aria-hidden="true"><td colspan="9"></td></tr>
         </tfoot>
       </table>`;
@@ -1099,6 +1179,7 @@ function renderPrintReport(rows, type, start, end) {
         <td>${esc((r.technicians || []).join(", ")) || "—"}</td><td class="num-col">${money(r.actual_cost)}</td>${hasDeposits ? `<td class="num-col">${r.customer_paid ? money(r.customer_paid) : "—"}</td><td class="num-col">${r.customer_paid ? money(r.net_cost) : "—"}</td>` : ""}</tr>`).join("")}</tbody>
         <tfoot>
           <tr><td colspan="4">Report Total (${rows.length} vehicle${rows.length === 1 ? "" : "s"})</td><td class="num-col"></td><td class="num-col">${money(totalActual)}</td>${hasDeposits ? `<td class="num-col">${money(totalPaid)}</td><td class="num-col">${money(totalActual - totalPaid)}</td>` : ""}</tr>
+          ${printMissingFootRow(rows, { labelSpan: 5, after: hasDeposits ? 2 : 0 })}
           <tr class="tfoot-space" aria-hidden="true"><td colspan="${hasDeposits ? 8 : 6}"></td></tr>
         </tfoot>
       </table>`;

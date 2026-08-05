@@ -557,6 +557,11 @@ td.age-crit { color: var(--crit); font-weight: 700; }
    because the total isn't wrong so much as incomplete -- and a car can be
    missing receipts whatever else is going on with it.
 
+   Unscoped on purpose. It started on the Vehicles board's Cost column and now
+   also sits under Cost on the spend sheet and under Total In on the profit
+   sheet, which is the same fact about the same car; a reader who has learned
+   what it means on one screen must not meet a different badge on the next.
+
    nowrap because the Cost column is sized for "$1,234.56" and this wrapped to
    three lines inside it, which made a flagged row half again as tall as its
    neighbours and the whole board jump as cars came and went. Letting the
@@ -3509,14 +3514,26 @@ th.sel-col, td.sel-col { width: 32px; padding-right: 0; }
    for the same reason spelled out up there -- the total isn't wrong so much
    as incomplete -- so one fact keeps one colour wherever it turns up. */
 .cost-unreceipted { color: var(--warn); font-weight: 700; }
-/* The correction row under the whole-lot total. It hangs off the same footer
+/* The correction row under a sheet's own total. It hangs off the same footer
    so it lines up under the column it corrects, but reads as a note rather
-   than a second total -- no top rule, lighter label, same tabular figures. */
-.lot-table tfoot tr.lot-total-missing td { border-top: 0; padding-top: 2px; font-weight: 400; color: var(--ink-soft); font-size: 11.5px; }
+   than a second total -- no top rule, lighter label, same tabular figures.
+   Written against .report-sheet rather than .lot-table: the lot sheet was the
+   first to carry this row, but the spend and profit sheets report the same
+   money and are corrected the same way, and one selector is what keeps the
+   three looking like one habit instead of three decisions. */
+.report-sheet tfoot tr.total-missing td { border-top: 0; padding-top: 2px; font-weight: 400; color: var(--ink-soft); font-size: 11.5px; }
 /* The money on the correction row keeps its own colour and weight: the row
    above sets a muted tone for the label, and at this specificity it would
    otherwise repaint the one figure the row exists to show. */
-.lot-table tfoot tr.lot-total-missing td.cost-unreceipted { color: var(--warn); font-weight: 700; }
+.report-sheet tfoot tr.total-missing td.cost-unreceipted { color: var(--warn); font-weight: 700; }
+/* The per-car badge, where a report sheet carries one. The board lets it stay
+   on one line and lets the Cost column widen by the few pixels it needs; a
+   report sheet is table-layout:fixed, so there is no widening to be had and
+   nowrap simply printed "+$380.00 not received" out over the column beside
+   it. It wraps here instead. Only flagged rows get taller, and a sheet is
+   read down one column rather than scanned across like the board, so the
+   second line costs nothing worth keeping. */
+.report-sheet td .cost-missing { white-space: normal; }
 /* An empty pile still gets its heading -- "no cars are finished right now" is
    an answer. Muted back to the neutral tone, because there is nothing under
    it to read. */

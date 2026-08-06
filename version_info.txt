@@ -17,12 +17,12 @@ VSVersionInfo(
         '040904B0',
         [StringStruct('CompanyName', 'Discount Auto Repair'),
          StringStruct('FileDescription', 'RECON - shop, recon and we-owe management'),
-         StringStruct('FileVersion', '1.6.0.0'),
+         StringStruct('FileVersion', '1.7.0.0'),
          StringStruct('InternalName', 'RECON'),
          StringStruct('LegalCopyright', ''),
          StringStruct('OriginalFilename', 'RECON.exe'),
          StringStruct('ProductName', 'RECON'),
-         StringStruct('ProductVersion', '1.6.0.0')]
+         StringStruct('ProductVersion', '1.7.0.0')]
       )
     ]),
     VarFileInfo([VarStruct('Translation', [1033, 1200])])

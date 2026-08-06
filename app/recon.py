@@ -636,6 +636,38 @@ class ArchiveIn(BaseModel):
     expected_version: int | None = None
 
 
+class FileAwayItemIn(BaseModel):
+    """One car the sheet was offering to file, and the version of it that was
+    on screen.
+
+    The version is required rather than optional, unlike ArchiveIn's. That one
+    is sent from the car's own page, where a person is looking at the record
+    they are about to change; this is sent from a list, in a batch, by somebody
+    who was reading a row. A batch write with no version is exactly the
+    check-then-act this app does not allow anywhere else.
+    """
+
+    id: int
+    expected_version: int
+
+
+class FileAwayIn(BaseModel):
+    """The cars the Lot Status sheet was showing in its "Finished — file away"
+    pile at the moment the button was pressed.
+
+    Sent rather than left to the server to work out, so the action can only
+    ever cover what the person could actually see. The other workstation is
+    filing cars away too, and "file away everything that qualifies right now"
+    would quietly take a car nobody on this screen had looked at.
+
+    The server checks every one of them again anyway (see file_away_settled):
+    the list says what was *offered*, never what is allowed.
+    """
+
+    recon: list[FileAwayItemIn] = Field(default_factory=list)
+    we_owe: list[FileAwayItemIn] = Field(default_factory=list)
+
+
 class WeOwePaymentIn(BaseModel):
     """Customers are sometimes talked into putting money down toward a
     we-owe repair -- tracked separately from shop cost so the net amount
@@ -1365,10 +1397,17 @@ def vehicle_board_rows(
                     "segment": "recon",
                     "recon_id": row["id"],
                     "we_owe_id": None,
-                    # Which side of the live-board/History divide this row was
-                    # fetched from -- the needs sentence reads it, so a sold
-                    # car already in History isn't told to be sent there.
-                    "archived": archived,
+                    # Which side of the live-board/History divide this car is
+                    # on -- the needs sentence reads it, so a sold car already
+                    # in History isn't told to be sent there.
+                    #
+                    # Read off the row, not off the `archived` argument. They
+                    # agree whenever the caller asked for one side or the
+                    # other, and they cannot when it asked for both: archived
+                    # is None there, so every row -- filed or not -- came back
+                    # claiming to be live, and anything reading this field had
+                    # to know not to ask that way.
+                    "archived": bool(row["archived_at"]),
                     "stock_number": row["stock_number"],
                     "vehicle": f"{row['year']} {row['make']} {row['model']}",
                     "vin": row["vin"],
@@ -1414,6 +1453,13 @@ def vehicle_board_rows(
                     # read identically and need different things done to them.
                     "voided_order_count": voided_count,
                     "updated_at": row["updated_at"],
+                    # The counter a board-level action has to send back to prove it
+                    # is acting on the row it was shown -- see file_away_settled.
+                    # Every per-record write in the app is a compare-and-set on it
+                    # (tests/test_optimistic_locking.py), and an action offered from
+                    # a list rather than from the record's own page has no other way
+                    # to reach one.
+                    "edit_version": row["edit_version"],
                     # Carried alongside the count so the board can say what it
                     # is counting from -- "34d" is worth arguing with, "on the
                     # lot since June 27" is worth acting on.
@@ -1477,9 +1523,10 @@ def vehicle_board_rows(
                     "segment": "we_owe",
                     "recon_id": None,
                     "we_owe_id": row["id"],
-                    # Same reason as the recon rows: the needs wording is
-                    # allowed to differ between the live board and History.
-                    "archived": archived,
+                    # Same reason as the recon rows, and read off the row for
+                    # the same reason: the needs wording is allowed to differ
+                    # between the live board and History.
+                    "archived": bool(row["archived_at"]),
                     "stock_number": row["lot_stock_number"] or None,
                     "vehicle": f"{row['year']} {row['make']} {row['model']}",
                     "vin": row["vin"],
@@ -1526,6 +1573,13 @@ def vehicle_board_rows(
                     "order_number": current_order["number"] if current_order else "",
                     "voided_order_count": voided_count,
                     "updated_at": row["updated_at"],
+                    # The counter a board-level action has to send back to prove it
+                    # is acting on the row it was shown -- see file_away_settled.
+                    # Every per-record write in the app is a compare-and-set on it
+                    # (tests/test_optimistic_locking.py), and an action offered from
+                    # a list rather than from the record's own page has no other way
+                    # to reach one.
+                    "edit_version": row["edit_version"],
                     # No arrival date on this side, and none wanted: a we-owe's
                     # clock starts when the promise was made, which is what
                     # created_at already is. The car itself was sold weeks ago.
@@ -2136,7 +2190,104 @@ def build_recon_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
                 raise HTTPException(404, "Payment not found")
             db.execute("DELETE FROM we_owe_payments WHERE id=?", (payment_id,))
 
+    @router.post("/lot/file-away")
+    def file_away_settled(item: FileAwayIn):
+        """File a whole pile of finished cars to History in one go.
+
+        The Lot Status sheet already ends with a pile of cars whose only
+        remaining step is this one -- it prints "Sold — send to History" on
+        every row of it. Doing that meant opening each car, finding the button
+        and confirming, one car at a time, and the pile is the part of the
+        sheet nobody is in a hurry about. So it grows, and while it does, every
+        count above it is describing a lot that is bigger than the real one:
+        "1 ready of 8 on the lot" when four of the eight left weeks ago.
+
+        Two guarantees make a bulk button safe enough to offer here, and
+        neither of them exists on the single-vehicle archive route:
+
+        * **Only genuinely finished cars are filed.** Every id is re-checked
+          against the same lot_bucket the sheet grouped it by, read inside this
+          transaction. A car that went back into the shop between the sheet
+          being drawn and the button being pressed is refused, not filed. The
+          per-vehicle route will archive anything it is pointed at, which is
+          fine when a person is looking at that one car and wrong when a
+          button is filing five.
+        * **Nothing is silently swallowed.** Every car the caller sent comes
+          back either filed or skipped with the reason, so the screen can say
+          "4 filed, 1 left -- it is back in the shop" instead of quietly
+          filing four and looking like it filed five.
+
+        A stale version is a skip here rather than the 409 the single-vehicle
+        routes raise. Failing the whole batch over one car another workstation
+        touched a second ago would mean the button stops working on exactly
+        the busy lot it exists for -- and every car in the batch is an
+        independent record, so there is nothing half-applied to protect. The
+        write is still a real compare-and-set (see
+        tests/test_optimistic_locking.py): the version sits in the WHERE
+        clause and a row that did not win is reported, never assumed.
+
+        Filing is reversible (see reopen_recon_vehicle) and deletes nothing,
+        which is what makes the confirm on the other side a question rather
+        than a warning.
+        """
+        with connect() as db:
+            # Both sides of History, so a car another workstation already filed
+            # can be told apart from one that has left the lot entirely.
+            rows = {
+                (row["segment"], row["recon_id"] if row["segment"] == "recon" else row["we_owe_id"]): row
+                for row in vehicle_board_rows(db, archived=None)
+            }
+            requested = [("recon", entry) for entry in item.recon] + [("we_owe", entry) for entry in item.we_owe]
+            seen: set[tuple[str, int]] = set()
+            filed: list[dict] = []
+            skipped: list[dict] = []
+            stamp = now_fn()
+            for segment, asked in requested:
+                if (segment, asked.id) in seen:
+                    continue
+                seen.add((segment, asked.id))
+                row = rows.get((segment, asked.id))
+                if row is None:
+                    skipped.append(
+                        {"segment": segment, "id": asked.id, "label": "", "reason": "it is no longer on the lot"}
+                    )
+                    continue
+                result = {"segment": segment, "id": asked.id, "label": lot_row_label(row)}
+                if row["archived"]:
+                    skipped.append({**result, "reason": "it is already in History"})
+                    continue
+                if row["lot_bucket"] != LOT_SETTLED:
+                    # The pile it is in now, not the pile the sheet drew it in.
+                    skipped.append({**result, "reason": "it is back in the shop"})
+                    continue
+                table = "recon_vehicles" if segment == "recon" else "we_owe_items"
+                cur = db.execute(
+                    f"UPDATE {table} SET archived_at=?,edit_version=edit_version+1 WHERE id=? AND edit_version=?",
+                    (stamp, asked.id, asked.expected_version),
+                )
+                if cur.rowcount:
+                    filed.append(result)
+                else:
+                    skipped.append({**result, "reason": "somebody else changed it just now"})
+            return {"filed": filed, "skipped": skipped}
+
     return router
+
+
+def lot_row_label(row: Mapping[str, Any]) -> str:
+    """How one lot row is named back to a person -- the same handle the sheet
+    shows, so a message about a car can be matched to the line it came from.
+
+    A recon car is known by its stock number and a we-owe promise by whose car
+    it is; neither is guaranteed to be there, so the year/make/model is always
+    included rather than being dropped when a better name exists.
+    """
+    vehicle = row.get("vehicle") or ""
+    if row.get("segment") == "recon":
+        stock = row.get("stock_number") or ""
+        return f"{stock} — {vehicle}".strip(" —") if stock else vehicle
+    customer = row.get("customer_name") or ""
+    return f"{vehicle} — {customer}".strip(" —") if customer else vehicle
 
 
 def cost_rollup(db: sqlite3.Connection, column: str, ref_id: int, segment: str | None = None) -> dict:

@@ -1,5 +1,7 @@
-import { $, $$, fmtHours, get } from "./core.js";
+import { $, $$, fmtHours, get, post } from "./core.js";
 import { esc, money, todayLocal } from "./shortcuts.js";
+import { confirmAction } from "./confirm.js";
+import { toast } from "./notify.js";
 import { emptyState } from "./empty-states.js";
 import { skeletonCards, skeletonRows } from "./skeletons.js";
 import { STATUS_LABEL, state } from "./state.js";
@@ -1009,6 +1011,19 @@ function renderLotTable(rows) {
           missing.total ? ` · <span class="cost-unreceipted">${money(missing.total)} never marked received</span>` : ""
         }</span>`
       : "";
+    // Every row in this one pile ends in the same instruction -- "send to
+    // History" -- and the sheet had no way to carry it out. Doing it a car at
+    // a time is why the pile grows, and while it does, every count above it
+    // is describing a bigger lot than the shop actually has. Offered on the
+    // band rather than per row because the whole pile is one chore.
+    //
+    // Screen only: renderPrintLotTable builds the paper sheet separately, and
+    // a button printed on paper is a button nobody can press.
+    const fileAway = group.key === "settled" && inGroup.length
+      ? `<button type="button" class="btn btn-sm lot-file-away" data-file-away="settled">File ${
+          inGroup.length === 1 ? "it" : `all ${inGroup.length}`
+        } away</button>`
+      : "";
     // The band is laid out by a div inside the cell rather than by the cell
     // itself: a <td> with display:flex leaves table layout, and colspan goes
     // with it -- the heading, its note and its money were stacking three high
@@ -1018,6 +1033,7 @@ function renderLotTable(rows) {
           <span class="lot-group-name">${esc(group.label)}</span>
           <span class="lot-group-note">${note}</span>
           ${cash}
+          ${fileAway}
         </div>
       </td></tr>${inGroup.map(line).join("")}`;
   }).join("");
@@ -1460,6 +1476,62 @@ async function refreshReport() {
   }
 }
 
+/* Send the whole "Finished — file away" pile to History.
+
+   The confirm names every car rather than counting them. This is the last
+   screen any of these cars appear on, so "file 4 cars away" is not enough to
+   check against: if one of them is a car somebody meant to reopen, the only
+   way to notice is to read its name here.
+
+   A car in this pile whose cost is short a part nobody receipted gets said out
+   loud for the same reason the single-vehicle confirm says it -- filing is the
+   moment a car stops being looked at, so it is the last chance anyone has to
+   notice money the app can't see. */
+async function fileAwaySettled() {
+  const settled = (state.report?.rows || []).filter((r) => r.lot_bucket === "settled" && !r.archived);
+  if (!settled.length) return;
+  const missing = missingReceiptTotals(settled);
+  // Named the way its row on the sheet names it: a recon car by its stock
+  // number, a we-owe car by whose car it is. A list of bare years and models
+  // is not something anybody can check three Kias against.
+  const names = settled.map((r) => (r.segment === "recon"
+    ? `• ${r.stock_number ? `${r.stock_number} — ` : ""}${r.vehicle}`
+    : `• ${r.vehicle}${r.customer_name ? ` — ${r.customer_name}` : ""}`)).join("\n");
+  if (!(await confirmAction({
+    title: settled.length === 1 ? "Send this car to History?" : `Send these ${settled.length} cars to History?`,
+    body: `${names}\n\nThey come off this sheet and off the Vehicles board. Nothing is deleted, and any of them can be reopened.`
+      + (missing.total
+        ? `\n\nBefore you do: ${money(missing.total)} of parts on ${pluralCount(missing.cars, "car")} here was `
+          + "never marked received, so what the shop spent is short by that much."
+        : ""),
+    confirmLabel: "Send to History",
+  }))) return;
+  try {
+    // Each car goes with the version that was on screen, so a car somebody at
+    // the other desk changed while this sheet sat open is refused rather than
+    // written over -- the same compare-and-set every other save in the app
+    // does, done per car so one stale row can't fail the whole press.
+    const answer = await post("/api/lot/file-away", {
+      recon: settled.filter((r) => r.segment === "recon")
+        .map((r) => ({ id: r.recon_id, expected_version: r.edit_version })),
+      we_owe: settled.filter((r) => r.segment === "we_owe")
+        .map((r) => ({ id: r.we_owe_id, expected_version: r.edit_version })),
+    });
+    // A skip is not a failure, but it is never silent: the other workstation
+    // files cars away too, and "4 of 5 went" has to say which one stayed and
+    // why or the sheet looks like it lost one.
+    const filed = answer.filed.length;
+    const message = filed
+      ? `${pluralCount(filed, "car")} sent to History`
+      : "Nothing was filed";
+    const skipped = answer.skipped.map((s) => `${s.label || "one car"} stayed — ${s.reason}`);
+    toast(skipped.length ? `${message}. ${skipped.join("; ")}` : message, !filed);
+  } catch (err) {
+    toast(err.message, true);
+  }
+  await refreshReport();
+}
+
 export function wireReportsView() {
   $("#report-type-seg").addEventListener("click", (e) => {
     const btn = e.target.closest("[data-report-type]");
@@ -1543,6 +1615,12 @@ export function wireReportsView() {
   }
 
   $("#report-output").addEventListener("click", (e) => {
+    // Ahead of the sort and row-open handlers below: this button lives inside
+    // a group heading row, and a click on it is not a click on the sheet.
+    if (e.target.closest("[data-file-away]")) {
+      fileAwaySettled();
+      return;
+    }
     const th = e.target.closest("th[data-report-sort]");
     if (!th || !state.report) {
       if (!th) openFromDataset(e.target.closest("tr[data-ref-id]"));

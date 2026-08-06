@@ -353,8 +353,13 @@ const REPORT_SORTS = {
     vehicle:  { label: "Vehicle",     type: "text",   value: (r) => r.vehicle || "" },
     vin:      { label: "VIN",         type: "text",   value: (r) => r.vin || "" },
     hours:    { label: "Hours",       type: "number", value: (r) => r.labor_hours || 0 },
+    spent:    { label: "Spent",       type: "number", value: (r) => shopSpend(r) },
     purchase: { label: "Purchase",    type: "number", value: (r) => r.purchase_price },
-    cost:     { label: "Total In",    type: "number", value: (r) => r.total_invested },
+    // Sorts on what the cell actually shows. A car with no purchase price on
+    // file has no Total In to display (see renderProfitTable), so ordering it
+    // by the spend-only figure hiding behind the dash would shuffle the dashed
+    // rows through the list by a number nobody can see.
+    cost:     { label: "Total In",    type: "number", value: (r) => (hasPurchasePrice(r) ? r.total_invested : 0) },
     sale:     { label: "Sold For",    type: "number", value: (r) => r.sale_price || 0 },
     profit:   { label: "Profit",      type: "number", value: (r) => r.profit || 0 },
     margin:   { label: "Margin",      type: "number", value: (r) => r.margin_pct || 0 },
@@ -381,7 +386,11 @@ const REPORT_SORTS = {
 const DEFAULT_SORT = {
   lot: { key: "stock", dir: "asc" },
   "vehicle-spend": { key: "cost", dir: "desc" },
-  "vehicle-profit": { key: "cost", dir: "desc" },
+  // On Spent, not Total In: Total In is blank on every car with no purchase
+  // price on file, and opening a sheet ordered by a column most of its rows
+  // are empty in scatters them rather than ranking them. Spent is filled in
+  // everywhere and is the money this shop actually controls.
+  "vehicle-profit": { key: "spent", dir: "desc" },
   // No money column to sort on -- labor here is never charged out -- so the
   // technician report opens on the tech carrying the most hours.
   technicians: { key: "hours", dir: "desc" },
@@ -509,6 +518,36 @@ function lotStatCards(rows) {
   ];
 }
 
+/* ---------- what the shop spent, and what it merely knows ----------
+
+   Two different facts sit side by side on the Profit sheet and they are not
+   equally knowable.
+
+   What the shop spent fixing a car -- recon parts plus we-owe work, net of
+   anything the customer chipped in, all of it at cost -- is this app's own
+   number. It is right for every car on the sheet, always.
+
+   What the lot paid for the car is not. Walt keeps that figure and does that
+   arithmetic himself (see CLAUDE.md); there is no purchase-price entry here
+   and there is not going to be one. Only cars written down before that rule
+   carry a purchase price at all, so on any recent lot most rows have none.
+
+   Which means a zero in that column is not "this car was free", it is "we do
+   not hold that number" -- and a total that sums it is only a total of the
+   cars that happen to have one. Everything below keeps the two apart so no
+   figure on this sheet mixes them without saying so. */
+
+function shopSpend(row) {
+  return (row.recon_cost || 0) + (row.we_owe_net_cost || 0);
+}
+
+// A purchase price the app actually holds. Zero means absent, not free: the
+// field has no input and defaults to 0, and the server already refuses to
+// work out a profit without one (see recon.unit_lifetime).
+function hasPurchasePrice(row) {
+  return (row.purchase_price || 0) > 0;
+}
+
 /* ---------- money that is already spent and in no total ----------
 
    Parts on a finished ticket that nobody marked received. The shop buys the
@@ -566,6 +605,27 @@ function printMissingFootRow(rows, { labelSpan = 3, before = 0, after = 2, noun 
   return `<tr class="print-foot-note">
     <td colspan="${labelSpan}">${esc(missingReceiptsText(missing, noun))}</td>
     ${blanks(before)}<td class="num-col">${money(missing.total)}</td>${blanks(after)}</tr>`;
+}
+
+/* The sentence under the Profit footer that says what its Purchase and Total
+   In totals actually cover.
+
+   Those two columns can only be added up over the cars that have a purchase
+   price on file, and on a modern lot that is a minority of them -- so a bare
+   figure sitting under a nine-row sheet reads as all nine. Nothing is hidden
+   and nothing is guessed; the sheet just says which cars it counted. Silent
+   when every row has one, because then the totals mean what they look like.
+
+   Plain words rather than a figure, so it is a caption on two columns and not
+   mistaken for a third number the way a right-aligned amount would be. */
+function purchaseCoverageRow(rows, priced, span) {
+  if (!rows.length || priced.length === rows.length) return "";
+  const text = priced.length
+    ? `Purchase and Total In cover the ${priced.length} of ${rows.length} cars with a purchase price on file — `
+      + "what the lot paid for the rest isn't recorded here"
+    : `No purchase price on file for any of these ${rows.length} cars — `
+      + "what the lot paid isn't recorded here, so only what the shop spent can be totalled";
+  return `<tr class="total-note"><td colspan="${span}">${esc(text)}</td></tr>`;
 }
 
 /* The per-car badge, under the number it corrects. Word for word what the
@@ -637,7 +697,14 @@ function vehicleProfitStatCards(rows) {
   const weOweOnly = rows.length - lot.length;
   const sold = rows.filter((r) => r.sale_price !== null && r.sale_price !== undefined);
   const withProfit = sold.filter((r) => r.profit !== null && r.profit !== undefined);
-  const invested = rows.reduce((s, r) => s + (r.total_invested || 0), 0);
+  // What the shop spent, which is every row's to give. Deliberately NOT
+  // sum(total_invested): that figure carries the lot's purchase price on the
+  // handful of cars that still have one, so summing it answered a question
+  // nobody asked with a number the card's own caption then denied. On the
+  // seeded lot it read $15,770 under the words "what the shop spent" when the
+  // shop had spent $370, because $15,400 of it was auction money this app is
+  // not the record of.
+  const spent = rows.reduce((s, r) => s + shopSpend(r), 0);
   const profit = withProfit.reduce((s, r) => s + r.profit, 0);
   const revenue = withProfit.reduce((s, r) => s + (r.sale_price || 0), 0);
   const weOwe = rows.reduce((s, r) => s + (r.we_owe_net_cost || 0), 0);
@@ -660,12 +727,12 @@ function vehicleProfitStatCards(rows) {
       ].join(" · "),
     },
     {
-      label: "Total Invested",
-      value: money(invested),
+      label: "Spent Fixing Them",
+      value: money(spent),
       tone: missing.total ? "warn" : "",
       sub: missing.total
         ? `${money(missing.total)} more was spent but never marked received`
-        : "what the shop spent: recon + we-owe",
+        : "recon + we-owe, at cost · not what the lot paid for the cars",
     },
     {
       label: "Profit On Sold",
@@ -684,7 +751,9 @@ function vehicleProfitStatCards(rows) {
     {
       label: "We-Owe Cost",
       value: money(weOwe),
-      sub: weOwe ? "came off the above, net of customer payments" : "no we-owe work in this range",
+      // "Included in", not "came off": the card above is now the shop's own
+      // spend, and we-owe work is one of the two things it is made of.
+      sub: weOwe ? "included in the above, net of customer payments" : "no we-owe work in this range",
       tone: weOwe > 0 ? "warn" : "",
     },
   ];
@@ -951,7 +1020,9 @@ function reportHeaderRow(shape, hasDeposits) {
       + reportSortHeader("vehicle-profit", "vehicle")
       + reportSortHeader("vehicle-profit", "vin", "col-vin")
       + reportSortHeader("vehicle-profit", "hours", "num-col col-hours")
-      + ["purchase", "cost", "sale", "profit"].map((k) => reportSortHeader("vehicle-profit", k, "num-col col-money")).join("")
+      // Spent comes before Purchase: it is the column that is filled in on
+      // every row, and the one Walt's fourth question actually asks for.
+      + ["spent", "purchase", "cost", "sale", "profit"].map((k) => reportSortHeader("vehicle-profit", k, "num-col col-money")).join("")
       + reportSortHeader("vehicle-profit", "margin", "num-col col-hours");
   }
   return reportSortHeader("vehicle-spend", "stock", "col-stock")
@@ -1065,16 +1136,26 @@ function renderProfitTable(rows) {
   // knowable profit, so it dropped out of the "N sold" tally and the footer
   // disagreed with the card above it about how many cars the lot moved.
   const sold = rows.filter((r) => r.sale_price !== null && r.sale_price !== undefined);
+  // A dash, not $0.00, when not one car on the sheet has a knowable profit --
+  // a zero there reads as "the lot broke even", which is a claim, where the
+  // truth is that the arithmetic can't be done without a purchase price. The
+  // card above says the same thing in words.
+  const knowsProfit = rows.some((r) => r.profit !== null && r.profit !== undefined);
   const totalProfit = rows.reduce((s, r) => s + (r.profit || 0), 0);
+  // The rows the Purchase and Total In columns can honestly speak for. Both
+  // totals are taken over these and nothing else, and the note under the
+  // footer says how many that was whenever it isn't the whole sheet.
+  const priced = rows.filter(hasPurchasePrice);
   const cell = (r) => {
     // An unsold car has no profit yet -- a dash, not a zero and not a loss.
     const unsold = r.profit === null || r.profit === undefined;
     const tone = unsold ? "" : r.profit < 0 ? " class=\"num-col money-bad\"" : " class=\"num-col money-good\"";
+    const purchased = hasPurchasePrice(r);
     // Deliberately not click-to-open: a row here can stand for a recon record
     // AND one or more we-owe promises, so there is no single vehicle page it
     // could honestly navigate to. The VIN (with its copy button) is the handle.
     return `<tr title="${esc([
-      `${money(r.purchase_price)} purchase`,
+      purchased ? `${money(r.purchase_price)} purchase` : "no purchase price on file",
       `${money(r.recon_cost)} recon`,
       r.we_owe_count ? `${r.we_owe_count} we-owe promise${r.we_owe_count === 1 ? "" : "s"} costing ${money(r.we_owe_net_cost)} net` : "no we-owe work",
     ].join(" · "))}">
@@ -1082,8 +1163,16 @@ function renderProfitTable(rows) {
       <td class="cell-name">${esc(r.vehicle || "—")}</td>
       <td class="num cell-vin">${r.vin ? `${esc(r.vin)} <button type="button" class="copy-btn" data-copy="${esc(r.vin)}" data-copy-label="VIN" title="Copy VIN" aria-label="Copy VIN">⧉</button>` : "—"}</td>
       <td class="num-col" title="Hours flagged by techs on this car">${r.labor_hours ? fmtHours(r.labor_hours) : "—"}</td>
-      <td class="num-col">${money(r.purchase_price)}</td>
-      <td class="num-col" title="${esc(`${money(r.purchase_price)} purchase + ${money(r.recon_cost)} recon + ${money(r.we_owe_net_cost)} we-owe`)}">${money(r.total_invested)}${costMissingBadge(r)}</td>
+      ${/* The shortfall badge sits here rather than under Total In: what a
+           part nobody receipted is missing from is the shop's spend, and on
+           a car with no purchase price Total In is a dash with nothing to
+           correct. */ ""}
+      <td class="num-col" title="${esc(`${money(r.recon_cost)} recon + ${money(r.we_owe_net_cost)} we-owe, at cost`)}">${money(shopSpend(r))}${costMissingBadge(r)}</td>
+      <td class="num-col">${purchased ? money(r.purchase_price) : `<span class="muted-dash" title="What the lot paid isn't recorded in RECON — Walt keeps that figure">—</span>`}</td>
+      <td class="num-col" title="${esc(purchased
+        ? `${money(r.purchase_price)} purchase + ${money(shopSpend(r))} spent fixing it`
+        : "No purchase price on file, so what the lot has in this car can't be worked out here")}">${
+        purchased ? money(r.total_invested) : `<span class="muted-dash">—</span>`}</td>
       <td class="num-col">${r.sale_price != null ? money(r.sale_price) : "—"}</td>
       <td${tone}>${unsold ? "—" : money(r.profit)}</td>
       <td class="num-col">${r.margin_pct != null ? `${r.margin_pct}%` : "—"}</td>
@@ -1096,16 +1185,18 @@ function renderProfitTable(rows) {
     <tfoot><tr>
       <td colspan="3">Total (${rows.length} vehicle${rows.length === 1 ? "" : "s"}, ${sold.length} sold)</td>
       <td class="num-col">${fmtHours(sum((r) => r.labor_hours))}</td>
-      <td class="num-col">${money(sum((r) => r.purchase_price))}</td>
-      <td class="num-col">${money(sum((r) => r.total_invested))}</td>
+      <td class="num-col">${money(sum(shopSpend))}</td>
+      <td class="num-col">${priced.length ? money(priced.reduce((s, r) => s + r.purchase_price, 0)) : "—"}</td>
+      <td class="num-col">${priced.length ? money(priced.reduce((s, r) => s + r.total_invested, 0)) : "—"}</td>
       <td class="num-col">${money(sum((r) => r.sale_price))}</td>
-      <td class="num-col">${money(totalProfit)}</td>
+      <td class="num-col">${knowsProfit ? money(totalProfit) : "—"}</td>
       <td class="num-col">—</td>
     </tr>
-    ${/* Under Total In, the column it is missing from -- the same money is
-         also what the Profit column is over by, and the card above says so in
+    ${purchaseCoverageRow(rows, priced, 10)}
+    ${/* Under Spent, the column it is missing from -- the same money is also
+         what the Profit column is over by, and the card above says so in
          words. Putting one figure under two columns would read as two. */ ""}
-    ${missingFootRow(rows, { labelSpan: 5, after: 3 })}</tfoot>
+    ${missingFootRow(rows, { labelSpan: 4, after: 5 })}</tfoot>
     </table></div></div>`;
 }
 
@@ -1277,22 +1368,30 @@ function renderPrintReport(rows, type, start, end, totals) {
     // Same count the screen's footer uses -- paper and screen have to agree
     // about how many cars the lot sold. See renderProfitTable.
     const sold = rows.filter((r) => r.sale_price !== null && r.sale_price !== undefined);
+    // Paper and screen have to say the same thing about which cars a total
+    // covers -- this sheet gets emailed out as a PDF and read away from the
+    // app, where there is nothing to check it against. See renderProfitTable.
+    const priced = rows.filter(hasPurchasePrice);
+    const knowsProfit = rows.some((r) => r.profit !== null && r.profit !== undefined);
     body = `
       <table class="print-table report">
-        <thead><tr><th>Stock #</th><th>Vehicle</th><th>VIN</th><th class="num-col">Hours</th><th class="num-col">Purchase</th><th class="num-col">Total In</th><th class="num-col">Sold For</th><th class="num-col">Profit</th><th class="num-col">Margin</th></tr></thead>
+        <thead><tr><th>Stock #</th><th>Vehicle</th><th>VIN</th><th class="num-col">Hours</th><th class="num-col">Spent</th><th class="num-col">Purchase</th><th class="num-col">Total In</th><th class="num-col">Sold For</th><th class="num-col">Profit</th><th class="num-col">Margin</th></tr></thead>
         <tbody>${rows.map((r) => `<tr><td class="num">${esc(r.stock_number || "—")}</td><td>${esc(r.vehicle || "—")}</td><td class="num">${esc(r.vin || "—")}</td>
         <td class="num-col">${r.labor_hours ? fmtHours(r.labor_hours) : "—"}</td>
-        <td class="num-col">${money(r.purchase_price)}</td><td class="num-col">${money(r.total_invested)}</td>
+        <td class="num-col">${money(shopSpend(r))}</td>
+        <td class="num-col">${hasPurchasePrice(r) ? money(r.purchase_price) : "—"}</td><td class="num-col">${hasPurchasePrice(r) ? money(r.total_invested) : "—"}</td>
         <td class="num-col">${r.sale_price != null ? money(r.sale_price) : "—"}</td>
         <td class="num-col">${r.profit != null ? money(r.profit) : "—"}</td>
         <td class="num-col">${r.margin_pct != null ? `${r.margin_pct}%` : "—"}</td></tr>`).join("")}</tbody>
         <tfoot>
           <tr><td colspan="3">Report Total (${rows.length} vehicle${rows.length === 1 ? "" : "s"}, ${sold.length} sold)</td>
             <td class="num-col">${fmtHours(sum((r) => r.labor_hours))}</td>
-            <td class="num-col">${money(sum((r) => r.purchase_price))}</td><td class="num-col">${money(sum((r) => r.total_invested))}</td>
-            <td class="num-col">${money(sum((r) => r.sale_price))}</td><td class="num-col">${money(sum((r) => r.profit))}</td><td class="num-col"></td></tr>
-          ${printMissingFootRow(rows, { labelSpan: 5, after: 3 })}
-          <tr class="tfoot-space" aria-hidden="true"><td colspan="9"></td></tr>
+            <td class="num-col">${money(sum(shopSpend))}</td>
+            <td class="num-col">${priced.length ? money(priced.reduce((s, r) => s + r.purchase_price, 0)) : "—"}</td><td class="num-col">${priced.length ? money(priced.reduce((s, r) => s + r.total_invested, 0)) : "—"}</td>
+            <td class="num-col">${money(sum((r) => r.sale_price))}</td><td class="num-col">${knowsProfit ? money(sum((r) => r.profit)) : "—"}</td><td class="num-col"></td></tr>
+          ${purchaseCoverageRow(rows, priced, 10)}
+          ${printMissingFootRow(rows, { labelSpan: 4, after: 5 })}
+          <tr class="tfoot-space" aria-hidden="true"><td colspan="10"></td></tr>
         </tfoot>
       </table>`;
   } else {

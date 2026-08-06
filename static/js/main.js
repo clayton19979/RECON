@@ -23,6 +23,7 @@ import "./estimate-money.js";
 import "./vehicles-board.js";
 import "./list-keyboard.js";
 import "./vehicle-detail.js";
+import "./ticket-topbar.js";
 import "./move-ticket.js";
 import "./dialog-new-recon.js";
 import "./dialog-new-weowe.js";

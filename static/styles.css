@@ -1141,6 +1141,65 @@ table.sticky-head thead th {
   .detail-cost { align-items: flex-start; }
 }
 
+/* ---------- the identity band's understudy ----------
+   A slim sticky bar that stands in for .detail-head once it scrolls out of
+   the .content scrollport -- which car, where it stands, what's been spent.
+   The anchor is a zero-height sticky post at the very top of the view: it
+   takes no room in the page, so the bar's arrival never shoves the ticket
+   down mid-scroll; the bar just hangs from it, over the content. Hidden by
+   default; ticket-topbar.js flips .shown while the band is out of sight.
+   Same edge rule as the band -- steel for recon, amber for we-owe, accent
+   for retail -- so the page doesn't change color when the understudy steps
+   in. z-index over the sticky table heads (2) and under menus (50). */
+.ticket-topbar-anchor { position: sticky; top: 0; height: 0; z-index: 30; }
+.ticket-topbar {
+  display: flex; align-items: center; gap: 10px;
+  background: var(--surface); border: 1px solid var(--line);
+  border-left: 4px solid var(--recon);
+  border-radius: var(--radius);
+  padding: 7px 12px; margin-top: 8px;
+  box-shadow: var(--shadow);
+  visibility: hidden; opacity: 0; transform: translateY(-12px);
+  transition: opacity .16s ease, transform .16s ease, visibility 0s linear .16s;
+}
+.ticket-topbar.shown { visibility: visible; opacity: 1; transform: none; transition-delay: 0s; }
+.ticket-topbar.dh-weowe { border-left-color: var(--weowe); }
+.ticket-topbar.dh-retail { border-left-color: var(--accent); }
+.ticket-topbar-back {
+  display: flex; align-items: center; justify-content: center;
+  background: none; border: none; cursor: pointer;
+  color: var(--ink-soft); padding: 4px; border-radius: 8px; flex-shrink: 0;
+}
+.ticket-topbar-back:hover { background: var(--paper-raise); color: var(--ink); }
+.ticket-topbar-back svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.ticket-topbar-ident {
+  display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1;
+  background: none; border: none; cursor: pointer; text-align: left;
+  padding: 2px 4px; color: inherit;
+}
+.ticket-topbar-ident .pill { flex-shrink: 0; }
+.ticket-topbar-title {
+  font-family: "Space Grotesk", "SF Compact Condensed", "Segoe UI Semibold", system-ui, sans-serif;
+  font-size: 15px; font-weight: 700; letter-spacing: -.01em;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;
+}
+.ticket-topbar-who {
+  font-size: 12.5px; font-weight: 600; color: var(--accent-strong);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex-shrink: 1; min-width: 0;
+}
+.ticket-topbar-who[hidden] { display: none; }
+.ticket-topbar-cost { display: flex; flex-direction: column; align-items: flex-end; flex-shrink: 0; margin-left: auto; }
+.ticket-topbar-cost[hidden] { display: none; }
+.ticket-topbar-cost-label {
+  font-size: 9.5px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .06em; color: var(--ink-faint);
+}
+.ticket-topbar-cost-value {
+  font-family: "IBM Plex Mono", "Cascadia Mono", Consolas, monospace;
+  font-size: 15px; font-weight: 700; line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+}
+
 .grid-2 { display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr); gap: 18px; align-items: start; }
 @media (max-width: 980px) { .grid-2 { grid-template-columns: 1fr; } }
 

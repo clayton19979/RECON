@@ -359,6 +359,31 @@
 
       <!-- VEHICLE DETAIL -->
       <section class="view" id="view-vehicle-detail">
+        <!-- The identity band's understudy (ticket-topbar.js). A zero-height
+             sticky post holds no room in the page; the bar hangs from it and
+             slides in only while the real band above is scrolled out of
+             sight, repeating the car, its status and the money. Everything
+             on it is a copy of the band, so assistive tech is told to skip
+             it rather than hear each fact twice -- and its buttons stay out
+             of the tab order for the same reason (the band's own controls
+             are the real ones). -->
+        <div class="ticket-topbar-anchor">
+          <div class="ticket-topbar" id="vd-topbar" aria-hidden="true">
+            <button type="button" class="ticket-topbar-back" id="vd-topbar-back" tabindex="-1" title="Back to Vehicles">
+              <svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg>
+            </button>
+            <button type="button" class="ticket-topbar-ident" id="vd-topbar-ident" tabindex="-1" title="Back to the top of the ticket">
+              <span class="ticket-topbar-title" id="vd-topbar-title"></span>
+              <span class="ticket-topbar-who" id="vd-topbar-who" hidden></span>
+              <span class="pill" id="vd-topbar-pill" hidden></span>
+            </button>
+            <span class="ticket-topbar-cost" id="vd-topbar-cost" hidden>
+              <span class="ticket-topbar-cost-label">Spent so far</span>
+              <span class="ticket-topbar-cost-value" id="vd-topbar-cost-value"></span>
+            </span>
+          </div>
+        </div>
+
         <button type="button" class="back-link" id="back-to-vehicles">
           <svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg>
           <span id="back-to-vehicles-label">Back to Vehicles</span>

@@ -8,6 +8,7 @@ import { initTheme, showView, wireGlobalErrorReporting, wireViewRetry } from "./
 import { loadVehicleViewPrefs } from "./vehicles-board.js";
 import { wireVehiclesView } from "./list-keyboard.js";
 import { wireEstimateGrid, wireJobDialog, wireMoveItemDialog, wireVehicleDetail } from "./vehicle-detail.js";
+import { wireTicketTopbar } from "./ticket-topbar.js";
 import { wireMoveSegmentDialog } from "./move-ticket.js";
 import { wireReconDialog } from "./dialog-new-recon.js";
 import { wireWeOweDialog } from "./dialog-new-weowe.js";
@@ -47,6 +48,9 @@ export function startApp() {
     // shared dialog this wires.
     wireCustomerEditor();
     wireVehicleDetail();
+    // After wireVehicleDetail: the understudy bar copies from the band that
+    // wiring owns, and never renders anything of its own.
+    wireTicketTopbar();
     wireEstimateGrid();
     wireReconDialog();
     wireWeOweDialog();

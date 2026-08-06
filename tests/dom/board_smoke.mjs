@@ -1089,6 +1089,44 @@ ok(/R\. Alvarez/.test(cardFor("we_owe:5").textContent), "a we-owe card doesn't n
 ok(/1FTEW1E5XKF/.test(cardFor("recon:1").querySelector(".veh-card-sub span").title || ""),
    "a recon card doesn't carry the full VIN for hover");
 
+/* The card raises the same coloured flags the list layout's columns do,
+   instead of leaving them buried in the grey needs sentence: the truck badge
+   for parts on order, the promise tag once the customer's date lands, and the
+   missing-receipt line under the cost figure it corrects. Same markup as the
+   table's cells, so a reader who has learned a flag on one layout meets the
+   identical flag on the other. */
+ok(cardFor("recon:1").querySelector(".veh-card-facts .parts-badge")?.textContent.trim() === "2",
+   "the F-150's card doesn't carry the parts-on-order badge its table row has");
+ok(/2 parts ordered, not yet received · \$340/.test(cardFor("recon:1").querySelector(".veh-card-facts .parts-badge")?.title || ""),
+   `the card's parts tooltip reads "${cardFor("recon:1").querySelector(".veh-card-facts .parts-badge")?.title}"`);
+ok(!cardFor("recon:2").querySelector(".parts-badge"),
+   "a card with nothing on order grew a parts badge");
+
+// The promise tag and the missing-receipt line, on rows dressed for the
+// occasion and put back after -- the base fixture keeps every promise quiet.
+w.state.vehicles = board.map((v) =>
+  v.we_owe_id === 6 ? { ...v, target_date: "2026-07-20", promise_days_late: 3 }
+  : v.we_owe_id === 5 ? { ...v, target_date: "2026-07-25", promise_days_late: 0 }
+  : v.recon_id === 3 ? { ...v, unreceived_closed_cost: 380, unreceived_closed_parts: 2 }
+  : v);
+w.renderVehiclesTable();
+ok(cardFor("we_owe:6").querySelector(".veh-card-head .promise-late .promise-tag")?.textContent === "3d late",
+   `a blown promise's card head reads "${cardFor("we_owe:6").querySelector(".veh-card-head .promise-tag")?.textContent}"`);
+ok(/Promised for .* — 3 days past due/.test(cardFor("we_owe:6").querySelector(".veh-card-head .promise-cell")?.title || ""),
+   "the late tag's hover doesn't say which date was missed");
+ok(cardFor("we_owe:5").querySelector(".veh-card-head .promise-today .promise-tag")?.textContent === "due today",
+   "a promise due today doesn't say so on its card");
+ok(/\+\$380\.00 not received/.test(cardFor("recon:3").querySelector(".veh-card-money .cost-missing")?.textContent || ""),
+   "a card's cost figure is short with nothing under it saying so");
+// A settled promise goes quiet on the card the same way its table row does.
+w.state.vehicles = board.map((v) =>
+  v.we_owe_id === 6 ? { ...v, target_date: "2026-07-20", promise_days_late: null } : v);
+w.renderVehiclesTable();
+ok(!cardFor("we_owe:6").querySelector(".veh-card-head .promise-tag"),
+   "a settled promise is still flying a flag on its card");
+w.state.vehicles = board;
+w.renderVehiclesTable();
+
 /* Filters and search reach the columns, because they're the same rows. */
 chip("recon").click();
 ok(allCards().length === 3 && cardsIn("working").length === 2 && cardsIn("waiting").length === 1,

@@ -1799,8 +1799,10 @@ function vehicleCardHtml(v) {
       <span class="veh-card-ref">${esc(ref)}${age ? ` <span class="${ageTone}">· ${esc(age)}</span>` : ""}</span>
       ${roTagHtml(v)}
     </div>
-    <div class="veh-card-name" title="${esc(v.vehicle)}">${esc(v.vehicle)}</div>
-    <div class="veh-card-sub">${cardSubHtml(v)}</div>
+    <div class="veh-card-title">
+      <div class="veh-card-name" title="${esc(v.vehicle)}">${esc(v.vehicle)}</div>
+      <div class="veh-card-sub">${cardSubHtml(v)}</div>
+    </div>
     <div class="veh-card-needs" title="${esc(v.needs || "")}">${esc(v.needs || "")}</div>
     ${jobsProgressHtml(v)}
     <div class="veh-card-foot">

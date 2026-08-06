@@ -329,8 +329,10 @@ def test_csv_carries_the_same_groups_and_needs_as_the_screen(client):
 
     res = client.get("/api/export/report/lot.csv")
     assert res.status_code == 200
-    body = res.text
-    assert "Group,Stock #,Vehicle" in body, body.splitlines()[0]
+    # utf-8-sig: the file leads with a byte-order mark so Excel reads the
+    # dashes and dots in the Needs sentence -- see test_export.py.
+    body = res.content.decode("utf-8-sig")
+    assert body.startswith("Group,Stock #,Customer,Vehicle"), body.splitlines()[0]
     row = row_for(lot(client), "R-CSV")
     assert LOT_GROUP_LABEL[row["lot_bucket"]] in body, "the CSV is missing the row's group label"
     assert row["needs"] in body, "the CSV's Needs column disagrees with the report's"

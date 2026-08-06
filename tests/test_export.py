@@ -2,14 +2,71 @@ from __future__ import annotations
 
 import csv
 import io
+import re
 from datetime import date
+from pathlib import Path
 
+from app.export import VEHICLE_STATUS_LABEL
 from tests.helpers import (
     make_recon_order,
     make_recon_vehicle,
     make_we_owe,
     save_estimate,
 )
+
+
+def _rows(res):
+    """The file's header and body, read the way a spreadsheet reads it.
+
+    utf-8-sig, not utf-8: every export is written with a byte-order mark so
+    Excel on Windows reads the em dashes and middle dots in it as text rather
+    than as line noise (see export._excel_bytes). A reader that doesn't skip
+    the mark finds it stuck to the front of the first column name.
+    """
+    text = res.content.decode("utf-8-sig")
+    parsed = list(csv.reader(io.StringIO(text)))
+    return parsed[0], parsed[1:]
+
+
+def _cell(header, row, column):
+    return row[header.index(column)]
+
+
+def test_every_export_is_readable_by_excel(client):
+    """These files are written to be double-clicked, and on Windows that opens
+    Excel, which reads a mark-less .csv in the machine's ANSI code page. The
+    sheets are full of em dashes and middle dots that aren't in it, so every one
+    of them used to arrive as two or three characters of garbage."""
+    # A car whose ticket closed with a part nobody receipted, because its
+    # "Still Needs" sentence is one of the ones written with an em dash.
+    vehicle = make_recon_vehicle(client, stock_number="R-8400")
+    order = make_recon_order(client, vehicle["id"])
+    save_estimate(
+        client,
+        order["id"],
+        [{"kind": "part", "description": "Tires", "quantity": 1, "unit_price": 380, "unit_cost": 380}],
+    )
+    client.patch(f"/api/orders/{order['id']}/status", json={"status": "complete"})
+    make_we_owe(client, description="Fix mirror")
+
+    for path in (
+        "/api/export/vehicles.csv",
+        "/api/export/report/vehicle-spend.csv",
+        "/api/export/report/lot.csv",
+        "/api/export/report/vehicle-profit.csv",
+        "/api/export/report/technicians.csv",
+    ):
+        res = client.get(path)
+        assert res.status_code == 200, path
+        assert res.content.startswith(b"\xef\xbb\xbf"), f"{path} has no byte-order mark"
+        # ...exactly one of them: a reader that skips the mark must land on the
+        # first column name, not on a second mark.
+        assert not res.content.decode("utf-8-sig").startswith("﻿"), path
+
+    # The characters this is all about, still intact in the file.
+    header, body = _rows(client.get("/api/export/report/lot.csv"))
+    needs = _cell(header, next(r for r in body if _cell(header, r, "Stock #") == "R-8400"), "Still Needs")
+    assert "—" in needs, f"the lot sheet's sentences lost their dashes: {needs!r}"
 
 
 def test_export_vehicles_csv(client):
@@ -42,10 +99,10 @@ def test_export_vehicles_csv(client):
     assert res.headers["content-type"].startswith("text/csv")
     assert "attachment" in res.headers["content-disposition"]
 
-    rows = list(csv.reader(io.StringIO(res.text)))
-    header, body = rows[0], rows[1:]
+    header, body = _rows(res)
     assert header == [
-        "Stock #/Customer",
+        "Stock #",
+        "Customer",
         "Vehicle",
         "VIN",
         "Segment",
@@ -58,17 +115,57 @@ def test_export_vehicles_csv(client):
     assert "Purchase Price" not in header
     assert not any("9999" in cell for row in body for cell in row)  # purchase price never leaks into the export
 
-    recon_row = next(r for r in body if r[0] == "R-7001")
-    assert recon_row[3] == "Recon"
-    assert "INV-1" in recon_row[7]
-    assert "WorldPac" in recon_row[7]
+    recon_row = next(r for r in body if _cell(header, r, "Stock #") == "R-7001")
+    assert _cell(header, recon_row, "Segment") == "Recon"
+    assert "INV-1" in _cell(header, recon_row, "Linked Vendor Invoices")
+    assert "WorldPac" in _cell(header, recon_row, "Linked Vendor Invoices")
 
-    assert any(r[3] == "We-Owe" for r in body)
+    assert any(_cell(header, r, "Segment") == "We-Owe" for r in body)
 
 
-def _rows(res):
-    parsed = list(csv.reader(io.StringIO(res.text)))
-    return parsed[0], parsed[1:]
+def test_a_we_owe_keeps_its_customer_out_of_the_stock_number_column(client):
+    """A stock number and a customer's name are two different things, and the
+    column a downloaded sheet gets sorted by is the stock number. Putting the
+    customer in it interleaved people's names among the R-numbers, and left the
+    name the screen shows on every we-owe row in no column at all."""
+    make_recon_vehicle(client, stock_number="R-8500")
+    make_we_owe(client, customer_name="Renata Silva", description="Tie rod")
+
+    for path in ("/api/export/vehicles.csv", "/api/export/report/vehicle-spend.csv", "/api/export/report/lot.csv"):
+        header, body = _rows(client.get(path))
+        assert "Customer" in header, path
+        we_owe = next(r for r in body if _cell(header, r, "Customer") == "Renata Silva")
+        assert _cell(header, we_owe, "Stock #") == "", path
+
+        recon = next(r for r in body if _cell(header, r, "Stock #") == "R-8500")
+        # ...and the other way round: a lot car is nobody's, so its customer
+        # cell stays blank rather than borrowing the shop's own record.
+        assert _cell(header, recon, "Customer") == "", path
+
+
+def test_a_car_with_no_ticket_gets_a_status_in_words(client):
+    """A vehicle row's status is a ticket status on a car with a ticket and a
+    board status on one without, and the file holds both in one column. The
+    exports knew only the ticket half, so a lot sheet read "acquired", "sold"
+    and "waived" in raw lower case beside "Complete" from the same column."""
+    make_recon_vehicle(client, stock_number="R-8600")
+    make_we_owe(client, description="Touch up paint")
+
+    header, body = _rows(client.get("/api/export/report/lot.csv"))
+    statuses = {_cell(header, r, "Status") for r in body}
+    assert statuses == {"Acquired", "Open"}
+    assert not any(word.islower() for word in statuses)
+
+
+def test_the_browser_and_the_exports_say_the_same_status_words(client):
+    """The screen has its own copy of this map, and the two drifting apart is
+    exactly how the exports ended up printing raw column values: nothing held
+    them together. state.js is the browser's copy."""
+    source = (Path(__file__).resolve().parent.parent / "static/js/state.js").read_text(encoding="utf-8")
+    body = re.search(r"export const STATUS_LABEL = \{(.*?)\n\};", source, re.DOTALL)
+    assert body, "STATUS_LABEL is no longer declared the way this test reads it"
+    on_screen = dict(re.findall(r"(\w+):\s*\"([^\"]+)\"", body.group(1)))
+    assert on_screen == VEHICLE_STATUS_LABEL
 
 
 def test_export_vehicle_spend_report_csv(client):
@@ -97,6 +194,9 @@ def test_export_vehicle_spend_report_csv(client):
     header, body = _rows(res)
     assert header == [
         "Stock #",
+        # The we-owe's customer, kept out of the column above so the file can
+        # be sorted by stock number -- see the test of that name.
+        "Customer",
         "Vehicle",
         "VIN",
         "Type",
@@ -115,13 +215,14 @@ def test_export_vehicle_spend_report_csv(client):
         "Filed To History",
     ]
     assert len(body) == 2
-    recon_row = next(r for r in body if r[0] == "R-8001")
-    assert recon_row[3] == "Recon"
-    assert recon_row[6] == "150.00"  # 2 x $45 labor + the $60 rotor, every line in full
-    assert recon_row[7] == "90.00"  # only the labor has actually landed
+    recon_row = next(r for r in body if _cell(header, r, "Stock #") == "R-8001")
+    assert _cell(header, recon_row, "Type") == "Recon"
+    # 2 x $45 labor + the $60 rotor, every line in full
+    assert _cell(header, recon_row, "Written Up") == "150.00"
+    assert _cell(header, recon_row, "Cost") == "90.00"  # only the labor has actually landed
     # Nothing yet: this ticket is still open, and an unreceived line on an open
     # ticket is work still ahead rather than a hole in what the car cost.
-    assert recon_row[8] == "0.00"
+    assert _cell(header, recon_row, "Never Marked Received") == "0.00"
 
     # The segment filter has to reach the file, or "Recon only" on screen
     # downloads every vehicle in the shop.

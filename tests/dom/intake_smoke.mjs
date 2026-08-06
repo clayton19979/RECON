@@ -111,6 +111,73 @@ await settle();
 ok(note().hidden, "last car's warning must not greet the next one");
 ok($("#recon-stock").value === "", "the form should be empty again");
 
+/* ---------- the VIN proves itself while it's being typed ----------
+
+   Every 17-character VIN carries its own check digit, and the server already
+   refuses one that fails it -- but only after the whole form is typed. The
+   box now answers while the eyes are still on the car: a count on the way
+   to 17, then the verdict. */
+const vinBox = $("#recon-vin");
+const verdict = $("#recon-vin-verdict");
+const typeVin = async (value) => {
+  vinBox.value = value;
+  vinBox.dispatchEvent(new w.Event("input", { bubbles: true }));
+  await settle();
+};
+ok(verdict.hidden, "an empty VIN box should say nothing");
+await typeVin("1hgcm826");
+ok(vinBox.value === "1HGCM826", `the box should show the shape the record will store, shows "${vinBox.value}"`);
+ok(!verdict.hidden && /8 of 17/.test(verdict.textContent),
+   `a short VIN should be counted, not judged, got "${verdict.textContent}"`);
+await typeVin("1HGCM82633A004352");
+ok(verdict.classList.contains("ok") && /checks out/.test(verdict.textContent),
+   `a VIN whose check digit works out should say so, got "${verdict.textContent}"`);
+
+/* Decode VIN lights up while it is the shortest path -- the VIN just proved
+   itself and make/model are still empty -- and rests once they're typed. */
+ok($("#recon-decode-vin").classList.contains("btn-decode-ready"),
+   "a proven VIN over an empty make/model should light up Decode VIN");
+$("#recon-make").value = "Honda";
+$("#recon-make").dispatchEvent(new w.Event("input", { bubbles: true }));
+ok(!$("#recon-decode-vin").classList.contains("btn-decode-ready"),
+   "typing the make by hand should put the Decode button back to rest");
+$("#recon-make").value = "";
+$("#recon-make").dispatchEvent(new w.Event("input", { bubbles: true }));
+
+/* One character off fails the arithmetic; the letter O gets named as the
+   usual suspect it is. */
+await typeVin("1HGCM82633A004353");
+ok(verdict.classList.contains("bad") && /misread/.test(verdict.textContent),
+   `a VIN one character off should be doubted, got "${verdict.textContent}"`);
+await typeVin("1HGCM82633AO04352");
+ok(/letter O/.test(verdict.textContent),
+   `the letter O should be called out as a probable zero, got "${verdict.textContent}"`);
+await typeVin("");
+ok(verdict.hidden, "clearing the box should clear the verdict with it");
+
+/* ---------- the head line assembles the car ----------
+
+   What's about to be saved, readable in one place while it's still being
+   typed. The year only joins once a make exists -- the field defaults to
+   the current year, and a bare year is the form talking to itself. */
+const preview = $("#recon-preview");
+const typeField = async (sel, value) => {
+  $(sel).value = value;
+  $(sel).dispatchEvent(new w.Event("input", { bubbles: true }));
+  await settle();
+};
+ok(preview.hidden, "an empty form should have no head line");
+await typeField("#recon-stock", "R-2200");
+ok(!preview.hidden && /R-2200/.test(preview.textContent),
+   `the stock number should lead the head line, got "${preview.textContent}"`);
+await typeField("#recon-make", "Kia");
+ok(new RegExp(`${new w.Date().getFullYear()} Kia`).test(preview.textContent),
+   `the year should join once a make exists, got "${preview.textContent}"`);
+await typeField("#recon-model", "Sorento");
+await typeField("#recon-color", "White");
+ok(/R-2200 · \d{4} Kia Sorento · White/.test(preview.textContent),
+   `the head line should read like the board card will, got "${preview.textContent}"`);
+
 /* ---------- the plate box actually saves ----------
 
    It sat on this form from the beginning and the save simply left it out, so
@@ -132,4 +199,4 @@ ok(saved[0].plate_state === "IN", `the plate's state never reached the server: $
 
 ok(rejections.length === 0, `unhandled rejections during the run: ${rejections.map((r) => r && r.message).join("; ")}`);
 
-finish("recon intake: duplicate stock number and VIN caught before the form is typed, History told apart from the lot, plate saved");
+finish("recon intake: duplicates caught before the form is typed, the VIN checks itself as it lands, the head line assembles the car, plate saved");

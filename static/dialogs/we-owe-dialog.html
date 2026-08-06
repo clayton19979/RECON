@@ -5,7 +5,10 @@
 <dialog id="we-owe-dialog">
   <form class="modal" id="we-owe-form">
     <div class="modal-head">
-      <div><p class="eyebrow">NEW PROMISE</p><h2>Add We-Owe Item</h2></div>
+      <div><p class="eyebrow">NEW PROMISE</p><h2>Add We-Owe Item</h2>
+        <!-- The promise assembling as the form is typed: who, which car,
+             what was said. Hidden until there's something to show. -->
+        <p class="intake-preview" id="we-owe-preview" hidden></p></div>
       <button class="icon-btn" formnovalidate type="button" id="we-owe-cancel">×</button>
     </div>
     <div class="modal-body">
@@ -39,7 +42,7 @@
                  already spent on it. Without one the car is stranded on a
                  record of its own and its profit can never be worked out, so
                  it's asked for properly rather than marked "optional". -->
-            <label style="flex:2">VIN<input id="we-owe-new-vin" placeholder="17-character VIN"></label>
+            <label style="flex:2">VIN<input id="we-owe-new-vin" maxlength="17" placeholder="17-character VIN" autocapitalize="characters" autocomplete="off" spellcheck="false"><span class="vin-verdict" id="we-owe-vin-verdict" hidden></span></label>
             <button type="button" class="btn btn-ghost form-row-btn-end" id="we-owe-decode-vin">Decode VIN</button>
           </div>
           <div class="form-row">

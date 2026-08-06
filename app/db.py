@@ -318,6 +318,23 @@ CREATE TABLE IF NOT EXISTS purchase_orders (
   number TEXT NOT NULL UNIQUE,
   vendor_id INTEGER REFERENCES vendors(id),
   note TEXT NOT NULL DEFAULT '',
+  /* The day the vendor said the parts would land, as a shop-local calendar
+   * date (YYYY-MM-DD). Empty means nobody was told a day, which is a normal
+   * and common state -- plenty of orders are placed with "should be a couple
+   * of days" and nothing firmer.
+   *
+   * On the batch rather than the part line because a batch is one phone call
+   * to one supplier, and the date is what they said on that call. Splitting it
+   * per line would mean typing the same date four times for four parts that
+   * are coming in one box.
+   *
+   * A date, not a timestamp: nobody promises 2:15pm, and every other date the
+   * advisor filters or reads in this app is a local calendar day (see now()).
+   * It is what turns the On Order desk from "this has been nine days" into
+   * "they said Tuesday and it is Friday" -- the difference between a part
+   * that is simply taking a while and a promise that was broken.
+   */
+  expected_at TEXT NOT NULL DEFAULT '',
   created_by TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL,
   /* When ordering against this batch finished -- set once and never cleared.
@@ -1045,6 +1062,14 @@ def _migrate(db: sqlite3.Connection) -> None:
     for column in ("address_line1", "address_line2", "city", "state", "postal_code"):
         if column not in customer_columns:
             db.execute(f"ALTER TABLE customers ADD COLUMN {column} TEXT NOT NULL DEFAULT ''")
+
+    # What day the vendor said the parts would land. Every batch already on
+    # file was placed before anyone could record an answer, so they all start
+    # blank -- which reads on the desk as "nobody was told a day", exactly what
+    # was true of them. See the column's comment in SCHEMA.
+    po_columns = {row[1] for row in db.execute("PRAGMA table_info(purchase_orders)")}
+    if "expected_at" not in po_columns:
+        db.execute("ALTER TABLE purchase_orders ADD COLUMN expected_at TEXT NOT NULL DEFAULT ''")
 
     vehicle_columns = {row[1] for row in db.execute("PRAGMA table_info(vehicles)")}
     if "unit_id" not in vehicle_columns:

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections.abc import Callable
+from datetime import date, datetime
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, HTTPException
@@ -28,6 +29,43 @@ from .workflow import (
 )
 
 PART_STATUSES = {"quoted", "ordered", "received"}
+
+
+def clean_expected_date(value: str) -> str:
+    """The day a vendor said a batch would land, normalised or refused.
+
+    Empty stays empty -- "they didn't say" is a real answer and the common one.
+    Anything else has to be a calendar date the app can compare against today,
+    because the whole point of storing it is to say "that was three days ago".
+    A value that cannot be read would sit on the desk looking like a promise
+    and quietly count for nothing, which is worse than refusing it at the door.
+    """
+    text = (value or "").strip()
+    if not text:
+        return ""
+    try:
+        return date.fromisoformat(text).isoformat()
+    except ValueError:
+        raise HTTPException(400, "Expected date must be a calendar date like 2026-08-14") from None
+
+
+def days_past_expected(expected_at: str) -> int | None:
+    """How many days past the promised day a batch is.
+
+    Negative counts days still to go and 0 means it is due today, so one number
+    answers both "have they broken this" and "how long have I got" -- the same
+    shape recon.promise_days_late uses for a we-owe's promised date, so the two
+    "past the date somebody was given" figures in the app read alike.
+
+    None means the question doesn't apply: no day was written down. Compared
+    against the shop's own calendar date rather than UTC, because "they said
+    Thursday" means Thursday in Merrillville -- see db.now().
+    """
+    try:
+        promised = date.fromisoformat((expected_at or "").strip())
+    except ValueError:
+        return None
+    return (datetime.now().date() - promised).days
 
 
 class AppendItemIn(BaseModel):
@@ -82,11 +120,15 @@ class PurchaseOrderIn(BaseModel):
     # them; see vendor_for_name.
     vendor_name: str = Field(default="", max_length=200)
     note: str = Field(default="", max_length=200)
+    # What day they said it would be here. Almost never known at the moment the
+    # number is pulled -- the number is pulled *to make* the call -- so it is
+    # normally filled in afterwards, from the On Order desk. See the patch.
+    expected_at: str = Field(default="", max_length=10)
     actor: str = "ui"
 
 
 class PurchaseOrderPatch(BaseModel):
-    """Fill in who a batch went to after the fact.
+    """Fill in who a batch went to, and when they said it would land.
 
     Every field is None-means-leave-alone rather than defaulting, because this
     is what the supplier box on the ticket sends and it must be able to say
@@ -96,6 +138,9 @@ class PurchaseOrderPatch(BaseModel):
     vendor_id: int | None = None
     vendor_name: str | None = Field(default=None, max_length=200)
     note: str | None = Field(default=None, max_length=200)
+    # An explicit "" clears the promised day, which is how a date heard wrong
+    # gets taken back off. "They didn't say" has to stay sayable.
+    expected_at: str | None = Field(default=None, max_length=10)
     actor: str = "ui"
 
 
@@ -245,7 +290,12 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
         return vendor_for_name(db, vendor_name)
 
     def create_purchase_order(
-        db: sqlite3.Connection, order: sqlite3.Row, vendor_id: int | None, note: str, actor: str
+        db: sqlite3.Connection,
+        order: sqlite3.Row,
+        vendor_id: int | None,
+        note: str,
+        actor: str,
+        expected_at: str = "",
     ) -> dict:
         """Hand out the next PO number on this ticket.
 
@@ -264,9 +314,18 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
         )
         number = purchase_order_number(order["ro_number"], sequence)
         cur = db.execute(
-            "INSERT INTO purchase_orders(order_id,sequence,number,vendor_id,note,created_by,created_at)"
-            " VALUES(?,?,?,?,?,?,?)",
-            (order["id"], sequence, number, vendor_id, note.strip(), actor.strip(), now_fn()),
+            "INSERT INTO purchase_orders(order_id,sequence,number,vendor_id,note,expected_at,created_by,created_at)"
+            " VALUES(?,?,?,?,?,?,?,?)",
+            (
+                order["id"],
+                sequence,
+                number,
+                vendor_id,
+                note.strip(),
+                clean_expected_date(expected_at),
+                actor.strip(),
+                now_fn(),
+            ),
         )
         po_id = inserted_id(cur)
         return dict(db.execute("SELECT * FROM purchase_orders WHERE id=?", (po_id,)).fetchone())
@@ -344,13 +403,13 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
             order = order_row(db, order_id)
             assert_vehicle_editable(db, order)
             vendor_id = resolve_vendor(db, item.vendor_id, item.vendor_name)
-            created = create_purchase_order(db, order, vendor_id, item.note, item.actor)
+            created = create_purchase_order(db, order, vendor_id, item.note, item.actor, item.expected_at)
             record_activity(db, order_id, "purchase_order_created", item.actor, {"number": created["number"]}, now_fn)
             return created
 
     @router.patch("/orders/{order_id}/purchase-orders/{po_id}")
     def update_purchase_order(order_id: int, po_id: int, item: PurchaseOrderPatch):
-        """Say who a batch of parts was ordered from.
+        """Say who a batch of parts was ordered from, and when they said it lands.
 
         Deliberately editable after the fact, and for the whole life of the
         batch. The number is pulled *before* the call -- that is the point of
@@ -364,6 +423,12 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
         supplier was never quoted to anybody, so changing it cannot make the
         shop's paper and the vendor's paper disagree. What it does change is
         whether "who do I ring about this part" has an answer.
+
+        The promised day works the same way and moves more often than the
+        supplier does: a vendor who said Tuesday rings back and says Thursday,
+        and the desk has to be able to be told so. It is deliberately editable
+        from the On Order desk as well as from the ticket, because that is the
+        screen somebody is looking at while the vendor is still on the phone.
         """
         with connect() as db:
             order = order_row(db, order_id)
@@ -379,11 +444,22 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
                 db.execute("UPDATE purchase_orders SET vendor_id=? WHERE id=?", (vendor_id, po_id))
             if item.note is not None:
                 db.execute("UPDATE purchase_orders SET note=? WHERE id=?", (item.note.strip(), po_id))
+            if item.expected_at is not None:
+                db.execute(
+                    "UPDATE purchase_orders SET expected_at=? WHERE id=?",
+                    (clean_expected_date(item.expected_at), po_id),
+                )
             updated = db.execute(
                 "SELECT po.*, v.name vendor_name FROM purchase_orders po"
                 " LEFT JOIN vendors v ON v.id=po.vendor_id WHERE po.id=?",
                 (po_id,),
             ).fetchone()
+            # Both of these are answers somebody got on the phone, so both are
+            # worth a line in the car's history -- "who did we order it from"
+            # and "when did they say" are the two questions asked about a car
+            # that is sitting waiting, and a week later nobody remembers which
+            # call produced which answer.
+            logged = False
             if updated["vendor_id"] != row["vendor_id"]:
                 record_activity(
                     db,
@@ -393,7 +469,18 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
                     {"number": row["number"], "vendor": updated["vendor_name"] or ""},
                     now_fn,
                 )
-            else:
+                logged = True
+            if updated["expected_at"] != row["expected_at"]:
+                record_activity(
+                    db,
+                    order_id,
+                    "purchase_order_expected_set",
+                    item.actor,
+                    {"number": row["number"], "expected_at": updated["expected_at"]},
+                    now_fn,
+                )
+                logged = True
+            if not logged:
                 touch_order(db, order_id, now_fn)
             return dict(updated)
 
@@ -1160,6 +1247,21 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
         person to quote it to was reachable from here. `po_outstanding` counts
         the other lines on this list from the same batch, so one call can be
         made about all of them instead of the same vendor being rung twice.
+
+        It also carries what the vendor said on that call: `expected_at`, the
+        day they promised, and `days_late`, how far past it today is (negative
+        counts days still to go, 0 is due today, None means nobody was told a
+        day). That is what separates the two very different rows this list used
+        to render identically -- a part that has been nine days coming and is
+        due tomorrow, and a part that has been four days coming and was
+        promised on Monday. Only one of those is worth a phone call.
+
+        Which is also why broken promises lead the list. The base order is
+        still longest-wait-first, and a batch nobody was given a date for keeps
+        exactly the place it always had; a batch whose promised day has come
+        and gone is lifted above them, worst first, because a supplier who said
+        Tuesday and hasn't delivered by Friday is the one call that will change
+        something today.
         """
         with connect() as db:
             rows = db.execute(
@@ -1168,7 +1270,7 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
                        o.id order_id, o.number ro_number, o.segment,
                        o.recon_vehicle_id, o.we_owe_id, o.vehicle_id,
                        v.year, v.make, v.model,
-                       po.id po_id, po.number po_number,
+                       po.id po_id, po.number po_number, coalesce(po.expected_at,'') expected_at,
                        po.vendor_id, coalesce(pv.name,'') vendor_name,
                        rv.stock_number, wc.name we_owe_customer_name, oc.name order_customer_name
                    FROM estimate_items ei
@@ -1201,7 +1303,13 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
                 value["outstanding_quantity"] = outstanding
                 value["value"] = round(outstanding * float(value["unit_cost"]), 2)
                 value["days_waiting"] = age_days(value["ordered_at"]) if value["ordered_at"] else None
+                value["days_late"] = days_past_expected(value["expected_at"])
                 result.append(value)
+            # Stable, so everything that isn't a broken promise keeps the order
+            # the query already put it in -- including the undated lines the
+            # query deliberately sorts last, which must not be lifted by having
+            # no promise to break.
+            result.sort(key=lambda v: -v["days_late"] if (v["days_late"] or 0) > 0 else 1)
             # Counted over the rows actually on this list, not over the batch
             # in the database: a batch of four whose other three turned up is
             # one phone call about one part, and saying "4 parts on this PO"

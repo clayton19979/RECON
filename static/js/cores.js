@@ -1,7 +1,7 @@
 import { $, $$, get, patch, post } from "./core.js";
 import { toast } from "./notify.js";
 import { confirmAction } from "./confirm.js";
-import { esc, fmtDate, money, promptInvoiceNumber, withLoading } from "./shortcuts.js";
+import { currentActor, esc, fmtDate, money, promptInvoiceNumber, withLoading } from "./shortcuts.js";
 import { emptyRow } from "./empty-states.js";
 import { MISSING_RECEIPT_COLUMNS, ON_ORDER_COLUMNS } from "./skeletons.js";
 import { state } from "./state.js";
@@ -66,6 +66,16 @@ function isOverdueOnOrder(p) {
   return p.days_waiting != null && p.days_waiting >= OVERDUE_AFTER_DAYS;
 }
 
+/* A promise the vendor has actually broken -- they named a day and that day
+   has gone. Deliberately not "due today": a part promised for today may well
+   turn up this afternoon, and ringing about it at 8am is the call that annoys
+   a supplier for nothing. days_late is the server's figure (see
+   parts.days_past_expected) so this desk and the API agree about which
+   promises are broken. */
+function isPastPromise(p) {
+  return p.days_late != null && p.days_late > 0;
+}
+
 // One summary row above all three tables: what the shop is waiting on from
 // its vendors, and what its vendors owe back. The credit figures span cores
 // and returns together, since a call to chase a credit doesn't care which
@@ -100,12 +110,20 @@ function renderCoresReturnsStats() {
   const oldestWait = knownWaits.length ? Math.max(...knownWaits) : 0;
   const undated = onOrder.length - knownWaits.length;
   const onOrderValue = onOrder.reduce((s, p) => s + (p.value || 0), 0);
-  const onOrderTone = oldestWait >= 14 ? "crit" : oldestWait >= OVERDUE_AFTER_DAYS ? "warn" : "";
+  const onOrderTone = oldestWait >= 14
+    ? "crit"
+    : oldestWait >= OVERDUE_AFTER_DAYS || onOrder.some(isPastPromise) ? "warn" : "";
   // Spelled out separately rather than folded into the oldest wait: an
   // undated line is not a line that was ordered today, and rolling the two
   // together is how "oldest 0d" ends up printed over a part from last month.
+  // A broken promise is the part of this card somebody can act on today, so it
+  // leads the sub-line and pushes the card to warning on its own -- a part
+  // three days past what the vendor said is worth a call even if it has only
+  // been on order since Monday.
+  const pastPromise = onOrder.filter(isPastPromise).length;
   const onOrderSub = [
     money(onOrderValue),
+    pastPromise ? `${pastPromise} past the promised day` : "",
     knownWaits.length ? (oldestWait ? `oldest ${oldestWait}d` : "all ordered today") : "",
     undated ? `${undated} with no date` : "",
   ].filter(Boolean).join(" · ");
@@ -201,6 +219,35 @@ function orderedOnHtml(value) {
   return esc(fmtDate(value).replace(/,\s+\d{1,2}:\d{2}\s*(AM|PM)$/i, ""));
 }
 
+/* The day the vendor said it would land, and whether that day has passed.
+
+   An editable date box rather than a printed date, because the answer arrives
+   during a phone call and this is the screen somebody is looking at while they
+   are on it. Making them open the car, find the parts grid and find the batch
+   is three clicks that don't get made during a busy morning, and an ETA
+   nobody records is an ETA that may as well not exist.
+
+   Empty means nobody was told a day. That stays a perfectly normal state and
+   is never dressed up as one: no count, no colour, just an empty box asking
+   for one -- the same refusal to guess the Ordered column already makes about
+   a line with no order date. */
+function expectedHtml(p) {
+  if (!p.po_id) {
+    return '<span class="muted-dash" title="This part was marked ordered before RECON recorded purchase orders, so there is no batch to hang a date on">—</span>';
+  }
+  const late = isPastPromise(p);
+  const note = p.days_late == null
+    ? ""
+    : p.days_late > 0
+      ? `<div class="veh-sub crit">${p.days_late}d late</div>`
+      : p.days_late === 0
+        ? '<div class="veh-sub">due today</div>'
+        : `<div class="veh-sub">in ${-p.days_late}d</div>`;
+  return `<input type="date" class="eta-input${late ? " late" : ""}" value="${esc(p.expected_at || "")}"
+    data-eta-id="${p.id}" aria-label="Day the vendor said this part would land"
+    title="What the vendor said on the phone. Clear it to go back to &quot;they didn't say&quot;.">${note}`;
+}
+
 // Whole days, coloured on the same age scale the board uses for its own day
 // counts. An unknown wait gets no number and no colour rather than a zero,
 // which would read as "ordered today".
@@ -214,7 +261,9 @@ function visibleOnOrderRows() {
   const query = (state.onOrderSearch || "").toLowerCase();
   return state.partsOnOrder.filter((p) => {
     if (!onOrderMatchesSearch(p, query)) return false;
-    return state.onOrderFilter === "overdue" ? isOverdueOnOrder(p) : true;
+    if (state.onOrderFilter === "overdue") return isOverdueOnOrder(p);
+    if (state.onOrderFilter === "late") return isPastPromise(p);
+    return true;
   });
 }
 
@@ -237,6 +286,7 @@ function renderPartsOnOrderTable() {
       <td class="num-col">${esc(String(p.outstanding_quantity))}</td>
       <td class="num-col">${money(p.value)}</td>
       <td>${orderedOnHtml(p.ordered_at)}</td>
+      <td class="eta-col">${expectedHtml(p)}</td>
       <td>${waitingHtml(p)}</td>
     </tr>
   `).join("") : emptyRow(ON_ORDER_COLUMNS, query ? {
@@ -247,6 +297,10 @@ function renderPartsOnOrderTable() {
     icon: "check",
     title: "Nothing has been waiting a week",
     hint: `Every part on order was called in less than ${OVERDUE_AFTER_DAYS} days ago.`,
+  } : state.onOrderFilter === "late" ? {
+    icon: "check",
+    title: "Nobody has broken a promise",
+    hint: "Every part a vendor gave a day for is still due. Parts nobody gave a day for aren't counted here — fill in the Expected box when they tell you one.",
   } : {
     icon: "check",
     title: "Nothing on order",
@@ -259,6 +313,46 @@ function renderPartsOnOrderTable() {
       if (item) openVehicleFromRow(item);
     });
   });
+
+  // The whole row opens the vehicle, so the date box has to stop its own
+  // clicks getting there -- otherwise reaching for the picker navigates away
+  // from the desk before the date can be typed.
+  $$(".eta-input", $("#on-order-table")).forEach((input) => {
+    input.addEventListener("click", (e) => e.stopPropagation());
+    input.addEventListener("change", (e) => {
+      e.stopPropagation();
+      saveExpectedDate(Number(input.dataset.etaId), input.value);
+    });
+  });
+}
+
+/* Record what the vendor said, against the batch the part went out on.
+
+   Saved against the purchase order, not the line, because a batch is one call
+   and one answer -- so a date typed on one of four parts from the same order
+   correctly moves all four, which is the behaviour somebody who just got off
+   the phone expects.
+
+   The whole desk is reloaded afterwards rather than the one cell patched: the
+   promise being recorded changes which rows are late, and therefore the order
+   of the list, the count on the chip and the summary above it. Re-rendering
+   half of that would leave the desk quietly disagreeing with itself. */
+async function saveExpectedDate(itemId, value) {
+  const item = state.partsOnOrder.find((p) => p.id === itemId);
+  if (!item || !item.po_id) return;
+  try {
+    await patch(`/api/orders/${item.order_id}/purchase-orders/${item.po_id}`, {
+      expected_at: value || "",
+      actor: currentActor() || "ui",
+    });
+    toast(value ? "Expected date saved" : "Expected date cleared");
+    await loadCoresView();
+  } catch (err) {
+    toast(err.message, true);
+    // Put the box back to what is actually on file. A refused save that left
+    // the typed date sitting in the cell would read as saved.
+    await loadCoresView();
+  }
 }
 
 export function wirePartsOnOrderView() {

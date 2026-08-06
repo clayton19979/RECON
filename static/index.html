@@ -947,7 +947,7 @@
           <div class="desk-head">
             <div class="desk-heading">
               <h2 id="desk-on-order-title">On Order</h2>
-              <p class="desk-desc">Parts marked ordered that haven't been received yet — longest wait first. Click a row to open the vehicle and receive it.</p>
+              <p class="desk-desc">Parts marked ordered that haven't been received yet — broken promises first, then longest wait. Fill in the day the vendor said it would land and this desk will tell you when they've missed it. Click a row to open the vehicle and receive it.</p>
             </div>
             <div class="desk-tally">
               <span class="desk-count" id="on-order-count" aria-live="polite">0 parts</span>
@@ -958,12 +958,13 @@
           <div class="filters desk-filters">
             <button class="chip active" data-on-order-filter="">All</button>
             <button class="chip" data-on-order-filter="overdue" title="Ordered a week or more ago and still not here">Waiting 7+ days</button>
+            <button class="chip" data-on-order-filter="late" title="The vendor said a day and that day has passed">Past the promised day</button>
             <input id="on-order-search" class="filters-search" placeholder="Search parts on order…" title="Searches part, part #, RO, vehicle, supplier and PO" aria-label="Search parts on order" autocomplete="off">
           </div>
 
           <div class="table-wrap">
             <table>
-              <thead><tr><th>Part</th><th>Part #</th><th>RO / Vehicle</th><th>Ordered From</th><th class="num-col">Qty</th><th class="num-col">Value</th><th>Ordered</th><th>Waiting</th></tr></thead>
+              <thead><tr><th>Part</th><th>Part #</th><th>RO / Vehicle</th><th>Ordered From</th><th class="num-col">Qty</th><th class="num-col">Value</th><th>Ordered</th><th>Expected</th><th>Waiting</th></tr></thead>
               <tbody id="on-order-table"></tbody>
             </table>
           </div>

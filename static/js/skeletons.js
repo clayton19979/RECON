@@ -41,15 +41,15 @@ export const BOARD_COLUMNS = 11;
 // skeleton/empty-state colspan contract as BOARD_COLUMNS above.
 export const CUSTOMER_COLUMNS = 7;
 
-// Part, Part #, RO / Vehicle, Qty, Value, Ordered, Waiting. Same contract
-// again: the loading skeleton, the empty state and the error state all have
-// to span the On Order table's real width.
-export const ON_ORDER_COLUMNS = 8;
+// Part, Part #, RO / Vehicle, Ordered From, Qty, Value, Ordered, Expected,
+// Waiting. Same contract again: the loading skeleton, the empty state and the
+// error state all have to span the On Order table's real width.
+export const ON_ORDER_COLUMNS = 9;
 
-// Part, Part #, RO / Vehicle, Qty, Not In Cost, Ticket Idle. One column
-// shorter than On Order: a line that was never received has no Ordered date
-// worth printing, and a blank column reads as missing data rather than as a
-// question that doesn't apply.
+// Part, Part #, RO / Vehicle, Qty, Not In Cost, Ticket Idle. Shorter than On
+// Order: a line that was never received has no Ordered date worth printing,
+// and a blank column reads as missing data rather than as a question that
+// doesn't apply.
 export const MISSING_RECEIPT_COLUMNS = 6;
 
 // Which containers to fill with a placeholder when a view is opened, and how

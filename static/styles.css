@@ -2121,6 +2121,15 @@ dialog::backdrop { background: var(--backdrop); backdrop-filter: blur(3px); }
 #we-owe-dialog { border-top-color: var(--weowe); }
 #we-owe-dialog .eyebrow { color: var(--weowe); }
 
+/* ---------- add-job usual chips ----------
+   The shop's own most-written job names, offered as one-click fills in the
+   Add Job dialog. Same .chip shape as the board filters so "click me" reads
+   instantly; the label above them says what clicking does. */
+.job-usual { margin: -4px 0 12px; }
+.job-usual-label { margin: 0 0 7px; font-size: 11.5px; font-weight: 600; color: var(--ink-faint); }
+.job-usual-grid { display: flex; flex-wrap: wrap; gap: 7px; }
+.job-usual-chip { background: var(--paper-raise); }
+
 /* ---------- address autocomplete ---------- */
 .addr-autocomplete { position: relative; }
 .addr-suggestions {

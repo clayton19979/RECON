@@ -225,6 +225,7 @@ const HELP_TOPICS = [
     steps: [
       "Open the vehicle and find the Parts & Labor card.",
       "'+ Add Job' groups related work; '+ Part' and '+ Labor' add lines under it.",
+      "Adding a job offers the shop's usual job names as buttons — click one instead of typing it.",
       "Every field saves itself as you type — there's no Save button, and the card says so when it's saving.",
       "The totals under 'This Ticket' update as you go.",
     ],

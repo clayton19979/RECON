@@ -57,6 +57,29 @@ def build_jobs_router(connect: Callable[[], sqlite3.Connection], now_fn: Callabl
         discover that the tech who had it has left the shop."""
         assert_assignable(db, technician_id, {"technician"}, "Technician", current_id)
 
+    @router.get("/jobs/usual-titles")
+    def usual_job_titles(limit: int = 12):
+        """The job names this shop actually writes, most-written first.
+
+        Feeds the one-click choices in the Add Job dialog, so it comes from
+        the shop's own tickets rather than a canned list -- a shop that does
+        windshields all day sees "Windshield", not somebody's guess. Grouped
+        case-insensitively; the spelling shown is whichever was written most
+        recently (SQLite's bare-column-with-MAX(id) rule), so correcting a
+        title's capitalization once eventually corrects the chip too.
+        """
+        limit = max(1, min(limit, 30))
+        with connect() as db:
+            rows = db.execute(
+                """SELECT trim(title) AS title, max(id)
+                   FROM estimate_jobs WHERE trim(title) != ''
+                   GROUP BY lower(trim(title))
+                   ORDER BY count(*) DESC, max(id) DESC
+                   LIMIT ?""",
+                (limit,),
+            ).fetchall()
+        return [row["title"] for row in rows]
+
     @router.post("/orders/{order_id}/jobs", status_code=201)
     def create_job(order_id: int, item: JobIn):
         with connect() as db:

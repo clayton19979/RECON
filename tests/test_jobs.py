@@ -187,6 +187,27 @@ def test_save_estimate_rejects_job_id_from_other_estimate(client):
     assert res.status_code == 422
 
 
+def test_usual_titles_come_from_the_shops_own_tickets(client):
+    """The Add Job dialog's one-click chips: most-written first, spellings
+    deduped case-insensitively, and the spelling shown is the latest one."""
+    assert client.get("/api/jobs/usual-titles").json() == []
+
+    vehicle = make_recon_vehicle(client, stock_number="R-USL-A")
+    order = make_recon_order(client, vehicle["id"])
+    other_vehicle = make_recon_vehicle(client, stock_number="R-USL-B")
+    other_order = make_recon_order(client, other_vehicle["id"])
+
+    client.post(f"/api/orders/{order['id']}/jobs", json={"title": "front brakes"})
+    client.post(f"/api/orders/{order['id']}/jobs", json={"title": "Windshield"})
+    client.post(f"/api/orders/{other_order['id']}/jobs", json={"title": "Front Brakes"})
+
+    titles = client.get("/api/jobs/usual-titles").json()
+    assert titles == ["Front Brakes", "Windshield"]
+
+    # The limit is respected, and the most-written name survives the cut.
+    assert client.get("/api/jobs/usual-titles?limit=1").json() == ["Front Brakes"]
+
+
 def test_job_mutations_blocked_when_vehicle_archived(client):
     vehicle = make_recon_vehicle(client, stock_number="R-JOB-ARCH")
     order = make_recon_order(client, vehicle["id"])

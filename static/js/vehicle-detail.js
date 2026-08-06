@@ -2529,7 +2529,38 @@ function openJobDialog(job = null) {
     selectedName: job ? job.technician_name : "",
     blankLabel: "Use ticket default",
   });
+  $("#job-usual").hidden = true;
+  if (!job) fillUsualJobs();
   $("#job-dialog").showModal();
+}
+
+/* The shop writes the same handful of jobs all day; offer its own
+   most-written names as one-click chips so a busy write-up never types
+   "Front Brakes" again. Filled after the dialog opens (never blocks it),
+   and any failure just leaves the section hidden -- the typed path is
+   untouched. */
+async function fillUsualJobs() {
+  let titles = [];
+  try {
+    titles = await get("/api/jobs/usual-titles");
+  } catch {
+    return;
+  }
+  // Ignore a stale response if the dialog moved on to a rename meanwhile.
+  if (state.detail.editingJobId !== null || !titles.length) return;
+  const grid = $("#job-usual-grid");
+  grid.innerHTML = titles
+    .map((t) => `<button type="button" class="chip job-usual-chip" data-title="${esc(t)}">${esc(t)}</button>`)
+    .join("");
+  $$(".job-usual-chip", grid).forEach((chip) =>
+    chip.addEventListener("click", () => {
+      const input = $("#job-title-input");
+      input.value = chip.dataset.title;
+      $$(".job-usual-chip", grid).forEach((c) => c.classList.toggle("active", c === chip));
+      input.focus();
+    })
+  );
+  $("#job-usual").hidden = false;
 }
 
 export function wireJobDialog() {

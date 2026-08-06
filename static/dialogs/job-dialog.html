@@ -7,6 +7,14 @@
     </div>
     <div class="modal-body">
       <label>Job name<input id="job-title-input" required placeholder="e.g. Front Brakes" autofocus></label>
+      <!-- The shop's own most-written job names, one click instead of typing.
+           Filled by openJobDialog from /api/jobs/usual-titles; stays hidden
+           while renaming (the name is already there) and on a fresh database
+           with no history to offer. -->
+      <div class="job-usual" id="job-usual" hidden>
+        <p class="job-usual-label">Usual jobs — click to fill it in</p>
+        <div class="job-usual-grid" id="job-usual-grid"></div>
+      </div>
       <label>Technician<select id="job-technician-input"><option value="">Use ticket default</option></select></label>
     </div>
     <div class="modal-actions">

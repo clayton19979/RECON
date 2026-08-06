@@ -683,6 +683,19 @@ table.sticky-head thead th {
   font-variant-numeric: tabular-nums; letter-spacing: .04em;
   font-weight: 600; color: var(--ink-soft);
 }
+/* The colour on file, worn wherever a car's identity line is drawn. The chip
+   is a picture of the word next to it, nothing more -- bordered so a white
+   chip still reads on white paper and a black one in a dark theme, and
+   skipped entirely when the written colour isn't one the palette knows. */
+.veh-color { display: inline-flex; align-items: center; gap: 5px; color: var(--ink-soft); font-weight: 500; }
+.color-chip {
+  width: 10px; height: 10px; border-radius: 3px; flex: none;
+  border: 1px solid color-mix(in srgb, var(--ink) 35%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, #fff 25%, transparent);
+}
+/* Inside the header's spec tags the chip sits against the tag's own raised
+   paper, so it can drop the inner highlight and just keep the outline. */
+.detail-sub .spec .veh-color { color: inherit; font-weight: inherit; }
 .board-table .veh-customer { display: inline-flex; vertical-align: top; align-items: center; gap: 4px; color: var(--ink-soft); font-weight: 500; }
 .board-table .veh-customer svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 2; opacity: .8; }
 .board-table tbody tr.selected { background: var(--accent-tint); }

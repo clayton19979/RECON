@@ -535,6 +535,7 @@ def main() -> None:
             "model": "Sorento",
             "vin": "5XYPGDA31JG123456",
             "mileage": 71200,
+            "color": "Pearl White",
             "acquisition_source": "trade-in",
             "acquisition_date": "2026-07-22",
             "purchase_price": 5200,
@@ -553,6 +554,7 @@ def main() -> None:
             "model": "Elantra",
             "vin": "5NPD84LF0HH123456",
             "mileage": 84500,
+            "color": "Silver",
             "acquisition_source": "auction",
             "acquisition_date": "2026-07-10",
             "purchase_price": 3100,
@@ -632,6 +634,7 @@ def main() -> None:
             "model": "Fusion",
             "vin": "3FA6P0H70GR123456",
             "mileage": 92000,
+            "color": "Dk Gray",
             "acquisition_source": "auction",
             "acquisition_date": "2026-06-28",
             "purchase_price": 2800,
@@ -674,6 +677,7 @@ def main() -> None:
             "model": "Malibu",
             "vin": "1G11C5SL2FF123456",
             "mileage": 101500,
+            "color": "Red",
             "acquisition_source": "auction",
             "acquisition_date": "2026-06-05",
             "purchase_price": 2400,
@@ -705,6 +709,7 @@ def main() -> None:
             "model": "Patriot",
             "vin": "1C4NJRFB8ED123456",
             "mileage": 118000,
+            "color": "Black",
             "acquisition_source": "trade-in",
             "acquisition_date": "2026-04-02",
             "purchase_price": 1900,
@@ -728,6 +733,7 @@ def main() -> None:
         model="Soul",
         vin="KNDJP3A50L7123456",
         mileage=31000,
+        color="Yellow",
     )
     we1 = post(
         client,
@@ -782,6 +788,7 @@ def main() -> None:
         model="RAV4",
         vin="2T3P1RFV0KW123456",
         mileage=48200,
+        color="Blue",
     )
     we2 = post(
         client,
@@ -810,6 +817,7 @@ def main() -> None:
         model="Accord",
         vin="1HGCV1F34JA123456",
         mileage=52300,
+        color="Black",
     )
     we3 = post(
         client,
@@ -834,6 +842,7 @@ def main() -> None:
         model="Cherokee",
         vin="1C4PJLDB4HW123456",
         mileage=67800,
+        color="Anvil",
     )
     we4 = post(
         client,

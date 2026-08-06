@@ -1407,7 +1407,7 @@ def vehicle_board_rows(
     result = []
     if segment in (None, "recon"):
         rows = db.execute(
-            """SELECT rv.*, v.year, v.make, v.model, v.vin, v.mileage, v.plate, v.plate_state, v.unit_id,
+            """SELECT rv.*, v.year, v.make, v.model, v.vin, v.mileage, v.color, v.plate, v.plate_state, v.unit_id,
                       u.purchase_price unit_purchase_price, u.sale_price unit_sale_price
                FROM recon_vehicles rv
                JOIN vehicles v ON v.id=rv.vehicle_id
@@ -1460,6 +1460,11 @@ def vehicle_board_rows(
                     "stock_number": row["stock_number"],
                     "vehicle": f"{row['year']} {row['make']} {row['model']}",
                     "vin": row["vin"],
+                    # The colour off the intake form, because "the white
+                    # Sorento" is how a car is actually pointed at across a
+                    # lot -- the board's card leads its identity line with it,
+                    # and the search box matches on it.
+                    "color": row["color"] or "",
                     # Carried on every board row because the search bar filters
                     # this list in the browser -- a plate the row doesn't hold
                     # is a plate nobody can find the car by.
@@ -1537,7 +1542,7 @@ def vehicle_board_rows(
     if segment in (None, "we_owe"):
         rows = db.execute(
             """SELECT w.*, c.name customer_name, v.year, v.make, v.model, v.vin,
-                      v.plate, v.plate_state, v.unit_id,
+                      v.color, v.plate, v.plate_state, v.unit_id,
                       u.purchase_price unit_purchase_price, u.sale_price unit_sale_price
                FROM we_owe_items w
                JOIN customers c ON c.id=w.customer_id JOIN vehicles v ON v.id=w.vehicle_id
@@ -1586,6 +1591,9 @@ def vehicle_board_rows(
                     "stock_number": row["lot_stock_number"] or None,
                     "vehicle": f"{row['year']} {row['make']} {row['model']}",
                     "vin": row["vin"],
+                    # Same as the recon rows: the colour is half of how anyone
+                    # says which car a promise is about.
+                    "color": row["color"] or "",
                     "plate": row["plate"],
                     "plate_state": row["plate_state"],
                     "customer_name": row["customer_name"],

@@ -1605,34 +1605,74 @@ textarea { min-height: 70px; resize: vertical; font-family: inherit; }
 .money-credit span:last-child { color: var(--good); }
 
 /* ---------- receive parts lines ----------
-   Description / qty / an editable price / that line's total. The price is a
-   real input rather than a printed figure because the vendor's invoice is
-   what's being typed in, and it is the number that decides both what the car
-   cost and what the shop owes. */
-.receive-lines { padding: 4px 0 12px; display: flex; flex-direction: column; gap: 6px; }
-.receive-line {
-  display: grid; grid-template-columns: 1fr auto 92px 78px; gap: 10px;
-  align-items: center; font-size: 12.5px;
+   A little invoice sheet: description / qty / an editable price / that line's
+   total. Drawn as one bordered block with a shaded header so the rows read as
+   the paper bill they're being checked against. The price is a real input
+   rather than a printed figure because the vendor's invoice is what's being
+   typed in, and it is the number that decides both what the car cost and what
+   the shop owes. */
+.receive-lines {
+  border: 1px solid var(--line); border-radius: 10px; overflow: hidden;
+  display: flex; flex-direction: column;
 }
-.receive-line.head { color: var(--ink-faint); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+.receive-line {
+  display: grid; grid-template-columns: 1fr auto 100px 84px; gap: 10px;
+  align-items: center; font-size: 12.5px; padding: 8px 12px;
+}
+.receive-line.head {
+  color: var(--ink-faint); font-size: 11px; text-transform: uppercase;
+  letter-spacing: .04em; background: var(--paper-raise); padding: 7px 12px;
+}
+.receive-line + .receive-line { border-top: 1px solid var(--line-soft); }
 .receive-line .rl-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .receive-line .rl-desc { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The price-moved / blank-price notes carry weight: they are the data-entry
+   check this dialog exists for, and they compete with a whole row of numbers. */
 .receive-line .rl-note { font-size: 11px; color: var(--ink-faint); }
-.receive-line .rl-note.over { color: var(--crit); }
-.receive-line .rl-note.under { color: var(--good); }
-.receive-line .rl-note.bad { color: var(--crit); }
-/* Sits directly under the vendor dropdown to say why that name is already in
+.receive-line .rl-note.over { color: var(--crit); font-weight: 600; }
+.receive-line .rl-note.under { color: var(--good); font-weight: 600; }
+.receive-line .rl-note.bad { color: var(--crit); font-weight: 600; }
+/* Sits directly under the vendor row to say why that name is already in
    it. Faint on purpose: it is an explanation of a filled-in box, not a warning
-   -- the dropdown next to it is the thing to read. Negative top margin pulls
-   it up under the <label> it belongs to, which carries its own bottom gap. */
+   -- the dropdown above it is the thing to read. Negative top margin pulls
+   it up under the row it belongs to, which carries its own bottom gap. */
 .receive-vendor-why { margin: -6px 0 0; font-size: 11px; color: var(--ink-faint); }
 .receive-line .rl-qty { color: var(--ink-faint); font-variant-numeric: tabular-nums; }
-.receive-line input.rl-cost { width: 92px; text-align: right; padding: 5px 8px; font-size: 12.5px; }
-.receive-line.bad input.rl-cost { border-color: var(--crit); }
+/* The one box that gets typed in per line, so it dresses like the money it
+   is: mono, bold, right-aligned, sitting raised off the row. */
+.receive-line input.rl-cost {
+  width: 100px; text-align: right; padding: 6px 8px; font-size: 12.5px;
+  font-family: "IBM Plex Mono", "Cascadia Mono", Consolas, monospace; font-weight: 600;
+}
+.receive-line.bad input.rl-cost { border-color: var(--crit); box-shadow: 0 0 0 3px var(--crit-tint); }
 .receive-line .rl-total, .receive-line .rl-cost-head { text-align: right; }
 .receive-line:not(.head) .rl-total {
   font-family: "IBM Plex Mono", "Cascadia Mono", Consolas, monospace; font-weight: 600;
 }
+
+/* ---------- receive totals ----------
+   Reads like the bottom edge of the vendor's invoice: subtotal, the typed
+   tax, then the total the bill should say. Subtotal and Total live inside
+   #receive-total-summary and are rewritten on every keystroke (one writer,
+   see dialog-receive-parts.js); display:contents + order slots the Tax input
+   between them without it being rebuilt mid-typing. */
+.receive-totals {
+  display: flex; flex-direction: column; gap: 8px;
+  border: 1px solid var(--line); border-radius: 10px;
+  background: var(--paper-raise); padding: 12px 14px;
+}
+#receive-total-summary { display: contents; }
+#receive-total-summary .cost-line { order: 1; }
+.receive-totals > .cost-line.rt-tax { order: 2; align-items: center; }
+#receive-total-summary .cost-line.total { order: 3; }
+/* On the raised totals block the fields step down to the page ground instead
+   of up -- the reverse of the modal-body default, same intent: the box to
+   type in is the one on different ground. */
+.receive-totals .cost-line input {
+  width: 110px; text-align: right; padding: 5px 8px; font-size: 12.5px;
+  background: var(--surface);
+}
+.receive-footnote { margin: 8px 2px 0; font-size: 11.5px; color: var(--ink-faint); }
 
 /* ---------- kv list ---------- */
 .kv-list { padding: 14px 16px; display: flex; flex-direction: column; gap: 9px; }
@@ -2053,8 +2093,12 @@ dialog::backdrop { background: var(--backdrop); backdrop-filter: blur(3px); }
 }
 @keyframes dialog-in { from { opacity: 0; transform: translateY(10px) scale(.985); } }
 @keyframes backdrop-in { from { opacity: 0; } }
-/* The receive dialog shows a line list plus a cost summary; 560px squashes it. */
-#receive-dialog { max-width: 680px; }
+/* The receive dialog shows a line list plus a cost summary; 560px squashes it.
+   Green top bar: this is the money-landing moment -- parts arriving and a
+   vendor's bill going on the books -- and green is the app's tone for money
+   that has actually landed. */
+#receive-dialog { max-width: 680px; border-top-color: var(--good); }
+#receive-dialog .eyebrow { color: var(--good); }
 #move-item-dialog { max-width: 620px; }
 .modal { display: flex; flex-direction: column; max-height: 88vh; }
 .modal-head {

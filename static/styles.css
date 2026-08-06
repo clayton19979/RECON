@@ -796,10 +796,16 @@ table.sticky-head thead th {
 .veh-col-blank { margin: 6px 2px; font-size: 12px; color: var(--ink-faint); }
 .veh-columns-empty { padding: 8px 0; }
 
+/* Trimmed for density on purpose: on the shop's own screen a pile used to
+   show barely two cards, and the whole point of the columns is seeing the
+   lot at once. The padding and the gaps here, the shorter pill capsule and
+   the shared name/identity line below each give back a little height; per
+   card it adds up to roughly a quarter, which is one more whole car visible
+   in every pile before anyone scrolls. */
 .veh-card {
   position: relative; background: var(--surface); border: 1px solid var(--line);
-  border-left: 3px solid var(--recon); border-radius: 8px; padding: 10px 12px 11px 13px;
-  display: flex; flex-direction: column; gap: 5px; min-width: 0;
+  border-left: 3px solid var(--recon); border-radius: 8px; padding: 8px 11px 9px 12px;
+  display: flex; flex-direction: column; gap: 4px; min-width: 0;
 }
 /* Type carries no pill on a card -- there's a whole edge available, and the
    colour says "lot car" or "customer promise" without spending a line on it. */
@@ -812,7 +818,12 @@ table.sticky-head thead th {
 /* The checkbox lives in the card's top-right corner, out of the reading path
    until you go looking for it -- bulk selection is an occasional job, and a
    permanent box on every card competes with the status pill for the eye. */
-.veh-card-select { position: absolute; top: 8px; right: 9px; padding: 3px; line-height: 0; cursor: pointer; }
+.veh-card-select { position: absolute; top: 6px; right: 8px; padding: 3px; line-height: 0; cursor: pointer; }
+/* Same 11px status word as everywhere -- the pills section raised the font
+   size for reading distance and that stays. Only the capsule around it is
+   shorter here: the pill is the tallest thing in the head row on every card,
+   so its padding was setting the height of forty head rows at once. */
+.veh-card .pill { padding: 2px 8px; }
 /* Wraps rather than squeezes: a crowded head (long status + old age + an RO
    tag) used to crush its last item into a two-line smear inside the row.
    Whole pieces now step down to a tidy second line instead. */
@@ -824,13 +835,25 @@ table.sticky-head thead th {
 .veh-card-ref .age-warn { color: var(--warn); font-weight: 700; }
 .veh-card-ref .age-crit { color: var(--crit); font-weight: 700; }
 /* The name is what someone at the counter scans forty cards by; it's the
-   card's headline and sized like one. Still one line -- the height of every
-   card stays uniform so the columns read as tidy piles, not a ragged list. */
+   card's headline and sized like one. The identity details (colour, plate,
+   VIN tail or customer) now share the name's line instead of taking one of
+   their own -- the bold name still lands first because it is the only bold
+   thing there, and every card gives a whole line of height back to the pile.
+   Both halves stay one line and ellipsize so cards keep a uniform height and
+   the columns read as tidy piles, not a ragged list. The sub's shrink factor
+   is deliberately lopsided: when the two fight for room the faint half gives
+   way first (down to a floor that keeps a color chip or a customer's first
+   name visible), and only then does a long name start to ellipsize. */
+.veh-card-title { display: flex; align-items: baseline; gap: 7px; min-width: 0; }
 .veh-card-name {
+  flex: 0 1 auto; min-width: 0;
   font-size: 15px; font-weight: 600; color: var(--ink); letter-spacing: -.01em;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.veh-card-sub { font-size: 12px; color: var(--ink-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.veh-card-sub {
+  flex: 1 20 auto; min-width: 64px;
+  font-size: 12px; color: var(--ink-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 .veh-card-sub .veh-customer { display: inline-flex; align-items: center; gap: 4px; color: var(--ink-soft); font-weight: 500; }
 .veh-card-sub .veh-customer svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 2; opacity: .8; }
 /* The one line answering "what does this car still need?" -- the server's
@@ -838,7 +861,7 @@ table.sticky-head thead th {
    the full text on hover, so a car with four outstanding things doesn't make
    its card three times the height of its neighbours. */
 .veh-card-needs {
-  font-size: 12px; color: var(--ink-soft); margin-top: 1px;
+  font-size: 12px; line-height: 1.32; color: var(--ink-soft);
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
 }
 /* How far through its repairs the car is: one segment per repair, filled as
@@ -864,8 +887,8 @@ table.sticky-head thead th {
 .veh-card-jobs.all-done .seg-fill { background: var(--good); }
 
 .veh-card-foot {
-  display: flex; align-items: flex-end; gap: 8px; margin-top: 3px;
-  padding-top: 7px; border-top: 1px solid var(--line-soft);
+  display: flex; align-items: flex-end; gap: 8px; margin-top: 2px;
+  padding-top: 5px; border-top: 1px solid var(--line-soft);
 }
 .veh-card-facts { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; min-width: 0; font-size: 12px; }
 .veh-card-money { margin-left: auto; display: flex; flex-direction: column; align-items: flex-end; line-height: 1.25; }

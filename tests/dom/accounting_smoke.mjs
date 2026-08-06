@@ -32,9 +32,15 @@ const ORDERS = [
   { id: 61, segment: "recon", status: "complete", stock_number: "R-0888", number: "RO-2607-0004", year: 2017, make: "Mazda", model: "3", customer_name: null, accepts_parts_bill: false },
 ];
 
+// The log now carries the vendor and the car on every line -- an invoice
+// number alone is not something anybody in the shop recognises. The third
+// entry is a second delivery landing on a bill already on file, which is
+// ordinary and must not be worded like a fault.
 const AUDITS = [
-  { invoice_number: "INV-9001", status: "review_required", issues: ["total does not match line items"], created_at: new Date().toISOString().slice(0, 19) },
-  { invoice_number: "INV-8990", status: "posted", issues: [], created_at: new Date().toISOString().slice(0, 19) },
+  { invoice_number: "INV-9001", status: "review_required", issues: ["total does not match line items"], vendor_name: "Nobody's Auto", vehicle_label: "No ticket", created_at: new Date().toISOString().slice(0, 19) },
+  { invoice_number: "INV-8990", status: "posted", issues: [], vendor_name: "WorldPac", vehicle_label: "R-1042", created_at: new Date().toISOString().slice(0, 19) },
+  { invoice_number: "INV-8990", status: "extended", issues: [], vendor_name: "WorldPac", vehicle_label: "R-1042", created_at: new Date().toISOString().slice(0, 19) },
+  { invoice_number: "CR-7", status: "posted", issues: ["part returned — $80.00 back off the car"], vendor_name: "WorldPac", vehicle_label: "R-1042", created_at: new Date().toISOString().slice(0, 19) },
 ];
 
 // A posted recon invoice (clickable), a voided one, a retail one (a plain row
@@ -336,6 +342,18 @@ await settle();
 /* ---------- the control log tones severity ---------- */
 ok($$("#audit-list .mini-item").length >= 2, "the control log didn't render the audits");
 ok($("#audit-list .mini-item.is-review"), "a review_required audit isn't toned as needing review");
+const logText = $("#audit-list").textContent.replace(/\s+/g, " ");
+ok(/WorldPac/.test(logText) && /R-1042/.test(logText),
+   `the control log doesn't say which vendor or which car: "${logText.trim()}"`);
+ok(/added to/.test(logText) && !/extended/.test(logText),
+   `a second delivery should read "added to", not the database word: "${logText.trim()}"`);
+ok(/held for review/.test(logText) && !/review_required/.test(logText),
+   `a held bill should say so in plain words: "${logText.trim()}"`);
+// Amber is for problems. A credit note coming back is ordinary.
+const amber = $$("#audit-list .mi-meta.issues").map((el) => el.textContent);
+ok(amber.some((t) => /did not|does not|match/.test(t)), "the held bill's reason isn't flagged");
+ok(!amber.some((t) => /back off the car/.test(t)),
+   `a routine credit note is coloured like a problem: ${JSON.stringify(amber)}`);
 
 /* ---------- voiding asks first, and cancel is a real no-op ---------- */
 const patchesBefore = patches.length;

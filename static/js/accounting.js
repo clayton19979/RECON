@@ -320,23 +320,54 @@ function renderApTable(invoices) {
         const result = await patch(`/api/ap/invoices/${btn.dataset.id}/void`, {});
         toast(voidResultMessage(result));
         await loadApTable();
+        // The void writes a line of the Control Log too, and the log is right
+        // beside the table -- leaving it stale showed the bill as posted
+        // directly under a row that had just been voided.
+        try {
+          state.apAudits = await get("/api/accounting/audits");
+          renderAuditList(state.apAudits);
+        } catch { /* the table already shows the void */ }
       } catch (err) {
         toast(err.message, true);
       }
     });
   });
 }
-const AP_AUDIT_PILL = { posted: "pill-done", review_required: "pill-progress", duplicate: "pill-void", voided: "pill-void" };
+const AP_AUDIT_PILL = {
+  posted: "pill-done",
+  // A second delivery landing on a bill already on file -- normal, and not a
+  // new invoice. See receive_onto_invoice.
+  extended: "pill-done",
+  review_required: "pill-progress",
+  duplicate: "pill-void",
+  voided: "pill-void",
+};
+// The database verb is not what anyone in the shop would say. "extended" in
+// particular reads like a fault; it is the ordinary case of a vendor sending
+// the rest of an order a day later.
+const AP_AUDIT_WORD = { extended: "added to", review_required: "held for review" };
 
 function renderAuditList(audits) {
   // The log is the only place a failed post is recorded -- severity has to
   // be legible at a glance, not buried in a capitalized enum string.
-  $("#audit-list").innerHTML = audits.length ? audits.slice(0, 20).map((a) => `
+  $("#audit-list").innerHTML = audits.length ? audits.slice(0, 20).map((a) => {
+    // An invoice number on its own is not something anybody recognises. The
+    // vendor and the car are what make a logged event findable later, and
+    // both are worth more line space than the number is.
+    const where = [a.vendor_name, a.vehicle_label].filter(Boolean).join(" · ");
+    // The note under an entry is amber only when it is a problem. A bill held
+    // for review or refused as a duplicate is; "core deposit refunded" and
+    // "1 part put back on order" are ordinary and must not be coloured like
+    // something went wrong on a screen people scan for exactly that.
+    const wrong = a.status === "review_required" || a.status === "duplicate";
+    return `
     <div class="mini-item${a.status === "review_required" ? " is-review" : ""}${a.status === "duplicate" ? " is-duplicate" : ""}">
-    <div class="mi-title"><span>${esc(a.invoice_number)}</span><span class="pill ${AP_AUDIT_PILL[a.status] || "pill-void"}">${esc(a.status.replace(/_/g, " "))}</span></div>
-    ${a.issues.length ? `<div class="mi-meta issues">${a.issues.map(esc).join("; ")}</div>` : ""}
+    <div class="mi-title"><span>${esc(a.invoice_number)}</span><span class="pill ${AP_AUDIT_PILL[a.status] || "pill-void"}">${esc(AP_AUDIT_WORD[a.status] || a.status.replace(/_/g, " "))}</span></div>
+    ${where ? `<div class="mi-meta">${esc(where)}</div>` : ""}
+    ${a.issues.length ? `<div class="mi-meta${wrong ? " issues" : ""}">${a.issues.map(esc).join("; ")}</div>` : ""}
     <div class="mi-meta" title="${esc(fmtDate(a.created_at))}">${esc(relativeTime(a.created_at))}</div></div>
-  `).join("") + (audits.length > 20 ? `<div class="mi-meta">Showing 20 of ${audits.length}</div>` : "")
+  `;
+  }).join("") + (audits.length > 20 ? `<div class="mi-meta">Showing 20 of ${audits.length}</div>` : "")
     : emptyState({ icon: "invoice", title: "No activity yet", hint: "Posting or voiding a vendor invoice is recorded here.", compact: true });
 }
 

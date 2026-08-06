@@ -127,6 +127,66 @@ def create_ap_invoice_record(
     return {"status": "posted", "ap_invoice_id": ap_id}
 
 
+def record_invoice_audit(
+    db: sqlite3.Connection,
+    now_fn: Callable[[], str],
+    *,
+    invoice_number: str,
+    vendor_text: str,
+    po_number: str,
+    status: str,
+    issues: list[str],
+    source: str,
+    order_id: int | None,
+    vendor_id: int | None,
+) -> None:
+    """Write one line of the A/P Control Log.
+
+    The Control Log is the shop's answer to "what happened to that bill?", and
+    it says so on screen -- its empty state promises that posting or voiding a
+    vendor invoice is recorded here. For a long time only one of the three ways
+    a bill can arrive actually wrote to it: an invoice typed into the
+    Accounting screen (or handed over by the agent) was logged, an invoice
+    created by receiving parts on a ticket was not, and no void was ever logged
+    at all. Since receiving parts is how nearly every bill in this shop gets
+    posted, the log was empty on a day the shop had posted a thousand dollars
+    of parts -- and a bill that was voided, which is the single event most
+    worth being able to point at later, left no trace on the screen that
+    claims to keep the record.
+
+    So this is the one writer, called from every path that creates, extends or
+    voids a vendor invoice.
+    """
+    db.execute(
+        "INSERT INTO invoice_audits(invoice_number,vendor_text,po_number,status,issues,source,order_id,vendor_id,created_at)"
+        " VALUES(?,?,?,?,?,?,?,?,?)",
+        (
+            invoice_number.strip(),
+            vendor_text.strip(),
+            po_number.strip(),
+            status,
+            json.dumps(issues),
+            source,
+            order_id,
+            vendor_id,
+            now_fn(),
+        ),
+    )
+
+
+def vendor_name_for(db: sqlite3.Connection, vendor_id: int | None) -> str:
+    """The vendor's name for the log, from its id.
+
+    The log stores the name as text as well as the id, because it also has to
+    record bills naming a vendor nobody has set up -- there is no row to point
+    at in that case, and the name the paper carried is the whole point.
+    """
+    if vendor_id is None:
+        return ""
+    row = db.execute("SELECT name FROM vendors WHERE id=?", (vendor_id,)).fetchone()
+    return row["name"] if row else ""
+
+
 def _insert_invoice_items(
     db: sqlite3.Connection,
     ap_invoice_id: int,
@@ -283,12 +343,30 @@ def receive_onto_invoice(
     carry the truth. Cars are costed from their own received part lines, never
     from an invoice total, so spanning tickets cannot disturb what any car has
     in it.
+
+    Every outcome here writes one line of the Control Log, because this is how
+    nearly every vendor bill in this shop actually gets posted -- see
+    record_invoice_audit.
     """
     subtotal = round(sum(i.quantity * i.unit_cost for i in items), 2)
     existing = db.execute(
         "SELECT * FROM ap_invoices WHERE vendor_id=? AND normalized_invoice_number=? AND status!='voided'",
         (vendor_id, normalize(invoice_number)),
     ).fetchone()
+
+    def logged(status: str, issues: list[str]) -> None:
+        record_invoice_audit(
+            db,
+            now_fn,
+            invoice_number=invoice_number,
+            vendor_text=vendor_name_for(db, vendor_id),
+            po_number=po_number,
+            status=status,
+            issues=issues,
+            source="ticket_receive",
+            order_id=order_id,
+            vendor_id=vendor_id,
+        )
 
     if existing is None:
         result = create_ap_invoice_record(
@@ -304,6 +382,13 @@ def receive_onto_invoice(
             total=round(subtotal + tax, 2),
             source="ticket_receive",
             estimate_item_ids=estimate_item_ids,
+        )
+        # Whatever came back, including the rare refusal: the advisor sees a
+        # refusal as a message that disappears, and the log is where it lasts
+        # long enough to be explained afterwards.
+        logged(
+            result["status"],
+            ["this invoice number is already on a bill from this vendor"] if result["status"] == "duplicate" else [],
         )
         return result
 
@@ -321,6 +406,10 @@ def receive_onto_invoice(
             existing["id"],
         ),
     )
+    # Not "posted": nothing new was created. A second delivery landing on a
+    # bill already on file is what "extended" means, and logging it as a fresh
+    # post would have the log claim two invoices where the vendor sent one.
+    logged("extended", [])
     return {"status": "extended", "ap_invoice_id": existing["id"]}
 
 
@@ -637,6 +726,24 @@ def build_accounting_router(connect: Callable[[], sqlite3.Connection], now: Call
                     },
                     now,
                 )
+            # The Control Log gets it too, and it is the only screen that does
+            # for a bill belonging to no ticket. A void is the event most worth
+            # being able to point at weeks later -- it takes real money back
+            # off a car -- so the log says what it undid, not just that it
+            # happened.
+            put_back = reversal["unreceived_items"]
+            record_invoice_audit(
+                db,
+                now,
+                invoice_number=invoice["invoice_number"],
+                vendor_text=vendor_name_for(db, invoice["vendor_id"]),
+                po_number=invoice["po_number"],
+                status="voided",
+                issues=([f"{put_back} part{'' if put_back == 1 else 's'} put back on order"] if put_back else []),
+                source=item.actor,
+                order_id=invoice["order_id"],
+                vendor_id=invoice["vendor_id"],
+            )
             return dict(db.execute("SELECT * FROM ap_invoices WHERE id=?", (invoice_id,)).fetchone()) | {
                 # Response metadata, not invoice columns -- the UI says what
                 # the void actually changed instead of a bare "Invoice voided"
@@ -648,11 +755,48 @@ def build_accounting_router(connect: Callable[[], sqlite3.Connection], now: Call
 
     @router.get("/accounting/audits")
     def list_audits():
+        """The Control Log, newest first.
+
+        Each line carries the vendor and the car as well as the invoice
+        number, because an invoice number on its own is not something anybody
+        in this shop recognises. "INV-88213 — held for review" told the advisor
+        nothing they could act on; "NAPA · R-1042 — held for review" is the
+        same event with the two facts that make it findable.
+
+        The vendor name is taken from the vendor row when the bill matched one
+        and falls back to the name written on the paper, which is the only
+        thing there is when it didn't -- and an unmatched vendor is exactly why
+        a bill gets held.
+        """
         with connect() as db:
-            return [
-                dict(row) | {"issues": json.loads(row["issues"])}
-                for row in db.execute("SELECT * FROM invoice_audits ORDER BY id DESC LIMIT 100")
-            ]
+            # Columns named one by one rather than a.* + _TICKET_COLUMNS: that
+            # shared fragment starts with `o.id order_id`, which would shadow
+            # the audit row's own order_id with the joined ticket's.
+            rows = db.execute(
+                """SELECT a.id, a.invoice_number, a.vendor_text, a.po_number, a.status, a.issues,
+                          a.source, a.order_id, a.vendor_id, a.created_at,
+                          v.name matched_vendor_name,
+                          o.number ro_number, o.segment, o.recon_vehicle_id, o.we_owe_id, o.vehicle_id,
+                          rv.stock_number, wc.name we_owe_customer_name, oc.name order_customer_name
+                     FROM invoice_audits a
+                     LEFT JOIN vendors v ON v.id=a.vendor_id
+                     LEFT JOIN orders o ON o.id=a.order_id
+                     LEFT JOIN recon_vehicles rv ON rv.id=o.recon_vehicle_id
+                     LEFT JOIN we_owe_items wi ON wi.id=o.we_owe_id
+                     LEFT JOIN customers wc ON wc.id=wi.customer_id
+                     LEFT JOIN customers oc ON oc.id=o.customer_id
+                    ORDER BY a.id DESC LIMIT 100"""
+            ).fetchall()
+            result = []
+            for row in rows:
+                value = dict(row)
+                value["issues"] = json.loads(value["issues"])
+                value["vendor_name"] = value.pop("matched_vendor_name") or value["vendor_text"]
+                # "No ticket" rather than a blank: a bill for shop supplies
+                # legitimately names no car, and a blank reads as a lost link.
+                value["vehicle_label"] = ticket_vehicle_label(row) if value["ro_number"] else "No ticket"
+                result.append(value)
+            return result
 
     def find_vendor(db: sqlite3.Connection, supplied: str):
         target = normalize(supplied)
@@ -720,19 +864,17 @@ def build_accounting_router(connect: Callable[[], sqlite3.Connection], now: Call
         order_id: int | None,
         vendor_id: int | None,
     ):
-        db.execute(
-            "INSERT INTO invoice_audits(invoice_number,vendor_text,po_number,status,issues,source,order_id,vendor_id,created_at) VALUES(?,?,?,?,?,?,?,?,?)",
-            (
-                invoice.invoice_number.strip(),
-                invoice.vendor_name.strip(),
-                invoice.po_number.strip(),
-                status,
-                json.dumps(issues),
-                invoice.source,
-                order_id,
-                vendor_id,
-                now(),
-            ),
+        record_invoice_audit(
+            db,
+            now,
+            invoice_number=invoice.invoice_number,
+            vendor_text=invoice.vendor_name,
+            po_number=invoice.po_number,
+            status=status,
+            issues=issues,
+            source=invoice.source,
+            order_id=order_id,
+            vendor_id=vendor_id,
         )
 
     @router.post("/agent/invoices/process")

@@ -2874,8 +2874,21 @@ function renderAssignment(order) {
 // stale flag -- and "restart the server" only helped because it forced the
 // page reload that cleared it.
 
-function renderPrintTicket() {
+/* Two copies of the same ticket, chosen at the printer.
+
+   "shop" is the whole record, money included -- what the office files. "tech"
+   is the work list that gets handed across the counter: the same jobs, parts
+   and labor in the same order, with every dollar figure left off. What a part
+   cost is the office's business, not something to hand around the floor on
+   paper -- and the space the money columns took up goes to what a paper on a
+   toolbox is actually for: a tick box per line, and ruled lines to write down
+   what was found once the car was open. Fees and vendor credits are money
+   bookkeeping with no wrench behind them, so the tech copy drops those lines
+   entirely; a returned part stays, marked Returned, because "the first
+   alternator went back" is something the person under the hood needs to know. */
+function renderPrintTicket(copy = "shop") {
   state.printSurfaceOwner = "ticket";
+  const moneyed = copy !== "tech";
   const { segment, item, order } = state.detail;
   const generated = new Date().toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" });
   const isWeOwe = segment !== "recon";
@@ -2904,10 +2917,14 @@ function renderPrintTicket() {
   // info blocks self-compact instead of printing rows of dashes.
   const kv = (k, v) => (v ? `<div class="pi-row"><span class="k">${k}</span><span class="v">${v}</span></div>` : "");
 
-  // 6 columns: Description | Part # | Qty | Unit | Total | Status. The line
-  // total is what lets anyone verify the math on paper; status is a
-  // parts-only concept (labor/fees have no order lifecycle), mirroring the
-  // on-screen grid.
+  // The lines this copy carries. The shop copy is the whole ticket; the tech
+  // copy is only the lines somebody turns a wrench for.
+  const printItems = moneyed ? items : items.filter((i) => i.kind === "part" || i.kind === "labor");
+  // Shop copy: Description | Part # | Qty | Unit | Total | Status -- the line
+  // total is what lets anyone verify the math on paper. Tech copy: a tick box
+  // takes the money columns' place. Status is a parts-only concept (labor/fees
+  // have no order lifecycle), mirroring the on-screen grid.
+  const COLS = moneyed ? 6 : 5;
   const itemRow = (i) => {
     const returned = isReturnedPart(i);
     let status = "";
@@ -2921,12 +2938,20 @@ function renderPrintTicket() {
     // $45 into some rows and not others is unauditable on paper.
     // Say where the deposit stands, since it is in the totals below only
     // while it's still owed back.
+    // The tech copy keeps only the half of it that is an instruction: the
+    // old part has to go back in the box.
     const coreSub = i.kind === "part" && (i.core_charge || 0) > 0
-      ? `<div class="pt-desc-sub">Core charge ${money(i.core_charge)}${coreOwing(i) ? " — owed back" : i.core_return_invoice_number ? " — credited back" : " — reversed with the return"}</div>`
+      ? (moneyed
+        ? `<div class="pt-desc-sub">Core charge ${money(i.core_charge)}${coreOwing(i) ? " — owed back" : i.core_return_invoice_number ? " — credited back" : " — reversed with the return"}</div>`
+        : (coreOwing(i) ? `<div class="pt-desc-sub">Core — the old part goes back</div>` : ""))
       : "";
-    return `<tr><td>${esc(i.description)}${coreSub}</td><td>${i.part_number ? esc(i.part_number) : ""}</td>
-      <td class="num-col">${i.quantity}</td><td class="num-col">${money(returned ? 0 : i.unit_cost)}</td>
-      <td class="num-col">${money(lineTotal(i))}</td><td>${status}</td></tr>`;
+    const moneyCells = moneyed
+      ? `<td class="num-col">${money(returned ? 0 : i.unit_cost)}</td>
+      <td class="num-col">${money(lineTotal(i))}</td>`
+      : "";
+    const tickCell = moneyed ? "" : `<td class="tick-col"><span class="print-tick" aria-hidden="true"></span></td>`;
+    return `<tr>${tickCell}<td>${esc(i.description)}${coreSub}</td><td>${i.part_number ? esc(i.part_number) : ""}</td>
+      <td class="num-col">${i.quantity}</td>${moneyCells}<td>${status}</td></tr>`;
   };
 
   // Parts/Labor/Fees sub-headers replace the old Kind column -- the same
@@ -2934,25 +2959,29 @@ function renderPrintTicket() {
   // page it was printed from can't list different lines.
   const kindGroupRows = (bucketItems) =>
     kindGroupsOf(bucketItems)
-      .map((g) => `<tr class="print-kind-head"><td colspan="6">${esc(KIND_GROUP_LABEL[g.kind] || g.kind)}</td></tr>` + g.kindItems.map(itemRow).join(""))
+      .map((g) => `<tr class="print-kind-head"><td colspan="${COLS}">${esc(KIND_GROUP_LABEL[g.kind] || g.kind)}</td></tr>` + g.kindItems.map(itemRow).join(""))
       .join("");
 
   // Same job/General buckets as the on-screen ticket (renderEstimate) --
   // a printed ticket that's grouped differently than what the advisor was
   // just looking at on screen would be confusing to hand to a technician.
   // One tbody per job so a page break can't strand a job title alone.
+  // Job subtotals are money, so only the shop copy's job heads carry one.
+  const jobHeadRow = (title, subtotalItems) => moneyed
+    ? `<tr class="print-job-head"><td colspan="4">${title}</td><td class="num-col">${money(ticketTotal(subtotalItems))}</td><td></td></tr>`
+    : `<tr class="print-job-head"><td colspan="${COLS}">${title}</td></tr>`;
   let bodyRows;
   if (!jobs.length) {
-    bodyRows = `<tbody>${items.length ? kindGroupRows(items) : `<tr><td colspan="6">No parts or labor lines.</td></tr>`}</tbody>`;
+    bodyRows = `<tbody>${printItems.length ? kindGroupRows(printItems) : `<tr><td colspan="${COLS}">No parts or labor lines.</td></tr>`}</tbody>`;
   } else {
     const buckets = [...jobs, { id: null, title: "General" }];
     bodyRows = buckets.map((bucket) => {
-      const bucketItems = items.filter((i) => (i.job_id ?? null) === bucket.id);
+      const bucketItems = printItems.filter((i) => (i.job_id ?? null) === bucket.id);
       if (!bucketItems.length) return "";
       const jobTech = bucket.id === null ? "" : (bucket.technician_name || "Use ticket default");
-      const jobSubtotal = ticketTotal(bucketItems);
-      return `<tbody class="print-job"><tr class="print-job-head"><td colspan="4">${esc(bucket.title)}${jobTech ? ` — ${esc(jobTech)}` : ""}</td><td class="num-col">${money(jobSubtotal)}</td><td></td></tr>${kindGroupRows(bucketItems)}</tbody>`;
-    }).join("") || `<tbody><tr><td colspan="6">No parts or labor lines.</td></tr></tbody>`;
+      const title = `${esc(bucket.title)}${jobTech ? ` — ${esc(jobTech)}` : ""}`;
+      return `<tbody class="print-job">${jobHeadRow(title, bucketItems)}${kindGroupRows(bucketItems)}</tbody>`;
+    }).join("") || `<tbody><tr><td colspan="${COLS}">No parts or labor lines.</td></tr></tbody>`;
   }
 
   // Invoice-style totals. With deposits (we-owe), the balance is the grand
@@ -2972,6 +3001,11 @@ function renderPrintTicket() {
   const totalsNote = paid > 0 && (item.orders || []).length > 1
     ? `<div class="tl-note">Deposits and balance include all repair orders on this vehicle.</div>` : "";
 
+  // Tech copy table: the tick box leads, and the money columns are gone.
+  const headRow = moneyed
+    ? `<tr><th>Description</th><th>Part #</th><th class="num-col">Qty</th><th class="num-col">Unit</th><th class="num-col">Total</th><th>Status</th></tr>`
+    : `<tr><th class="tick-col"><span class="sr-only">Done</span></th><th>Description</th><th>Part #</th><th class="num-col">Qty</th><th>Status</th></tr>`;
+
   $("#print-report").innerHTML = `
     <header class="print-letterhead">
       <div>
@@ -2979,7 +3013,7 @@ function renderPrintTicket() {
         <div class="print-shop-sub">Discount Auto Repair · Merrillville, IN</div>
       </div>
       <div class="print-meta">
-        <div class="print-report-title">Repair Order ${esc(order.number)}</div>
+        <div class="print-report-title">Repair Order ${esc(order.number)}${moneyed ? "" : " — Technician Copy"}</div>
         <div>${esc(vehicleLabel)}${customerLabel ? " — " + esc(customerLabel) : ""}</div>
         <div class="print-meta-line">${esc(STATUS_LABEL[order.status] || order.status)} · ${segment === "recon" ? "Recon Inventory" : segment === "retail" ? "Customer Vehicle (Retail)" : "Customer Vehicle (We-Owe)"}</div>
         <div class="print-generated">Generated ${esc(generated)}</div>
@@ -3000,8 +3034,8 @@ function renderPrintTicket() {
       <div class="print-info-block">
         <div class="pi-label">Customer</div>
         ${kv("Name", esc(item.customer_name || ""))}
-        ${kv("Phone", esc(fmtPhone(item.customer_phone || "")))}
-        ${kv("Email", esc(item.customer_email || ""))}
+        ${moneyed ? kv("Phone", esc(fmtPhone(item.customer_phone || ""))) : ""}
+        ${moneyed ? kv("Email", esc(item.customer_email || "")) : ""}
         ${kv("We-Owe", esc(item.description || ""))}
       </div>` : `
       <div class="print-info-block">
@@ -3021,21 +3055,29 @@ function renderPrintTicket() {
       </div>
     </div>
     <div class="print-subhead">Parts &amp; Labor</div>
-    <table class="print-table ticket">
-      <thead><tr><th>Description</th><th>Part #</th><th class="num-col">Qty</th><th class="num-col">Unit</th><th class="num-col">Total</th><th>Status</th></tr></thead>
+    <table class="print-table ticket${moneyed ? "" : " tech-copy"}">
+      <thead>${headRow}</thead>
       ${bodyRows}
-      <tfoot><tr class="tfoot-space" aria-hidden="true"><td colspan="6"></td></tr></tfoot>
+      <tfoot><tr class="tfoot-space" aria-hidden="true"><td colspan="${COLS}"></td></tr></tfoot>
     </table>
-    <div class="print-totals">${totalsRows.join("")}${totalsNote}</div>
+    ${moneyed ? `<div class="print-totals">${totalsRows.join("")}${totalsNote}</div>` : ""}
     ${printNotes.length ? `<div class="print-subhead">Notes</div><div class="print-notes">${printNotes.map((n) => `<div>${esc(n.text)}</div>`).join("")}</div>` : ""}
-    ${auth && auth.status === "approved" ? `<p class="print-note">Estimate approved by ${esc(auth.approved_by)}${AUTH_METHOD_LABEL[auth.method] ? ` ${AUTH_METHOD_LABEL[auth.method]}` : ""} · ${esc(fmtDate(auth.created_at))}</p>` : ""}
+    ${moneyed && auth && auth.status === "approved" ? `<p class="print-note">Estimate approved by ${esc(auth.approved_by)}${AUTH_METHOD_LABEL[auth.method] ? ` ${AUTH_METHOD_LABEL[auth.method]}` : ""} · ${esc(fmtDate(auth.created_at))}</p>` : ""}
+    ${moneyed ? "" : `
+    <div class="print-writein">
+      <div class="print-subhead">Found during repair</div>
+      <div class="writein-rule"></div>
+      <div class="writein-rule"></div>
+      <div class="writein-rule"></div>
+      <div class="writein-rule"></div>
+    </div>`}
     <div class="print-sign">
-      <div class="sign-cell"><div class="sign-rule"></div><div class="sign-label">${isWeOwe ? "Customer Authorization" : "Technician Sign-Off"}</div></div>
+      <div class="sign-cell"><div class="sign-rule"></div><div class="sign-label">${moneyed && isWeOwe ? "Customer Authorization" : "Technician Sign-Off"}</div></div>
       <div class="sign-cell"><div class="sign-rule"></div><div class="sign-label">Date</div></div>
     </div>
     <footer class="print-foot">
       <span>RECON · Discount Auto Repair</span>
-      <span>Repair Order ${esc(order.number)} · ${esc(vehicleLabel)} · Generated ${esc(generated)}</span>
+      <span>Repair Order ${esc(order.number)}${moneyed ? "" : " · Technician Copy"} · ${esc(vehicleLabel)} · Generated ${esc(generated)}</span>
     </footer>
   `;
 }
@@ -3134,8 +3176,20 @@ export function wireVehicleDetail() {
     }
   });
 
-  $("#vd-print-ticket").addEventListener("click", () => {
-    renderPrintTicket();
+  // Which copy comes out of the printer. Enter still means the full shop
+  // copy, so the habit of Print-then-Enter keeps doing what it always did;
+  // the technician copy is the same sheet with every dollar figure left off,
+  // for handing across the counter.
+  $("#vd-print-ticket").addEventListener("click", async () => {
+    const choice = await confirmAction({
+      eyebrow: "PRINT",
+      title: "Which copy?",
+      body: "The shop copy is the whole ticket, money included. The technician copy is the work list with no pricing on it — a tick box per line and room to write down what was found.",
+      confirmLabel: "Shop Copy",
+      altLabel: "Technician Copy",
+    });
+    if (!choice) return;
+    renderPrintTicket(choice === "alt" ? "tech" : "shop");
     window.print();
   });
 

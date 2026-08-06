@@ -2370,6 +2370,20 @@ dialog::backdrop { background: var(--backdrop); backdrop-filter: blur(3px); }
   .print-table.ticket tbody td { font-size: 13px; padding: 9px 10px; }
   .print-table.ticket .pt-desc-sub { font-size: 10px; color: #333; margin-top: 1px; }
 
+  /* Technician copy: the money columns' space goes to what a paper on a
+     toolbox is actually for. The tick box is drawn as a bordered square in
+     ink, never a checkbox glyph -- box-drawing characters come out as tofu
+     in some print engines. Sized against the 13px row text beside it. */
+  .print-table.ticket.tech-copy .tick-col { width: 26px; }
+  .print-tick {
+    display: inline-block; width: 12px; height: 12px;
+    border: 1pt solid #000; border-radius: 1.5px; margin-top: 2px;
+  }
+  /* Ruled lines under "Found during repair" for handwriting. Hairline grey,
+     not black -- they're stationery, and at full ink they'd read as data. */
+  .print-writein { break-inside: avoid; margin-top: 4px; }
+  .print-writein .writein-rule { border-bottom: 0.75pt solid #999; height: 30px; }
+
   /* Job band: the borders carry the grouping in ink; the #eee fill is an
      enhancement print-color-adjust keeps through Chrome's background-
      graphics-off default, never load-bearing. */

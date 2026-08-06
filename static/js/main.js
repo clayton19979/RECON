@@ -14,6 +14,7 @@ import { wireDownloadIntercept } from "./downloads.js";
 import "./notify.js";
 import "./confirm.js";
 import "./shortcuts.js";
+import "./vin.js";
 import "./empty-states.js";
 import "./skeletons.js";
 import "./state.js";

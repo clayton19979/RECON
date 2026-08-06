@@ -116,13 +116,53 @@ ok(vehiclesAsked.length > before, "their cars should be loaded into the vehicle 
 ok(Array.from($("#we-owe-vehicle").options).some((o) => /Civic/.test(o.textContent)),
    "the vehicle picker should now offer the car already on their record");
 
+/* ---------- the head line assembles the promise ----------
+
+   Who it's for, which car, what was said -- built up under the title as the
+   form is typed, so what's about to be saved is readable in one place. The
+   customer picked by Use Them above is already on it. */
+const preview = $("#we-owe-preview");
+ok(!preview.hidden && /Iris Chandler/.test(preview.textContent),
+   `the picked customer should be on the head line, got "${preview.textContent}"`);
+const civicOption = Array.from($("#we-owe-vehicle").options).find((o) => /Civic/.test(o.textContent));
+$("#we-owe-vehicle").value = civicOption.value;
+$("#we-owe-vehicle").dispatchEvent(new w.Event("change", { bubbles: true }));
+await settle();
+ok(/Iris Chandler · 2019 Honda Civic/.test(preview.textContent),
+   `the picked car should join the head line, got "${preview.textContent}"`);
+$("#we-owe-description").value = "Replace missing passenger mirror";
+$("#we-owe-description").dispatchEvent(new w.Event("input", { bubbles: true }));
+await settle();
+ok(/Civic · Replace missing passenger mirror/.test(preview.textContent),
+   `what was promised should finish the head line, got "${preview.textContent}"`);
+
+/* ---------- the VIN proves itself here too ----------
+
+   Same live verdict the recon write-up gives: a count on the way to 17
+   characters, then the check-digit answer. */
+const vinBox = $("#we-owe-new-vin");
+const verdict = $("#we-owe-vin-verdict");
+vinBox.value = "1hgcm826";
+vinBox.dispatchEvent(new w.Event("input", { bubbles: true }));
+await settle();
+ok(vinBox.value === "1HGCM826", `the box should show the shape the record will store, shows "${vinBox.value}"`);
+ok(!verdict.hidden && /8 of 17/.test(verdict.textContent),
+   `a short VIN should be counted, not judged, got "${verdict.textContent}"`);
+vinBox.value = "1HGCM82633A004352";
+vinBox.dispatchEvent(new w.Event("input", { bubbles: true }));
+await settle();
+ok(verdict.classList.contains("ok") && /checks out/.test(verdict.textContent),
+   `a VIN whose check digit works out should say so, got "${verdict.textContent}"`);
+
 /* ---------- reopening starts clean ---------- */
 await fill("#we-owe-new-customer-name", "Iris Chandler");
 await w.openWeOweDialog();
 await settle();
 ok(note().hidden, "last customer's warning must not greet the next one");
 ok($("#we-owe-new-customer-name").value === "", "the form should be empty again");
+ok(preview.hidden, "last promise's head line must not greet the next one");
+ok(verdict.hidden, "last car's VIN verdict must not greet the next one");
 
 ok(rejections.length === 0, `unhandled rejections during the run: ${rejections.map((r) => r && r.message).join("; ")}`);
 
-finish("we-owe intake: a customer already on file is caught before the form is typed, and picked in one click");
+finish("we-owe intake: a customer already on file is caught and picked in one click, the head line assembles the promise, the VIN checks itself");

@@ -16,7 +16,7 @@
       </div>
       <label>Model<input id="vehicle-add-model" required></label>
       <div class="form-row">
-        <label style="flex:2">VIN<input id="vehicle-add-vin" autocapitalize="characters" autocomplete="off"></label>
+        <label style="flex:2">VIN<input id="vehicle-add-vin" maxlength="17" autocapitalize="characters" autocomplete="off" spellcheck="false"><span class="vin-verdict" id="vehicle-add-vin-verdict" hidden></span></label>
         <label style="flex:1">Mileage<input id="vehicle-add-mileage" type="number" min="0"></label>
       </div>
       <div class="form-row">

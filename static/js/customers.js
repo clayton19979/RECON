@@ -11,6 +11,7 @@ import { STATUS_LABEL, STATUS_PILL_CLASS, state } from "./state.js";
 import { renderViewFailure } from "./error-boundary.js";
 import { wireListKeyboard } from "./list-keyboard.js";
 import { US_STATE_CODES, emailFieldOk, fmtPhone, focusInvalidField, hideAddressSuggestions, openVehicleDetail, phoneDigits, phoneFieldOk, setupAddressAutocomplete, wirePhoneInput } from "./vehicle-detail.js";
+import { wireVinField } from "./vin.js";
 
 /* ==================================================================
    CUSTOMERS
@@ -532,12 +533,16 @@ export function wireRetailRoDialog() {
    after the POST differs per caller (jump to the new page vs. refresh the
    expansion), which is what onCreated carries. */
 let addVehicleTarget = null; // { customerId, onCreated } while the dialog is open
+/* Re-run the VIN verdict after the field is cleared from code on open;
+   assigned in wireAddVehicleDialog. */
+let syncAddVehicleVin = () => {};
 
 export function openAddVehicleDialog(customerId, customerName, onCreated) {
   addVehicleTarget = { customerId, onCreated };
   $("#vehicle-add-customer").textContent = customerName || "";
   ["year", "make", "model", "vin", "mileage", "plate", "plate-state", "color"]
     .forEach((f) => { $(`#vehicle-add-${f}`).value = ""; });
+  syncAddVehicleVin();
   $("#vehicle-add-dialog").showModal();
 }
 
@@ -546,9 +551,9 @@ export function wireAddVehicleDialog() {
   $("#vehicle-add-cancel-2").addEventListener("click", () => $("#vehicle-add-dialog").close());
   // VIN/plate/plate-state uppercase as you type, same shapes the backend
   // normalizes to -- so what the form shows is what the record will say.
-  $("#vehicle-add-vin").addEventListener("input", (e) => {
-    e.target.value = e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 17);
-  });
+  // The VIN box also counts its characters and checks the finished number's
+  // check digit, the same live verdict the intake dialogs give (see vin.js).
+  syncAddVehicleVin = wireVinField($("#vehicle-add-vin"), $("#vehicle-add-vin-verdict"));
   wirePlateFields("#vehicle-add-plate", "#vehicle-add-plate-state");
   $("#vehicle-add-form").addEventListener("submit", async (e) => {
     e.preventDefault();

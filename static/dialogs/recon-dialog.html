@@ -6,7 +6,11 @@
 <dialog id="recon-dialog">
   <form class="modal" id="recon-form">
     <div class="modal-head">
-      <div><p class="eyebrow">NEW STOCK</p><h2>Add Recon Vehicle</h2></div>
+      <div><p class="eyebrow">NEW STOCK</p><h2>Add Recon Vehicle</h2>
+        <!-- The car assembling itself as the form is typed -- the same line
+             the board card will lead with, readable before Save is pressed.
+             Hidden until there's something to say (see syncReconPreview). -->
+        <p class="intake-preview" id="recon-preview" hidden></p></div>
       <button class="icon-btn" value="cancel" formnovalidate type="button" id="recon-cancel">×</button>
     </div>
     <div class="modal-body">
@@ -17,7 +21,10 @@
              there, so the whole step fits on one screen. -->
         <div class="form-row">
           <label>Stock number<input id="recon-stock" required placeholder="R-1042" autocapitalize="characters" autocomplete="off" spellcheck="false" autofocus></label>
-          <label style="flex:1.6">VIN<input id="recon-vin" maxlength="17" placeholder="17-character VIN" autocapitalize="characters" autocomplete="off" spellcheck="false"></label>
+          <!-- The verdict rides inside the label so it reads as part of the
+               field: a count while the VIN is short, then the check-digit
+               answer the moment the 17th character lands (see vin.js). -->
+          <label style="flex:1.6">VIN<input id="recon-vin" maxlength="17" placeholder="17-character VIN" autocapitalize="characters" autocomplete="off" spellcheck="false"><span class="vin-verdict" id="recon-vin-verdict" hidden></span></label>
           <button type="button" class="btn btn-ghost form-row-btn-end" id="recon-decode-vin">Decode VIN</button>
         </div>
         <!-- Filled in as soon as the stock number or VIN matches a car the shop

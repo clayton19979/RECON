@@ -209,3 +209,37 @@ def test_a_settled_promise_gets_its_own_pile_on_the_board(client):
     assert row["status_bucket"] == "finished"
     assert row["lot_bucket"] == "settled", f"a settled promise is filed under {row['lot_bucket']}"
     assert row["needs"] == "Fulfilled — send to History", row["needs"]
+
+
+# --- the colour on file rides the board row -------------------------------
+
+
+def test_board_rows_carry_the_color_on_file(client):
+    """The colour is how a car is pointed at across the lot ("the white
+    Sorento"), so the board row has to carry it -- the card's identity line
+    and the search box both read it off the row."""
+    recon = make_recon_vehicle(client, color="Pearl White")
+    row = next(r for r in board(client) if r.get("recon_id") == recon["id"])
+    assert row["color"] == "Pearl White"
+
+
+def test_a_we_owe_row_carries_its_vehicles_color(client):
+    customer = client.post("/api/customers", json={"name": "Renata Silva"}).json()
+    vehicle = client.post(
+        "/api/vehicles",
+        json={"customer_id": customer["id"], "year": 2019, "make": "Toyota", "model": "RAV4", "color": "Blue"},
+    ).json()
+    res = client.post(
+        "/api/we-owe",
+        json={"customer_id": customer["id"], "vehicle_id": vehicle["id"], "description": "Touch up paint"},
+    )
+    assert res.status_code == 201, res.text
+    assert we_owe_row(client, res.json()["id"])["color"] == "Blue"
+
+
+def test_a_car_with_no_color_on_file_carries_an_empty_one(client):
+    """Empty, not null -- the frontend joins identity fragments with
+    filter(Boolean), and a None would read "None" on the card."""
+    recon = make_recon_vehicle(client)
+    row = next(r for r in board(client) if r.get("recon_id") == recon["id"])
+    assert row["color"] == ""

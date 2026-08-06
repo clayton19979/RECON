@@ -200,3 +200,46 @@ export function todayLocal(date = new Date()) {
   const pad = (n) => String(n).padStart(2, "0");
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 }
+
+/* ---------- the car's colour, worn as a paint chip ----------
+
+   On the lot a car is pointed at by colour before anything else -- "the white
+   Sorento" -- so wherever a row names a car, the colour on file rides along
+   with a small paint chip beside it. The colour is free text off the intake
+   form ("Pearl White", "Dk Gray", "Silver Metallic"), so the chip comes from
+   picking the one word in it that names a paint colour; the rest is finish
+   and shade talk the chip doesn't need.
+
+   The chip never guesses: a colour that doesn't contain a word on this list
+   ("Two-tone", a typo) shows as its word alone, which is still worth showing
+   -- the word is the fact, the chip is only a picture of it. */
+const COLOR_SWATCHES = {
+  white: "#f3f3f0", cream: "#eee5cf", ivory: "#f0ead6",
+  black: "#232326", charcoal: "#43474d", graphite: "#585c62", gunmetal: "#525a64",
+  silver: "#c9ccd1", gray: "#8d9298", grey: "#8d9298", pewter: "#9aa0a6",
+  red: "#b23230", crimson: "#a3272f", maroon: "#6f2637", burgundy: "#6f2637",
+  blue: "#2f60a2", navy: "#26406b", teal: "#2f8084", turquoise: "#3aa0a4",
+  green: "#3f7c49", olive: "#6f7442", lime: "#83b04a",
+  yellow: "#ddbf45", gold: "#c3a052", champagne: "#d7c69e",
+  orange: "#cf7a2e", copper: "#a86634", bronze: "#8d6a3f", brown: "#6d4c33",
+  tan: "#c7ab84", beige: "#d4c6a8", sand: "#d1bd97",
+  purple: "#6c4d8b", plum: "#7b4a6b", violet: "#7a5c9e",
+};
+// "Pearl" is a finish that only means white when nothing else names a hue:
+// "Blue Pearl" is a blue car, "Pearl" alone is a white one.
+const FINISH_FALLBACKS = { pearl: "#efeee6" };
+
+export function vehicleColorSwatch(color) {
+  const words = String(color || "").toLowerCase().split(/[^a-z]+/);
+  for (const word of words) if (COLOR_SWATCHES[word]) return COLOR_SWATCHES[word];
+  for (const word of words) if (FINISH_FALLBACKS[word]) return FINISH_FALLBACKS[word];
+  return "";
+}
+
+export function vehicleColorTagHtml(color) {
+  const word = String(color || "").trim();
+  if (!word) return "";
+  const swatch = vehicleColorSwatch(word);
+  const chip = swatch ? `<span class="color-chip" style="background:${swatch}" aria-hidden="true"></span>` : "";
+  return `<span class="veh-color" title="Color on file">${chip}${esc(word)}</span>`;
+}

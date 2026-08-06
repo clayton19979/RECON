@@ -1,5 +1,5 @@
 import { $, $$, get } from "./core.js";
-import { esc, fmtDay, money, plateKey } from "./shortcuts.js";
+import { esc, fmtDay, money, plateKey, vehicleColorTagHtml } from "./shortcuts.js";
 import { emptyRow, emptyState } from "./empty-states.js";
 import { BOARD_COLUMNS, showPlaceholders, skeletonCards } from "./skeletons.js";
 import { STATUS_LABEL, STATUS_PILL_CLASS, state } from "./state.js";
@@ -357,6 +357,9 @@ export function matchesVehicleSearch(v, query) {
     || (plateQuery ? plate.includes(plateQuery) : false)
     || (v.customer_name || "").toLowerCase().includes(q)
     || (v.vehicle || "").toLowerCase().includes(q)
+    // "the white sorento" is how cars are actually asked for out loud, and
+    // half of that phrase lived in a field the search couldn't see.
+    || (v.color || "").toLowerCase().includes(q)
     // The number on the paper ticket in your hand. Both forms: the short one
     // that gets said out loud ("RO 41") and the long one filed on a vendor's
     // paperwork. Typing either used to match nothing at all, so the one place
@@ -1164,7 +1167,7 @@ function vehiclesEmptyState() {
       // "and not in History" only once History has actually been looked in --
       // before that it's a claim nothing has checked.
       hint: `Nothing matched "${state.search}"${reach.elsewhereKnown ? `, ${elsewhereLabel(state.filter === "history" ? "history" : "live")} or ${elsewhereLabel(reach.scope)}` : ""}.`
-        + " Searches cover stock number, VIN, customer name, and the vehicle description.",
+        + " Searches cover stock number, VIN, plate, color, customer name, and the vehicle description.",
       actions: clear,
     };
   }
@@ -1517,7 +1520,7 @@ function vehicleRowHtml(v) {
       <td class="num col-stock"><span class="stock-no">${esc(v.stock_number || "—")}</span><div class="veh-sub">${roTagHtml(v)}</div></td>
       <td class="col-vehicle">
         <div class="veh-name" title="${esc(v.vehicle)}">${esc(v.vehicle)}</div>
-        <div class="veh-sub">${[plateTagHtml(v), v.segment === "we_owe"
+        <div class="veh-sub">${[vehicleColorTagHtml(v.color), plateTagHtml(v), v.segment === "we_owe"
           ? `<span class="veh-customer"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-7 8-7s8 3 8 7"/></svg>${esc(v.customer_name || "—")}</span>`
           : (v.vin
             // Nobody scans a full 17-character VIN -- the last 8 identify
@@ -1540,7 +1543,7 @@ function vehicleRowHtml(v) {
 // as-is -- see renderVehiclesTable.
 function vehicleRowSignature(v) {
   return [
-    v.stock_number, v.vehicle, v.vin, v.plate, v.plate_state, v.customer_name, v.segment, v.status, v.status_bucket,
+    v.stock_number, v.vehicle, v.vin, v.color, v.plate, v.plate_state, v.customer_name, v.segment, v.status, v.status_bucket,
     // The row prints the ticket's number, so writing the first ticket on a
     // car has to rebuild it -- otherwise the card keeps saying "no ticket"
     // until something else about the car happens to change.
@@ -1759,16 +1762,19 @@ function plateTagHtml(v) {
 }
 
 function cardSubHtml(v) {
+  // Colour first: it's what someone looking out at the lot matches on before
+  // any number -- see vehicleColorTagHtml. Absent when none is on file.
+  const color = vehicleColorTagHtml(v.color);
   const plate = plateTagHtml(v);
   if (v.segment === "we_owe") {
     const customer = `<span class="veh-customer"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-7 8-7s8 3 8 7"/></svg>${esc(v.customer_name || "—")}</span>`;
-    return plate ? `${plate} · ${customer}` : customer;
+    return [color, plate, customer].filter(Boolean).join(" · ");
   }
   // Nobody scans a full 17-character VIN -- the last 8 identify the car.
   const vin = v.vin
     ? `<span title="${esc(v.vin)}">VIN …${esc(String(v.vin).slice(-8))}</span>`
     : `<span class="muted-dash">No VIN on file</span>`;
-  return plate ? `${plate} · ${vin}` : vin;
+  return [color, plate, vin].filter(Boolean).join(" · ");
 }
 
 function vehicleCardHtml(v) {

@@ -1,7 +1,7 @@
 import { $, $$, api, fmtHours, get, patch, post, put, withActorParam } from "./core.js";
 import { toast } from "./notify.js";
 import { confirmAction } from "./confirm.js";
-import { actorLabel, byActor, currentActor, esc, fmtDate, fmtDay, money, relativeTime, todayLocal, wirePlateFields, withLoading } from "./shortcuts.js";
+import { actorLabel, byActor, currentActor, esc, fmtDate, fmtDay, money, relativeTime, todayLocal, vehicleColorTagHtml, wirePlateFields, withLoading } from "./shortcuts.js";
 import { emptyState } from "./empty-states.js";
 import { actualTotal, isReturnedPart, lineTotal, ticketTotal, unreceivedPartLines, unreceivedPartTotal } from "./estimate-money.js";
 import { AUTH_METHOD_LABEL, ITEM_STATUS_LABEL, KIND_GROUP_LABEL, KIND_GROUP_ORDER, PAY_METHOD_LABEL, STATUS_LABEL, STATUS_OPTIONS, STATUS_PILL_CLASS, fieldLabels, state } from "./state.js";
@@ -404,6 +404,14 @@ function specTagsHtml(parts) {
   return parts.filter(Boolean).map((p) => `<span class="spec">${esc(p)}</span>`).join("");
 }
 
+// The colour as its own spec tag, wearing the same paint chip the board's
+// cards do -- built separately because specTagsHtml escapes its parts as
+// plain text and the chip is markup.
+function colorSpecHtml(item) {
+  const tag = vehicleColorTagHtml(item.color);
+  return tag ? `<span class="spec">${tag}</span>` : "";
+}
+
 // "ABC1234 (IN)", or nothing at all when no plate is on file. Sits in the
 // header beside the VIN because it is the identifier someone walking back in
 // from the lot actually has in their head.
@@ -455,7 +463,8 @@ function renderDetailHead() {
   $("#vd-recon-stock").value = segment === "recon" ? item.stock_number || "" : "";
   if (segment === "recon") {
     $("#vd-title").textContent = `${item.stock_number} — ${item.year} ${item.make} ${item.model}`;
-    $("#vd-sub").innerHTML = specTagsHtml([plateTag(item), item.vin, item.mileage ? `${item.mileage.toLocaleString()} mi` : "", item.trim]);
+    $("#vd-sub").innerHTML = colorSpecHtml(item)
+      + specTagsHtml([plateTag(item), item.vin, item.mileage ? `${item.mileage.toLocaleString()} mi` : "", item.trim]);
     $("#vd-customer-line").hidden = true;
     $("#vd-customer-info-card").style.display = "none";
     $("#vd-other-vehicles-card").style.display = "none";
@@ -465,7 +474,8 @@ function renderDetailHead() {
     // we_owe and retail share the customer-owned-car layout; only we_owe has
     // the promise machinery (status/category/target, dealer-paid deposits).
     $("#vd-title").textContent = `${item.year} ${item.make} ${item.model}`;
-    $("#vd-sub").innerHTML = specTagsHtml([plateTag(item), item.vin, item.mileage ? `${item.mileage.toLocaleString()} mi` : "", item.description]);
+    $("#vd-sub").innerHTML = colorSpecHtml(item)
+      + specTagsHtml([plateTag(item), item.vin, item.mileage ? `${item.mileage.toLocaleString()} mi` : "", item.description]);
     // Customer name gets its own prominent line in the header rather than
     // being buried mid-subtitle -- whose car it is is the first thing the
     // advisor needs.

@@ -14,6 +14,8 @@ from .accounting import (
     invoice_line_reach,
     normalize,
     receive_onto_invoice,
+    record_invoice_audit,
+    vendor_name_for,
 )
 from .db import inserted_id, purchase_order_number
 from .recon import age_days, assert_vehicle_editable
@@ -913,6 +915,22 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
                 if result["status"] == "duplicate":
                     raise HTTPException(409, "This credit number is already posted for this vendor")
                 ap_invoice_id = result["ap_invoice_id"]
+                # A credit note is a vendor document that changes what a car
+                # cost, so it belongs in the Control Log beside the bills --
+                # the log's job is every movement on a vendor's account, not
+                # only the ones that add money.
+                record_invoice_audit(
+                    db,
+                    now_fn,
+                    invoice_number=invoice_number,
+                    vendor_text=vendor_name_for(db, vendor_id),
+                    po_number="",
+                    status="posted",
+                    issues=[f"core deposit refunded — ${amount:,.2f} back off the car"],
+                    source="core_return",
+                    order_id=order_id,
+                    vendor_id=vendor_id,
+                )
 
             db.execute(
                 "UPDATE estimate_items SET core_return_invoice_number=? WHERE id=?",
@@ -1054,6 +1072,20 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
             )
             if result["status"] == "duplicate":
                 raise HTTPException(409, "This credit/RMA number is already posted for this vendor")
+            # Same reason as the core credit above: money coming back off a car
+            # is as much a vendor-account movement as money going on.
+            record_invoice_audit(
+                db,
+                now_fn,
+                invoice_number=item.credit_number,
+                vendor_text=vendor_name_for(db, item.vendor_id),
+                po_number="",
+                status="posted",
+                issues=[f"part returned — ${-credit_total:,.2f} back off the car"],
+                source="part_return",
+                order_id=order_id,
+                vendor_id=item.vendor_id,
+            )
 
             # A credit that has arrived is proof the vendor took the part, so
             # a line still sitting in Pending gets its pickup stamped here

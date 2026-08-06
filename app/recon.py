@@ -216,6 +216,46 @@ def open_jobs_text(row: dict) -> str:
     return f"{named} ({done} of {total} done)" if done else named
 
 
+# How much of the ticket's own wording the "still needs" sentence carries. The
+# concern is a free-text box somebody types into with a customer on the phone,
+# and it is sometimes a paragraph; a paragraph in this cell pushes the money
+# and the idle days off the row it exists to be read beside.
+NEEDS_WORK_CHARS = 60
+
+
+def open_work_text(row: dict) -> str:
+    """What this car is in for, in the shop's own words.
+
+    The fallback for open_jobs_text, and the answer on most cars: splitting a
+    ticket into named jobs is a habit rather than a rule, and a great many
+    tickets here are one concern and a handful of part lines. On every one of
+    those, the sentence that exists to answer "what does this car still need"
+    could only ever reach for the money -- "$95.00 of work left · 1 part on
+    order" -- and never said what the work actually was.
+
+    A we-owe promise with no ticket written yet was the worst of it. The row
+    read "6 days past the promised date · no ticket written yet · untouched 9
+    days" about a car whose entire reason for being here -- the thing a
+    salesman promised a customer -- was sitting one field away and shown
+    nowhere Walt reads. Answering "what does it need?" with "nobody has typed
+    anything" when the shop plainly knows is the kind of quiet gap that gets a
+    car chased twice or not at all.
+
+    The ticket's concern comes first, because it is what the shop wrote down
+    about the work in front of it and it is kept up to date as the job is
+    understood. The promise stands in behind it, which on a we-owe with no
+    ticket is the only written record there is.
+    """
+    text = " ".join((row.get("concern") or "").split()) or " ".join((row.get("description") or "").split())
+    if len(text) <= NEEDS_WORK_CHARS:
+        return text
+    # Cut on a word, never mid-word: half a part name reads as a typo rather
+    # than as a sentence that ran long. The trailing punctuation goes with it
+    # so the ellipsis doesn't land after a stray comma.
+    clipped = text[:NEEDS_WORK_CHARS].rsplit(" ", 1)[0].rstrip(" ,.;:-/")
+    return f"{clipped or text[:NEEDS_WORK_CHARS].rstrip()}…"
+
+
 def lot_needs_text(row: dict) -> str:
     """One plain sentence answering "what does this car still need?".
 
@@ -286,10 +326,13 @@ def lot_needs_text(row: dict) -> str:
         bits.append("written up, work not started")
 
     # The work itself goes ahead of the money: it is the answer to the
-    # question, and the dollars are the follow-up.
-    jobs = open_jobs_text(row)
-    if jobs:
-        bits.append(jobs)
+    # question, and the dollars are the follow-up. Named jobs when the ticket
+    # has them, because they say which repairs are still outstanding rather
+    # than only what the car came in for; the ticket's own wording when it
+    # doesn't, which is most tickets. See open_work_text.
+    work = open_jobs_text(row) or open_work_text(row)
+    if work:
+        bits.append(work)
 
     pending = row.get("parts_pending") or 0
     if pending:
@@ -708,6 +751,12 @@ def cost_rollups(
         placeholders = ",".join("?" for _ in chunk)
         rows = db.execute(
             f"""SELECT o.{column} ref_id, o.id, o.number, o.ro_number, o.status, o.voided,
+               -- What the ticket says the car is in for. Carried here rather
+               -- than fetched separately because the board's "what does it
+               -- still need" sentence falls back to it on any ticket nobody
+               -- split into named jobs (see open_work_text), and this query
+               -- is already the one that visits every ticket on every car.
+               o.concern,
                -- received_cost, not received_quantity*unit_cost: the money the
                -- vendor actually billed for the units that landed, added up
                -- bill by bill. The two only agree while a line arrives on one
@@ -1388,6 +1437,13 @@ def vehicle_board_rows(
                     # the car except by opening tickets until one matched.
                     "ro_number": current_order["ro_number"] if current_order else 0,
                     "order_number": current_order["number"] if current_order else "",
+                    # What the ticket says the car is in for, off the same
+                    # ticket every other number on this row came from. The
+                    # "still needs" sentence is built from the finished row
+                    # (see add_lot_status), so the wording it falls back to
+                    # has to be on the row -- same reason ro_number and
+                    # order_number are here rather than looked up again.
+                    "concern": (current_order["concern"] or "").strip() if current_order else "",
                     # How many tickets on this car were taken back. Only used
                     # to tell "nobody has written one" apart from "the one
                     # somebody wrote was voided" -- two rows that otherwise
@@ -1504,6 +1560,12 @@ def vehicle_board_rows(
                     # Same as recon above -- see there.
                     "ro_number": current_order["ro_number"] if current_order else 0,
                     "order_number": current_order["number"] if current_order else "",
+                    # Same as recon above. On this side the needs sentence has
+                    # the promise itself to fall back on when no ticket has
+                    # been written yet, which is the everyday case here -- the
+                    # salesman's promise is written down long before anybody
+                    # opens a repair order against it.
+                    "concern": (current_order["concern"] or "").strip() if current_order else "",
                     "voided_order_count": voided_count,
                     "updated_at": row["updated_at"],
                     # No arrival date on this side, and none wanted: a we-owe's

@@ -3723,6 +3723,14 @@ th.sel-col, td.sel-col { width: 32px; padding-right: 0; }
    above sets a muted tone for the label, and at this specificity it would
    otherwise repaint the one figure the row exists to show. */
 .report-sheet tfoot tr.total-missing td.cost-unreceipted { color: var(--warn); font-weight: 700; }
+/* A footnote that says what a total covers rather than correcting it (the
+   Profit sheet's purchase-price coverage line). Same quiet treatment as the
+   correction row, with no warn colour anywhere on it: nothing here is wrong,
+   the sheet is just saying which cars it could count. */
+.report-sheet tfoot tr.total-note td { border-top: 0; padding-top: 2px; font-weight: 400; color: var(--ink-faint); font-size: 11.5px; white-space: normal; }
+@media print {
+  .print-table tfoot tr.total-note td { border-top: 0; padding-top: 1px; font-weight: 400; font-style: italic; white-space: normal; }
+}
 /* The per-car badge, where a report sheet carries one. The board lets it stay
    on one line and lets the Cost column widen by the few pixels it needs; a
    report sheet is table-layout:fixed, so there is no widening to be had and
@@ -3816,7 +3824,7 @@ tr.lot-group-head { scroll-margin-top: 44px; }
    The lot sheet is deliberately left out: it has prose in it and was written
    to wrap rather than scroll, and it still fits. */
 .spend-table { min-width: 900px; }
-.profit-table { min-width: 930px; }
+.profit-table { min-width: 1030px; }
 .tech-table { min-width: 750px; }
 .report-sheet thead th, .report-sheet tbody td, .report-sheet tfoot td { padding-left: 12px; padding-right: 12px; }
 .report-sheet .col-stock { width: 92px; }
@@ -3842,7 +3850,7 @@ tr.lot-group-head { scroll-margin-top: 44px; }
    sideways scrollbar under this sheet. */
 .spend-table .col-paid { width: 124px; }
 
-/* Profit: nine columns, the most crowded sheet in the app. The VIN is this
+/* Profit: ten columns, the most crowded sheet in the app. The VIN is this
    report's handle -- its rows deliberately don't open a vehicle, because one
    row can stand for a recon record and several we-owe promises at once -- so
    it has to fit whole rather than trail off, and it drops a size to do it. */
@@ -3874,8 +3882,17 @@ tr.lot-group-head { scroll-margin-top: 44px; }
   .spend-table .col-status { width: 108px; }
   .spend-table .col-tech { width: 118px; }
   .spend-table .col-paid { width: 120px; }
-  .profit-table .col-vin { width: 162px; }
-  .profit-table .col-hours { width: 74px; }
+  /* The profit sheet is the one that can't give ground by trimming alone: ten
+     columns, six of them money. It buys the room back out of its own cell
+     padding instead, which costs nothing legible -- the figures are tabular
+     and right-aligned, so they stay in step with each other however much air
+     is around them -- and keeps the whole sheet inside a 1280 laptop without
+     a sideways scrollbar under it. */
+  .profit-table { min-width: 970px; }
+  .profit-table thead th, .profit-table tbody td, .profit-table tfoot td { padding-left: 8px; padding-right: 8px; }
+  .profit-table .col-vin { width: 156px; }
+  .profit-table .col-hours { width: 70px; }
+  .profit-table .col-money { width: 86px; }
   /* Technicians is the one sheet that doesn't give ground: six columns and a
      short name fit anywhere, and narrowing the counts here would only strand
      the name further from the first number that belongs to it. */

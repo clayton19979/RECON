@@ -3,6 +3,7 @@ import { toast } from "./notify.js";
 import { esc, fmtDate, money, withLoading } from "./shortcuts.js";
 import { loadVehiclesView } from "./vehicles-board.js";
 import { phoneFieldOk, wirePhoneInput } from "./vehicle-detail.js";
+import { wireVinField } from "./vin.js";
 
 /* ==================================================================
    NEW WE-OWE DIALOG
@@ -80,9 +81,50 @@ async function checkForExistingCustomer() {
   $("#we-owe-customer-match").hidden = false;
 }
 
+/* ---------- the promise assembling in the dialog head ----------
+   Who it's for, which car, and what was said, built up as the form is
+   typed -- the same order the conversation at the counter happens in.
+   The picked option's text is used when an existing customer or car is
+   chosen; the typed boxes are used when they're new. Year only joins once
+   a make exists (the field defaults to the current year, which says
+   nothing until there's a car for it to belong to). */
+function weOwePreviewText() {
+  const customerSelect = $("#we-owe-customer");
+  const customer = customerSelect.value === "__new__"
+    ? $("#we-owe-new-customer-name").value.trim()
+    : (customerSelect.options[customerSelect.selectedIndex]?.textContent || "").trim();
+  const vehicleSelect = $("#we-owe-vehicle");
+  let vehicle;
+  if (vehicleSelect.value === "__new__") {
+    const make = $("#we-owe-new-make").value.trim();
+    vehicle = [make ? $("#we-owe-new-year").value.trim() : "", make, $("#we-owe-new-model").value.trim()]
+      .filter(Boolean).join(" ");
+  } else {
+    vehicle = (vehicleSelect.options[vehicleSelect.selectedIndex]?.textContent || "").trim();
+  }
+  return [customer, vehicle, $("#we-owe-description").value.trim()].filter(Boolean).join(" · ");
+}
+
+function syncWeOwePreview() {
+  const text = weOwePreviewText();
+  $("#we-owe-preview").textContent = text;
+  $("#we-owe-preview").hidden = !text;
+}
+
+/* Same Decode VIN nudge the recon intake has: the VIN just proved itself
+   and make/model are still empty, so decoding is the shortest path. */
+let weOweVinState = "empty";
+let syncWeOweVin = () => {};
+
+function syncWeOweDecodeNudge() {
+  const untyped = !$("#we-owe-new-make").value.trim() && !$("#we-owe-new-model").value.trim();
+  $("#we-owe-decode-vin").classList.toggle("btn-decode-ready", weOweVinState === "ok" && untyped);
+}
+
 export async function openWeOweDialog() {
   $("#we-owe-form").reset();
   clearCustomerMatchNote();
+  syncWeOweVin();
   $("#we-owe-new-year").value = new Date().getFullYear();
   try {
     const customers = await get("/api/customers");
@@ -117,6 +159,9 @@ async function refreshWeOweVehicleOptions() {
   // first option) without firing a change event -- without this, the
   // fields to actually type the new vehicle stay hidden.
   $("#we-owe-new-vehicle").style.display = select.value === "__new__" ? "" : "none";
+  // The head line reads the picked vehicle's text, and what's picked may
+  // just have changed under it the same eventless way.
+  syncWeOwePreview();
 }
 export function wireWeOweDialog() {
   $("#we-owe-cancel").addEventListener("click", () => $("#we-owe-dialog").close());
@@ -157,6 +202,22 @@ export function wireWeOweDialog() {
     $("#we-owe-new-vehicle").style.display = $("#we-owe-vehicle").value === "__new__" ? "" : "none";
   });
   wirePhoneInput($("#we-owe-new-customer-phone"));
+  syncWeOweVin = wireVinField($("#we-owe-new-vin"), $("#we-owe-vin-verdict"), (vinState) => {
+    weOweVinState = vinState;
+    syncWeOweDecodeNudge();
+  });
+  // Everything the head line reads from. The two selects change rather than
+  // input; the typed boxes input as they're typed.
+  for (const sel of ["#we-owe-customer", "#we-owe-vehicle"]) {
+    $(sel).addEventListener("change", () => syncWeOwePreview());
+  }
+  for (const sel of ["#we-owe-new-customer-name", "#we-owe-new-year", "#we-owe-new-make", "#we-owe-new-model", "#we-owe-description"]) {
+    $(sel).addEventListener("input", () => syncWeOwePreview());
+  }
+  // Typing the make or model by hand puts the lit-up Decode button to rest.
+  for (const sel of ["#we-owe-new-make", "#we-owe-new-model"]) {
+    $(sel).addEventListener("input", () => syncWeOweDecodeNudge());
+  }
   $("#we-owe-decode-vin").addEventListener("click", async () => {
     const vin = $("#we-owe-new-vin").value.trim();
     if (vin.length < 5) return toast("Enter a VIN first", true);
@@ -165,6 +226,10 @@ export function wireWeOweDialog() {
       $("#we-owe-new-year").value = data.year;
       $("#we-owe-new-make").value = data.make;
       $("#we-owe-new-model").value = data.model;
+      // Filled from code, so no input events fired: rebuild the head line
+      // and put the lit-up Decode button (its job is done) back to rest.
+      syncWeOwePreview();
+      syncWeOweDecodeNudge();
       toast("VIN decoded");
     } catch (err) {
       toast(err.message, true);

@@ -4,6 +4,7 @@ import { todayLocal, wirePlateFields, withLoading } from "./shortcuts.js";
 import { state } from "./state.js";
 import { loadVehiclesView } from "./vehicles-board.js";
 import { openVehicleDetail } from "./vehicle-detail.js";
+import { wireVinField } from "./vin.js";
 
 /* ==================================================================
    NEW RECON VEHICLE DIALOG
@@ -70,6 +71,36 @@ async function checkForExistingCar() {
   $("#recon-match-note").hidden = false;
 }
 
+/* ---------- the car assembling in the dialog head ----------
+   The head line builds itself out of the identity fields as they're typed --
+   stock number, then the car, then its color -- so what's about to be saved
+   is readable in one place without re-scanning six boxes. The year only
+   joins once a make exists: the field defaults to the current year, and a
+   bare "2026" up there would just be the form talking to itself. */
+function syncReconPreview() {
+  const stock = $("#recon-stock").value.trim().toUpperCase();
+  const make = $("#recon-make").value.trim();
+  const car = [make ? $("#recon-year").value.trim() : "", make, $("#recon-model").value.trim()]
+    .filter(Boolean).join(" ");
+  const text = [stock, car, $("#recon-color").value.trim()].filter(Boolean).join(" · ");
+  $("#recon-preview").textContent = text;
+  $("#recon-preview").hidden = !text;
+}
+
+/* The last VIN state wireVinField reported, for the Decode nudge below. */
+let reconVinState = "empty";
+/* Re-run the VIN verdict after the field is set from code (form reset,
+   decoded plate); assigned in wireReconDialog. */
+let syncReconVin = () => {};
+
+/* Light up Decode VIN the moment it becomes the shortest path: the VIN just
+   proved itself and year/make/model are still waiting to be typed. Filling
+   either by hand, or decoding, puts the button back to rest. */
+function syncReconDecodeNudge() {
+  const untyped = !$("#recon-make").value.trim() && !$("#recon-model").value.trim();
+  $("#recon-decode-vin").classList.toggle("btn-decode-ready", reconVinState === "ok" && untyped);
+}
+
 export function openReconDialog() {
   $("#recon-form").reset();
   clearMatchNote();
@@ -77,6 +108,8 @@ export function openReconDialog() {
   // The day the car landed, and it is what the board's Age column counts
   // from -- so this default has to be the shop's today, not UTC's.
   $("#recon-date").value = todayLocal();
+  syncReconPreview();
+  syncReconVin();
   $("#recon-dialog").showModal();
 }
 export function wireReconDialog() {
@@ -85,6 +118,18 @@ export function wireReconDialog() {
   wirePlateFields("#recon-plate", "#recon-plate-state");
   $("#recon-stock").addEventListener("blur", () => checkForExistingCar());
   $("#recon-vin").addEventListener("blur", () => checkForExistingCar());
+  syncReconVin = wireVinField($("#recon-vin"), $("#recon-vin-verdict"), (vinState) => {
+    reconVinState = vinState;
+    syncReconDecodeNudge();
+  });
+  for (const sel of ["#recon-stock", "#recon-year", "#recon-make", "#recon-model", "#recon-color"]) {
+    $(sel).addEventListener("input", () => syncReconPreview());
+  }
+  // Typing the make or model by hand answers the question the lit-up Decode
+  // button was asking, so it goes back to rest.
+  for (const sel of ["#recon-make", "#recon-model"]) {
+    $(sel).addEventListener("input", () => syncReconDecodeNudge());
+  }
   $("#recon-match-open").addEventListener("click", () => {
     const id = matchedReconId;
     $("#recon-dialog").close();
@@ -100,6 +145,10 @@ export function wireReconDialog() {
       $("#recon-model").value = data.model;
       $("#recon-trim").value = data.trim;
       $("#recon-engine").value = data.engine;
+      // Filled from code, so no input events fired: rebuild the head line
+      // and put the lit-up Decode button (its job is done) back to rest.
+      syncReconPreview();
+      syncReconDecodeNudge();
       toast("VIN decoded");
     } catch (err) {
       toast(err.message, true);
@@ -118,6 +167,9 @@ export function wireReconDialog() {
       $("#recon-trim").value = data.trim;
       $("#recon-engine").value = data.engine;
       $("#recon-color").value = data.color;
+      // All set from code -- no input events fired for any of it.
+      syncReconPreview();
+      syncReconVin();
       toast("Plate decoded");
       // The VIN just arrived without anyone typing in the field, so no blur
       // is coming -- ask now, or a plate-decoded duplicate goes unnoticed.

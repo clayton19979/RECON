@@ -24,12 +24,24 @@
 
 import { boot, click } from "./harness.mjs";
 
-const car = (over) => ({
-  stock_number: "", vehicle: "", vin: "", labor_hours: 0, purchase_price: 0,
-  recon_cost: 0, we_owe_cost: 0, we_owe_customer_paid: 0, we_owe_net_cost: 0,
-  total_invested: 0, sale_price: null, sale_date: null, profit: null,
-  margin_pct: null, recon_count: 1, we_owe_count: 0, acquired_at: "2026-07-01T09:00:00", ...over,
-});
+//   - the spend card and column were built on the we-owe figure that has
+//     customer deposits netted out of it. A promise with a $50 deposit taken
+//     and nothing received yet made a shop that had spent nothing report
+//     -$50.00 under the words "what the shop spent", and put this sheet at
+//     odds with the board, the Lot Status sheet and the car's own page. Spend
+//     is gross; the deposit is said on its own card.
+//
+// The rows carry shop_spend because the server sends it (recon.unit_lifetime)
+// -- one definition, so the screen, the printed copy and the CSV cannot drift.
+const car = (over) => {
+  const row = {
+    stock_number: "", vehicle: "", vin: "", labor_hours: 0, purchase_price: 0,
+    recon_cost: 0, we_owe_cost: 0, we_owe_customer_paid: 0, we_owe_net_cost: 0,
+    total_invested: 0, sale_price: null, sale_date: null, profit: null,
+    margin_pct: null, recon_count: 1, we_owe_count: 0, acquired_at: "2026-07-01T09:00:00", ...over,
+  };
+  return { ...row, shop_spend: row.recon_cost + row.we_owe_cost };
+};
 
 // Three of the lot's own cars and one we-owe:
 //   R-1  sold, purchase price on file  -> 8000 - 5000 - 800 = 2200 profit
@@ -206,9 +218,52 @@ ok(!bareFoot.includes("$0.00"),
 ok(bareFoot.includes("No purchase price on file for any of these 4 cars"),
    `the footer doesn't explain its dashes: "${bareFoot.replace(/\s+/g, " ").trim()}"`);
 
+/* ---------- a deposit is money in, not spending that didn't happen ----------
+   The Camry's customer puts $50 toward the promise before a single part has
+   been received. The shop has spent nothing on it, and the sheet has to say
+   nothing -- not minus fifty dollars, which is what a spend figure with the
+   deposit netted out of it produced. The Vehicles board, the Lot Status sheet
+   and the car's own page all report the gross cost; this one used to be the
+   odd one out. */
+profit.forEach((r) => {
+  r.recon_cost = 0; r.we_owe_cost = 0; r.shop_spend = 0;
+  r.unreceived_closed_cost = 0; r.unreceived_closed_parts = 0;
+  r.total_invested = 0;
+});
+const camry = profit[3];
+camry.we_owe_customer_paid = 50;
+camry.we_owe_net_cost = -50;
+camry.total_invested = -50;
+await w.loadReportsView();
+await settle();
+
+const deposit = stats();
+ok(deposit[1].value === "$0.00",
+   `a $50 deposit on a car nothing has been spent on made the spend card read ${deposit[1].value}`);
+ok(!deposit[1].value.startsWith("-"),
+   `"Spent Fixing Them" is showing a negative number: ${deposit[1].value}`);
+ok(deposit[3].value === "$0.00",
+   `We-Owe Cost reads ${deposit[3].value} -- the cost is nil; the deposit is a separate fact`);
+ok(deposit[3].sub.includes("$50.00") && deposit[3].sub.includes("customers paid"),
+   `the deposit isn't reported anywhere on the screen now that it is out of the spend: "${deposit[3].sub}"`);
+
+const depositRows = [...doc.querySelectorAll("#report-output tbody tr")];
+const camryRow = depositRows.find((tr) => tr.textContent.includes("2017 Toyota Camry"));
+ok(cells(camryRow)[4] === "$0.00",
+   `the Camry's Spent cell reads ${cells(camryRow)[4]} -- the shop has spent nothing on it`);
+ok(camryRow.getAttribute("title").includes("$50.00 paid by the customer"),
+   `the row tooltip drops the deposit: "${camryRow.getAttribute("title")}"`);
+const depositFoot = doc.querySelector("#report-output tfoot").textContent;
+ok(!depositFoot.includes("-$50.00"),
+   `the footer spend total went negative on a deposit: "${depositFoot.replace(/\s+/g, " ").trim()}"`);
+const depositPrint = doc.querySelector("#print-report").textContent;
+ok(!depositPrint.includes("-$50.00"),
+   `the printed sheet still nets the deposit out of the spend: "${depositPrint.slice(-300)}"`);
+
 ok(rejections.length === 0, `unhandled rejections during the run: ${rejections.map((e) => e && e.message).join(" | ")}`);
 
 finish("profit report: the spend card reports what the shop spent and not what the lot paid, "
+  + "a we-owe deposit is reported on its own instead of driving the spend negative, "
   + "Purchase and Total In dash out and total only where a purchase price is on file, "
   + "stock count excludes we-owe cars, sold count survives a missing purchase price, "
   + "margin owns up to unreceipted parts");

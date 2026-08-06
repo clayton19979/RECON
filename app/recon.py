@@ -1157,6 +1157,21 @@ def _unit_lifetime(
     the same reason total_cost never folds it in: what landed is a fact, and
     what was bought and never receipted is a different fact the screens are
     expected to say out loud. Nothing here subtracts it, and nothing should.
+
+    shop_spend and total_invested answer two different questions and must not
+    be confused for each other. shop_spend is Walt's fourth question -- what
+    did this shop spend fixing this car -- and it is the gross cost of the
+    parts that landed, recon and we-owe together. total_invested is the input
+    to a profit calculation, so it also carries what the lot paid for the car
+    and it nets out whatever the customer chipped in on the we-owe side.
+
+    A customer deposit is money coming in, not shop spending that didn't
+    happen, so it has no business in shop_spend. Netting it there produced a
+    *negative* figure on the Profit report's "Spent Fixing Them" card the
+    moment a we-owe promise took a deposit before any part was received -- a
+    shop that had spent nothing reporting that it had spent minus fifty
+    dollars -- and it disagreed with the Vehicles board, the Lot Status sheet
+    and the car's own page, all of which report the gross cost.
     """
     all_rollups = recon_rollups + we_owe_rollups
     recon_cost = sum(r["total_cost"] for r in recon_rollups)
@@ -1187,6 +1202,12 @@ def _unit_lifetime(
         "labor_hours": labor_hours,
         "we_owe_customer_paid": round(customer_paid, 2),
         "we_owe_net_cost": we_owe_net,
+        # What this shop spent fixing this car, gross, at cost. The one figure
+        # every surface that asks Walt's fourth question reads, so the Profit
+        # report, the CSV and the printed sheet cannot drift from each other or
+        # from the board. Customer deposits are money in and stay out of it --
+        # see the docstring.
+        "shop_spend": round(recon_cost + we_owe_cost, 2),
         "total_invested": total_invested,
         # Money already spent on this car that none of the figures above
         # include. Same two field names the board row carries, so the Profit
@@ -1407,7 +1428,7 @@ def vehicle_board_rows(
     result = []
     if segment in (None, "recon"):
         rows = db.execute(
-            """SELECT rv.*, v.year, v.make, v.model, v.vin, v.mileage, v.plate, v.plate_state, v.unit_id,
+            """SELECT rv.*, v.year, v.make, v.model, v.vin, v.mileage, v.color, v.plate, v.plate_state, v.unit_id,
                       u.purchase_price unit_purchase_price, u.sale_price unit_sale_price
                FROM recon_vehicles rv
                JOIN vehicles v ON v.id=rv.vehicle_id
@@ -1460,6 +1481,11 @@ def vehicle_board_rows(
                     "stock_number": row["stock_number"],
                     "vehicle": f"{row['year']} {row['make']} {row['model']}",
                     "vin": row["vin"],
+                    # The colour off the intake form, because "the white
+                    # Sorento" is how a car is actually pointed at across a
+                    # lot -- the board's card leads its identity line with it,
+                    # and the search box matches on it.
+                    "color": row["color"] or "",
                     # Carried on every board row because the search bar filters
                     # this list in the browser -- a plate the row doesn't hold
                     # is a plate nobody can find the car by.
@@ -1537,7 +1563,7 @@ def vehicle_board_rows(
     if segment in (None, "we_owe"):
         rows = db.execute(
             """SELECT w.*, c.name customer_name, v.year, v.make, v.model, v.vin,
-                      v.plate, v.plate_state, v.unit_id,
+                      v.color, v.plate, v.plate_state, v.unit_id,
                       u.purchase_price unit_purchase_price, u.sale_price unit_sale_price
                FROM we_owe_items w
                JOIN customers c ON c.id=w.customer_id JOIN vehicles v ON v.id=w.vehicle_id
@@ -1586,6 +1612,9 @@ def vehicle_board_rows(
                     "stock_number": row["lot_stock_number"] or None,
                     "vehicle": f"{row['year']} {row['make']} {row['model']}",
                     "vin": row["vin"],
+                    # Same as the recon rows: the colour is half of how anyone
+                    # says which car a promise is about.
+                    "color": row["color"] or "",
                     "plate": row["plate"],
                     "plate_state": row["plate_state"],
                     "customer_name": row["customer_name"],

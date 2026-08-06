@@ -1,4 +1,9 @@
-<!-- Receive Parts Dialog -->
+<!-- Receive Parts Dialog.
+     The app's most-used money action, laid out as three short steps: the
+     parts in your hand, whose bill they came on, and what that bill totals.
+     Receiving is the one moment the app writes the car's cost and the
+     vendor's bill from the same figure; correcting it afterwards fixes only
+     one of them. -->
 <dialog id="receive-dialog">
   <form class="modal" id="receive-form">
     <div class="modal-head">
@@ -6,24 +11,45 @@
       <button class="icon-btn" formnovalidate type="button" id="receive-cancel">×</button>
     </div>
     <div class="modal-body">
-      <!-- Each price starts at what the line was quoted at and is editable,
-           because the invoice in your hand is the number that's true. This is
-           the one moment the app writes the car's cost and the vendor's bill
-           from the same figure; correcting it afterwards fixes only one of
-           them. -->
-      <div class="receive-lines" id="receive-lines"></div>
-      <!-- The dialog opens on the vendor these parts were most likely bought
-           from, and says why underneath when it has a real reason (see
-           preferredVendor). The note is not shown for a shop-wide "bought from
-           them last" guess -- that says nothing about these parts. -->
-      <label>Vendor<select id="receive-vendor"><option value="__new__">＋ New vendor…</option></select></label>
-      <p class="receive-vendor-why" id="receive-vendor-why" hidden></p>
-      <div id="receive-new-vendor" style="display:none">
-        <label>New vendor name<input id="receive-new-vendor-name" placeholder="WorldPac"></label>
-      </div>
-      <label>Invoice #<input id="receive-invoice-number" required placeholder="INV-1234" autofocus></label>
-      <label>Tax<input id="receive-tax" type="number" min="0" step="0.01" value="0"></label>
-      <div class="cost-summary" id="receive-total-summary"></div>
+      <fieldset class="form-group">
+        <legend>What landed</legend>
+        <!-- Each price starts at what the line was quoted at and is editable,
+             because the invoice in your hand is the number that's true. A
+             price that moved gets a note under the part saying what the line
+             was written up at, while the paper to check it against is still
+             on the counter. -->
+        <div class="receive-lines" id="receive-lines"></div>
+      </fieldset>
+
+      <fieldset class="form-group">
+        <legend>Whose bill it is</legend>
+        <!-- The dialog opens on the vendor these parts were most likely bought
+             from, and says why underneath when it has a real reason (see
+             preferredVendor). The note is not shown for a shop-wide "bought from
+             them last" guess -- that says nothing about these parts. -->
+        <div class="form-row">
+          <label>Vendor<select id="receive-vendor"><option value="__new__">＋ New vendor…</option></select></label>
+          <label>Invoice #<input id="receive-invoice-number" required placeholder="INV-1234" autofocus></label>
+        </div>
+        <p class="receive-vendor-why" id="receive-vendor-why" hidden></p>
+        <div id="receive-new-vendor" style="display:none">
+          <label>New vendor name<input id="receive-new-vendor-name" placeholder="WorldPac"></label>
+        </div>
+      </fieldset>
+
+      <fieldset class="form-group">
+        <legend>What the bill says</legend>
+        <!-- Subtotal and Total are written by the dialog's repaint (see
+             dialog-receive-parts.js); only Tax is typed. The CSS lifts the
+             Tax row between them so the block reads in bill order --
+             subtotal, tax, total -- without the input being rebuilt (and
+             losing focus) on every keystroke. -->
+        <div class="receive-totals">
+          <div class="cost-line rt-tax"><span>Tax</span><input id="receive-tax" type="number" min="0" step="0.01" value="0" aria-label="Tax"></div>
+          <div id="receive-total-summary"></div>
+        </div>
+        <p class="receive-footnote">Posting puts this bill in A/P and adds the parts to what this car cost.</p>
+      </fieldset>
     </div>
     <div class="modal-actions">
       <button class="btn btn-ghost" formnovalidate type="button" id="receive-cancel-2">Cancel</button>

@@ -17,7 +17,9 @@ import { boot, press, click } from "./harness.mjs";
 // The fixture supplies them the way the API does, verbatim.
 const veh = (over) => ({
   segment: "recon", recon_id: null, we_owe_id: null, stock_number: "", vehicle: "",
-  vin: "", plate: "", plate_state: "", customer_name: "", status: "in_progress", status_bucket: "in_progress",
+  // Blank like most identity fields: a colour is only on file when intake
+  // wrote one down, and a card must show nothing at all where it would go.
+  vin: "", plate: "", plate_state: "", color: "", customer_name: "", status: "in_progress", status_bucket: "in_progress",
   purchase_price: 0, actual_cost: 0, quoted_cost: 0, technicians: [], updated_at: "2026-07-01T09:00:00",
   // Blank is the common case and the awkward one: most cars have no arrival
   // date on file, and the cell has to say so rather than passing the write-up
@@ -52,9 +54,9 @@ const veh = (over) => ({
    nearly as long. A column that quietly read age_days would still pass a
    same-order fixture, and fails this one. */
 let board = [
-  veh({ recon_id: 1, stock_number: "B204", vehicle: "2019 Ford F-150", vin: "1FTEW1E5XKF", status: "in_progress", technicians: ["Dana"], acquired_at: "2026-06-09", age_days: 22, quoted_cost: 900, actual_cost: 1450, parts_pending: 2, parts_pending_value: 340, idle_days: 0, last_activity_at: "2026-07-25T08:15:00", needs: "2 parts on order ($340.00)" }),
+  veh({ recon_id: 1, stock_number: "B204", vehicle: "2019 Ford F-150", vin: "1FTEW1E5XKF", color: "Oxford White", status: "in_progress", technicians: ["Dana"], acquired_at: "2026-06-09", age_days: 22, quoted_cost: 900, actual_cost: 1450, parts_pending: 2, parts_pending_value: 340, idle_days: 0, last_activity_at: "2026-07-25T08:15:00", needs: "2 parts on order ($340.00)" }),
   veh({ recon_id: 2, stock_number: "A118", vehicle: "2021 Honda Civic", vin: "2HGFC2F69MH", plate: "TK7Q419", plate_state: "IN", status: "estimate", technicians: [], age_days: 3, quoted_cost: 600, actual_cost: 0, idle_days: 2, last_activity_at: "2026-07-23T11:00:00", lot_bucket: "waiting", remaining_cost: 600, needs: "No ticket written yet · $600.00 of work left" }),
-  veh({ segment: "we_owe", we_owe_id: 5, stock_number: "", vehicle: "2017 Toyota Camry", customer_name: "R. Alvarez", status: "pending_approval", status_bucket: "in_progress", technicians: ["Chris", "Dana"], age_days: 41, quoted_cost: 300, actual_cost: 310, parts_pending: 1, parts_pending_value: 85, idle_days: 4, last_activity_at: "2026-07-21T09:30:00", needs: "Waiting on approval · 1 part on order ($85.00)" }),
+  veh({ segment: "we_owe", we_owe_id: 5, stock_number: "", vehicle: "2017 Toyota Camry", color: "Anvil", customer_name: "R. Alvarez", status: "pending_approval", status_bucket: "in_progress", technicians: ["Chris", "Dana"], age_days: 41, quoted_cost: 300, actual_cost: 310, parts_pending: 1, parts_pending_value: 85, idle_days: 4, last_activity_at: "2026-07-21T09:30:00", needs: "Waiting on approval · 1 part on order ($85.00)" }),
   // The two stalled cars carry real ticket ids: they're what "Make Tasks"
   // acts on, and the id is what gives the resulting task its jump-to-vehicle
   // chip. Distinct values so a batch that sent one order_id for every item
@@ -1014,6 +1016,29 @@ ok(reachLine().hidden, "the reach line showed itself with nothing to report");
 setSearch("");
 ok(reachLine().hidden, "the reach line outlived the search that produced it");
 ok(dataRows().length === 5, `clearing the search should restore the board, got ${dataRows().length}`);
+
+/* ---------- the colour on file ----------
+
+   "The white F-150" is how a car is asked for out loud, so the identity line
+   wears the colour intake wrote down, with a paint chip when the word names a
+   colour the palette knows. The chip never guesses: a colour it can't place
+   ("Anvil") shows as its word alone, and a car with no colour on file shows
+   nothing where it would have been -- not a blank chip, not a dash. */
+const colorTag = (key) => dataRows().find((tr) => tr.dataset.key === key)?.querySelector(".veh-color");
+ok(colorTag("recon:1") && colorTag("recon:1").textContent.trim() === "Oxford White",
+   "the F-150's row doesn't say Oxford White");
+ok(colorTag("recon:1").querySelector(".color-chip"),
+   "a colour containing a known paint word should wear a chip");
+ok(colorTag("we_owe:5") && colorTag("we_owe:5").textContent.trim() === "Anvil"
+   && !colorTag("we_owe:5").querySelector(".color-chip"),
+   "a colour the palette can't place should be its word alone, chipless");
+ok(!colorTag("recon:2"), "a car with no colour on file grew a colour tag");
+
+setSearch("oxford");
+ok(dataRows().length === 1 && dataRows()[0].dataset.key === "recon:1",
+   `searching by colour should find exactly the white F-150, got ${dataRows().map((tr) => tr.dataset.key).join(",")}`);
+setSearch("");
+
 /* ---------- the columns layout ----------
 
    The same filtered, sorted list read as three piles instead of one stack:
@@ -1053,6 +1078,10 @@ ok(cardsIn("working").map((c) => c.dataset.key).join(",") === "recon:1,we_owe:5,
 ok(cardsIn("ready").length === 0, "Ready to go has cars in a fixture where nothing is finished");
 ok(allCards().every((c) => board.some((v) => w.vehicleKey(v) === c.dataset.key)),
    "a card appeared for a vehicle that isn't on the board");
+// The cards wear the same colour tag the table rows were shown wearing above
+// -- one helper feeds both layouts, and this pins that the cards call it too.
+ok(cardFor("recon:1")?.querySelector(".veh-color .color-chip"),
+   "the F-150's card doesn't wear its paint chip in the columns layout");
 // Travel order, with the cars that have finished travelling last.
 ok(w.LOT_COLUMNS.map((c) => c.key).join(",") === "waiting,working,ready,settled",
    "the columns aren't in the order a car travels through the shop");
@@ -1086,7 +1115,9 @@ ok(cardFor("recon:1").querySelector(".idle-cell").textContent.trim() === "Active
 ok(!cardFor("recon:1").querySelector(".veh-card-quoted"),
    "a card is back to printing what the car was 'quoted'");
 ok(/R\. Alvarez/.test(cardFor("we_owe:5").textContent), "a we-owe card doesn't name the customer");
-ok(/1FTEW1E5XKF/.test(cardFor("recon:1").querySelector(".veh-card-sub span").title || ""),
+// Any span on the identity line may carry it -- the colour tag leads the
+// line now, so the VIN's position isn't fixed.
+ok([...cardFor("recon:1").querySelectorAll(".veh-card-sub span")].some((s) => /1FTEW1E5XKF/.test(s.title || "")),
    "a recon card doesn't carry the full VIN for hover");
 
 /* The card raises the same coloured flags the list layout's columns do,

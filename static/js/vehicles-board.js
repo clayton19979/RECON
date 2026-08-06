@@ -4,7 +4,6 @@ import { emptyRow, emptyState } from "./empty-states.js";
 import { BOARD_COLUMNS, showPlaceholders, skeletonCards } from "./skeletons.js";
 import { STATUS_LABEL, STATUS_PILL_CLASS, state } from "./state.js";
 import { renderViewFailure } from "./error-boundary.js";
-import { barChart } from "./reports.js";
 
 /* ==================================================================
    VEHICLES LIST
@@ -1016,7 +1015,14 @@ function leftCellHtml(v, { spelled = false } = {}) {
    hunt for which six down a 60-row table is the kind of half-feature that
    makes a dashboard decorative, so clicking a bar filters the board to it and
    clicking it again clears it. Empty buckets are dropped rather than drawn as
-   zero-width bars nobody can click. */
+   zero-width bars nobody can click.
+
+   Drawn as one horizontal strip (the Lot Status report's idiom), not a
+   stack of bar rows: five buckets never earn 250px of height, and every
+   pixel this chart gives back is a car visible without scrolling on the
+   screen people leave open all day. Widths are proportional to counts, so
+   the strip still shows the shape -- how much of the lot is moving vs
+   sitting -- in one glance. */
 function renderIdleChart(rows) {
   const target = $("#vehicles-chart");
   if (!target) return;
@@ -1084,14 +1090,31 @@ function renderIdleChart(rows) {
     const stalledInPool = pool.filter(isStalled).length;
     legendBits.unshift(`<span class="legend-item"><span class="legend-swatch marker" style="background:var(--crit);opacity:1"></span>${stalledInPool} stalled — finished cars aren't counted</span>`);
   }
-  target.innerHTML = barChart({
-    title: "Time since anything happened",
-    note: pool.length ? `${pool.length} vehicle${pool.length === 1 ? "" : "s"} in view` : "",
-    legend: legendBits.join(""),
-    items,
-    rowAttrs: (i) => i.attrs,
-    rowClass: (i) => [i.muted ? "bar-row-muted" : "", i.inSpan ? "bar-row-in-span" : ""].filter(Boolean).join(" "),
-  }) || `<div class="panel chart-panel chart-empty">No vehicles in view to chart.</div>`;
+  if (!items.length) {
+    target.innerHTML = `<div class="panel chart-panel chart-empty">No vehicles in view to chart.</div>`;
+    return;
+  }
+  // Same DOM vocabulary as the bar rows this replaces -- data-idle-bucket,
+  // .bar-fill for tone, .bar-value for the count, bar-row-muted / -in-span
+  // for the two quiet states -- so the keyboard handler and the smoke tests
+  // read the strip exactly as they read the old chart. flex-grow carries the
+  // count, same trick as the Lot Status strip: the widths ARE the shape.
+  const segs = items.map((i) => `
+    <div class="idle-seg ${[i.muted ? "bar-row-muted" : "", i.inSpan ? "bar-row-in-span" : ""].filter(Boolean).join(" ")}"
+         ${i.attrs} style="flex-grow:${Math.max(i.value, 1)}">
+      <span class="bar-fill${i.tone ? ` ${i.tone}` : ""}"></span>
+      <span class="bar-value">${esc(i.display)}</span>
+      <span class="bar-label" title="${esc(i.label)}">${esc(i.label)}</span>
+    </div>`).join("");
+  const note = pool.length ? `${pool.length} vehicle${pool.length === 1 ? "" : "s"} in view` : "";
+  target.innerHTML = `<div class="panel chart-panel idle-strip-panel">
+    <div class="chart-head">
+      <h3 class="chart-title">Time since anything happened</h3>
+      ${note ? `<span class="chart-note">${note}</span>` : ""}
+      <div class="chart-legend">${legendBits.join("")}</div>
+    </div>
+    <div class="idle-strip">${segs}</div>
+  </div>`;
 }
 
 // Recon rows always carry the linked repair order's status (one of the 4

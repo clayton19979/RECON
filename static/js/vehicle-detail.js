@@ -1690,7 +1690,14 @@ function updateEstimateTotalsFromDom() {
 
    Deliberately *not* in the signature: description, part number, quantity,
    cost, core. Those live inside inputs the user is editing; they're the
-   values a re-render exists to avoid clobbering. */
+   values a re-render exists to avoid clobbering.
+
+   Both paths still assume the response describes the grid it is about to be
+   written into, which is only true while nothing was typed during the round
+   trip. sendEstimate is what checks that, and holds the response back when it
+   isn't -- skipping the focused control is not enough on its own, because the
+   boxes the advisor has already tabbed past are the ones that were losing
+   their numbers. */
 let lastEstimateShape = null;
 
 function estimateShape(order) {
@@ -2206,47 +2213,76 @@ function wireEstimateRowDragging(box) {
   });
 }
 
+/* Every editable control on a grid row, read as one string.
+
+   This is what tells "the response describes what is on screen" apart from
+   "the advisor has typed since" -- see sendEstimate. Deliberately the mirror
+   image of estimateShape(): that one lists everything a save can restructure
+   and leaves the typed values out, this one lists exactly the typed values. */
+const EST_EDITABLE_FIELDS = [".ei-kind", ".ei-desc", ".ei-part", ".ei-qty", ".ei-cost", ".ei-core", ".ei-job"];
+
+function rowEditableSignature(row) {
+  const values = EST_EDITABLE_FIELDS.map((sel) => row.querySelector(sel)?.value ?? "");
+  values.push(row.querySelector(".ei-core-on")?.checked ? "1" : "0");
+  return values.join("");
+}
+
+/* The grid rows and the payload they produce, side by side.
+
+   collectEstimateItems() below is this with the rows dropped; sendEstimate
+   needs both halves, because lining a saved item up with the row it came from
+   is the only way to hand a brand-new row the id the server just gave it. */
+function collectEstimateRows() {
+  return $$(".part-row:not(.head)", $("#vd-estimate-items"))
+    .map((row) => ({ row, item: rowAsPayload(row) }))
+    .filter((pair) => pair.item.description);
+}
+
 function collectEstimateItems() {
-  return $$(".part-row:not(.head)", $("#vd-estimate-items")).map((row) => {
-    // A returned part's Cost field is shown as 0 on screen so it reads as
-    // "no longer counted" -- but the real received cost lives in
-    // data-real-cost and must round-trip through every save (persistEstimate
-    // resends every row, this one included) or it'd be lost for good, taking
-    // the vendor credit amount with it.
-    const costInput = row.querySelector(".ei-cost");
-    const cost = costInput.dataset.realCost !== undefined
-      ? parseFloat(costInput.dataset.realCost)
-      : parseFloat(costInput.value || "0");
-    const coreInput = row.querySelector(".ei-core");
-    // The core amount only counts when the line is explicitly marked as
-    // carrying a core. An unticked row reports 0 no matter what is sitting in
-    // the box, so a stray figure can't quietly become a deposit the shop then
-    // chases a vendor for.
-    const coreOn = row.querySelector(".ei-core-on")?.checked;
-    const kind = row.querySelector(".ei-kind").value;
-    const jobSelect = row.querySelector(".ei-job");
-    return {
-      id: row.dataset.id ? Number(row.dataset.id) : null,
-      kind,
-      description: row.querySelector(".ei-desc").value.trim(),
-      // Labor has no part number -- the column is shared across line kinds,
-      // so anything typed there before the kind was switched is dropped
-      // rather than saved against a labor line.
-      part_number: kind === "part" ? row.querySelector(".ei-part").value.trim() : "",
-      quantity: parseFloat(row.querySelector(".ei-qty").value || "1"),
-      unit_cost: cost,
-      unit_price: cost,
-      core_charge: coreOn && coreInput ? parseFloat(coreInput.value || "0") : 0,
-      source: row.dataset.source || "manual",
-      // A freshly-added row (addEstimateRow) has no .ei-job select yet --
-      // just the data-job-id it was created with -- so fall back to that.
-      job_id: jobSelect ? (jobSelect.value ? Number(jobSelect.value) : null) : (row.dataset.jobId ? Number(row.dataset.jobId) : null),
-    };
-  }).filter((i) => i.description);
+  return collectEstimateRows().map((pair) => pair.item);
+}
+
+function rowAsPayload(row) {
+  // A returned part's Cost field is shown as 0 on screen so it reads as
+  // "no longer counted" -- but the real received cost lives in
+  // data-real-cost and must round-trip through every save (persistEstimate
+  // resends every row, this one included) or it'd be lost for good, taking
+  // the vendor credit amount with it.
+  const costInput = row.querySelector(".ei-cost");
+  const cost = costInput.dataset.realCost !== undefined
+    ? parseFloat(costInput.dataset.realCost)
+    : parseFloat(costInput.value || "0");
+  const coreInput = row.querySelector(".ei-core");
+  // The core amount only counts when the line is explicitly marked as
+  // carrying a core. An unticked row reports 0 no matter what is sitting in
+  // the box, so a stray figure can't quietly become a deposit the shop then
+  // chases a vendor for.
+  const coreOn = row.querySelector(".ei-core-on")?.checked;
+  const kind = row.querySelector(".ei-kind").value;
+  const jobSelect = row.querySelector(".ei-job");
+  return {
+    id: row.dataset.id ? Number(row.dataset.id) : null,
+    kind,
+    description: row.querySelector(".ei-desc").value.trim(),
+    // Labor has no part number -- the column is shared across line kinds,
+    // so anything typed there before the kind was switched is dropped
+    // rather than saved against a labor line.
+    part_number: kind === "part" ? row.querySelector(".ei-part").value.trim() : "",
+    quantity: parseFloat(row.querySelector(".ei-qty").value || "1"),
+    unit_cost: cost,
+    unit_price: cost,
+    core_charge: coreOn && coreInput ? parseFloat(coreInput.value || "0") : 0,
+    source: row.dataset.source || "manual",
+    // A freshly-added row (addEstimateRow) has no .ei-job select yet --
+    // just the data-job-id it was created with -- so fall back to that.
+    job_id: jobSelect ? (jobSelect.value ? Number(jobSelect.value) : null) : (row.dataset.jobId ? Number(row.dataset.jobId) : null),
+  };
 }
 
 // Saves the estimate exactly as it currently sits in the DOM, then re-renders
-// from the server's response so ids/status controls attach to new rows.
+// from the server's response so ids/status controls attach to new rows --
+// unless the grid has moved on since, in which case the response is left
+// unapplied and the follow-up save's answer does the redrawing (sendEstimate).
 // Called after every add/edit/remove -- an estimate line is never sitting
 // unsaved in the browser waiting to be wiped out by an unrelated action
 // elsewhere on the page (that was the bug: adding a part, then clicking any
@@ -2286,44 +2322,113 @@ function persistEstimate() {
     }
     return estimateSaveQueued.promise;
   }
-  estimateSaveInFlight = sendEstimate().then((saved) => {
+  estimateSaveInFlight = sendEstimate().then(({ saved, stale }) => {
     estimateSaveInFlight = null;
     const queued = estimateSaveQueued;
     estimateSaveQueued = null;
-    if (!queued) return;
+    // `stale` means the answer that just came back was left on the floor
+    // because the grid had already moved past it, so the shop PC is still
+    // holding the older lines and another round trip is owed -- whether or
+    // not anything queued one. (It normally has: every edit calls in here.
+    // But the promise addEstimateRow is waiting on must not settle while the
+    // line it just added is unsaved, and that is exactly the case where the
+    // queue can be empty.)
+    if (!queued && !stale) return;
     // A failed save has already dealt with itself -- a real conflict reloaded
     // the ticket from the server, anything else left "Not saved" showing for
     // the next edit to clear. Re-firing on top of that would either re-post
     // what the reload just replaced or fail the identical way twice.
-    if (saved) return void persistEstimate().then(queued.settle);
-    queued.settle();
+    if (saved) return void persistEstimate().then(() => queued && queued.settle());
+    if (queued) queued.settle();
   });
   return estimateSaveInFlight;
 }
 
-/** One round trip. Resolves true when the estimate was saved, false when it
-    wasn't -- persistEstimate uses that to decide whether a coalesced follow-up
-    save is still worth sending. */
+/** One round trip.
+
+    `saved` is whether the estimate reached the database -- persistEstimate
+    uses it to decide whether a coalesced follow-up save is still worth
+    sending. `stale` is whether the response was deliberately left unapplied
+    because the advisor had typed since it was sent; see below. */
 async function sendEstimate() {
   const order = state.detail.order;
-  if (!order) return false;
-  const items = collectEstimateItems();
+  if (!order) return { saved: false, stale: false };
+  const pairs = collectEstimateRows();
+  const items = pairs.map((pair) => pair.item);
+  /* What went to the shop PC, row by row, so the answer can be checked against
+     the grid it describes rather than against the grid as it is when it lands.
+
+     Those are not the same grid. A save posts on every field change, the shop
+     PC is across a LAN, and the entry path here is a spreadsheet tab-through:
+     Description, Tab, Qty, Tab, Cost, Tab. Each Tab starts a save and the
+     advisor keeps typing into the next box while it flies. The response then
+     arrives describing the line as it was two fields ago and -- until this --
+     was written straight over the grid, so the quantity and the cost just
+     typed reverted to 1 and $0.00 with "All changes saved" showing underneath.
+     A two-off quantity on a $96 rotor is $96 missing from what the shop spent
+     on that car, and nobody was told. */
+  const sentRows = $$(".part-row:not(.head)", $("#vd-estimate-items")).map((row) => ({
+    row,
+    signature: rowEditableSignature(row),
+  }));
   const expectedVersion = order.estimate ? order.estimate.edit_version : null;
   setEstimateSaveState("saving");
   try {
     const estimate = await post(`/api/orders/${order.id}/estimate`, { labor_rate: 0, tax_rate: 0, items, expected_version: expectedVersion });
     order.estimate = estimate;
+    // A brand-new row takes the id the server just gave it either way. Without
+    // it the follow-up save posts the line as new all over again, and the
+    // server -- which reconciles on id -- deletes the row it just wrote and
+    // inserts another, churning the id out from under anything (a receive
+    // tick, a vendor invoice) that had hold of it.
+    adoptSavedItemIds(pairs, estimate);
+    if (estimateGridMovedOn(sentRows)) {
+      // Leave the grid alone: what is on screen is newer than what came back,
+      // and persistEstimate is about to send it. The figures still have to
+      // move, so they are recomputed from the grid rather than from the stale
+      // answer, and the state line keeps saying "Saving..." because that is
+      // the truth until the follow-up lands.
+      updateEstimateTotalsFromDom();
+      return { saved: true, stale: true };
+    }
     applyEstimateResponse(order);
     setEstimateSaveState("saved");
-    return true;
+    return { saved: true, stale: false };
   } catch (err) {
     setEstimateSaveState("failed");
     toast(err.message, true);
     // A conflict now means what it says: somebody else really did change this
     // ticket, so the only safe move is to show what they wrote.
     if (String(err.message).includes("Someone else changed")) await loadVehicleDetail();
-    return false;
+    return { saved: false, stale: false };
   }
+}
+
+/* Has the grid changed since this save was posted?
+
+   Rows are compared by identity, not by position, so a redraw that happened
+   mid-flight counts as a change even if it produced a grid that looks the
+   same -- the row objects the response was going to be written into are gone,
+   and writing into their replacements is guesswork. */
+function estimateGridMovedOn(sentRows) {
+  const rows = $$(".part-row:not(.head)", $("#vd-estimate-items"));
+  if (rows.length !== sentRows.length) return true;
+  return rows.some((row, i) => row !== sentRows[i].row || rowEditableSignature(row) !== sentRows[i].signature);
+}
+
+/* Stamp each row with the id the server holds for its line.
+
+   The server writes sort_order from the position each item arrived in and
+   reads them back in that order, so the response lines up with what was sent
+   one for one -- but only if it came back whole. Anything else and this does
+   nothing: a wrong id here would point a row at another line entirely, and
+   the next full render fixes the ids anyway. */
+function adoptSavedItemIds(pairs, estimate) {
+  const items = estimate?.items ?? [];
+  if (items.length !== pairs.length) return;
+  pairs.forEach((pair, i) => {
+    if (pair.row.isConnected && !pair.row.dataset.id && items[i]?.id) pair.row.dataset.id = String(items[i].id);
+  });
 }
 
 /* Autosave is invisible by design -- which also means there was no way to tell

@@ -304,6 +304,12 @@ def build_export_router(connect: Callable[[], sqlite3.Connection], now_fn: Calla
                 "Vehicle",
                 "VIN",
                 "Labor Hours",
+                # Walt's fourth question, in the column the screen puts it in.
+                # The two cost columns after Purchase Price are what it is made
+                # of; without it the reader has to add them up by hand, and a
+                # reader adding by hand is a reader who can get a different
+                # answer from the sheet they were emailed.
+                "Spent Fixing",
                 "Purchase Price",
                 "Recon Cost",
                 "We-Owe Cost",
@@ -325,6 +331,7 @@ def build_export_router(connect: Callable[[], sqlite3.Connection], now_fn: Calla
                     row["vehicle"],
                     row["vin"],
                     f"{row['labor_hours']:.2f}",
+                    f"{row['shop_spend']:.2f}",
                     f"{row['purchase_price']:.2f}",
                     f"{row['recon_cost']:.2f}",
                     f"{row['we_owe_cost']:.2f}",

@@ -1157,6 +1157,21 @@ def _unit_lifetime(
     the same reason total_cost never folds it in: what landed is a fact, and
     what was bought and never receipted is a different fact the screens are
     expected to say out loud. Nothing here subtracts it, and nothing should.
+
+    shop_spend and total_invested answer two different questions and must not
+    be confused for each other. shop_spend is Walt's fourth question -- what
+    did this shop spend fixing this car -- and it is the gross cost of the
+    parts that landed, recon and we-owe together. total_invested is the input
+    to a profit calculation, so it also carries what the lot paid for the car
+    and it nets out whatever the customer chipped in on the we-owe side.
+
+    A customer deposit is money coming in, not shop spending that didn't
+    happen, so it has no business in shop_spend. Netting it there produced a
+    *negative* figure on the Profit report's "Spent Fixing Them" card the
+    moment a we-owe promise took a deposit before any part was received -- a
+    shop that had spent nothing reporting that it had spent minus fifty
+    dollars -- and it disagreed with the Vehicles board, the Lot Status sheet
+    and the car's own page, all of which report the gross cost.
     """
     all_rollups = recon_rollups + we_owe_rollups
     recon_cost = sum(r["total_cost"] for r in recon_rollups)
@@ -1187,6 +1202,12 @@ def _unit_lifetime(
         "labor_hours": labor_hours,
         "we_owe_customer_paid": round(customer_paid, 2),
         "we_owe_net_cost": we_owe_net,
+        # What this shop spent fixing this car, gross, at cost. The one figure
+        # every surface that asks Walt's fourth question reads, so the Profit
+        # report, the CSV and the printed sheet cannot drift from each other or
+        # from the board. Customer deposits are money in and stay out of it --
+        # see the docstring.
+        "shop_spend": round(recon_cost + we_owe_cost, 2),
         "total_invested": total_invested,
         # Money already spent on this car that none of the figures above
         # include. Same two field names the board row carries, so the Profit

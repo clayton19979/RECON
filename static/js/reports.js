@@ -523,9 +523,9 @@ function lotStatCards(rows) {
    Two different facts sit side by side on the Profit sheet and they are not
    equally knowable.
 
-   What the shop spent fixing a car -- recon parts plus we-owe work, net of
-   anything the customer chipped in, all of it at cost -- is this app's own
-   number. It is right for every car on the sheet, always.
+   What the shop spent fixing a car -- recon parts plus we-owe work, all of it
+   at cost -- is this app's own number. It is right for every car on the sheet,
+   always.
 
    What the lot paid for the car is not. Walt keeps that figure and does that
    arithmetic himself (see CLAUDE.md); there is no purchase-price entry here
@@ -537,8 +537,22 @@ function lotStatCards(rows) {
    cars that happen to have one. Everything below keeps the two apart so no
    figure on this sheet mixes them without saying so. */
 
+/* The gross cost, recon and we-owe together, exactly as the server works it
+   out (recon.unit_lifetime). Read off the row's own field so this sheet, the
+   CSV and the printed copy cannot drift apart; the sum is kept here only as a
+   fallback for a row that predates the field.
+
+   Deliberately NOT net of we-owe deposits. A customer chipping in on a promise
+   is money coming in, not shop spending that didn't happen, and subtracting it
+   here made a car the shop had spent nothing on report minus fifty dollars
+   under a card captioned "what the shop spent". It also put this sheet at odds
+   with the Vehicles board, the Lot Status sheet and the car's own page, which
+   all report the gross cost. What the customer paid is a real fact and it is
+   said in the we-owe card below and on the spend sheet's own column, where it
+   is labelled as what it is. */
 function shopSpend(row) {
-  return (row.recon_cost || 0) + (row.we_owe_net_cost || 0);
+  if (row.shop_spend != null) return row.shop_spend;
+  return (row.recon_cost || 0) + (row.we_owe_cost || 0);
 }
 
 // A purchase price the app actually holds. Zero means absent, not free: the
@@ -707,7 +721,10 @@ function vehicleProfitStatCards(rows) {
   const spent = rows.reduce((s, r) => s + shopSpend(r), 0);
   const profit = withProfit.reduce((s, r) => s + r.profit, 0);
   const revenue = withProfit.reduce((s, r) => s + (r.sale_price || 0), 0);
-  const weOwe = rows.reduce((s, r) => s + (r.we_owe_net_cost || 0), 0);
+  const weOwe = rows.reduce((s, r) => s + (r.we_owe_cost || 0), 0);
+  // Deposits taken on we-owe promises. Money in, so it is named here rather
+  // than quietly taken off the two cards above it.
+  const weOwePaid = rows.reduce((s, r) => s + (r.we_owe_customer_paid || 0), 0);
   const unpriced = sold.length - withProfit.length;
   const missing = missingReceiptTotals(rows);
   // Only the cars whose profit is actually in the figure beside it. A part
@@ -752,8 +769,14 @@ function vehicleProfitStatCards(rows) {
       label: "We-Owe Cost",
       value: money(weOwe),
       // "Included in", not "came off": the card above is now the shop's own
-      // spend, and we-owe work is one of the two things it is made of.
-      sub: weOwe ? "included in the above, net of customer payments" : "no we-owe work in this range",
+      // spend, and we-owe work is one of the two things it is made of. A
+      // deposit the customer put down is said here, on its own, rather than
+      // subtracted from either card -- it is money in, and folding it into a
+      // spend figure is what made that figure go negative.
+      sub: !weOwe && !weOwePaid ? "no we-owe work in this range"
+        : !weOwe ? `nothing has landed yet · customers paid ${money(weOwePaid)} toward these promises`
+        : weOwePaid ? `included in the above, at cost · customers paid ${money(weOwePaid)} toward it`
+        : "included in the above, at cost",
       tone: weOwe > 0 ? "warn" : "",
     },
   ];
@@ -1157,7 +1180,10 @@ function renderProfitTable(rows) {
     return `<tr title="${esc([
       purchased ? `${money(r.purchase_price)} purchase` : "no purchase price on file",
       `${money(r.recon_cost)} recon`,
-      r.we_owe_count ? `${r.we_owe_count} we-owe promise${r.we_owe_count === 1 ? "" : "s"} costing ${money(r.we_owe_net_cost)} net` : "no we-owe work",
+      r.we_owe_count ? `${r.we_owe_count} we-owe promise${r.we_owe_count === 1 ? "" : "s"} costing ${money(r.we_owe_cost)}` : "no we-owe work",
+      // Only when there is one. A "$0.00 customer deposit" on every row is how
+      // the reader stops noticing the rows that have one.
+      ...(r.we_owe_customer_paid ? [`${money(r.we_owe_customer_paid)} paid by the customer`] : []),
     ].join(" · "))}">
       <td class="num cell-code">${esc(r.stock_number || "—")}</td>
       <td class="cell-name">${esc(r.vehicle || "—")}</td>
@@ -1167,10 +1193,16 @@ function renderProfitTable(rows) {
            part nobody receipted is missing from is the shop's spend, and on
            a car with no purchase price Total In is a dash with nothing to
            correct. */ ""}
-      <td class="num-col" title="${esc(`${money(r.recon_cost)} recon + ${money(r.we_owe_net_cost)} we-owe, at cost`)}">${money(shopSpend(r))}${costMissingBadge(r)}</td>
+      <td class="num-col" title="${esc(`${money(r.recon_cost)} recon + ${money(r.we_owe_cost)} we-owe, at cost`)}">${money(shopSpend(r))}${costMissingBadge(r)}</td>
       <td class="num-col">${purchased ? money(r.purchase_price) : `<span class="muted-dash" title="What the lot paid isn't recorded in RECON — Walt keeps that figure">—</span>`}</td>
+      ${/* Total In is the profit calculation's input, so unlike Spent beside
+           it this figure DOES come down by whatever the customer put toward a
+           we-owe promise. When that happens the arithmetic no longer reads off
+           the two columns either side of it, so the tooltip spells out the
+           third term rather than leaving the reader to find a missing $50. */ ""}
       <td class="num-col" title="${esc(purchased
-        ? `${money(r.purchase_price)} purchase + ${money(shopSpend(r))} spent fixing it`
+        ? `${money(r.purchase_price)} purchase + ${money(shopSpend(r))} spent fixing it${
+            r.we_owe_customer_paid ? ` − ${money(r.we_owe_customer_paid)} the customer paid` : ""}`
         : "No purchase price on file, so what the lot has in this car can't be worked out here")}">${
         purchased ? money(r.total_invested) : `<span class="muted-dash">—</span>`}</td>
       <td class="num-col">${r.sale_price != null ? money(r.sale_price) : "—"}</td>

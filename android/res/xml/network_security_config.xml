@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  RECON is served over plain http on a private network. Android 9 and later
+  block cleartext by default, and with it blocked the app shows a blank screen
+  and no error worth reading.
+
+  Cleartext is permitted here for everything, and the reason it is not narrowed
+  to the shop's address is worth stating rather than leaving as an oversight:
+  Android matches domain entries as literal hosts or DNS suffixes, and has no
+  syntax for an IP range. The shop PC's address is typed in on the settings
+  screen (it is DHCP today and will be a Tailscale address tomorrow), so there
+  is no host to name at build time. Listing "10.0.0.0" would match that one
+  literal string and block 10.1.2.3, which would be the actual shop PC.
+
+  The check that this file cannot do is done where it can be: MainActivity
+  refuses to save an address outside the private and CGNAT ranges (or a
+  .ts.net name), so a mistyped address cannot send the shop's records to a
+  public host over plain http. See isPrivateAddress() there.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>

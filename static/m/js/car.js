@@ -188,15 +188,23 @@ export async function loadCar() {
   if (!state.carRef) return;
   const { kind, id } = state.carRef;
   const target = $("#m-car");
+  // Two round trips, and a thumb can start a third before either lands. If a
+  // slower answer for the previous car arrived last it would paint that car's
+  // repairs and that car's costs under this car's heading -- the app showing a
+  // number it can't stand behind. Only the car still being asked for may draw.
+  const stale = () => !state.carRef || state.carRef.kind !== kind || state.carRef.id !== id;
   try {
     const item = await get(detailPath(kind, id));
+    if (stale()) return;
     const summary = liveOrder(item.orders);
     // The rollup in the vehicle detail carries totals but not the repairs or
     // the notes, so the ticket itself is fetched second.
     const order = summary ? await get(`/api/orders/${summary.id}`) : null;
+    if (stale()) return;
     current = { kind, id, item, order };
     target.innerHTML = carHtml(kind, item, order);
   } catch (err) {
+    if (stale()) return;
     renderFailure(target, err, loadCar);
   }
 }

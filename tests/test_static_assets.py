@@ -63,6 +63,9 @@ RUNTIME_CREATED_IDS: set[str] = {
     "customers-empty-clear",
     # rendered at the tail of the completed-tasks list once it's capped
     "tasks-show-all-completed",
+    # rendered into #vd-checkover-body's add-your-own-line form, and only
+    # while the sheet is open in draft
+    "vd-checkover-add-name",
 }
 
 

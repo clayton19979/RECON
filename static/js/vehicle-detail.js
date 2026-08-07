@@ -14,6 +14,7 @@ import { loadTasksView, taskLinkFields } from "./task-bulk.js";
 import { taskDueInfo } from "./tasks.js";
 import { assigneeSummaryLabel } from "./multi-picker.js";
 import { copyText } from "./clipboard.js";
+import { renderInspection } from "./inspection.js";
 
 /* ==================================================================
    VEHICLE DETAIL
@@ -865,6 +866,11 @@ function applyArchivedLockUI(archived) {
   ticketIds.forEach((id) => { const el = $(`#${id}`); if (el) el.disabled = archived || noTicket; });
   vehicleIds.forEach((id) => { const el = $(`#${id}`); if (el) el.disabled = archived; });
   $$(".job-control", $("#vd-estimate-items")).forEach((el) => { el.disabled = archived; });
+  // The check-over's controls are rebuilt each render like the job controls
+  // above, so the archived lock is applied here the same way. An archived
+  // car keeps showing what its walk-around found -- it just stops taking
+  // answers.
+  $$(".insp-control", $("#vd-checkover-card")).forEach((el) => { el.disabled = archived; });
   // Rebuilt on every render like the estimate rows, but the strip renders
   // before this runs, so the boxes still need switching off here -- an
   // archived car's ticket is frozen, and a supplier box that takes typing and
@@ -988,6 +994,7 @@ function renderOrderPanel() {
   $("#vd-ro-number").title = order ? order.number : "";
   renderStatusCard(order);
   renderPoStrip(order);
+  renderInspection(order);
   renderEstimate(order);
   renderNotes(order);
   renderActivity(order);
@@ -2707,7 +2714,7 @@ const ACTIVITY_LABEL = {
   concern_updated: "Concern updated",
   assignment_updated: "Assignment changed",
   note_added: "Note added",
-  inspection_saved: "Inspection saved",
+  inspection_saved: "Check-over sheet saved",
   technician_findings_recorded: "Findings recorded",
   job_created: "Job added",
   jobs_created: "Jobs added",

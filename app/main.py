@@ -33,6 +33,7 @@ from .db import connect as db_connect
 from .export import build_export_router
 from .jobs import build_jobs_router
 from .mcp_server import mcp_http_app
+from .mobile import build_mobile_router
 from .pages import render_index
 from .parts import build_parts_router
 from .recon import (
@@ -464,6 +465,7 @@ def create_app(db_path: Path = DEFAULT_DB, backups_dir: Path = DEFAULT_BACKUPS_D
     app.include_router(build_tasks_router(connect, now))
     app.include_router(build_jobs_router(connect, now))
     app.include_router(build_backup_router(db_path, backups_dir))
+    app.include_router(build_mobile_router(ROOT / "static", NETWORK_FLAG))
     # backups_dir is data_root/backups, so its parent is where deployment.json
     # and the updates folder live -- derived rather than re-resolved, so the
     # tests' tmp_path data root is honoured the same as the real one.

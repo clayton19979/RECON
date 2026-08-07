@@ -1,0 +1,287 @@
+/* RECON on a phone.
+ *
+ * This file loads *after* /assets/styles.css, which is here only for its
+ * theme tokens and its @font-face rules -- so Clayton's six themes work on
+ * the phone on day one and can never drift out of step with the desk.
+ *
+ * The rule that keeps that safe: every class in this file is `m-` prefixed.
+ * The desktop sheet has nine max-width breakpoints, all of which fire on a
+ * phone; none of them can reach a class it has never heard of. The only
+ * things deliberately shared are the element-level basics (body font,
+ * `.num`, `h1..h3`) and the status pill colours, which have to match the
+ * board exactly or the two screens would disagree about what "In Progress"
+ * looks like.
+ */
+
+/* styles.css locks the page at 100vh and hides overflow so its rail and
+   topbar can't scroll. A phone is the opposite: one scrolling column. */
+html, body { height: 100%; overflow: hidden; overscroll-behavior-y: none; }
+
+body {
+  /* Bigger than the desk's 14px. This gets read at arm's length, outdoors,
+     by someone holding a phone in one hand and a wrench in the other. */
+  font-size: 15.5px;
+  -webkit-text-size-adjust: 100%;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* ---------- shell ----------
+   Header and tab bar are fixed; exactly one element scrolls. */
+.m-app {
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  height: 100dvh;   /* dvh, not vh: vh doesn't shrink for mobile Safari's bar */
+  max-width: 720px; /* a tablet shouldn't stretch these lines to 1000px */
+  margin: 0 auto;
+}
+
+.m-head {
+  display: flex; align-items: center; gap: 10px;
+  padding: calc(env(safe-area-inset-top) + 10px) 14px 10px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+  min-height: 52px;
+}
+.m-head h1 { font-size: 19px; flex: 1; min-width: 0; }
+.m-head-sub { font-size: 12px; color: var(--ink-faint); font-weight: 500; }
+
+/* The back affordance on the car screen. 44px square: the smallest target
+   Apple's own guidance calls reliably tappable, and this one gets pressed
+   with a glove on. */
+.m-back {
+  width: 44px; height: 44px; margin-left: -10px; flex-shrink: 0;
+  display: none; align-items: center; justify-content: center;
+  background: none; border: 0; color: var(--ink); font-size: 26px; line-height: 1;
+  border-radius: var(--radius); cursor: pointer;
+}
+.m-back:active { background: var(--paper-raise); }
+body[data-screen="car"] .m-back { display: flex; }
+
+.m-who {
+  flex-shrink: 0; max-width: 40%;
+  background: var(--paper-raise); color: var(--ink); font-family: inherit;
+  border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 8px 10px; font-size: 13px; font-weight: 600;
+}
+
+.m-main { overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 14px 14px 22px; }
+.m-screen { display: none; }
+.m-screen.is-on { display: block; }
+
+/* ---------- tab bar ----------
+   Bottom, not top: this is the half of a 6.1" screen a thumb reaches. */
+.m-tabs {
+  display: grid; grid-auto-flow: column; grid-auto-columns: 1fr;
+  background: var(--surface);
+  border-top: 1px solid var(--line);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+.m-tab {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 3px; padding: 9px 4px 8px; min-height: 56px;
+  background: none; border: 0; cursor: pointer;
+  font-family: inherit; font-size: 11px; font-weight: 700;
+  letter-spacing: .04em; text-transform: uppercase;
+  color: var(--ink-faint);
+  /* The active tab is named by a top rule in the accent, not by colour
+     alone -- the same reason the board's piles carry a dot. */
+  border-top: 3px solid transparent; margin-top: -1px;
+}
+.m-tab svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.8; }
+.m-tab[aria-selected="true"] { color: var(--accent); border-top-color: var(--accent); background: var(--accent-tint); }
+
+/* ---------- pile sections (Not started / In the shop / Ready to go / …) ----
+   Same four piles, same names, same colour language as the desktop board.
+   --stage is set per-pile and drives the dot, the rule and the count. */
+.m-pile { margin-bottom: 18px; }
+.m-pile[data-pile] { --stage: var(--ink-faint); --stage-tint: var(--paper-raise); }
+.m-pile[data-pile="working"] { --stage: var(--accent); --stage-tint: var(--accent-tint); }
+.m-pile[data-pile="ready"] { --stage: var(--good); --stage-tint: var(--good-tint); }
+
+.m-pile-head {
+  display: flex; align-items: center; gap: 9px;
+  padding: 7px 2px 9px; border-bottom: 2px solid var(--stage);
+  margin-bottom: 10px; position: sticky; top: -14px;
+  background: var(--paper); z-index: 2;
+}
+.m-pile-head::before {
+  content: ""; width: 9px; height: 9px; border-radius: 50%;
+  background: var(--stage); flex-shrink: 0;
+}
+.m-pile-head h2 { font-size: 15px; flex: 1; }
+.m-pile-count {
+  background: var(--stage-tint); color: var(--stage);
+  border-radius: 20px; padding: 2px 10px;
+  font-size: 12px; font-weight: 700;
+}
+.m-pile-blank { color: var(--ink-faint); font-size: 13.5px; padding: 2px 2px 6px; }
+
+/* ---------- a car ---------- */
+.m-car {
+  display: block; width: 100%; text-align: left;
+  background: var(--surface); color: inherit; font-family: inherit;
+  border: 1px solid var(--line); border-left: 4px solid var(--recon);
+  border-radius: 10px; padding: 11px 13px 12px;
+  margin-bottom: 9px; cursor: pointer;
+}
+.m-car[data-segment="we_owe"] { border-left-color: var(--weowe); }
+.m-car:active { border-color: var(--accent); background: var(--paper-raise); }
+
+.m-car-top { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; margin-bottom: 5px; }
+.m-car-stock { font-size: 12.5px; font-weight: 700; color: var(--ink-soft); letter-spacing: .02em; }
+.m-car-name { font-size: 17px; font-weight: 700; line-height: 1.25; }
+.m-car-sub { font-size: 12.5px; color: var(--ink-faint); margin-top: 2px; }
+
+/* The sentence Walt's third question is about -- "what does this one still
+   need". It is the reason to open the app at all, so it gets the most
+   readable line on the card, and the server writes it (app/recon.py) so the
+   phone and the desk can never word it differently. */
+.m-car-needs {
+  font-size: 14.5px; line-height: 1.4; color: var(--ink);
+  margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line-soft);
+}
+
+.m-car-foot {
+  display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+  margin-top: 8px; font-size: 12.5px; color: var(--ink-faint);
+}
+.m-car-spend { margin-left: auto; font-size: 15px; font-weight: 600; color: var(--ink); }
+
+/* Age / idle severity -- same three thresholds the board uses. */
+.m-age-ok { color: var(--ink-faint); }
+.m-age-warn { color: var(--warn); font-weight: 700; }
+.m-age-crit { color: var(--crit); font-weight: 700; }
+
+/* ---------- pills ---------- */
+.m-pill {
+  display: inline-block; border-radius: 6px; padding: 3px 9px;
+  font-size: 11px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .04em; white-space: nowrap;
+  background: var(--ink-faint); color: var(--ink-on-fill);
+}
+.m-pill-estimate { background: var(--ink-faint); }
+.m-pill-pending  { background: var(--warn); }
+.m-pill-progress { background: var(--accent); }
+.m-pill-complete { background: var(--good); }
+.m-pill-done     { background: var(--good); }
+/* Outline, not filled -- so a we-owe tag never competes with the status
+   pill sitting next to it. Straight from the desktop's .pill-weowe. */
+.m-pill-weowe {
+  background: var(--weowe-tint); color: var(--weowe);
+  border: 1px solid var(--weowe);
+}
+
+/* ---------- search ---------- */
+.m-search-wrap { position: sticky; top: -14px; background: var(--paper); padding: 4px 0 12px; z-index: 2; }
+.m-search {
+  width: 100%; font-family: inherit; font-size: 17px; /* <16px makes iOS zoom */
+  padding: 13px 14px; border-radius: var(--radius);
+  background: var(--surface); color: var(--ink); border: 1px solid var(--line);
+}
+.m-search:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-tint); }
+.m-search-hint { font-size: 12.5px; color: var(--ink-faint); margin-top: 8px; }
+
+/* ---------- car detail ---------- */
+.m-detail-head { margin-bottom: 14px; }
+.m-detail-name { font-size: 22px; line-height: 1.2; }
+.m-detail-sub { font-size: 13.5px; color: var(--ink-faint); margin-top: 5px; }
+.m-detail-spend {
+  display: flex; align-items: baseline; gap: 10px; margin-top: 12px;
+  padding: 12px 14px; border-radius: var(--radius);
+  background: var(--surface); border: 1px solid var(--line); border-top: 3px solid var(--accent);
+}
+.m-detail-spend-value { font-size: 25px; font-weight: 600; }
+.m-detail-spend-label { font-size: 11.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--ink-faint); }
+
+.m-sec { margin-bottom: 18px; }
+.m-sec-title {
+  font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em;
+  color: var(--ink-faint); font-weight: 700; margin-bottom: 8px;
+}
+
+/* A repair, tickable from under the hood. The whole row is the target --
+   56px tall, because the alternative is aiming at a 16px checkbox with
+   dirty hands. */
+.m-job {
+  display: flex; align-items: center; gap: 12px; width: 100%; text-align: left;
+  background: var(--surface); color: inherit; font-family: inherit; font-size: 15.5px;
+  border: 1px solid var(--line); border-radius: 10px;
+  padding: 13px 14px; margin-bottom: 8px; min-height: 56px; cursor: pointer;
+}
+.m-job:active { border-color: var(--accent); }
+.m-job-box {
+  width: 24px; height: 24px; flex-shrink: 0; border-radius: 6px;
+  border: 2px solid var(--line); display: flex; align-items: center; justify-content: center;
+  font-size: 15px; font-weight: 700; color: var(--ink-on-fill);
+}
+.m-job[data-done="1"] .m-job-box { background: var(--good); border-color: var(--good); }
+.m-job[data-done="1"] .m-job-title { color: var(--ink-faint); text-decoration: line-through; }
+.m-job-title { flex: 1; line-height: 1.3; }
+.m-job[aria-busy="true"] { opacity: .55; }
+
+.m-line {
+  display: flex; gap: 12px; justify-content: space-between;
+  padding: 9px 0; border-bottom: 1px solid var(--line-soft); font-size: 14.5px;
+}
+.m-line:last-child { border-bottom: 0; }
+.m-line-label { color: var(--ink-faint); }
+.m-line-value { text-align: right; }
+
+.m-note { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 11px 13px; margin-bottom: 8px; }
+.m-note-meta { font-size: 11.5px; color: var(--ink-faint); margin-bottom: 3px; }
+.m-note-text { font-size: 14.5px; line-height: 1.4; white-space: pre-wrap; }
+
+.m-note-form { display: flex; flex-direction: column; gap: 8px; }
+.m-note-input {
+  width: 100%; font-family: inherit; font-size: 16px; line-height: 1.4;
+  padding: 11px 13px; border-radius: var(--radius); resize: vertical; min-height: 78px;
+  background: var(--surface); color: var(--ink); border: 1px solid var(--line);
+}
+.m-note-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-tint); }
+
+.m-btn {
+  font-family: inherit; font-size: 15px; font-weight: 700;
+  padding: 13px 18px; min-height: 48px; border-radius: var(--radius);
+  border: 1px solid transparent; cursor: pointer;
+  background: var(--accent); color: var(--ink-on-fill);
+}
+.m-btn:disabled { opacity: .5; }
+.m-btn-ghost { background: var(--surface); color: var(--ink); border-color: var(--line); }
+.m-btn-row { display: flex; gap: 9px; }
+.m-btn-row .m-btn { flex: 1; }
+
+/* ---------- tasks ---------- */
+.m-task {
+  display: flex; align-items: flex-start; gap: 12px; width: 100%; text-align: left;
+  background: var(--surface); color: inherit; font-family: inherit; font-size: 15.5px;
+  border: 1px solid var(--line); border-radius: 10px;
+  padding: 13px 14px; margin-bottom: 8px; min-height: 56px; cursor: pointer;
+}
+.m-task[data-urgent="1"] { border-left: 4px solid var(--crit); }
+.m-task[data-done="1"] .m-job-box { background: var(--good); border-color: var(--good); }
+.m-task[data-done="1"] .m-task-title { color: var(--ink-faint); text-decoration: line-through; }
+.m-task-title { line-height: 1.3; }
+.m-task-meta { font-size: 12.5px; color: var(--ink-faint); margin-top: 3px; }
+.m-task-body { flex: 1; min-width: 0; }
+
+/* ---------- states ---------- */
+.m-empty { color: var(--ink-faint); text-align: center; padding: 40px 20px; font-size: 14.5px; line-height: 1.5; }
+.m-loading { color: var(--ink-faint); text-align: center; padding: 40px 20px; font-size: 14.5px; }
+.m-fail { border: 1px solid var(--crit); border-radius: var(--radius); padding: 16px; margin: 8px 0; }
+.m-fail-title { font-weight: 700; margin-bottom: 5px; }
+.m-fail-why { color: var(--ink-soft); font-size: 13.5px; margin-bottom: 12px; }
+
+.m-toast {
+  position: fixed; left: 50%; transform: translateX(-50%);
+  bottom: calc(env(safe-area-inset-bottom) + 74px);
+  background: var(--accent-strong); color: var(--ink-on-fill);
+  padding: 11px 18px; border-radius: 8px; font-size: 14.5px; font-weight: 600;
+  box-shadow: var(--shadow); z-index: 99; max-width: calc(100vw - 32px);
+  display: none;
+}
+.m-toast.is-on { display: block; }
+.m-toast.is-error { background: var(--crit); }
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; }
+}

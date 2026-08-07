@@ -749,6 +749,14 @@
 
           <button type="button" class="details-handle" id="vd-details-handle" aria-label="Toggle details panel" title="Toggle details panel">
             <svg viewBox="0 0 24 24"><path d="M13 5l-6 7 6 7"/></svg>
+            <!-- Only readable while the panel is closed (see .details-handle
+                 .details-handle-label): an open panel's own header already
+                 says Details, and the word would just repeat it 20px away.
+                 Closed -- which is now the resting state on most of the
+                 shop's screens -- a bare chevron strip reads as decoration,
+                 and what's behind it (VIN, promised date, notes, activity)
+                 is invisible until someone happens to click it. -->
+            <span class="details-handle-label" aria-hidden="true">Details</span>
           </button>
         </div>
       </section>

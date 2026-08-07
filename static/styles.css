@@ -2718,6 +2718,97 @@ dialog::backdrop { background: var(--backdrop); backdrop-filter: blur(3px); }
   .concern-strip textarea { flex-basis: 100%; }
 }
 
+/* ---------- the check-over sheet ----------
+   The walk around the car, as a card above Parts & Labor (inspection.js).
+   Rows stay tight -- the sheet is fifteen quick answers, not fifteen forms --
+   and the three answers wear the same status colours the rest of the app
+   speaks: good green, watch amber, fix red. */
+.checkover-card { margin-bottom: 16px; }
+.checkover-card .card-head { padding-bottom: 8px; }
+.chk-head-right { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
+.chk-progress { font-size: 12px; color: var(--ink-soft); font-weight: 600; white-space: nowrap; }
+.chk-count-fix { color: var(--crit); }
+.chk-count-watch { color: var(--warn); }
+
+/* Not started: one quiet line and the button. */
+.chk-start { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 4px 16px 14px; }
+.chk-start-hint { margin: 0; font-size: 12.5px; color: var(--ink-faint); flex: 1; min-width: 220px; }
+
+.chk-group { padding: 0 16px 8px; }
+.chk-group-head {
+  font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em; font-weight: 700;
+  color: var(--ink-faint); padding: 8px 2px 4px; border-bottom: 1px solid var(--line-soft);
+}
+.chk-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 5px 2px; border-bottom: 1px solid var(--line-soft);
+}
+.chk-row:last-child { border-bottom: none; }
+.chk-name { flex: 0 0 200px; font-size: 13px; font-weight: 600; color: var(--ink); }
+.chk-conds { display: inline-flex; flex-shrink: 0; border: 1px solid var(--line); border-radius: 999px; overflow: hidden; }
+.chk-cond {
+  border: none; background: none; cursor: pointer; color: var(--ink-faint);
+  font-size: 11.5px; font-weight: 700; padding: 4px 11px;
+  border-left: 1px solid var(--line-soft);
+}
+.chk-cond:first-child { border-left: none; }
+.chk-cond:hover { background: var(--paper-raise); color: var(--ink-soft); }
+/* The pressed answer is a solid fill: readable across the counter, and the
+   same ink-on-fill contrast rule every pill in the app follows. */
+.chk-cond.on { color: var(--ink-on-fill); }
+.chk-cond.chk-green.on { background: var(--good); }
+.chk-cond.chk-yellow.on { background: var(--warn); }
+.chk-cond.chk-red.on { background: var(--crit); }
+.chk-cond:disabled { cursor: default; background: none; color: var(--ink-faint); opacity: .55; }
+.chk-cond.on:disabled { opacity: .8; color: var(--ink-on-fill); }
+.chk-cond.chk-green.on:disabled { background: var(--good); }
+.chk-cond.chk-yellow.on:disabled { background: var(--warn); }
+.chk-cond.chk-red.on:disabled { background: var(--crit); }
+.chk-note {
+  flex: 1; min-width: 80px; font-size: 12.5px; padding: 5px 9px;
+  background: transparent; border-color: transparent;
+}
+.chk-row:hover .chk-note, .chk-row:focus-within .chk-note { background: var(--paper-raise); border-color: var(--line); }
+.chk-note:focus { background: var(--paper-raise); border-color: var(--accent); }
+/* A flagged line carries its colour on the edge, the same read the board's
+   cards use for a late promise. */
+.chk-row.flagged-red { box-shadow: inset 3px 0 0 var(--crit); padding-left: 8px; }
+.chk-row.flagged-yellow { box-shadow: inset 3px 0 0 var(--warn); padding-left: 8px; }
+.chk-writeup {
+  flex-shrink: 0; border: 1px solid var(--line); background: var(--paper-raise);
+  color: var(--accent); font-size: 11.5px; font-weight: 700; cursor: pointer;
+  border-radius: 999px; padding: 4px 11px; white-space: nowrap;
+}
+.chk-writeup:hover { border-color: var(--accent); }
+.chk-remove {
+  flex-shrink: 0; border: none; background: none; cursor: pointer;
+  color: var(--ink-faint); font-size: 14px; line-height: 1; padding: 4px 6px; border-radius: 6px;
+  /* Present but quiet: taking a line off the sheet is rare and shouldn't
+     read at the same weight as answering it. */
+  opacity: 0;
+}
+.chk-row:hover .chk-remove, .chk-remove:focus-visible { opacity: 1; }
+.chk-remove:hover { color: var(--crit); background: var(--paper-raise); }
+.chk-add { display: flex; gap: 8px; padding: 10px 16px 14px; align-items: center; }
+.chk-add input { flex: 1; min-width: 0; font-size: 12.5px; padding: 6px 10px; }
+
+/* Finished: the verdict, then only the lines that flagged. */
+.chk-summary { padding: 2px 16px 14px; }
+.chk-summary-verdict { font-size: 13px; font-weight: 600; color: var(--ink); margin-bottom: 6px; }
+.chk-summary.clean .chk-summary-verdict { color: var(--good); }
+.chk-summary-line { display: flex; align-items: baseline; gap: 8px; padding: 3px 0; font-size: 12.5px; }
+.chk-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; align-self: center; }
+.chk-dot-fix { background: var(--crit); }
+.chk-dot-watch { background: var(--warn); }
+.chk-summary-name { font-weight: 600; color: var(--ink); }
+.chk-summary-note { color: var(--ink-soft); }
+
+@media (max-width: 900px) {
+  .chk-row { flex-wrap: wrap; }
+  .chk-name { flex-basis: 100%; }
+  .chk-note { min-width: 140px; }
+}
+
 /* Parts & Labor: the shell itself goes transparent so each job (or the flat
    list, when there are no jobs yet) reads as its own separate card. */
 .parts-labor-shell { background: transparent; border: none; box-shadow: none; margin-bottom: 16px; }

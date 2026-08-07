@@ -8,6 +8,7 @@ import { initTheme, showView, wireGlobalErrorReporting, wireViewRetry } from "./
 import { loadVehicleViewPrefs } from "./vehicles-board.js";
 import { wireVehiclesView } from "./list-keyboard.js";
 import { wireEstimateGrid, wireJobDialog, wireMoveItemDialog, wireVehicleDetail } from "./vehicle-detail.js";
+import { wireInspection } from "./inspection.js";
 import { wireTicketTopbar } from "./ticket-topbar.js";
 import { wireMoveSegmentDialog } from "./move-ticket.js";
 import { wireReconDialog } from "./dialog-new-recon.js";
@@ -58,6 +59,7 @@ export function startApp() {
     wireUpdateBar();
     wireReceiveDialog();
     wireJobDialog();
+    wireInspection();
     wireMoveItemDialog();
     wireReportsView();
     wireAccountingView();

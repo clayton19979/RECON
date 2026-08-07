@@ -526,6 +526,30 @@
                 <button class="btn btn-ghost btn-sm" id="vd-concern-save">Save</button>
               </div>
 
+              <!-- The check-over sheet (inspection.js). Above Parts & Labor
+                   because the walk-around is where that work gets found: the
+                   sheet is the standard list the shop answers on every car,
+                   a flagged line files itself onto the ticket as a job, and
+                   a finished sheet folds to one readable verdict. The body is
+                   rendered per ticket; untouched it is a single quiet line. -->
+              <div class="card checkover-card" id="vd-checkover-card" style="display:none">
+                <div class="card-head">
+                  <div>
+                    <p class="section-eyebrow">Check-Over</p>
+                    <h3 class="section-title">Walk the Car
+                      <span class="save-state" id="vd-checkover-save-state"></span>
+                    </h3>
+                  </div>
+                  <div class="chk-head-right">
+                    <span class="chk-progress" id="vd-checkover-progress" hidden></span>
+                    <button type="button" class="btn btn-ghost btn-sm insp-control" id="vd-checkover-finish" hidden
+                            title="Fold the sheet down to what it found">Finish Check-Over</button>
+                    <button type="button" class="btn btn-ghost btn-sm insp-control" id="vd-checkover-reopen" hidden>Reopen the Sheet</button>
+                  </div>
+                </div>
+                <div id="vd-checkover-body"></div>
+              </div>
+
               <div class="card parts-labor-shell">
                 <div class="card-head">
                   <div>

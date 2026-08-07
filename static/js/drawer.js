@@ -32,11 +32,18 @@ export function wireDrawer() {
     // flips direction to show which way it'll swing, instead of a close-only
     // "x" that disappears once collapsed.
     //
-    // The preference is remembered *per width bucket*, not globally. Below
-    // 1240px the drawer takes enough room out of the detail shell that the
-    // Parts & Labor grid drops into its stacked card layout -- so a window
-    // that was once maximised (drawer open, plenty of room) shouldn't drag
-    // that choice down with it when it's resized to sit beside another app.
+    // The preference is remembered *per width bucket*, not globally. With the
+    // drawer open, the Parts & Labor grid only keeps its one-line-per-part
+    // layout when the window leaves it at least 820px (the stacked-layout
+    // container breakpoint); rail + page padding + drawer + handle eat ~650px,
+    // so the window has to be ~1470px wide before both fit side by side.
+    // Below that, an open drawer turns every ticket line into a tall stacked
+    // card -- which is the wrong resting state for the sheet the page exists
+    // to show. The bucket flips at 1500px rather than exactly 1470 so a
+    // window sitting right on the line gets the roomy default instead of a
+    // sheet scraping its breakpoint. (The old 1240px threshold predated the
+    // drawer's current width and let 1280-1470px windows -- most of the
+    // shop's screens -- open every ticket in the stacked pile.)
     // Wide defaults to open, narrow defaults to closed, and each remembers
     // what you last did *at that size*; crossing the threshold re-applies the
     // bucket you just entered rather than leaving the other one's choice on.
@@ -46,7 +53,7 @@ export function wireDrawer() {
     // harness); falling back to "never narrow" keeps the old single-preference
     // behaviour rather than throwing halfway through wiring the page.
     const DRAWER_NARROW = typeof window.matchMedia === "function"
-      ? window.matchMedia("(max-width: 1240px)")
+      ? window.matchMedia("(max-width: 1500px)")
       : { matches: false };
     const drawerKey = () => (DRAWER_NARROW.matches ? "dao-details-open-narrow" : "dao-details-open");
     function setDrawerOpen(open, remember = true) {

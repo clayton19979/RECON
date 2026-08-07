@@ -34,6 +34,19 @@ def test_version_info_matches_version_module():
     assert parse(match.group(1)) == parse(VERSION)
 
 
+def test_version_info_number_tuples_match_version_module():
+    """The binary tuples are a second copy of the number, and they drifted:
+    1.7.0 shipped with filevers still reading 1.6.0 because the bump only
+    touched the text fields. Windows sorts files by these tuples, not by the
+    strings, so a stale one misreports the exe to anything that compares them."""
+    text = (REPO / "version_info.txt").read_text(encoding="utf-8")
+    for field in ("filevers", "prodvers"):
+        match = re.search(rf"{field}=\(([\d,\s]+)\)", text)
+        assert match, f"version_info.txt no longer declares {field}"
+        numbers = tuple(int(part) for part in match.group(1).split(","))
+        assert parse(".".join(str(n) for n in numbers)) == parse(VERSION)
+
+
 def test_installer_script_matches_version_module():
     text = (REPO / "installers" / "RECON.iss").read_text(encoding="utf-8")
     match = re.search(r'#define\s+AppVersion\s+"([\d.]+)"', text)

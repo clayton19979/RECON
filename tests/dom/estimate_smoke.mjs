@@ -66,6 +66,10 @@ for (const [label, jobs] of [["flat", []], ["jobs", [{ id: 7, title: "Front brak
   }
   ok(rows[2].querySelector(".part-return-btn"), `${label}: received part has no Mark Returned button`);
   ok(box.classList.contains("has-jobs") === (jobs.length > 0), `${label}: has-jobs class wrong`);
+  // The repair outline only appears once there are two repairs to jump
+  // between -- one repair (or a flat list) has nowhere else to go.
+  ok(box.querySelectorAll(".job-jump").length === 0,
+     `${label}: repair outline chips rendered on a ticket with nowhere to jump`);
   const collected = w.collectEstimateItems();
   ok(collected.length === 3, `${label}: collectEstimateItems returned ${collected.length}, expected 3`);
   ok(collected[0].description === "Front pads" && collected[0].quantity === 2 && collected[0].unit_cost === 41.5,
@@ -404,6 +408,61 @@ ok(gridRows().length === 4, "Shift+Enter changed the row count");
 // First field of the first line: nowhere further back, keep the default.
 const topOut = pressShiftEnter(gridRows()[0].querySelector(".ei-desc"));
 ok(!topOut.defaultPrevented, "Shift+Enter at the top of the grid was hijacked");
+
+/* ------------------------------------------------------------------
+   Repair outline: on a multi-repair ticket the progress card grows a
+   row of chips, one per repair in ticket order, that scroll to (and
+   flash) that repair's own group. jsdom has no scrollIntoView, so what
+   the chips are held to here is the flash landing on the right group
+   -- the scroll itself is feature-checked in onJobJump.
+   ------------------------------------------------------------------ */
+{
+  const outlineOrder = {
+    id: 1, number: "RO-1", status: "in_progress", concern: "",
+    estimate: {
+      edit_version: 1,
+      jobs: [
+        { id: 21, title: "Front brakes", technician_id: null, completed_at: "2026-08-07 09:00:00", completed_by: "advisor" },
+        { id: 22, title: "Windshield", technician_id: null },
+        { id: 23, title: "Detail", technician_id: null },
+      ],
+      items: [
+        { id: 31, kind: "part", description: "Pads", quantity: 1, unit_cost: 40, status: "quoted", received_quantity: 0, job_id: 21 },
+        { id: 32, kind: "part", description: "Glass", quantity: 1, unit_cost: 250, status: "quoted", received_quantity: 0, job_id: 22 },
+        { id: 33, kind: "part", description: "Shop supplies", quantity: 1, unit_cost: 12, status: "quoted", received_quantity: 0, job_id: null },
+      ],
+    },
+  };
+  w.state.detail = { segment: "recon", id: 1, item: {}, order: outlineOrder };
+  w.renderEstimate(outlineOrder);
+  const outlineBox = doc.querySelector("#vd-estimate-items");
+  const chips = [...outlineBox.querySelectorAll(".job-jump")];
+  ok(chips.length === 4, `expected 3 repair chips + General, got ${chips.length}`);
+  const chipLabels = chips.map((c) => c.querySelector(".job-jump-title").textContent.trim());
+  ok(chipLabels.join("|") === "Front brakes|Windshield|Detail|General",
+     `outline chips out of ticket order: ${chipLabels.join("|")}`);
+  ok(chips[0].querySelector(".job-jump-title").classList.contains("jump-done")
+     && chips[0].querySelector(".job-jump-tick"),
+     "the finished repair's chip is not struck through and ticked");
+  ok(!chips[1].querySelector(".job-jump-tick"), "an unfinished repair's chip carries a done tick");
+  ok(chips[3].dataset.jumpJob === "", "the General chip does not target the General group");
+
+  // A press flashes that repair's own group, not the first one.
+  chips[1].click();
+  const flashed = outlineBox.querySelector(".job-group.job-jump-flash");
+  ok(flashed && flashed.dataset.jobId === "22", "clicking a chip did not flash that repair's group");
+
+  // Jumping to the same repair twice re-arms the flash instead of piling up.
+  chips[1].click();
+  ok(outlineBox.querySelectorAll(".job-group.job-jump-flash").length === 1,
+     "second jump to the same repair left a stray flash class");
+
+  // An empty General bucket is not a destination, so it earns no chip.
+  outlineOrder.estimate.items = outlineOrder.estimate.items.filter((i) => i.job_id !== null);
+  w.renderEstimate(outlineOrder);
+  ok([...outlineBox.querySelectorAll(".job-jump")].every((c) => c.dataset.jumpJob !== ""),
+     "an empty General group still got an outline chip");
+}
 
 /* ------------------------------------------------------------------
    Message log: a toast that faded is still recoverable from the bell.

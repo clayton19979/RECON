@@ -1649,12 +1649,31 @@ textarea { min-height: 70px; resize: vertical; font-family: inherit; }
    It is its own card rather than a rule above the first job, so it reads as a
    summary of all of them instead of a caption on the top one. */
 .job-progress {
-  display: flex; align-items: center; gap: 14px;
+  display: flex; flex-direction: column; gap: 9px;
   padding: 11px 16px; font-size: 11.5px; font-weight: 700; color: var(--ink-soft);
   text-transform: uppercase; letter-spacing: 0.04em;
   background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
 }
+.job-progress-line { display: flex; align-items: center; gap: 14px; }
 .job-progress-text { flex: none; }
+
+/* The repair outline under the count: one chip per repair, jump on press.
+   Chips un-inherit the card's uppercase -- they carry the repairs' own names,
+   and "WINDSHIELD REPLACEMENT (ROCK CHIP...)" shouts eight times per ticket.
+   A finished repair's chip is struck through like its group header, so this
+   row reads as what's left, not just a table of contents. */
+.job-outline { display: flex; flex-wrap: wrap; gap: 6px; }
+.job-jump {
+  display: inline-flex; align-items: center; gap: 5px; max-width: 260px;
+  font-size: 11.5px; font-weight: 600; text-transform: none; letter-spacing: normal;
+  color: var(--ink-soft); background: var(--paper);
+  border: 1px solid var(--line); border-radius: 999px; padding: 3px 10px;
+  cursor: pointer;
+}
+.job-jump:hover { border-color: var(--accent); color: var(--ink); background: var(--accent-tint); }
+.job-jump-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.job-jump-title.jump-done { text-decoration: line-through; color: var(--ink-faint); }
+.job-jump-tick { color: var(--good); flex: none; }
 /* The bar takes the leftover width rather than a fixed one: on a narrow
    container (details drawer open) it shrinks instead of pushing the count
    onto a second line. */
@@ -2895,6 +2914,19 @@ dialog::backdrop { background: var(--backdrop); backdrop-filter: blur(3px); }
 /* "General" is the ungrouped leftovers, not a repair anyone finishes -- it
    gets a plain edge so it doesn't read as outstanding work. */
 .job-group[data-job-id=""] { box-shadow: inset 3px 0 0 var(--line); }
+
+/* Where an outline chip's jump lands: clear of the ticket top bar hanging
+   over the scrollport, and one fading flash so the eye finds the right
+   repair. Background animation with no fill mode, so the group's header ends
+   up exactly the colour its own rules say. */
+.job-group { scroll-margin-top: 62px; }
+@keyframes job-jump-flash {
+  from { background-color: var(--accent-tint); }
+}
+.job-group.job-jump-flash .job-group-head { animation: job-jump-flash 1.4s ease-out; }
+@media (prefers-reduced-motion: reduce) {
+  .job-group.job-jump-flash .job-group-head { animation: none; }
+}
 
 /* Status pickers: the popover pattern the assign control uses. (The ticket's
    own status moved onto the stage strip above the concern; what remains here

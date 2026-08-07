@@ -1345,15 +1345,36 @@ function renderEstimate(order) {
     // is answerable from across the desk, which is how this line actually
     // gets used when somebody asks how far along a car is.
     const donePct = Math.round((doneCount / jobs.length) * 100);
+    // The outline under the count: one chip per repair, in ticket order, that
+    // scrolls to it. On a car with eight repairs the grid runs several screens
+    // tall, and "where's the windshield on this ticket" was a scroll-and-scan
+    // -- the chip is the answer at the door of the ticket. A finished repair's
+    // chip is struck through the same way its group header is, so the row of
+    // chips is also "what's left" at a glance. One repair gets no outline:
+    // there is nowhere else to jump to. General only earns a chip when it
+    // actually holds lines -- an empty leftovers bucket is not a destination.
+    // These are navigation, not edits, so no job-control class: they stay
+    // alive on an archived read-only ticket.
+    const jumpChip = (bucket, done) => `<button type="button" class="job-jump" data-jump-job="${bucket.id ?? ""}" title="Jump to ${esc(bucket.title)}">
+        ${done ? `<span class="job-jump-tick" aria-hidden="true">✓</span>` : ""}<span class="job-jump-title${done ? " jump-done" : ""}">${esc(bucket.title)}</span>
+      </button>`;
+    const generalHasLines = items.some((i) => (i.job_id ?? null) === null);
+    const outline = jobs.length < 2 ? "" : `<div class="job-outline">
+      ${jobs.map((j) => jumpChip(j, !!j.completed_at)).join("")}
+      ${generalHasLines ? jumpChip({ id: null, title: "General" }, false) : ""}
+    </div>`;
     const progress = `<div class="job-progress${doneCount === jobs.length ? " all-done" : ""}">
-      <span class="job-progress-text">${
-        doneCount === jobs.length
-          ? `All ${jobs.length} repair${jobs.length === 1 ? "" : "s"} finished`
-          : `${doneCount} of ${jobs.length} repair${jobs.length === 1 ? "" : "s"} finished`
-      }</span>
-      ${/* Decoration for the sentence beside it, so it is hidden from screen
-           readers rather than read out as a second, wordless progress bar. */""}
-      <span class="job-progress-track" aria-hidden="true"><span class="job-progress-fill" style="width: ${donePct}%"></span></span>
+      <div class="job-progress-line">
+        <span class="job-progress-text">${
+          doneCount === jobs.length
+            ? `All ${jobs.length} repair${jobs.length === 1 ? "" : "s"} finished`
+            : `${doneCount} of ${jobs.length} repair${jobs.length === 1 ? "" : "s"} finished`
+        }</span>
+        ${/* Decoration for the sentence beside it, so it is hidden from screen
+             readers rather than read out as a second, wordless progress bar. */""}
+        <span class="job-progress-track" aria-hidden="true"><span class="job-progress-fill" style="width: ${donePct}%"></span></span>
+      </div>
+      ${outline}
     </div>`;
     box.innerHTML = progress + buckets.map((bucket) => {
       const bucketItems = items.filter((i) => (i.job_id ?? null) === bucket.id);
@@ -2106,6 +2127,7 @@ export function wireEstimateGrid() {
   box.addEventListener("click", (e) => {
     const btn = e.target instanceof Element ? e.target.closest("button") : null;
     if (!btn || !box.contains(btn)) return;
+    if (btn.classList.contains("job-jump")) return void onJobJump(btn);
     if (btn.classList.contains("rm-btn")) return void onEstimateRowRemove(btn);
     if (btn.classList.contains("row-move-btn")) return void onEstimateRowMove(btn);
     if (btn.classList.contains("part-return-btn")) return void onEstimatePartReturn(btn);
@@ -2121,6 +2143,30 @@ export function wireEstimateGrid() {
 
 function currentEstimateJob(jobId) {
   return (state.detail.order?.estimate?.jobs ?? []).find((j) => String(j.id) === String(jobId)) || null;
+}
+
+/* Scroll the grid to a repair's own group and flash it once, so the eye lands
+   on the right section instead of somewhere mid-scroll -- the same move the
+   Lot report makes for its piles. data-jump-job carries "" for General, which
+   is exactly what the General group's data-job-id holds, so one string match
+   serves both. scrollIntoView is feature-checked for the jsdom the smoke
+   tests run in; the flash class still lands there, which is what the test
+   watches for. */
+function onJobJump(btn) {
+  const target = $$(`#vd-estimate-items .job-group`)
+    .find((g) => g.dataset.jobId === btn.dataset.jumpJob);
+  if (!target) return;
+  if (typeof target.scrollIntoView === "function") {
+    const reduced = typeof window.matchMedia === "function"
+      && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    target.scrollIntoView({ behavior: reduced ? "auto" : "smooth", block: "start" });
+  }
+  // Remove-then-re-add (with a reflow between) restarts the flash when the
+  // same repair is jumped to twice in a row.
+  target.classList.remove("job-jump-flash");
+  void target.offsetWidth;
+  target.classList.add("job-jump-flash");
+  target.addEventListener("animationend", () => target.classList.remove("job-jump-flash"), { once: true });
 }
 
 async function onEstimateRowRemove(btn) {

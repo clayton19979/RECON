@@ -1416,7 +1416,36 @@ function renderEstimate(order) {
   $$(".part-row:not(.head)", box).forEach(syncRowKindFields);
   updateReceiveButtonState();
   renderEstimateTotals(order);
+  syncClipCues();
   lastEstimateShape = estimateShape(order);
+}
+
+/* ---------- saying so when a field is holding more than it shows ----------
+   The quiet-fields rule (styles.css) makes this grid read as a printed sheet,
+   and a printed line that stops flush at a column edge reads as complete: on
+   a 1366px shop screen "USED-COND-SPR-19-PNP" showed as "USED-COND-SPR-1",
+   which is a different part number, with nothing to say so. Description and
+   Part # are the two columns where a silent cut changes what the line SAYS
+   (a number column that runs out of room clips digits the totals would
+   contradict; these two have no cross-check). So any of those inputs whose
+   text genuinely overruns its box gets .is-clipped -- the stylesheet fades
+   the text out at the edge instead of cutting it clean -- and carries the
+   full text as its tooltip. Focusing the field scrolls it like any input,
+   so the fade lifts there (also styles.css).
+   Class + title are re-derived on render, on typing in either column, and
+   when the grid's own width changes (window, details drawer -- one observer
+   on the box catches both, wired in wireEstimateGrid). In jsdom every
+   scrollWidth is 0, so this is inert there by construction. */
+function syncClipCue(input) {
+  const clipped = input.scrollWidth > input.clientWidth + 1;
+  input.classList.toggle("is-clipped", clipped);
+  // Tooltip only while it earns its place -- titles that repeat what is
+  // already fully visible are hover noise on every line of the sheet.
+  if (clipped) input.title = input.value;
+  else input.removeAttribute("title");
+}
+function syncClipCues() {
+  $$(".ei-desc, .ei-part", $("#vd-estimate-items")).forEach(syncClipCue);
 }
 
 function updateReceiveButtonState() {
@@ -1938,6 +1967,20 @@ export function wireEstimateGrid() {
     if (t.matches(".ei-job-done")) return void onJobDoneChange(t);
   });
 
+  // How much room a column gets changes without any re-render: the window
+  // resizes, or the details drawer swings open beside the grid. Observing the
+  // box itself catches both with one hook. Coalesced through a timer because
+  // a drag-resize streams dozens of callbacks, and the cue only has to be
+  // right once the box settles. Guarded: jsdom has no ResizeObserver (and no
+  // layout for the cue to measure anyway).
+  if (typeof ResizeObserver === "function") {
+    let clipCueTimer = null;
+    new ResizeObserver(() => {
+      if (clipCueTimer) clearTimeout(clipCueTimer);
+      clipCueTimer = setTimeout(() => { clipCueTimer = null; syncClipCues(); }, 120);
+    }).observe(box);
+  }
+
   // Keystroke-level feedback. The change handler above only fires on blur, so
   // while a number was being typed every total on the page -- Quoted, Actual,
   // the over/under delta, job subtotals -- sat stale until the advisor clicked
@@ -1949,6 +1992,9 @@ export function wireEstimateGrid() {
     const t = e.target;
     if (!(t instanceof Element) || !t.matches(".ei-qty, .ei-cost, .ei-core, .ei-desc, .ei-part")) return;
     if (t.matches(".ei-qty, .ei-cost, .ei-core")) updateEstimateTotalsFromDom();
+    // Keeps the overflow cue and its tooltip agreeing with the text mid-edit,
+    // not just after the next render.
+    if (t.matches(".ei-desc, .ei-part")) syncClipCue(t);
     clearEstimateTypingTimer();
     // A row whose description is empty gets dropped by collectEstimateItems --
     // saving mid-retype would delete the line out from under the advisor. Hold

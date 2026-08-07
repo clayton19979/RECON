@@ -1373,6 +1373,20 @@ textarea { min-height: 70px; resize: vertical; font-family: inherit; }
 .part-row:not(.head) .pr-cell > select:focus {
   background-color: var(--surface); border-color: var(--accent);
 }
+/* A sheet line that is holding more text than its column shows fades out at
+   the right edge instead of stopping flush -- cut clean, "USED-COND-SPR-1"
+   reads as a whole part number, and this grid is read far more than it is
+   edited (see quiet fields above). vehicle-detail.js::syncClipCue sets the
+   class only when the text genuinely overruns, and puts the full text on the
+   field's tooltip. A mask rather than a painted gradient because the row's
+   background changes under hover/focus and a mask doesn't care what it is
+   fading into. Lifted on focus: a focused input scrolls to the caret, and
+   fading out the text somebody is editing at the caret end is worse than a
+   hard edge. */
+.part-row:not(.head) .pr-cell > input.is-clipped:not(:focus) {
+  -webkit-mask-image: linear-gradient(to left, transparent, #000 26px);
+  mask-image: linear-gradient(to left, transparent, #000 26px);
+}
 /* A caret the theme can color (two gradient triangles), in place of the
    native arrow -- appearance:none takes that arrow away so a resting sheet
    shows no widget chrome, but a select with no marker at all is

@@ -2592,6 +2592,53 @@ dialog::backdrop { background: var(--backdrop); backdrop-filter: blur(3px); }
   .print-sign .sign-rule { border-bottom: 0.75pt solid #000; height: 18px; }
   .print-sign .sign-label { font-size: 8.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: #555; margin-top: 3px; }
 
+  /* ---------- the lot card ----------
+     Read through a windshield, not across a desk: the stock number is the
+     headline at keytag scale, the work list is toolbox-note size, and every
+     rule below is sized so the whole card stays one sheet. */
+  .print-lotcard .lc-stock {
+    font-family: Bahnschrift, "Segoe UI Semibold", "Space Grotesk", sans-serif;
+    font-size: 92px; font-weight: 700; letter-spacing: .01em; line-height: .95;
+    color: #000; margin: 10px 0 0;
+    /* A hand-typed stock number longer than the sheet is wide wraps rather
+       than running off the paper's edge. */
+    overflow-wrap: anywhere;
+  }
+  .print-lotcard .lc-vehicle { font-size: 30px; font-weight: 700; color: #000; margin-top: 8px; }
+  .print-lotcard .lc-tags { font-size: 14px; color: #333; margin-top: 7px; }
+  .print-lotcard .lc-customer { font-size: 15px; font-weight: 600; color: #000; margin-top: 5px; }
+  /* Where the car stands: one bold band, bookended by the same thick-thin
+     rules the letterhead uses, so the card reads as one document family. */
+  .print-lotcard .lc-status {
+    display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap;
+    border-top: 2px solid #000; border-bottom: 0.75pt solid #000;
+    padding: 9px 2px 10px; margin: 16px 0 6px;
+  }
+  .print-lotcard .lc-status-word {
+    font-family: Bahnschrift, "Segoe UI Semibold", "Space Grotesk", sans-serif;
+    font-size: 21px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: #000;
+  }
+  .print-lotcard .lc-promise { font-size: 15px; font-weight: 600; color: #333; }
+  /* A blown promise stays legible on a mono laser: the words say "past due",
+     the weight shouts it, and the ink does not need to be red to work. */
+  .print-lotcard .lc-promise.lc-late { color: #000; font-weight: 700; text-transform: uppercase; }
+  .print-lotcard .print-subhead { margin-top: 14px; }
+  /* The work list at across-the-hood size, one tick box per repair. */
+  .print-lotcard .lc-line {
+    display: flex; align-items: flex-start; gap: 12px;
+    font-size: 19px; color: #000; padding: 8px 2px;
+    border-bottom: 0.75pt solid #bbb; break-inside: avoid;
+  }
+  .print-lotcard .lc-line .print-tick { width: 17px; height: 17px; margin-top: 4px; flex-shrink: 0; }
+  /* A finished repair keeps its line -- "the brakes are done" is half the
+     story of the car -- filled box, struck text, secondary ink. */
+  .print-lotcard .print-tick.ticked { background: #000; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .print-lotcard .lc-line.done .lc-line-text { text-decoration: line-through; color: #555; }
+  .print-lotcard .lc-parts-note { font-size: 14px; font-weight: 700; color: #000; margin-top: 12px; }
+  /* Taller ruled lines than the ticket's write-in: this one is filled in
+     standing up, pen braced on the hood. */
+  .print-lotcard .lc-writein .writein-rule { height: 38px; }
+
   /* Running footer: position:fixed repeats per printed page in Chrome (the
      supported substitute for @page margin boxes, which it lacks). Opaque
      white masks any hairline a page's last row grazes into the band. */

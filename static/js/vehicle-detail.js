@@ -993,6 +993,13 @@ function renderOrderPanel() {
   renderActivity(order);
   renderAssignment(order);
   $("#vd-print-ticket").style.display = order ? "" : "none";
+  // The lot card exists for cars that live on the lot -- recon and we-owe --
+  // whether or not anyone has written a ticket yet. A retail customer's car
+  // isn't parked out there waiting to be found, and a car filed to History
+  // has left the lot; neither gets a windshield sheet.
+  $("#vd-print-card").style.display =
+    (state.detail.segment === "recon" || state.detail.segment === "we_owe") && !state.detail.item.archived_at
+      ? "" : "none";
   // + Task survives a car with no ticket: a follow-up can name the car
   // itself, and a car nobody has written up is the most common thing to
   // want to leave a note about. Retail is the exception -- a customer's
@@ -3124,6 +3131,125 @@ function renderPrintTicket(copy = "shop") {
   `;
 }
 
+/* ---------- the lot card ----------
+   The sheet that rides on the car. A recon lot is walked, not browsed: the
+   person deciding what to do with a car is standing in front of it, and the
+   answer to "what is this and what does it still need" lives back inside on
+   a screen. This card goes under the wiper -- stock number readable through
+   the windshield from the next row of cars, the work list with a tick box
+   per repair, and never a dollar figure anywhere: it sits in a window where
+   anyone on the lot can read it.
+
+   A car with no ticket prints the card too, saying exactly that, with ruled
+   lines to write on -- the walk around the car IS how the ticket gets
+   started, and the sheet carries the notes back to the desk. */
+function renderPrintLotCard() {
+  // Same shared surface and the same ownership rule as the printed ticket:
+  // anything but "report" keeps Reports' beforeprint rebuild off this page.
+  state.printSurfaceOwner = "ticket";
+  const { segment, item, order } = state.detail;
+  const isWeOwe = segment === "we_owe";
+  const printedOn = new Date().toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" });
+  const jobs = order?.estimate?.jobs ?? [];
+  const items = order?.estimate?.items ?? [];
+
+  // The identity block, loudest fact first. A recon car IS its stock number
+  // -- that's what's said over the radio and written on the keytag. A we-owe
+  // has no stock number; the banner says which kind of promise the car is,
+  // and the customer's name carries the identity below it.
+  const bigLabel = isWeOwe ? "WE-OWE" : (item.stock_number || "RECON");
+  const vehicleName = [item.year, item.make, item.model].filter(Boolean).join(" ");
+  const tags = [
+    item.color ? esc(item.color) : "",
+    item.plate ? `Plate ${esc(item.plate)}${item.plate_state ? ` (${esc(item.plate_state)})` : ""}` : "",
+    // The same last-8 rule the board uses -- nobody scans 17 characters on
+    // a windshield either. The full VIN is on the ticket.
+    item.vin ? `VIN …${esc(String(item.vin).slice(-8))}` : "",
+  ].filter(Boolean).join(" · ");
+
+  // Where the car stands, and -- on a promise still owed -- the date the
+  // customer was given, saying so plainly when that date is gone.
+  // A ticketed car answers with its ticket's status -- the same word the
+  // board's pill shows -- because the recon row's own enum ("in_repair") is
+  // a database word no one at the shop says out loud.
+  const VEHICLE_STATUS_LABEL = { acquired: "Acquired", in_repair: "In the Shop", ready: "Ready", retained: "Retained" };
+  const statusLabel = order
+    ? (order.voided ? "Voided" : (STATUS_LABEL[order.status] || order.status))
+    : (VEHICLE_STATUS_LABEL[item.status] || STATUS_LABEL[item.status] || item.status || "");
+  let promiseHtml = "";
+  if (isWeOwe && item.target_date && (item.status === "open" || item.status === "in_progress")) {
+    const days = calendarDaysUntil(item.target_date);
+    const late = days !== null && days < 0 ? -days : 0;
+    promiseHtml = `<span class="lc-promise${late ? " lc-late" : ""}">Promised for ${esc(fmtDay(item.target_date))}${
+      late ? ` — ${late} day${late === 1 ? "" : "s"} past due` : days === 0 ? " — due today" : ""}</span>`;
+  }
+
+  // The work list. Jobs are the units a repair is talked about in, so they
+  // are the lines; wrench lines that never got a job (or a ticket with no
+  // jobs at all) list themselves. Fees and credits are money bookkeeping
+  // with no wrench behind them -- same rule as the technician copy -- and a
+  // returned part isn't work the car is waiting on.
+  const wrenchLines = (list) => list.filter((i) => (i.kind === "part" || i.kind === "labor") && !isReturnedPart(i));
+  const lines = [];
+  for (const j of jobs) lines.push({ text: j.title, done: !!j.completed_at });
+  const loose = jobs.length ? wrenchLines(items).filter((i) => (i.job_id ?? null) === null) : wrenchLines(items);
+  for (const i of loose) lines.push({ text: i.description, done: false });
+  const lineHtml = (l) => `<div class="lc-line${l.done ? " done" : ""}">
+      <span class="print-tick${l.done ? " ticked" : ""}" aria-hidden="true"></span>
+      <span class="lc-line-text">${esc(l.text)}</span>
+    </div>`;
+
+  // Parts that were ordered and haven't landed: the one thing that tells the
+  // person at the car why nobody is working on it right now.
+  const waiting = items.filter((i) => i.kind === "part" && i.status === "ordered" && !isReturnedPart(i)).length;
+
+  let listHtml;
+  if (!order) {
+    listHtml = `<div class="print-subhead">No ticket written yet</div>
+      <div class="print-group-note">Walk the car, write what it needs below, and hand this sheet to the desk.</div>
+      <div class="print-writein lc-writein">
+        <div class="writein-rule"></div><div class="writein-rule"></div>
+        <div class="writein-rule"></div><div class="writein-rule"></div>
+        <div class="writein-rule"></div><div class="writein-rule"></div>
+      </div>`;
+  } else if (!lines.length) {
+    listHtml = `<div class="print-subhead">The work on this car</div>
+      <div class="print-group-note">The ticket has no repair lines yet — see RECON for where it stands.</div>`;
+  } else {
+    listHtml = `<div class="print-subhead">The work on this car</div>
+      <div class="lc-list">${lines.map(lineHtml).join("")}</div>
+      ${waiting ? `<div class="lc-parts-note">${waiting} part${waiting === 1 ? "" : "s"} on order — not here yet</div>` : ""}`;
+  }
+
+  $("#print-report").innerHTML = `
+    <div class="print-lotcard">
+      <header class="print-letterhead">
+        <div>
+          <div class="print-shop-name">RECON</div>
+          <div class="print-shop-sub">Discount Auto Repair · Merrillville, IN</div>
+        </div>
+        <div class="print-meta">
+          <div class="print-report-title">Lot Card</div>
+          <div class="print-generated">Printed ${esc(printedOn)}</div>
+        </div>
+      </header>
+      <div class="lc-stock">${esc(bigLabel)}</div>
+      <div class="lc-vehicle">${esc(vehicleName)}</div>
+      ${tags ? `<div class="lc-tags">${tags}</div>` : ""}
+      ${isWeOwe && item.customer_name ? `<div class="lc-customer">Customer: ${esc(item.customer_name)}</div>` : ""}
+      <div class="lc-status">
+        <span class="lc-status-word">${esc(statusLabel)}</span>
+        ${promiseHtml}
+      </div>
+      ${listHtml}
+      <footer class="print-foot">
+        <span>RECON · Discount Auto Repair</span>
+        <span>${order ? `Repair Order ${esc(order.number)} · ` : ""}No pricing on this sheet — costs live in RECON · Printed ${esc(printedOn)}</span>
+      </footer>
+    </div>
+  `;
+}
+
 /* ---------- vehicle-detail event wiring (wired once) ---------- */
 export function wireVehicleDetail() {
   $("#back-to-vehicles").addEventListener("click", () => showView(detailHomeView()));
@@ -3232,6 +3358,14 @@ export function wireVehicleDetail() {
     });
     if (!choice) return;
     renderPrintTicket(choice === "alt" ? "tech" : "shop");
+    window.print();
+  });
+
+  // One click, one sheet -- no copy to choose. The card only ever has the
+  // one moneyless form, so a dialog here would be a question with no answer
+  // to give.
+  $("#vd-print-card").addEventListener("click", () => {
+    renderPrintLotCard();
     window.print();
   });
 

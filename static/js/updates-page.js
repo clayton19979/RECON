@@ -75,6 +75,38 @@ function renderFacts(info) {
     : "Checking asks the main shop PC, which is where updates arrive.";
 }
 
+/* The address to type into a phone, and whether it will work yet.
+ *
+ * Deliberately not derived from window.location: on the shop PC that reads
+ * 127.0.0.1, which is correct for this browser and useless to a phone. The
+ * server reports which interface it would actually reach the network on.
+ *
+ * Sharing off means the server is bound to loopback, so the address is right
+ * and still unreachable. Saying that is the whole value of the line -- a URL
+ * that silently fails sends somebody hunting through their phone's Wi-Fi
+ * settings for a problem that is on this PC.
+ */
+async function renderPhoneLink() {
+  const url = $("#updates-phone-url");
+  const note = $("#updates-phone-note");
+  if (!url || !note) return;
+  let link;
+  try {
+    link = await get("/api/mobile/link");
+  } catch {
+    // A dead sub-request shouldn't take the version numbers down with it.
+    url.textContent = "—";
+    note.textContent = "Couldn't work out this computer's address on the network.";
+    return;
+  }
+  url.textContent = link.url || "—";
+  note.textContent = !link.url
+    ? "This computer doesn't appear to be on a network right now."
+    : link.sharing
+      ? "Sharing is on, so phones on the shop's Wi-Fi can reach this."
+      : "Sharing is off, so nothing else can reach this PC yet — turn on network mode from the RECON tray icon first.";
+}
+
 export async function loadUpdatesView() {
   let info;
   try {
@@ -84,6 +116,7 @@ export async function loadUpdatesView() {
   }
   renderFacts(info);
   renderAvailable(info);
+  renderPhoneLink();
 }
 
 export function wireUpdatesView() {

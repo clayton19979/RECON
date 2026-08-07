@@ -722,6 +722,25 @@ const HELP_TOPICS = [
   },
 
   {
+    id: "phone-app",
+    title: "Putting RECON on your phone",
+    view: "updates",
+    aliases: ["phone", "mobile", "cell", "iphone", "android", "tablet", "ipad", "app", "home screen", "in the lot", "out at the car", "walk the lot", "on my phone", "install on phone", "qr"],
+    summary: "There's a phone version of RECON for use out in the lot — the whole board, what each car still needs, and a tick box for each repair so work gets written down at the car instead of remembered until you're back inside.",
+    steps: [
+      "It's the same RECON and the same records — just laid out for a phone. Anything ticked off out at the car shows on the shop PC straight away, and the other way round.",
+      "First, the main shop PC has to be sharing: right-click the RECON tray icon and turn network mode on. It's the same switch the other computers in the shop already need.",
+      "On the phone, join the shop's Wi-Fi, open the web browser, and go to the main PC's address with /m on the end — for example http://192.168.1.20:8787/m/ . The Updates screen on the main PC shows its address.",
+      "iPhone: tap the Share button, then 'Add to Home Screen'. Android: it offers to install it. Either way you get a RECON icon that opens straight to the lot, no browser bar.",
+      "Three buttons along the bottom: the Lot (every car, in the same four groups as the big board), Find (type a stock number, plate, or the last few digits of a VIN), and To Do (your follow-ups).",
+      "Tap a car to see what it still needs and what's been spent. Tap a repair to tick it off, and it records your name — so set 'Who?' in the top right first.",
+      "Prices are read-only on the phone on purpose. Parts and costs get typed at the desk, where a wrong keystroke is easier to catch.",
+      "The phone only works inside the shop, on the shop's Wi-Fi. It won't reach the records from home.",
+    ],
+    related: ["update-recon", "vehicles-board", "working-as"],
+  },
+
+  {
     id: "backup-to-usb",
     title: "Taking a backup off-site",
     view: "backup",
@@ -805,6 +824,6 @@ const HELP_GROUPS = [
   },
   {
     title: "Reports, backups and your data",
-    ids: ["run-a-report", "export-and-print-reports", "backup-basics", "backup-to-usb", "restore-a-backup", "update-recon"],
+    ids: ["run-a-report", "export-and-print-reports", "backup-basics", "backup-to-usb", "restore-a-backup", "update-recon", "phone-app"],
   },
 ];

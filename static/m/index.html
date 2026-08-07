@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<!-- viewport-fit=cover so the layout can reach under the notch and the home
+     bar; every fixed edge below pads itself back with env(safe-area-inset-*). -->
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0c1118">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="RECON">
+<title>RECON</title>
+<link rel="manifest" href="/m/manifest.webmanifest">
+<!-- static/ is mounted at /assets, so a root-relative /favicon.ico would 404. -->
+<link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
+<link rel="apple-touch-icon" href="/assets/icon-180.png">
+<link rel="stylesheet" href="/assets/fonts.css">
+<!-- Loaded for its theme tokens only; mobile.css owns every layout rule and
+     namespaces its classes `m-` so no desktop rule can reach them. -->
+<link rel="stylesheet" href="/assets/styles.css">
+<link rel="stylesheet" href="/assets/m/mobile.css">
+</head>
+<body data-screen="lot">
+
+<div class="m-app">
+  <header class="m-head">
+    <button class="m-back" id="m-back" type="button" aria-label="Back to the lot">&#8249;</button>
+    <h1 id="m-title">The Lot</h1>
+    <select class="m-who" id="m-who" aria-label="Who is using this phone">
+      <option value="">Who?</option>
+    </select>
+  </header>
+
+  <main class="m-main" id="m-main">
+
+    <section class="m-screen is-on" id="m-screen-lot" aria-label="The lot">
+      <div id="m-lot"><p class="m-loading">Loading the lot…</p></div>
+    </section>
+
+    <section class="m-screen" id="m-screen-search" aria-label="Search">
+      <div class="m-search-wrap">
+        <input class="m-search" id="m-search" type="search" enterkeyhint="search"
+               autocomplete="off" autocapitalize="characters" autocorrect="off" spellcheck="false"
+               placeholder="Stock number, plate, VIN, name…" aria-label="Search for a car">
+      </div>
+      <div id="m-search-results">
+        <p class="m-search-hint">Type a stock number, a plate, the last few digits of a VIN, or a customer's name.</p>
+      </div>
+    </section>
+
+    <section class="m-screen" id="m-screen-tasks" aria-label="Follow-ups">
+      <div id="m-tasks"><p class="m-loading">Loading follow-ups…</p></div>
+    </section>
+
+    <section class="m-screen" id="m-screen-car" aria-label="Car">
+      <div id="m-car"></div>
+    </section>
+
+  </main>
+
+  <nav class="m-tabs" id="m-tabs" role="tablist" aria-label="Sections">
+    <button class="m-tab" type="button" role="tab" data-tab="lot" aria-selected="true">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10.5 12 4l9 6.5V20a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"/><path d="M9 21v-7h6v7"/></svg>
+      Lot
+    </button>
+    <button class="m-tab" type="button" role="tab" data-tab="search" aria-selected="false">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.6-3.6"/></svg>
+      Find
+    </button>
+    <button class="m-tab" type="button" role="tab" data-tab="tasks" aria-selected="false">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 12.5 4 4 12-11"/><path d="M4 6h9"/></svg>
+      To Do
+    </button>
+  </nav>
+</div>
+
+<div class="m-toast" id="m-toast" role="status" aria-live="polite"></div>
+
+<script type="module" src="/assets/m/js/main.js"></script>
+</body>
+</html>

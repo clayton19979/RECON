@@ -70,9 +70,42 @@ export function assembledHtml() {
   return template.replace("<!--DIALOGS-->", dialogs);
 }
 
-export async function boot({ fetch: handler, expose = [], beforeBoot } = {}) {
-  const html = assembledHtml();
-  const js = flatAppJs();
+/**
+ * The same trick as flatAppJs, for the phone app under static/m/.
+ *
+ * Two differences. Its modules live in static/m/js/ and are reached from
+ * static/m/js/main.js, and it deliberately imports two desktop modules by
+ * relative path -- core.js for the fetch helper and estimate-money.js for
+ * what a parts line is worth -- rather than keeping second copies of them.
+ * Those two are dependency-free, so they concatenate first and everything
+ * downstream sees them.
+ */
+export function flatMobileJs() {
+  const main = fs.readFileSync(`${STATIC_DIR}/m/js/main.js`, "utf8");
+  const strip = (src) =>
+    src
+      .split("\n")
+      .filter((l) => !/^import\b/.test(l))
+      .map((l) => l.replace(/^export /, ""))
+      .join("\n");
+  // Whatever the phone borrows from the desk, in the order it has to load.
+  const shared = ["core.js", "estimate-money.js"].map((f) => strip(fs.readFileSync(`${STATIC_DIR}/js/${f}`, "utf8")));
+  // format.js and shell.js underpin the screens, so they lead regardless of
+  // where main.js happens to name them.
+  const named = [...main.matchAll(/"\.\/([-\w]+\.js)"/g)].map((m) => m[1]);
+  const order = ["format.js", "shell.js", ...named.filter((f) => f !== "format.js" && f !== "shell.js")];
+  const modules = order.map((f) => strip(fs.readFileSync(`${STATIC_DIR}/m/js/${f}`, "utf8")));
+  return '"use strict";\n' + shared.join("\n;\n") + "\n;\n" + modules.join("\n;\n") + "\n" + strip(main);
+}
+
+/** The phone shell, served straight off disk -- no partials to splice. */
+export function mobileHtml() {
+  return fs.readFileSync(`${STATIC_DIR}/m/index.html`, "utf8");
+}
+
+export async function boot({ fetch: handler, expose = [], beforeBoot, html: htmlOverride, js: jsOverride } = {}) {
+  const html = htmlOverride || assembledHtml();
+  const js = jsOverride || flatAppJs();
   const dom = new JSDOM(html, { runScripts: "outside-only", url: "http://localhost/", pretendToBeVisual: true });
   const w = dom.window;
 

@@ -37,3 +37,13 @@ installers/MicrosoftEdgeWebview2Setup.exe
 tests/dom/node_modules/
 tests/dom/package-lock.json
 tests/dom/package.json
+
+# The signing key for the Android APK. A private key does not belong in the
+# repo even when, as here, its password sits in build_apk.ps1 in plain sight
+# and the certificate is self-signed for sideloading rather than a store
+# identity. Back the file up somewhere anyway: Android refuses to update an
+# installed app that was signed with a different key, so a lost keystore means
+# uninstalling RECON from each phone and re-typing the two addresses. That is
+# a minute of annoyance, not a disaster -- which is why this is ignored rather
+# than committed.
+android/*.keystore

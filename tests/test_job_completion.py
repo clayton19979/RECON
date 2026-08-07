@@ -201,6 +201,54 @@ def test_a_long_list_of_repairs_is_trimmed_rather_than_run_on(client):
     assert "Tires" not in needs and "Alignment" not in needs
 
 
+def test_a_long_winded_job_title_cannot_hide_the_money(client):
+    """A job title typed with a customer on the phone can be a sentence in its
+    own right, and the board card gives the whole "still needs" line two lines
+    before cutting it. One long title used to spend both, and the clauses
+    behind it -- parts on order, dollars left -- were exactly the ones that
+    vanished. The title is clipped on a word instead, and the money survives."""
+    vehicle = make_recon_vehicle(client, stock_number="R-JOB16")
+    order = make_recon_order(client, vehicle["id"])
+    save_estimate(
+        client,
+        order["id"],
+        [{"kind": "part", "description": "Control arm", "quantity": 1, "unit_price": 100, "unit_cost": 100}],
+    )
+    client.patch(f"/api/orders/{order['id']}/status", json={"status": "in_progress"})
+    add_job(
+        client,
+        order["id"],
+        "Front suspension rebuild — both lower control arms, sway bar links, alignment after",
+    )
+
+    needs = lot_row(client, "R-JOB16")["needs"]
+    assert "Front suspension rebuild" in needs, f"the repair lost its name entirely: {needs!r}"
+    assert "…" in needs, f"a title past the budget was not clipped: {needs!r}"
+    assert "alignment after" not in needs, f"the title's tail is still spending the line: {needs!r}"
+    assert "$100.00 of work left" in needs, f"the money the title used to push out of sight: {needs!r}"
+
+
+def test_one_long_title_pushes_its_neighbours_into_the_count(client):
+    """The budget is shared: when the first outstanding repair's title eats it,
+    the other repairs are counted rather than named. Three short names still
+    come through in full -- test_a_long_list_of_repairs_is_trimmed_rather_than_run_on
+    holds that side."""
+    vehicle = make_recon_vehicle(client, stock_number="R-JOB17")
+    order = make_recon_order(client, vehicle["id"])
+    client.patch(f"/api/orders/{order['id']}/status", json={"status": "in_progress"})
+    add_job(
+        client,
+        order["id"],
+        "A/C blows warm — diagnose leak, replace condenser, evac and recharge next morning",
+    )
+    add_job(client, order["id"], "Windshield")
+    add_job(client, order["id"], "Detail")
+
+    needs = lot_row(client, "R-JOB17")["needs"]
+    assert "+2 more" in needs, f"the repairs the budget squeezed out are not counted: {needs!r}"
+    assert "Windshield" not in needs and "Detail" not in needs
+
+
 def test_a_car_whose_work_is_all_ticked_says_the_ticket_needs_closing(client):
     """The most useful thing the report can say about this car: nothing is
     waiting on a technician, only on somebody clicking Complete."""

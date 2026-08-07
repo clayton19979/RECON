@@ -214,7 +214,16 @@ def open_jobs_text(row: dict) -> str:
     Every other clause on the row is a number -- dollars left, parts on order
     -- and none of them tells Walt whether what's outstanding is a windshield
     or an oil change. The job titles are what somebody actually typed about
-    this car, so they're repeated verbatim rather than summarised.
+    this car, so their words are kept -- but not without limit. A job written
+    with a customer on the phone can be a sentence in its own right ("Front
+    suspension rebuild — both lower control arms, sway bar links, alignment
+    after"), and on the board card the whole "still needs" line gets two lines
+    before it's cut. One long title spent both of them and the clauses behind
+    it -- parts on order, dollars left, a part never marked received -- were
+    exactly the ones that vanished. So the named jobs share the same
+    NEEDS_WORK_CHARS budget the concern gets: titles are named in order while
+    they fit, the first clipped on a word if it alone runs over, and the rest
+    become "+N more".
 
     A car whose jobs are all ticked but whose ticket is still open is worth
     saying out loud too: the work is finished and only the paperwork is
@@ -227,19 +236,35 @@ def open_jobs_text(row: dict) -> str:
         return ""
     if not open_titles:
         return f"all {total} job{'' if total == 1 else 's'} ticked off — close the ticket"
-    named = ", ".join(open_titles[:NEEDS_JOB_LIMIT])
-    hidden = len(open_titles) - NEEDS_JOB_LIMIT
+    named = [clip_to_words(open_titles[0], NEEDS_WORK_CHARS)]
+    for title in open_titles[1:NEEDS_JOB_LIMIT]:
+        if len(", ".join([*named, title])) > NEEDS_WORK_CHARS:
+            break
+        named.append(title)
+    hidden = len(open_titles) - len(named)
+    text = ", ".join(named)
     if hidden > 0:
-        named += f" +{hidden} more"
+        text += f" +{hidden} more"
     done = total - len(open_titles)
-    return f"{named} ({done} of {total} done)" if done else named
+    return f"{text} ({done} of {total} done)" if done else text
 
 
-# How much of the ticket's own wording the "still needs" sentence carries. The
-# concern is a free-text box somebody types into with a customer on the phone,
-# and it is sometimes a paragraph; a paragraph in this cell pushes the money
-# and the idle days off the row it exists to be read beside.
+# How much of the ticket's own wording the "still needs" sentence carries --
+# whether that wording is the concern or a list of job titles. Both are
+# free-text boxes somebody types into with a customer on the phone, and both
+# are sometimes a paragraph; a paragraph in this cell pushes the money and the
+# idle days off the row it exists to be read beside.
 NEEDS_WORK_CHARS = 60
+
+
+def clip_to_words(text: str, limit: int) -> str:
+    """Cut on a word, never mid-word: half a part name reads as a typo rather
+    than as a sentence that ran long. The trailing punctuation goes with it so
+    the ellipsis doesn't land after a stray comma."""
+    if len(text) <= limit:
+        return text
+    clipped = text[:limit].rsplit(" ", 1)[0].rstrip(" ,.;:-/")
+    return f"{clipped or text[:limit].rstrip()}…"
 
 
 def open_work_text(row: dict) -> str:
@@ -266,13 +291,7 @@ def open_work_text(row: dict) -> str:
     ticket is the only written record there is.
     """
     text = " ".join((row.get("concern") or "").split()) or " ".join((row.get("description") or "").split())
-    if len(text) <= NEEDS_WORK_CHARS:
-        return text
-    # Cut on a word, never mid-word: half a part name reads as a typo rather
-    # than as a sentence that ran long. The trailing punctuation goes with it
-    # so the ellipsis doesn't land after a stray comma.
-    clipped = text[:NEEDS_WORK_CHARS].rsplit(" ", 1)[0].rstrip(" ,.;:-/")
-    return f"{clipped or text[:NEEDS_WORK_CHARS].rstrip()}…"
+    return clip_to_words(text, NEEDS_WORK_CHARS)
 
 
 def lot_needs_text(row: dict) -> str:
@@ -928,9 +947,11 @@ def _rollup_from_orders(orders: list[dict]) -> dict:
 
 
 # How many outstanding repairs the "still needs" sentence names before it
-# gives up and counts the rest. Three fits a printed cell; a car with nine
-# open jobs would otherwise take a whole line to itself and push everything
-# else on the row out of sight.
+# gives up and counts the rest. Three short names fit a printed cell; a car
+# with nine open jobs would otherwise take a whole line to itself and push
+# everything else on the row out of sight. A cap on the count only -- the
+# NEEDS_WORK_CHARS budget in open_jobs_text can stop the naming sooner when
+# the titles run long.
 NEEDS_JOB_LIMIT = 3
 
 

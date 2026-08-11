@@ -1,0 +1,107 @@
+# Builds and publishes a shop update when a version bump lands on master.
+#
+# This is installers/publish_update.ps1's job moved onto a GitHub-hosted
+# Windows machine, so a merged PR that bumps app/version.py becomes a release
+# without anyone sitting at a Windows PC. Same steps, same guards: read the
+# version, refuse to touch a number that is already released, build the exe
+# and the installer with the repo's own scripts, attach the setup exe to
+# release v<version>. From there app/online_updates.py takes over exactly as
+# it does for a hand-published release: the shop PC's daily check finds it,
+# and installing stays a click in the tray app.
+#
+# Two ways this fires, and only two:
+#   - a push to master that changes app/version.py (i.e. a merged version
+#     bump) -- an ordinary merge publishes nothing;
+#   - the manual "Run workflow" button, for retrying a failed build or
+#     publishing a version that is pending on master right now.
+#
+# publish_update.ps1 stays: it is the from-home fallback when Actions is down
+# or a build needs hands on it. Both share the already-released guard, so
+# whichever runs second is a no-op rather than a conflicting re-release.
+name: Build shop update
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - app/version.py
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# One build at a time; a second bump queues rather than racing the first.
+concurrency:
+  group: build-shop-update
+  cancel-in-progress: false
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read the version
+        id: version
+        shell: pwsh
+        run: |
+          $version = (Select-String -Path "app/version.py" -Pattern 'VERSION = "([^"]+)"').Matches[0].Groups[1].Value
+          if (-not $version) { throw "Could not read VERSION from app/version.py" }
+          "version=$version" >> $env:GITHUB_OUTPUT
+          Write-Host "app/version.py says $version"
+
+      # Re-releasing an existing number is a wall, not a warning: shop PCs
+      # compare version numbers, so re-cut bits under the same number would
+      # mean machines "on 1.9.0" running different code. Same rule
+      # publish_update.ps1 enforces.
+      - name: Check whether this version is already released
+        id: released
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "v${{ steps.version.outputs.version }}" 2>&1 | Out-Null
+          $exists = ($LASTEXITCODE -eq 0)
+          "exists=$($exists.ToString().ToLower())" >> $env:GITHUB_OUTPUT
+          if ($exists) { Write-Host "Release v${{ steps.version.outputs.version }} already exists -- nothing to do." }
+
+      - name: Install uv
+        if: steps.released.outputs.exists != 'true'
+        uses: astral-sh/setup-uv@v5
+
+      - name: Build RECON.exe
+        if: steps.released.outputs.exists != 'true'
+        shell: pwsh
+        run: installers/build_exe.ps1
+
+      # The runner image ships Inno Setup 6 in Program Files (x86), which is
+      # one of the paths build_installer.ps1 already probes; this step only
+      # matters the day GitHub's image stops including it.
+      - name: Make sure Inno Setup 6 is installed
+        if: steps.released.outputs.exists != 'true'
+        shell: pwsh
+        run: |
+          $probed = @(
+            "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe",
+            "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
+            "$env:ProgramFiles\Inno Setup 6\ISCC.exe"
+          ) | Where-Object { Test-Path $_ }
+          if (-not $probed) { choco install innosetup -y --no-progress }
+
+      - name: Build the installer
+        if: steps.released.outputs.exists != 'true'
+        shell: pwsh
+        run: installers/build_installer.ps1
+
+      - name: Publish the release
+        if: steps.released.outputs.exists != 'true'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $version = "${{ steps.version.outputs.version }}"
+          $setup = "dist/RECON-Setup-$version.exe"
+          if (-not (Test-Path $setup)) { throw "$setup was not produced by the build" }
+          gh release create "v$version" $setup --title "RECON $version" --notes "Built from $(git rev-parse --short HEAD) by the Build shop update workflow."
+          if ($LASTEXITCODE -ne 0) { throw "gh release create failed" }
+          Write-Host "Published RECON $version. The shop PC picks it up on its daily check."

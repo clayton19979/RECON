@@ -1764,3 +1764,38 @@ Next time, in rough priority order:
   3. Other Vehicles rows could offer + Write RO directly (currently one
      hop through the car's page).
   4. .git lock debris (dead2*.lock) still needs a Windows-side delete.
+
+=== 2026-08-11 ===
+(Note: this log lapsed in July; entries above are stale as a record of
+current state. Resuming for idea-carrying purposes.)
+
+Fixed the broken baseline: test_an_older_database_gains_the_columns_
+without_losing_its_jobs failed on this SQLite (3.45.1) because ALTER
+TABLE DROP COLUMN edits the CREATE TABLE text stored in sqlite_master
+with a scan that is not comment-aware -- dropping a table's last column
+grabs a comma found inside a nearby comment and leaves the schema text
+ending mid-comment ("incomplete input"). Six tables (orders,
+purchase_orders, estimate_items, estimate_jobs, ap_invoice_items,
+tasks) had columns that could never be dropped, which quietly forbade
+the whole "roll a fresh DB back to an older shape" style of migration
+test for them.
+
+* app/db.py: new strip_sql_comments(); init_db now executes the
+  stripped SCHEMA so databases store comment-free CREATE TABLE text.
+  The prose stays in db.py where people read it.
+* tests/test_schema_alterable.py: stored schema has nothing left to
+  strip; every table survives peeling columns off the end (only
+  legitimate refusals allowed, never "incomplete input"); stripper
+  unit tests incl. string-literal safety.
+* 983 passed, 7 skipped, check.py ALL CLEAN; smoke.py ALL CLEAN.
+
+Next time, in rough priority order:
+  1. Live shop DBs still store the old commented schema text. Harmless
+     today (nothing drops columns at runtime), but the first migration
+     that needs DROP COLUMN on a live DB must normalize the stored
+     schema first. strip_sql_comments' docstring says so; a _migrate
+     step could proactively rebuild-or-normalize when it's ever needed.
+  2. Carried from run 31: detail page Escape/keyboard joining
+     wireListKeyboard (either do it or decide it's not worth it).
+  3. Carried: Add Vehicle dialog could offer Decode VIN.
+  4. Carried: Other Vehicles rows could offer + Write RO directly.

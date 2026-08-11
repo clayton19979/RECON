@@ -1167,6 +1167,57 @@ def _relax_ap_invoice_order_link(path: Path) -> None:
             db.execute("PRAGMA foreign_keys=ON")
 
 
+def strip_sql_comments(sql: str) -> str:
+    """SCHEMA with every -- and /* */ comment removed, string literals intact.
+
+    The comments in SCHEMA are for people reading this file, but executescript
+    copies the raw CREATE TABLE text into sqlite_master, and SQLite's ALTER
+    TABLE DROP COLUMN edits that stored text with a scan that is not
+    comment-aware: dropping a table's last column looks backwards for the
+    separating comma and will happily seize one inside a comment. The rewritten
+    schema then ends mid-comment and the drop dies with "incomplete input".
+    Six of our tables had columns that could never be dropped because of the
+    prose sitting next to them -- which is how the migration tests that roll a
+    fresh database back to an older shape (DROP COLUMN, restart the app) found
+    this. Stripping comments from what the database *stores*, while this file
+    keeps them, closes that trap for every table at once.
+
+    Databases created before this keep their commented schema text; nothing
+    ever drops columns on a live database, so they are unaffected until the
+    day a migration needs to -- and that migration can normalize first.
+    """
+    out: list[str] = []
+    i, n = 0, len(sql)
+    while i < n:
+        char = sql[i]
+        if char in ("'", '"'):
+            j = i + 1
+            while j < n:
+                if sql[j] == char:
+                    # A doubled quote is SQL's escape, not the end.
+                    if j + 1 < n and sql[j + 1] == char:
+                        j += 2
+                        continue
+                    j += 1
+                    break
+                j += 1
+            else:
+                j = n
+            out.append(sql[i:j])
+            i = j
+        elif sql.startswith("--", i):
+            while i < n and sql[i] != "\n":
+                i += 1
+        elif sql.startswith("/*", i):
+            end = sql.find("*/", i + 2)
+            i = n if end == -1 else end + 2
+            out.append(" ")
+        else:
+            out.append(char)
+            i += 1
+    return "".join(out)
+
+
 def init_db(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     # `closing` is doing real work here: sqlite3.Connection.__exit__ commits or
@@ -1179,7 +1230,7 @@ def init_db(path: Path) -> None:
     # exists, so an upgraded database still arrives here with the old one.
     _relax_ap_invoice_order_link(path)
     with closing(sqlite3.connect(path)) as db, db:
-        db.executescript(SCHEMA)
+        db.executescript(strip_sql_comments(SCHEMA))
         _migrate(db)
         db.execute(
             "INSERT OR IGNORE INTO customers(id,name,phone,email,is_shop_owned,created_at) VALUES(?,?,?,?,1,?)",

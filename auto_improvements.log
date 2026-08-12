@@ -1799,3 +1799,39 @@ Next time, in rough priority order:
      wireListKeyboard (either do it or decide it's not worth it).
   3. Carried: Add Vehicle dialog could offer Decode VIN.
   4. Carried: Other Vehicles rows could offer + Write RO directly.
+
+=== 2026-08-12 ===
+One line, one number: on recon and we-owe, the two API doors that don't
+go through the estimate grid (the agent's append door, POST
+/orders/{id}/estimate/items, and the technician findings door, POST
+/orders/{id}/findings) accepted unit_price and unit_cost as independent
+fields, both defaulting to 0. A caller filling in only one -- the natural
+thing for an AI told "a used alternator, $85" -- split the money: the
+ticket read $85 while the board, the Lot Report and the car's own total
+read $0 (unit_price feeds the subtotal, unit_cost feeds every rollup),
+or the reverse for cost-only. quoted_unit_cost froze the miss: "still to
+spend" priced the line at $0 forever, even after the vendor bill landed.
+
+* app/workflow.py: reconcile_at_cost_money() -- on recon/we-owe, either
+  field given alone fills the other; both given and different is refused
+  422 (a markup this shop never charges), before anything is written so
+  nothing half-lands. Retail passes through untouched (markup is real
+  there -- seeded retail lines prove it).
+* app/parts.py append door + app/workflow.py findings door wired to it;
+  app/mcp_server.py recon_add_lines docstring now says unit_cost alone
+  is enough.
+* tests/test_at_cost_money_doors.py: 10 tests, both doors, all three
+  segments. 993 passed, 7 skipped, check.py ALL CLEAN; verified live
+  against a running server (price-only line now lands in quoted/open
+  cost; contradiction 422s).
+
+Next time, in rough priority order:
+  1. Carried from run 32: live shop DBs still store the old commented
+     schema text; first live DROP COLUMN migration must normalize first.
+  2. Carried: detail page Escape/keyboard joining wireListKeyboard
+     (four runs now -- do it or drop it).
+  3. Carried: Add Vehicle dialog could offer Decode VIN.
+  4. Carried: Other Vehicles rows could offer + Write RO directly.
+  5. The grid door (POST /orders/{id}/estimate) trusts its caller the
+     same way -- the UI always sends price==cost, but an external caller
+     could split money through it too. Same reconcile would fit there.

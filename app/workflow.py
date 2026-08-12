@@ -153,6 +153,9 @@ class FindingItem(BaseModel):
     kind: Literal["part", "labor", "fee"]
     description: str = Field(min_length=1, max_length=300)
     quantity: float = Field(gt=0, le=1000)
+    # Two money fields because the schema is shared with retail. On recon and
+    # we-owe they are the same number and the endpoint keeps them that way
+    # (see reconcile_at_cost_money): fill in either one and the other follows.
     unit_price: float = Field(ge=0, le=1_000_000)
     part_number: str = Field(default="", max_length=100)
     unit_cost: float = Field(default=0, ge=0, le=1_000_000)
@@ -247,6 +250,56 @@ def estimate_line_total(kind: str, quantity: float, unit_price: float) -> float:
     """
     total = round(quantity * unit_price, 2)
     return -total if kind in CREDIT_KINDS else total
+
+
+# The segments billed at the shop's cost -- no markup, no charged-out labor
+# (see CLAUDE.md). On these, a line's price and its cost are the same number
+# by definition: the ticket's total IS what the parts cost.
+AT_COST_SEGMENTS = frozenset({"recon", "we_owe"})
+
+
+def reconcile_at_cost_money(segment: str, unit_price: float, unit_cost: float) -> tuple[float, float]:
+    """One number, not two, for a line on the lot's own work.
+
+    The schema carries unit_price and unit_cost separately because it is
+    shared with retail, where a marked-up price is a real, distinct number.
+    On recon and we-owe there is no markup, so they are the same number --
+    and the UI's estimate grid has always enforced that by collecting one
+    Cost box and sending it as both fields.
+
+    The doors that don't go through the grid (the agent's append door, the
+    technician findings door) had no such guard: unit_price feeds the
+    ticket's subtotal while unit_cost feeds every cost rollup the board and
+    the Lot Report are built on, and both default to 0. A caller that filled
+    in only one -- the natural thing for an AI told "a used alternator, $85"
+    -- split the money: the ticket read $85 while the car's cost read $0, or
+    the other way round. Worse, quoted_unit_cost froze the miss permanently:
+    it is set once from unit_cost at insert, so "what's still to land" priced
+    that line at $0 forever, even after the real bill arrived.
+
+    So on an at-cost segment: one side given, the other takes the same value;
+    both given and equal is fine; both given and *different* is a caller
+    stating a markup this shop never charges, and that is refused rather than
+    guessed at -- picking either number silently would put a figure on Walt's
+    report the app can't stand behind. Retail lines pass through untouched.
+
+    Compared with a tolerance, not with ==, because both sides are floats
+    that have been through JSON.
+    """
+    if segment not in AT_COST_SEGMENTS:
+        return unit_price, unit_cost
+    if unit_price and not unit_cost:
+        return unit_price, unit_price
+    if unit_cost and not unit_price:
+        return unit_cost, unit_cost
+    if abs(unit_price - unit_cost) > 0.005:
+        raise HTTPException(
+            422,
+            f"{SEGMENT_LABEL.get(segment, segment)} work is billed at cost with no markup, so a line's"
+            f" unit_price (${unit_price:.2f}) and unit_cost (${unit_cost:.2f}) must be the same number"
+            " -- send one of them, or both the same.",
+        )
+    return unit_price, unit_cost
 
 
 def purchase_orders_list(db: sqlite3.Connection, order_id: int) -> list[dict]:
@@ -766,8 +819,15 @@ def build_workflow_router(connect: Callable[[], sqlite3.Connection], now_fn: Cal
             if line.kind == "part" and not line.part_number.strip():
                 raise HTTPException(422, "Every proposed part requires a traceable part number")
         with connect() as db:
-            assert_vehicle_editable(db, order(db, order_id))
+            order_row = order(db, order_id)
+            assert_vehicle_editable(db, order_row)
             assert_estimate_editable(db, order_id)
+            # Reconciled for every line before anything is written, so a
+            # contradiction on line three doesn't leave lines one and two --
+            # or the finding itself -- half-recorded.
+            money = [
+                reconcile_at_cost_money(order_row["segment"], line.unit_price, line.unit_cost) for line in item.items
+            ]
             estimate = db.execute("SELECT * FROM estimates WHERE order_id=?", (order_id,)).fetchone()
             if not estimate:
                 raise HTTPException(409, "Create an estimate before adding repair recommendations")
@@ -775,7 +835,7 @@ def build_workflow_router(connect: Callable[[], sqlite3.Connection], now_fn: Cal
                 "INSERT INTO technician_findings(order_id,summary,actor,created_at) VALUES(?,?,?,?)",
                 (order_id, item.summary.strip(), item.actor.strip(), now_fn()),
             )
-            for line in item.items:
+            for line, (unit_price, unit_cost) in zip(item.items, money, strict=True):
                 db.execute(
                     "INSERT INTO estimate_items(estimate_id,kind,description,part_number,quantity,unit_price,unit_cost,quoted_unit_cost,received_quantity,line_total,source,review_required) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
                     (
@@ -784,13 +844,13 @@ def build_workflow_router(connect: Callable[[], sqlite3.Connection], now_fn: Cal
                         line.description.strip(),
                         line.part_number.strip().upper(),
                         line.quantity,
-                        line.unit_price,
-                        line.unit_cost,
+                        unit_price,
+                        unit_cost,
                         # A technician's proposed line is a quote like any
                         # other -- what it lands at is the invoice's business.
-                        line.unit_cost,
+                        unit_cost,
                         0,
-                        round(line.quantity * line.unit_price, 2),
+                        round(line.quantity * unit_price, 2),
                         "technician_finding",
                         1,
                     ),

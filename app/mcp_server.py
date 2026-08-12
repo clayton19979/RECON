@@ -534,11 +534,15 @@ def build_mcp(
             ticket, so it is safe to call without knowing what is there.
 
             Each line: {"kind": "part"|"labor"|"fee", "description": str,
-            "quantity": float, "unit_cost": float, "unit_price": float,
-            "part_number": str, "job_id": int|null}.
+            "quantity": float, "unit_cost": float, "part_number": str,
+            "job_id": int|null}.
 
             Recon and we-owe are billed at the shop's cost with NO markup and
-            labor at zero. Never invent a price or a part number: leave them at
+            labor at zero, so unit_cost is the only money a line has: send it
+            alone and the server keeps the ticket's price equal to it. (A
+            unit_price field also exists for the shared retail schema --
+            sending it a different number than unit_cost is refused on recon
+            and we-owe.) Never invent a price or a part number: leave them at
             0 and blank, and the real cost lands when the vendor invoice is
             received. A part with no number is normal here -- this shop runs on
             used and junkyard parts.

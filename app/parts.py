@@ -26,6 +26,7 @@ from .workflow import (
     estimate_line_total,
     get_or_create_estimate,
     purchase_orders_list,
+    reconcile_at_cost_money,
     record_activity,
     touch_order,
 )
@@ -83,10 +84,12 @@ class AppendItemIn(BaseModel):
     description: str = Field(min_length=1, max_length=300)
     quantity: float = Field(default=1, gt=0)
     # Recon and we-owe are billed at cost with no markup, so unit_price and
-    # unit_cost are the same number on nearly every line here. Both are kept
-    # because the schema is shared with retail, and both default to zero: a
-    # line whose price nobody has yet is a normal, honest state -- it gets its
-    # cost when the vendor's invoice is received.
+    # unit_cost are the same number on every line here. Both are kept because
+    # the schema is shared with retail, and both default to zero: a line whose
+    # price nobody has yet is a normal, honest state -- it gets its cost when
+    # the vendor's invoice is received. On those segments the endpoint keeps
+    # the two equal (see workflow.reconcile_at_cost_money): fill in either one
+    # and the other follows; fill in both differently and the line is refused.
     unit_price: float = Field(default=0, ge=0)
     unit_cost: float = Field(default=0, ge=0)
     part_number: str = ""
@@ -551,8 +554,16 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
             next_sort = db.execute(
                 "SELECT coalesce(max(sort_order),-1)+1 FROM estimate_items WHERE estimate_id=?", (estimate_id,)
             ).fetchone()[0]
+            # On recon and we-owe a line has one price -- the shop's cost --
+            # but this door's callers work blind from a conversation, not from
+            # the grid, and routinely fill in only one of the two shared-schema
+            # money fields. Reconciled up front, all lines before any insert,
+            # so a contradiction on line three cannot land lines one and two.
+            money = [
+                reconcile_at_cost_money(order["segment"], line.unit_price, line.unit_cost) for line in payload.items
+            ]
             created: list[int] = []
-            for offset, line in enumerate(payload.items):
+            for offset, (line, (unit_price, unit_cost)) in enumerate(zip(payload.items, money, strict=True)):
                 if line.job_id is not None and line.job_id not in valid_job_ids:
                     raise HTTPException(422, "Job does not belong to this repair order's estimate")
                 cur = db.execute(
@@ -565,14 +576,14 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
                         line.description.strip(),
                         line.part_number.strip().upper(),
                         line.quantity,
-                        line.unit_price,
-                        line.unit_cost,
+                        unit_price,
+                        unit_cost,
                         # What it was written down at, same as any other quote.
                         # Receiving the part overwrites unit_cost with what the
                         # vendor actually billed; this keeps the quote alive so
                         # cost-against-quote stays answerable.
-                        line.unit_cost,
-                        estimate_line_total(line.kind, line.quantity, line.unit_price),
+                        unit_cost,
+                        estimate_line_total(line.kind, line.quantity, unit_price),
                         payload.source,
                         next_sort + offset,
                         line.job_id,

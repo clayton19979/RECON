@@ -1835,3 +1835,42 @@ Next time, in rough priority order:
   5. The grid door (POST /orders/{id}/estimate) trusts its caller the
      same way -- the UI always sends price==cost, but an external caller
      could split money through it too. Same reconcile would fit there.
+
+=== 2026-08-13 ===
+Closed the last money door: POST /orders/{id}/estimate (the grid's own
+route, save_estimate in app/main.py) accepted unit_price and unit_cost
+as independent fields on recon/we-owe -- the exact split #129 fixed on
+the append and findings doors. Worse here than either: this route
+REPLACES the whole line set, and estimates.subtotal/total (what the
+customer invoice is built from at close) come straight from unit_price.
+The seed data itself wrote recon lines price-0/cost-set, so every
+seeded at-cost ticket showed subtotal $0 while the car's rollup read
+the real number.
+
+* app/main.py save_estimate: each line runs through
+  workflow.reconcile_at_cost_money before anything is written -- one
+  side given fills the other, both differing 422s whole (verified: a
+  contradiction on line two leaves line one and edit_version alone).
+  Pass-through for the UI (grid always sends the two fields equal) and
+  for retail.
+* tests/test_at_cost_money_doors.py: +6 grid-door tests. Four other
+  tests sent split money on at-cost segments as incidental setup (a
+  markup the app now refuses); equalized to the cost side, so every
+  number they assert is unchanged.
+* static/m/js/car.js: stale "unit_price is always 0" comment corrected.
+* 999 passed, 7 skipped, check.py ALL CLEAN. Live-verified: reseed
+  heals the seeded tickets ($420/$380/$95 subtotals where they read
+  $0), price-only heals, contradiction 422s, refusal writes nothing.
+
+Next time, in rough priority order:
+  1. Existing at-cost rows in a LIVE shop DB written split (agent lines
+     from before #129) stay split until their ticket is re-saved through
+     the grid. A one-time normalize (unit_price := written cost, redo
+     line_total + estimate totals on recon/we-owe) would heal history;
+     needs the obviously-safe-migration bar.
+  2. Carried from run 32: live shop DBs still store the old commented
+     schema text; first live DROP COLUMN migration must normalize first.
+  3. Carried: detail page Escape/keyboard joining wireListKeyboard
+     (five runs now -- do it or drop it).
+  4. Carried: Add Vehicle dialog could offer Decode VIN.
+  5. Carried: Other Vehicles rows could offer + Write RO directly.

@@ -178,10 +178,13 @@ def test_export_vehicle_spend_report_csv(client):
         client,
         order["id"],
         [
-            {"kind": "labor", "description": "Diag", "quantity": 2, "unit_price": 60, "unit_cost": 45},
+            {"kind": "labor", "description": "Diag", "quantity": 2, "unit_price": 45, "unit_cost": 45},
             # Written up but never received, so Written Up and Cost have to
             # differ -- a file reporting one number for both would look right.
-            {"kind": "part", "description": "Rotor", "quantity": 1, "unit_price": 90, "unit_cost": 60},
+            # The labor lands the moment it is logged; the rotor never does.
+            # (This used to force the gap with unit_price != unit_cost, which
+            # save_estimate now refuses on recon -- that's a markup.)
+            {"kind": "part", "description": "Rotor", "quantity": 1, "unit_price": 60, "unit_cost": 60},
         ],
     )
     make_we_owe(client, description="Touch up paint")
@@ -369,7 +372,7 @@ def test_export_technician_report_csv(client):
         client,
         order["id"],
         [
-            {"kind": "labor", "description": "Brakes", "quantity": 3, "unit_price": 80, "unit_cost": 50},
+            {"kind": "labor", "description": "Brakes", "quantity": 3, "unit_price": 50, "unit_cost": 50},
         ],
     )
     client.put(f"/api/orders/{order['id']}/assignment", json={"technician_id": technician["id"]})

@@ -653,7 +653,7 @@ def test_board_reports_parts_ordered_but_not_received(client):
                 "description": "Brake pads",
                 "part_number": "BP-1",
                 "quantity": 2,
-                "unit_price": 10,
+                "unit_price": 15,
                 "unit_cost": 15,
             },
             {
@@ -661,7 +661,7 @@ def test_board_reports_parts_ordered_but_not_received(client):
                 "description": "Rotors",
                 "part_number": "RT-1",
                 "quantity": 1,
-                "unit_price": 30,
+                "unit_price": 40,
                 "unit_cost": 40,
             },
             {"kind": "labor", "description": "Install", "quantity": 3, "unit_price": 50, "unit_cost": 50},
@@ -804,7 +804,7 @@ def test_we_owe_board_row_carries_parts_pending(client):
                 "description": "Mirror",
                 "part_number": "M-1",
                 "quantity": 1,
-                "unit_price": 120,
+                "unit_price": 85,
                 "unit_cost": 85,
             },
         ],
@@ -921,7 +921,7 @@ def test_saving_the_estimate_counts_as_activity(client, db_path):
         client,
         order["id"],
         [
-            {"kind": "labor", "description": "Diagnose", "quantity": 1, "unit_price": 120, "unit_cost": 60},
+            {"kind": "labor", "description": "Diagnose", "quantity": 1, "unit_price": 60, "unit_cost": 60},
         ],
     )
     row = board_row(client, vehicle["id"])
@@ -1020,7 +1020,7 @@ def test_detail_declines_to_attribute_an_unlogged_write(client, db_path):
         client,
         order["id"],
         [
-            {"kind": "labor", "description": "Diagnose", "quantity": 1, "unit_price": 120, "unit_cost": 60},
+            {"kind": "labor", "description": "Diagnose", "quantity": 1, "unit_price": 60, "unit_cost": 60},
         ],
     )
 

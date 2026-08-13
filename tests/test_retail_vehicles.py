@@ -79,7 +79,7 @@ def test_retail_rollup_excludes_other_segments_and_voided(client):
         client,
         wo_order["id"],
         [
-            {"kind": "labor", "description": "Mirror swap", "quantity": 1, "unit_price": 90, "unit_cost": 60},
+            {"kind": "labor", "description": "Mirror swap", "quantity": 1, "unit_price": 60, "unit_cost": 60},
         ],
     )
 

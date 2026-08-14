@@ -64,6 +64,13 @@ jobs:
           $exists = ($LASTEXITCODE -eq 0)
           "exists=$($exists.ToString().ToLower())" >> $env:GITHUB_OUTPUT
           if ($exists) { Write-Host "Release v${{ steps.version.outputs.version }} already exists -- nothing to do." }
+          else { Write-Host "Release v${{ steps.version.outputs.version }} not found -- building it." }
+          # gh exiting 1 is the EXPECTED answer when the version isn't
+          # released yet -- but Actions appends `exit $LASTEXITCODE` to every
+          # pwsh step, so leaving that 1 standing killed the whole run right
+          # here on the workflow's first real firing (run #1). The check has
+          # done its job once $exists is written; say so with a clean exit.
+          exit 0
 
       - name: Install uv
         if: steps.released.outputs.exists != 'true'

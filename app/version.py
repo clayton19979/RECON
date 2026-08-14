@@ -20,7 +20,7 @@ the version was bumped without one having been run since.
 
 from __future__ import annotations
 
-VERSION = "1.9.0"
+VERSION = "1.10.0"
 
 
 def parse(value: str | None) -> tuple[int, ...] | None:

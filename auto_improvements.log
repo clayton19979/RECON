@@ -1877,3 +1877,28 @@ Next time, in rough priority order:
      (received_cost is entered untaxed at the receive dialog). Decide on
      purpose or fix: on lot work the tax paid is real spend Walt never
      sees. Check with Clayton before changing money math.
+
+=== 2026-08-14 (second pass, issue #126) ===
+Clayton's issue: intake dialogs' error messages were invisible.
+showModal() puts a dialog in the browser's top layer, which paints above
+body-level content regardless of z-index -- so every toast fired while a
+dialog was open ("enter the customer's name", a refused save, a duplicate
+stock number) rendered *behind* the form. Fixed both halves:
+
+* static/js/notify.js: toast() re-homes #toast into the open dialog
+  (activeElement's dialog when they stack, since everything outside the
+  top modal is inert). position:fixed keeps its screen spot; a top-layer
+  subtree paints above the backdrop. Every dialog in the app fixed at once.
+* static/js/shortcuts.js: fieldError(input, message) -- the message stands
+  beside the box it's about (what the issue asked for): note in the label,
+  field outlined + focused, cleared on input or dialog close.
+* Converted the field-specific checks: we-owe intake (name, make, model,
+  mileage), recon + we-owe Decode buttons, phone/email validators,
+  customer editor state/ZIP. focusInvalidField deleted (fieldError does it).
+* Real bug found by the new ladder test: the we-owe save created the
+  customer BEFORE validating the vehicle boxes, so a save refused over a
+  missing model had already written the customer, and retrying tripped the
+  duplicate-person guard on the shop's own half-finished record. All boxes
+  are now checked before anything is written.
+* tests/dom/modal_errors_smoke.mjs (new); detail_smoke.mjs updated to the
+  new contract (notes beside fields instead of toasts).

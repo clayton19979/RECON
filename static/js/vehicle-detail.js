@@ -1,7 +1,7 @@
 import { $, $$, api, fmtHours, get, patch, post, put, withActorParam } from "./core.js";
 import { toast } from "./notify.js";
 import { confirmAction } from "./confirm.js";
-import { actorLabel, byActor, currentActor, esc, fmtDate, fmtDay, money, relativeTime, todayLocal, vehicleColorTagHtml, wirePlateFields, withLoading } from "./shortcuts.js";
+import { actorLabel, byActor, currentActor, esc, fieldError, fmtDate, fmtDay, money, relativeTime, todayLocal, vehicleColorTagHtml, wirePlateFields, withLoading } from "./shortcuts.js";
 import { emptyState } from "./empty-states.js";
 import { actualTotal, isReturnedPart, lineTotal, ticketTotal, unreceivedPartLines, unreceivedPartTotal } from "./estimate-money.js";
 import { AUTH_METHOD_LABEL, ITEM_STATUS_LABEL, KIND_GROUP_LABEL, KIND_GROUP_ORDER, PAY_METHOD_LABEL, STATUS_LABEL, STATUS_OPTIONS, STATUS_PILL_CLASS, fieldLabels, state } from "./state.js";
@@ -655,11 +655,6 @@ export const US_STATE_CODES = new Set([
   "VA","WA","WV","WI","WY","DC","PR","VI","GU","AS","MP","AA","AE","AP",
 ]);
 
-export function focusInvalidField(el) {
-  el.focus();
-  if (typeof el.select === "function") el.select();
-}
-
 /* ---------- phone numbers (shared) ---------- */
 // Phones are typed in two places (the customer editor and the we-owe
 // new-customer form) and shown in several more (customer info card, printed
@@ -707,8 +702,7 @@ export function phoneFieldOk(el) {
   const value = el.value.trim();
   if (!value || el.value === (el.dataset.loadedValue || "")) return true;
   if (phoneDigits(value).length !== 10) {
-    toast("Phone needs all 10 digits, like (313) 555-0142", true);
-    focusInvalidField(el);
+    fieldError(el, "Phone needs all 10 digits, like (313) 555-0142");
     return false;
   }
   return true;
@@ -723,8 +717,7 @@ export function emailFieldOk(el) {
   const value = el.value.trim();
   if (!value || el.value === (el.dataset.loadedValue || "")) return true;
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) {
-    toast("That email doesn't look right — needs a name@domain.com shape", true);
-    focusInvalidField(el);
+    fieldError(el, "That email doesn't look right — needs a name@domain.com shape");
     return false;
   }
   return true;

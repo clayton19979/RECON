@@ -380,6 +380,10 @@ const stateEl = doc.querySelector("#customer-edit-state");
 const zipEl = doc.querySelector("#customer-edit-postal");
 const form = doc.querySelector("#customer-edit-form");
 const toastEl = doc.querySelector("#toast");
+// Validation messages stand next to the field they're about (issue #126:
+// a toast is invisible behind an open modal dialog). This reads the note
+// currently standing in a field's label, or "" when the field is clean.
+const fieldNote = (el) => el.closest("label")?.querySelector(".field-error")?.textContent || "";
 const setField = (el, value) => {
   el.value = value;
   el.dispatchEvent(new w.Event("input", { bubbles: true }));
@@ -402,8 +406,9 @@ setField(zipEl, "48203");
 submitForm();
 await settle();
 ok(customerPatches() === 0, "a made-up state code still reached the customer PATCH");
-ok(toastEl.classList.contains("error") && /isn't a state code/.test(toastEl.textContent),
-   `expected the state-code toast, got "${toastEl.textContent}"`);
+ok(/isn't a state code/.test(fieldNote(stateEl)),
+   `expected the state-code note beside the field, got "${fieldNote(stateEl)}"`);
+ok(stateEl.classList.contains("field-invalid"), "the refused state field should be outlined");
 ok(doc.activeElement === stateEl, "focus should land on the state field after a bad code");
 
 // Short ZIP: refused the same way.
@@ -412,9 +417,13 @@ setField(zipEl, "482");
 submitForm();
 await settle();
 ok(customerPatches() === 0, "a 3-digit ZIP still reached the customer PATCH");
-ok(toastEl.classList.contains("error") && /ZIP should be 5 digits/.test(toastEl.textContent),
-   `expected the ZIP toast, got "${toastEl.textContent}"`);
+ok(/ZIP should be 5 digits/.test(fieldNote(zipEl)),
+   `expected the ZIP note beside the field, got "${fieldNote(zipEl)}"`);
 ok(doc.activeElement === zipEl, "focus should land on the ZIP field after a bad ZIP");
+// Fixing the state already cleared its note -- a message about a keystroke
+// someone already made must not outlive it.
+ok(!fieldNote(stateEl), `the fixed state field should be clean again, still says "${fieldNote(stateEl)}"`);
+ok(!stateEl.classList.contains("field-invalid"), "the fixed state field should lose its outline");
 
 // Valid values (including ZIP+4) sail through and close the dialog.
 setField(zipEl, "48203-1234");
@@ -472,8 +481,8 @@ setField(phoneEl, "313555");
 submitForm();
 await settle();
 ok(customerPatches() === 3, "a 6-digit phone still reached the customer PATCH");
-ok(toastEl.classList.contains("error") && /all 10 digits/.test(toastEl.textContent),
-   `expected the phone toast, got "${toastEl.textContent}"`);
+ok(/all 10 digits/.test(fieldNote(phoneEl)),
+   `expected the phone note beside the field, got "${fieldNote(phoneEl)}"`);
 ok(doc.activeElement === phoneEl, "focus should land on the phone field after a partial number");
 
 // A complete number sails through, already in canonical shape.

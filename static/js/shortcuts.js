@@ -128,6 +128,41 @@ export async function withLoading(button, label, fn) {
     button.textContent = original;
   }
 }
+
+/* "This box, this problem" -- a validation message that stands next to the
+   field it is about, instead of a toast at the bottom of the screen. Born
+   from issue #126: the dialogs' own checks ("enter the customer's name",
+   "enter the mileage") announced themselves as toasts, which a modal dialog
+   covers -- so the advisor saw the save do nothing and no reason why. The
+   note sits inside the field's <label>, the field is outlined and focused,
+   and both clear the moment the field is typed in or its dialog closes --
+   a message about a keystroke someone already made shouldn't outlive it.
+
+   For messages that are about the form rather than one box (a refused save,
+   a server error), toast() is still right -- it renders above the dialog now. */
+export function fieldError(input, message) {
+  const holder = input.closest("label") || input.parentElement;
+  let note = holder.querySelector(".field-error");
+  if (!note) {
+    note = document.createElement("span");
+    note.className = "field-error";
+    holder.appendChild(note);
+  }
+  note.textContent = message;
+  input.classList.add("field-invalid");
+  input.focus();
+  if (typeof input.select === "function") input.select();
+  const clear = () => {
+    note.remove();
+    input.classList.remove("field-invalid");
+  };
+  // { once } on both, and clear() is safe to run twice -- whichever comes
+  // first (fixing the field, or closing the form) takes the note with it.
+  input.addEventListener("input", clear, { once: true });
+  const dlg = input.closest("dialog");
+  if (dlg) dlg.addEventListener("close", clear, { once: true });
+}
+
 export function esc(value) {
   return String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }

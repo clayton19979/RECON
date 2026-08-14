@@ -283,6 +283,11 @@ def reconcile_at_cost_money(segment: str, unit_price: float, unit_cost: float) -
     guessed at -- picking either number silently would put a figure on Walt's
     report the app can't stand behind. Retail lines pass through untouched.
 
+    The estimate grid's own route (save_estimate in app/main.py) runs through
+    here too: the grid always sends the two fields equal, so for the UI this
+    is a pass-through, but that route is plain HTTP like the other doors and
+    was the last one a caller could split money through.
+
     Compared with a tolerance, not with ==, because both sides are floats
     that have been through JSON.
     """

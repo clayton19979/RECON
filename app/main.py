@@ -54,6 +54,7 @@ from .workflow import (
     get_or_create_estimate,
     initialize_order_workflow,
     purchase_orders_list,
+    reconcile_at_cost_money,
     touch_order,
     workflow_detail,
 )
@@ -1108,6 +1109,19 @@ def create_app(db_path: Path = DEFAULT_DB, backups_dir: Path = DEFAULT_BACKUPS_D
                 raise HTTPException(
                     409, "Someone else changed this estimate since you loaded it -- reload to see their update"
                 )
+            # Money runs through the same at-cost gate as the append and
+            # findings doors (see workflow.reconcile_at_cost_money). The grid
+            # always sends unit_price == unit_cost, so this is a pass-through
+            # for the UI -- but this door is plain HTTP like the other two,
+            # and a caller filling in only one side used to split the ticket's
+            # subtotal (and the customer invoice built from it at close) from
+            # the cost rollups the board and Walt's reports read. Reconciled
+            # before anything is written, so a contradiction on line ten can't
+            # leave lines one through nine behind.
+            money = [
+                reconcile_at_cost_money(current_order["segment"], item.unit_price, item.unit_cost)
+                for item in estimate.items
+            ]
             estimate_id = get_or_create_estimate(db, order_id, now)["id"]
             if old:
                 # The check above is a courtesy -- it fails fast with a clear
@@ -1144,7 +1158,7 @@ def create_app(db_path: Path = DEFAULT_DB, backups_dir: Path = DEFAULT_BACKUPS_D
                 row[0] for row in db.execute("SELECT id FROM estimate_jobs WHERE estimate_id=?", (estimate_id,))
             }
             retained_ids: set[int] = set()
-            for position, item in enumerate(estimate.items):
+            for position, (item, (unit_price, unit_cost)) in enumerate(zip(estimate.items, money, strict=True)):
                 if item.job_id is not None and item.job_id not in valid_job_ids:
                     raise HTTPException(422, "Job does not belong to this repair order's estimate")
                 existing = (
@@ -1183,12 +1197,12 @@ def create_app(db_path: Path = DEFAULT_DB, backups_dir: Path = DEFAULT_BACKUPS_D
                             item.description.strip(),
                             item.part_number.strip().upper(),
                             item.quantity,
-                            item.unit_price,
-                            item.unit_cost,
-                            item.unit_cost,
-                            item.unit_cost,
-                            item.unit_cost,
-                            estimate_line_total(item.kind, item.quantity, item.unit_price),
+                            unit_price,
+                            unit_cost,
+                            unit_cost,
+                            unit_cost,
+                            unit_cost,
+                            estimate_line_total(item.kind, item.quantity, unit_price),
                             estimate.actor,
                             now(),
                             position,
@@ -1206,10 +1220,10 @@ def create_app(db_path: Path = DEFAULT_DB, backups_dir: Path = DEFAULT_BACKUPS_D
                             item.description.strip(),
                             item.part_number.strip().upper(),
                             item.quantity,
-                            item.unit_price,
-                            item.unit_cost,
-                            item.unit_cost,
-                            estimate_line_total(item.kind, item.quantity, item.unit_price),
+                            unit_price,
+                            unit_cost,
+                            unit_cost,
+                            estimate_line_total(item.kind, item.quantity, unit_price),
                             item.source,
                             0,
                             estimate.actor,

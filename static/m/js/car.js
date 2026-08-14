@@ -80,8 +80,10 @@ function jobsHtml(order) {
  * simpler and got two things wrong: a part sent back to the vendor is not
  * money the shop is going to spend, and a line half-received still has the
  * other half outstanding. `unit_price` is not the field either -- recon work
- * carries no markup, so unit_cost is the only price this app has and
- * unit_price is a shared-schema leftover that is always 0. */
+ * carries no markup, so unit_cost is the only price this app has; the server
+ * keeps unit_price equal to it on these segments (a shared-schema field, see
+ * workflow.reconcile_at_cost_money), but the cost side is the one every
+ * rollup is built on. */
 function partsHtml(order) {
   const lines = unreceivedPartLines((order && order.estimate && order.estimate.items) || []);
   if (!lines.length) return "";

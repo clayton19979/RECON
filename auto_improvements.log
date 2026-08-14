@@ -1836,69 +1836,41 @@ Next time, in rough priority order:
      same way -- the UI always sends price==cost, but an external caller
      could split money through it too. Same reconcile would fit there.
 
-=== 2026-08-14 ===
-The keyboard now goes both ways through the morning walk: the board could
-be driven entirely by keys (arrow, Enter to open a car) but the car's page
-was a dead end -- back out or on to the next car meant the mouse, once per
-car, all morning. Now Escape backs out to the board with the cursor still
-on the car you were reading, and Alt+Up/Down flips straight to the
-previous/next car in the board's current filter+sort order, with the
-board's cursor following. This was carried idea #2, on the list four runs
-running ("do it or drop it") -- done.
+=== 2026-08-13 ===
+Closed the last money door: POST /orders/{id}/estimate (the grid's own
+route, save_estimate in app/main.py) accepted unit_price and unit_cost
+as independent fields on recon/we-owe -- the exact split #129 fixed on
+the append and findings doors. Worse here than either: this route
+REPLACES the whole line set, and estimates.subtotal/total (what the
+customer invoice is built from at close) come straight from unit_price.
+The seed data itself wrote recon lines price-0/cost-set, so every
+seeded at-cost ticket showed subtotal $0 while the car's rollup read
+the real number.
 
-* static/js/vehicle-detail.js: flipDetailCar() + a capture-phase keydown
-  in wireVehicleDetail. Capture matters: the notif/assign menus close
-  themselves from bubble listeners wired earlier, so a bubble listener
-  here would see the menu already closed and treat the same Escape as
-  "leave the page". stopPropagation on use, or the board's own Escape
-  reads the same press once showView flips the active view mid-dispatch.
-  Retail pages keep Escape (home is Customers) but don't walk the board.
-* Also loadVehicleDetail() now drops a stale load: flipping fast meant a
-  slow fetch for the car you left could resolve after the next car's page
-  rendered and paint the old car's data over it (state.detail is captured
-  at entry and checked after every await).
-* static/dialogs/shortcuts-dialog.html: new "Vehicle page" group; the
-  Back link carries title="Esc".
-* tests/dom/detail_keys_smoke.mjs: walks the keys end to end incl. the
-  menu/dialog/typing guards, retail behavior, and the stale-load race.
-* 994 passed, 7 skipped, check.py ALL CLEAN.
+* app/main.py save_estimate: each line runs through
+  workflow.reconcile_at_cost_money before anything is written -- one
+  side given fills the other, both differing 422s whole (verified: a
+  contradiction on line two leaves line one and edit_version alone).
+  Pass-through for the UI (grid always sends the two fields equal) and
+  for retail.
+* tests/test_at_cost_money_doors.py: +6 grid-door tests. Four other
+  tests sent split money on at-cost segments as incidental setup (a
+  markup the app now refuses); equalized to the cost side, so every
+  number they assert is unchanged.
+* static/m/js/car.js: stale "unit_price is always 0" comment corrected.
+* 999 passed, 7 skipped, check.py ALL CLEAN. Live-verified: reseed
+  heals the seeded tickets ($420/$380/$95 subtotals where they read
+  $0), price-only heals, contradiction 422s, refusal writes nothing.
 
 Next time, in rough priority order:
-  1. Carried from run 32: live shop DBs still store the old commented
+  1. Existing at-cost rows in a LIVE shop DB written split (agent lines
+     from before #129) stay split until their ticket is re-saved through
+     the grid. A one-time normalize (unit_price := written cost, redo
+     line_total + estimate totals on recon/we-owe) would heal history;
+     needs the obviously-safe-migration bar.
+  2. Carried from run 32: live shop DBs still store the old commented
      schema text; first live DROP COLUMN migration must normalize first.
-  2. Carried: Add Vehicle dialog could offer Decode VIN (retail-only
-     dialog though -- weigh against "Tekmetric owns retail" first).
-  3. Carried: Other Vehicles rows could offer + Write RO directly (same
-     retail caveat).
-  4. PR #130 (open at the time of this run) notes a one-time cleanup for
-     tickets saved with mismatched price/cost before the guards landed --
-     do it only after that PR merges.
-  5. Vendor-invoice tax lands on the AP bill but not in the car's cost
-     (received_cost is entered untaxed at the receive dialog). Decide on
-     purpose or fix: on lot work the tax paid is real spend Walt never
-     sees. Check with Clayton before changing money math.
-
-=== 2026-08-14 (second pass, issue #126) ===
-Clayton's issue: intake dialogs' error messages were invisible.
-showModal() puts a dialog in the browser's top layer, which paints above
-body-level content regardless of z-index -- so every toast fired while a
-dialog was open ("enter the customer's name", a refused save, a duplicate
-stock number) rendered *behind* the form. Fixed both halves:
-
-* static/js/notify.js: toast() re-homes #toast into the open dialog
-  (activeElement's dialog when they stack, since everything outside the
-  top modal is inert). position:fixed keeps its screen spot; a top-layer
-  subtree paints above the backdrop. Every dialog in the app fixed at once.
-* static/js/shortcuts.js: fieldError(input, message) -- the message stands
-  beside the box it's about (what the issue asked for): note in the label,
-  field outlined + focused, cleared on input or dialog close.
-* Converted the field-specific checks: we-owe intake (name, make, model,
-  mileage), recon + we-owe Decode buttons, phone/email validators,
-  customer editor state/ZIP. focusInvalidField deleted (fieldError does it).
-* Real bug found by the new ladder test: the we-owe save created the
-  customer BEFORE validating the vehicle boxes, so a save refused over a
-  missing model had already written the customer, and retrying tripped the
-  duplicate-person guard on the shop's own half-finished record. All boxes
-  are now checked before anything is written.
-* tests/dom/modal_errors_smoke.mjs (new); detail_smoke.mjs updated to the
-  new contract (notes beside fields instead of toasts).
+  3. Carried: detail page Escape/keyboard joining wireListKeyboard
+     (five runs now -- do it or drop it).
+  4. Carried: Add Vehicle dialog could offer Decode VIN.
+  5. Carried: Other Vehicles rows could offer + Write RO directly.

@@ -1,6 +1,6 @@
 [project]
 name = "discount-auto-ops"
-version = "1.9.0"
+version = "1.10.0"
 description = "Discount Auto Ops -- vehicle-centric shop, recon, and we-owe management"
 requires-python = ">=3.12"
 dependencies = [

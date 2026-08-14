@@ -160,6 +160,126 @@ def test_retail_lines_keep_their_markup(client):
 
 
 # ---------------------------------------------------------------------------
+# The grid door (POST /orders/{id}/estimate -- the route the UI itself uses)
+# ---------------------------------------------------------------------------
+#
+# The grid always sends unit_price == unit_cost (one Cost box, sent as both
+# fields), so none of this changes what the UI does. But the route is plain
+# HTTP like the other two doors, and it was the last one a caller could split
+# money through -- worse here than anywhere, because save_estimate REPLACES
+# the line set, and the estimate's subtotal/total (what the customer invoice
+# is built from at close) comes straight from unit_price.
+
+
+def grid_save(client, order_id, items, **extra):
+    return client.post(f"/api/orders/{order_id}/estimate", json={"items": items, **extra})
+
+
+def test_a_price_only_line_through_the_grid_lands_in_the_cars_cost(client):
+    vehicle, order = recon_order(client)
+    res = grid_save(client, order["id"], [ALTERNATOR | {"quantity": 1, "unit_price": 85.0}])
+    assert res.status_code == 200, res.text
+    assert res.json()["total"] == pytest.approx(85.0)
+
+    line = ticket_items(client, order["id"])[0]
+    assert line["unit_cost"] == pytest.approx(85.0)
+    assert line["quoted_unit_cost"] == pytest.approx(85.0)
+
+    detail = client.get(f"/api/recon/vehicles/{vehicle['id']}").json()
+    assert detail["quoted_cost"] == pytest.approx(85.0)
+    assert detail["open_cost"] == pytest.approx(85.0)
+
+
+def test_a_cost_only_line_through_the_grid_lands_on_the_ticket(client):
+    """The shape the seeded recon estimates were written in (unit_price 0,
+    unit_cost set) -- the ticket's own subtotal read $0 for a car whose cost
+    rollup read the real number."""
+    _vehicle, order = recon_order(client)
+    res = grid_save(client, order["id"], [ALTERNATOR | {"quantity": 1, "unit_price": 0, "unit_cost": 85.0}])
+    assert res.status_code == 200, res.text
+    assert res.json()["total"] == pytest.approx(85.0)
+    assert ticket_items(client, order["id"])[0]["unit_price"] == pytest.approx(85.0)
+
+
+def test_two_different_numbers_through_the_grid_are_refused_whole(client):
+    """And the refusal must not eat the ticket: save_estimate replaces the
+    whole line set, so a contradiction has to be caught before any write."""
+    _vehicle, order = recon_order(client)
+    res = grid_save(client, order["id"], [ALTERNATOR | {"quantity": 1, "unit_price": 85.0, "unit_cost": 85.0}])
+    assert res.status_code == 200, res.text
+    version = res.json()["edit_version"]
+
+    refused = grid_save(
+        client,
+        order["id"],
+        [
+            ALTERNATOR | {"quantity": 1, "unit_price": 85.0, "unit_cost": 85.0},
+            {"kind": "part", "description": "Serpentine belt", "quantity": 1, "unit_price": 30.0, "unit_cost": 14.0},
+        ],
+    )
+    assert refused.status_code == 422
+    assert "no markup" in refused.json()["detail"]
+    lines = ticket_items(client, order["id"])
+    assert [line["description"] for line in lines] == ["Used alternator"]
+    assert lines[0]["unit_cost"] == pytest.approx(85.0)
+    estimate = client.get(f"/api/orders/{order['id']}").json()["estimate"]
+    assert estimate["edit_version"] == version
+
+
+def test_editing_an_existing_line_one_sided_heals_it(client):
+    """A re-save that names an existing row by id goes through the same gate:
+    one side given, the stored row ends up with both sides equal."""
+    _vehicle, order = recon_order(client)
+    grid_save(client, order["id"], [ALTERNATOR | {"quantity": 1, "unit_price": 85.0, "unit_cost": 85.0}])
+    line = ticket_items(client, order["id"])[0]
+
+    res = grid_save(
+        client,
+        order["id"],
+        [ALTERNATOR | {"id": line["id"], "quantity": 1, "unit_price": 0, "unit_cost": 92.0}],
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["total"] == pytest.approx(92.0)
+    updated = ticket_items(client, order["id"])[0]
+    assert updated["id"] == line["id"]
+    assert updated["unit_price"] == pytest.approx(92.0)
+    assert updated["unit_cost"] == pytest.approx(92.0)
+
+
+def test_we_owe_grid_saves_follow_the_same_rule(client):
+    owed = make_we_owe(client)
+    order = client.post(
+        "/api/orders", json={"concern": "Owed tie rod", "segment": "we_owe", "we_owe_id": owed["id"]}
+    ).json()
+    res = grid_save(
+        client, order["id"], [{"kind": "part", "description": "Tie rod", "quantity": 1, "unit_price": 34.0}]
+    )
+    assert res.status_code == 200, res.text
+    assert ticket_items(client, order["id"])[0]["unit_cost"] == pytest.approx(34.0)
+
+    refused = grid_save(
+        client,
+        order["id"],
+        [{"kind": "part", "description": "Tie rod end", "quantity": 1, "unit_price": 50.0, "unit_cost": 20.0}],
+    )
+    assert refused.status_code == 422
+
+
+def test_retail_grid_saves_keep_their_markup(client):
+    order = make_retail_order(client)
+    res = grid_save(
+        client,
+        order["id"],
+        [{"kind": "part", "description": "Brake pads", "quantity": 1, "unit_price": 89.0, "unit_cost": 52.0}],
+        labor_rate=125.0,
+    )
+    assert res.status_code == 200, res.text
+    line = ticket_items(client, order["id"])[0]
+    assert line["unit_price"] == pytest.approx(89.0)
+    assert line["unit_cost"] == pytest.approx(52.0)
+
+
+# ---------------------------------------------------------------------------
 # The findings door (the technician's door)
 # ---------------------------------------------------------------------------
 

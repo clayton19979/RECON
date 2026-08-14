@@ -1,6 +1,6 @@
 import { $, get, post } from "./core.js";
 import { toast } from "./notify.js";
-import { esc, fmtDate, money, withLoading } from "./shortcuts.js";
+import { esc, fieldError, fmtDate, money, withLoading } from "./shortcuts.js";
 import { loadVehiclesView } from "./vehicles-board.js";
 import { phoneFieldOk, wirePhoneInput } from "./vehicle-detail.js";
 import { wireVinField } from "./vin.js";
@@ -220,7 +220,7 @@ export function wireWeOweDialog() {
   }
   $("#we-owe-decode-vin").addEventListener("click", async () => {
     const vin = $("#we-owe-new-vin").value.trim();
-    if (vin.length < 5) return toast("Enter a VIN first", true);
+    if (vin.length < 5) return fieldError($("#we-owe-new-vin"), "Enter a VIN first");
     try {
       const data = await post("/api/vehicles/decode-vin", { vin });
       $("#we-owe-new-year").value = data.year;
@@ -259,11 +259,37 @@ export function wireWeOweDialog() {
     e.preventDefault();
     await withLoading(e.submitter, "Saving…", async () => {
       try {
-        let customerId = $("#we-owe-customer").value;
-        if (customerId === "__new__") {
-          const name = $("#we-owe-new-customer-name").value.trim();
-          if (!name) return toast("Enter the customer's name", true);
+        /* Every box is checked before anything is written. The customer used
+           to be created first and the vehicle boxes checked after, so a save
+           refused over a missing model had already written the customer --
+           and pressing Save again (the natural next move) tripped the
+           duplicate-person guard on the shop's own half-finished record. */
+        const isNewCustomer = $("#we-owe-customer").value === "__new__";
+        const name = $("#we-owe-new-customer-name").value.trim();
+        if (isNewCustomer) {
+          if (!name) return fieldError($("#we-owe-new-customer-name"), "Enter the customer's name");
           if (!phoneFieldOk($("#we-owe-new-customer-phone"))) return;
+        }
+        const isNewVehicle = $("#we-owe-vehicle").value === "__new__";
+        const make = $("#we-owe-new-make").value.trim();
+        const model = $("#we-owe-new-model").value.trim();
+        const odoBroken = $("#we-owe-new-odo-broken").checked;
+        const mileage = Number($("#we-owe-new-mileage").value || 0);
+        if (isNewVehicle) {
+          // Pointed at whichever box is actually empty -- make first, since
+          // it comes first in the form and the tab order.
+          if (!make) return fieldError($("#we-owe-new-make"), "Enter the make");
+          if (!model) return fieldError($("#we-owe-new-model"), "Enter the model");
+          // Mileage is asked for, and "the odometer is broken" is a real
+          // answer to that question -- but silence isn't. Without one or the
+          // other a zero is unreadable a month from now.
+          if (!odoBroken && !mileage) {
+            return fieldError($("#we-owe-new-mileage"), "Enter the mileage, or tick Odometer broken");
+          }
+        }
+
+        let customerId;
+        if (isNewCustomer) {
           let customer;
           try {
             customer = await post("/api/customers", { name, phone: $("#we-owe-new-customer-phone").value.trim(), email: "" });
@@ -276,22 +302,10 @@ export function wireWeOweDialog() {
           }
           customerId = customer.id;
         } else {
-          customerId = Number(customerId);
+          customerId = Number($("#we-owe-customer").value);
         }
-        let vehicleId = $("#we-owe-vehicle").value;
-        const isNewVehicle = vehicleId === "__new__";
+        let vehicleId;
         if (isNewVehicle) {
-          const make = $("#we-owe-new-make").value.trim();
-          const model = $("#we-owe-new-model").value.trim();
-          if (!make || !model) return toast("Enter the vehicle's make and model", true);
-          const odoBroken = $("#we-owe-new-odo-broken").checked;
-          const mileage = Number($("#we-owe-new-mileage").value || 0);
-          // Mileage is asked for, and "the odometer is broken" is a real
-          // answer to that question -- but silence isn't. Without one or the
-          // other a zero is unreadable a month from now.
-          if (!odoBroken && !mileage) {
-            return toast("Enter the mileage, or tick Odometer broken", true);
-          }
           const vehicle = await post("/api/vehicles", {
             customer_id: customerId,
             year: Number($("#we-owe-new-year").value),
@@ -302,7 +316,7 @@ export function wireWeOweDialog() {
           });
           vehicleId = vehicle.id;
         } else {
-          vehicleId = Number(vehicleId);
+          vehicleId = Number($("#we-owe-vehicle").value);
         }
         const salePrice = $("#we-owe-new-sale-price").value.trim();
         await post("/api/we-owe", {

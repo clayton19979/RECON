@@ -24,6 +24,22 @@ export function toast(message, isError = false) {
   logMessage(message, isError);
   const el = $("#toast");
   if (!el) return;
+  /* Rendered inside the open dialog when one is up. showModal() puts a
+     dialog in the browser's top layer, which paints above everything at
+     body level no matter the z-index -- so a toast fired while a dialog was
+     open (a refused save, a duplicate stock number) appeared *behind* it,
+     and the one moment an error message matters most was the one moment it
+     couldn't be read (issue #126). A top-layer subtree paints with its
+     dialog, and position:fixed still pins the toast to its usual spot on
+     screen, so moving it is the whole fix.
+
+     The active element names the top dialog when they stack (everything
+     outside the top modal is inert, so focus can't be anywhere else);
+     re-homed on every call, so a toast after the dialog closes goes back
+     to the body. */
+  const host = (document.activeElement && document.activeElement.closest && document.activeElement.closest("dialog[open]"))
+    || document.querySelector("dialog[open]") || document.body;
+  if (el.parentElement !== host) host.appendChild(el);
   el.textContent = message;
   el.classList.toggle("error", isError);
   el.classList.add("show");

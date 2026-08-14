@@ -1,6 +1,6 @@
 import { $, get, post } from "./core.js";
 import { toast } from "./notify.js";
-import { todayLocal, wirePlateFields, withLoading } from "./shortcuts.js";
+import { fieldError, todayLocal, wirePlateFields, withLoading } from "./shortcuts.js";
 import { state } from "./state.js";
 import { loadVehiclesView } from "./vehicles-board.js";
 import { openVehicleDetail } from "./vehicle-detail.js";
@@ -137,7 +137,7 @@ export function wireReconDialog() {
   });
   $("#recon-decode-vin").addEventListener("click", async () => {
     const vin = $("#recon-vin").value.trim();
-    if (vin.length < 5) return toast("Enter a VIN first", true);
+    if (vin.length < 5) return fieldError($("#recon-vin"), "Enter a VIN first");
     try {
       const data = await post("/api/vehicles/decode-vin", { vin });
       $("#recon-year").value = data.year;
@@ -157,7 +157,10 @@ export function wireReconDialog() {
   $("#recon-decode-plate").addEventListener("click", async () => {
     const plate = $("#recon-plate").value.trim();
     const state_ = $("#recon-plate-state").value.trim();
-    if (!plate || !state_) return toast("Enter plate and state first", true);
+    // Pointed at the box that's actually empty; plate first, same order as
+    // the form.
+    if (!plate) return fieldError($("#recon-plate"), "Enter the plate first");
+    if (!state_) return fieldError($("#recon-plate-state"), "Enter the plate's state");
     try {
       const data = await post("/api/vehicles/decode-plate", { plate, state: state_ });
       $("#recon-vin").value = data.vin;

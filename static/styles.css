@@ -2307,6 +2307,13 @@ dialog::backdrop { background: var(--backdrop); backdrop-filter: blur(3px); }
    count while the number is short, the check-digit answer at 17. The box
    itself takes a hairline of the same color, so the answer is visible even
    mid-scan without reading the words. */
+/* A validation message standing next to the box it is about (fieldError in
+   shortcuts.js). Same voice as the vin-verdict below it -- small, bold,
+   coloured -- because they answer the same kind of question at the same
+   distance from the field. */
+.field-error { font-size: 11.5px; font-weight: 600; margin-top: 2px; color: var(--crit); }
+input.field-invalid, select.field-invalid, textarea.field-invalid { border-color: var(--crit); }
+
 .vin-verdict { font-size: 11.5px; font-weight: 600; margin-top: -1px; }
 .vin-verdict.counting { color: var(--ink-faint); }
 .vin-verdict.ok { color: var(--good); }

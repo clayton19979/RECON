@@ -4,13 +4,13 @@ import { toast } from "./notify.js";
 // shared now: the ticket printer needed the same "a day, not a timestamp"
 // answer, and two functions of the same name in two modules become one
 // arbitrary winner in the flattened bundle the DOM tests run against.
-import { esc, fmtDay, wirePlateFields, withLoading } from "./shortcuts.js";
+import { esc, fieldError, fmtDay, wirePlateFields, withLoading } from "./shortcuts.js";
 import { emptyRow } from "./empty-states.js";
 import { CUSTOMER_COLUMNS } from "./skeletons.js";
 import { STATUS_LABEL, STATUS_PILL_CLASS, state } from "./state.js";
 import { renderViewFailure } from "./error-boundary.js";
 import { wireListKeyboard } from "./list-keyboard.js";
-import { US_STATE_CODES, emailFieldOk, fmtPhone, focusInvalidField, hideAddressSuggestions, openVehicleDetail, phoneDigits, phoneFieldOk, setupAddressAutocomplete, wirePhoneInput } from "./vehicle-detail.js";
+import { US_STATE_CODES, emailFieldOk, fmtPhone, hideAddressSuggestions, openVehicleDetail, phoneDigits, phoneFieldOk, setupAddressAutocomplete, wirePhoneInput } from "./vehicle-detail.js";
 import { wireVinField } from "./vin.js";
 
 /* ==================================================================
@@ -619,7 +619,7 @@ export function wireCustomerEditor() {
   // (and the ZIP+4 hyphen) only. Both are optional fields, but if filled in
   // they must be real: a two-letter USPS code and a 5-digit (or 5+4) ZIP.
   // Validated here rather than with pattern= so the autocomplete's fills and
-  // the error toasts behave the same in every browser (and in jsdom).
+  // the error messages behave the same in every browser (and in jsdom).
   $("#customer-edit-state").addEventListener("input", (e) => {
     e.target.value = e.target.value.toUpperCase().replace(/[^A-Z]/g, "").slice(0, 2);
   });
@@ -631,14 +631,12 @@ export function wireCustomerEditor() {
     const stateEl = $("#customer-edit-state");
     const stateVal = stateEl.value.trim().toUpperCase();
     if (stateVal && !US_STATE_CODES.has(stateVal)) {
-      toast(`"${stateVal}" isn't a state code — use the two-letter abbreviation (MI, OH…)`, true);
-      return void focusInvalidField(stateEl);
+      return void fieldError(stateEl, `"${stateVal}" isn't a state code — use the two-letter abbreviation (MI, OH…)`);
     }
     const postalEl = $("#customer-edit-postal");
     const postalVal = postalEl.value.trim();
     if (postalVal && !/^\d{5}(-\d{4})?$/.test(postalVal)) {
-      toast("ZIP should be 5 digits (or ZIP+4, like 48203-1234)", true);
-      return void focusInvalidField(postalEl);
+      return void fieldError(postalEl, "ZIP should be 5 digits (or ZIP+4, like 48203-1234)");
     }
     if (!phoneFieldOk($("#customer-edit-phone"))) return;
     if (!emailFieldOk($("#customer-edit-email"))) return;

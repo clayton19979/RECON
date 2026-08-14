@@ -1,12 +1,12 @@
 import { $, $$, api, fmtHours, get, patch, post, put, withActorParam } from "./core.js";
 import { toast } from "./notify.js";
 import { confirmAction } from "./confirm.js";
-import { actorLabel, byActor, currentActor, esc, fmtDate, fmtDay, money, relativeTime, todayLocal, vehicleColorTagHtml, wirePlateFields, withLoading } from "./shortcuts.js";
+import { actorLabel, byActor, currentActor, esc, fieldError, fmtDate, fmtDay, money, relativeTime, todayLocal, vehicleColorTagHtml, wirePlateFields, withLoading } from "./shortcuts.js";
 import { emptyState } from "./empty-states.js";
 import { actualTotal, isReturnedPart, lineTotal, ticketTotal, unreceivedPartLines, unreceivedPartTotal } from "./estimate-money.js";
 import { AUTH_METHOD_LABEL, ITEM_STATUS_LABEL, KIND_GROUP_LABEL, KIND_GROUP_ORDER, PAY_METHOD_LABEL, STATUS_LABEL, STATUS_OPTIONS, STATUS_PILL_CLASS, fieldLabels, state } from "./state.js";
 import { showView } from "./error-boundary.js";
-import { isStalled } from "./vehicles-board.js";
+import { applyVehicleCursor, displayedVehicles, isStalled, vehicleKey } from "./vehicles-board.js";
 import { openMoveSegmentDialog } from "./move-ticket.js";
 import { openReceiveDialog } from "./dialog-receive-parts.js";
 import { openAddVehicleDialog, openCustomerEditor } from "./customers.js";
@@ -41,7 +41,13 @@ function enterVehicleDetailView() {
 }
 
 export async function loadVehicleDetail() {
-  const { segment, id } = state.detail;
+  // Everything below is written against this one object. openVehicleDetail
+  // replaces state.detail wholesale, so a load that awoke from its fetches to
+  // find a different object there belongs to a car the user has already
+  // flipped past -- rendering it would paint the old car's numbers on the new
+  // car's page. Refreshes of the same page reuse the object and pass.
+  const detail = state.detail;
+  const { segment, id } = detail;
   let item, orders;
   try {
     // Three segments, three entities: recon/we-owe pages are keyed by their
@@ -55,9 +61,11 @@ export async function loadVehicleDetail() {
       : o.we_owe_id === id)
       .sort((a, b) => b.id - a.id);
   } catch (err) {
+    if (state.detail !== detail) return;
     toast(`Could not load vehicle: ${err.message}`, true);
     return;
   }
+  if (state.detail !== detail) return;
   state.detail.item = item;
   state.detail.ordersHistory = orders;
   /* The whole task queue, filtered to this car in the browser. It is a short
@@ -67,10 +75,11 @@ export async function loadVehicleDetail() {
      the follow-ups are worth showing, they are not worth losing the ticket
      over, so the card simply stays empty. */
   try {
-    state.detail.tasks = await get("/api/tasks");
+    detail.tasks = await get("/api/tasks");
   } catch {
-    state.detail.tasks = [];
+    detail.tasks = [];
   }
+  if (state.detail !== detail) return;
   // A vehicle can have more than one RO over its life (recon prep now, a
   // warranty comeback later); the advisor picking an older one from Order
   // History must survive every other action on this page re-loading the
@@ -103,13 +112,17 @@ export async function loadVehicleDetail() {
   // car turns a page that had one into a page that hasn't.
   state.detail.order = null;
   if (active) {
+    let order;
     try {
-      state.detail.order = await get(`/api/orders/${active.id}`);
+      order = await get(`/api/orders/${active.id}`);
     } catch (err) {
+      if (state.detail !== detail) return;
       toast(`Could not load repair order: ${err.message}`, true);
       return;
     }
     if (!state.staff.length) state.staff = await get("/api/staff");
+    if (state.detail !== detail) return;
+    detail.order = order;
   }
   renderOrderPanel();
   applyArchivedLockUI(!!item.archived_at);
@@ -642,11 +655,6 @@ export const US_STATE_CODES = new Set([
   "VA","WA","WV","WI","WY","DC","PR","VI","GU","AS","MP","AA","AE","AP",
 ]);
 
-export function focusInvalidField(el) {
-  el.focus();
-  if (typeof el.select === "function") el.select();
-}
-
 /* ---------- phone numbers (shared) ---------- */
 // Phones are typed in two places (the customer editor and the we-owe
 // new-customer form) and shown in several more (customer info card, printed
@@ -694,8 +702,7 @@ export function phoneFieldOk(el) {
   const value = el.value.trim();
   if (!value || el.value === (el.dataset.loadedValue || "")) return true;
   if (phoneDigits(value).length !== 10) {
-    toast("Phone needs all 10 digits, like (313) 555-0142", true);
-    focusInvalidField(el);
+    fieldError(el, "Phone needs all 10 digits, like (313) 555-0142");
     return false;
   }
   return true;
@@ -710,8 +717,7 @@ export function emailFieldOk(el) {
   const value = el.value.trim();
   if (!value || el.value === (el.dataset.loadedValue || "")) return true;
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) {
-    toast("That email doesn't look right — needs a name@domain.com shape", true);
-    focusInvalidField(el);
+    fieldError(el, "That email doesn't look right — needs a name@domain.com shape");
     return false;
   }
   return true;
@@ -3349,9 +3355,71 @@ function renderPrintLotCard() {
   `;
 }
 
+/* Step to the next or previous car in the board's current order, without
+   going back to the board first. This is the morning walk: open the first
+   car, read what it needs, flip to the next. The list is exactly what the
+   board is showing -- same filters, same sort, both layouts -- so flipping
+   here visits the same cars in the same order that arrowing down the board
+   would, and the board's cursor follows so backing out lands on the car you
+   were just looking at, not the one you started from.
+
+   Only for cars that live on the board: a retail page's home is Customers,
+   which has no car order to walk. A car the board's current filter can't see
+   (opened from History search, or from a task chip while a filter narrows
+   the board) has no neighbours either, so the keys quietly do nothing --
+   same as pressing past the end of the list. */
+function flipDetailCar(delta) {
+  if (detailHomeView() !== "vehicles") return;
+  const rows = displayedVehicles();
+  const here = `${state.detail.segment}:${state.detail.id}`;
+  const at = rows.findIndex((v) => vehicleKey(v) === here);
+  const next = at === -1 ? null : rows[at + delta];
+  if (!next) return;
+  state.vehicleCursor = vehicleKey(next);
+  applyVehicleCursor();
+  openVehicleDetail(next.segment, next.segment === "recon" ? next.recon_id : next.we_owe_id);
+}
+
 /* ---------- vehicle-detail event wiring (wired once) ---------- */
 export function wireVehicleDetail() {
   $("#back-to-vehicles").addEventListener("click", () => showView(detailHomeView()));
+
+  /* The detail page's half of the keyboard model (see wireListKeyboard):
+     Enter on the board opens a car, so Escape on the car backs out -- to the
+     same screen the Back link goes to, with the cursor still on this car.
+     Alt+Arrows flip through the board's cars directly; plain arrows keep
+     scrolling this long page, which is what they already meant.
+
+     The guards mirror wireListKeyboard's, plus this page's own popover
+     menus: while any dialog or menu is open, Escape belongs to it (each one
+     already closes itself), and a keystroke inside a field belongs to the
+     field -- the grid's cells, the note box and the address dropdown all
+     keep their own keys.
+
+     Capture phase, deliberately: the menus close themselves from bubble
+     listeners wired before this one, so by the time a bubble listener here
+     saw the same Escape, the menu it should defer to had already closed and
+     the key would fall through to "leave the page" -- one press closing the
+     messages menu *and* the car. Capturing reads the menus as they were when
+     the key was pressed, whatever order the wire* calls ran in. */
+  document.addEventListener("keydown", (e) => {
+    if (!$("#view-vehicle-detail").classList.contains("active")) return;
+    if (document.querySelector('dialog[open], .notif-menu.open, .status-picker-menu.open, .ms-toggle[aria-expanded="true"]')) return;
+    const tag = (e.target.tagName || "").toLowerCase();
+    if (tag === "input" || tag === "textarea" || tag === "select" || e.target.isContentEditable) return;
+    if (e.key === "Escape") {
+      e.preventDefault();
+      // Used up right here: showView makes the board the active view mid-
+      // dispatch, and the board's own bubble-phase Escape would then read
+      // this same press as its own and drop the cursor this page just set.
+      e.stopPropagation();
+      showView(detailHomeView());
+    } else if (e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
+      e.preventDefault();
+      e.stopPropagation();
+      flipDetailCar(e.key === "ArrowDown" ? 1 : -1);
+    }
+  }, true);
 
   $("#vd-start-ro").addEventListener("click", async () => {
     const concern = $("#vd-new-ro-concern").value.trim();

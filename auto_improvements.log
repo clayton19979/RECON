@@ -1835,3 +1835,45 @@ Next time, in rough priority order:
   5. The grid door (POST /orders/{id}/estimate) trusts its caller the
      same way -- the UI always sends price==cost, but an external caller
      could split money through it too. Same reconcile would fit there.
+
+=== 2026-08-14 ===
+The keyboard now goes both ways through the morning walk: the board could
+be driven entirely by keys (arrow, Enter to open a car) but the car's page
+was a dead end -- back out or on to the next car meant the mouse, once per
+car, all morning. Now Escape backs out to the board with the cursor still
+on the car you were reading, and Alt+Up/Down flips straight to the
+previous/next car in the board's current filter+sort order, with the
+board's cursor following. This was carried idea #2, on the list four runs
+running ("do it or drop it") -- done.
+
+* static/js/vehicle-detail.js: flipDetailCar() + a capture-phase keydown
+  in wireVehicleDetail. Capture matters: the notif/assign menus close
+  themselves from bubble listeners wired earlier, so a bubble listener
+  here would see the menu already closed and treat the same Escape as
+  "leave the page". stopPropagation on use, or the board's own Escape
+  reads the same press once showView flips the active view mid-dispatch.
+  Retail pages keep Escape (home is Customers) but don't walk the board.
+* Also loadVehicleDetail() now drops a stale load: flipping fast meant a
+  slow fetch for the car you left could resolve after the next car's page
+  rendered and paint the old car's data over it (state.detail is captured
+  at entry and checked after every await).
+* static/dialogs/shortcuts-dialog.html: new "Vehicle page" group; the
+  Back link carries title="Esc".
+* tests/dom/detail_keys_smoke.mjs: walks the keys end to end incl. the
+  menu/dialog/typing guards, retail behavior, and the stale-load race.
+* 994 passed, 7 skipped, check.py ALL CLEAN.
+
+Next time, in rough priority order:
+  1. Carried from run 32: live shop DBs still store the old commented
+     schema text; first live DROP COLUMN migration must normalize first.
+  2. Carried: Add Vehicle dialog could offer Decode VIN (retail-only
+     dialog though -- weigh against "Tekmetric owns retail" first).
+  3. Carried: Other Vehicles rows could offer + Write RO directly (same
+     retail caveat).
+  4. PR #130 (open at the time of this run) notes a one-time cleanup for
+     tickets saved with mismatched price/cost before the guards landed --
+     do it only after that PR merges.
+  5. Vendor-invoice tax lands on the AP bill but not in the car's cost
+     (received_cost is entered untaxed at the receive dialog). Decide on
+     purpose or fix: on lot work the tax paid is real spend Walt never
+     sees. Check with Clayton before changing money math.

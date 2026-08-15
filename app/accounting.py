@@ -11,7 +11,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from .db import inserted_id, normalize_po_reference
-from .workflow import estimate_line_total, parts_bill_block_reason, record_activity
+from .workflow import AT_COST_SEGMENTS, estimate_line_total, parts_bill_block_reason, record_activity
 
 
 def _check_auth(request: Request) -> None:
@@ -1114,6 +1114,17 @@ def build_accounting_router(connect: Callable[[], sqlite3.Connection], now: Call
                             existing["id"],
                         ),
                     )
+                    if order["segment"] in AT_COST_SEGMENTS:
+                        # On the lot's own work a line's price IS its cost
+                        # (workflow.reconcile_at_cost_money). Without this the
+                        # billed price landed on every cost rollup while the
+                        # ticket's own subtotal kept the written-up number --
+                        # which quoted_unit_cost already preserves.
+                        db.execute(
+                            "UPDATE estimate_items SET unit_price=unit_cost,"
+                            "line_total=round(quantity*unit_cost,2) WHERE id=?",
+                            (existing["id"],),
+                        )
                 else:
                     db.execute(
                         "INSERT INTO estimate_items(estimate_id,kind,description,part_number,quantity,unit_price,unit_cost,received_quantity,received_cost,line_total,status,received_invoice_number) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",

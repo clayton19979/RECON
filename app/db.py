@@ -1080,6 +1080,67 @@ def _migrate(db: sqlite3.Connection) -> None:
     if "odometer_broken" not in vehicle_columns:
         db.execute("ALTER TABLE vehicles ADD COLUMN odometer_broken INTEGER NOT NULL DEFAULT 0")
 
+    # On recon and we-owe a line's price and its cost are the same number --
+    # the segments in workflow.AT_COST_SEGMENTS, named literally here because
+    # workflow imports this module. Every door that writes money keeps them
+    # equal now, but two older shapes are still in live databases: agent lines
+    # from before those doors were closed (money on one side, 0 on the other),
+    # and lines receiving re-priced when posting a vendor bill moved only
+    # unit_cost -- the ticket's subtotal, and the invoice the lot was billed
+    # with at close, kept the written-up price while the car's cost rollups
+    # read the billed one. Both stayed split until someone happened to re-save
+    # the ticket through the grid. Healed here the same way the doors
+    # reconcile: a blank side takes the other; both sides present, the billed
+    # cost wins -- it is the vendor's paper -- and the written-up price it
+    # replaces is preserved as quoted_unit_cost when no quote was recorded.
+    # Nothing is deleted and every number written comes from the same row, so
+    # a re-run (or a restored older backup) heals to the same place.
+    healed_estimates: set[int] = set()
+    for item_id, kind, quantity, price, cost, quoted, estimate_id in db.execute(
+        """SELECT ei.id, ei.kind, ei.quantity, ei.unit_price, ei.unit_cost,
+                  ei.quoted_unit_cost, ei.estimate_id
+           FROM estimate_items ei
+           JOIN estimates e ON e.id = ei.estimate_id
+           JOIN orders o ON o.id = e.order_id
+           WHERE o.segment IN ('recon','we_owe')
+             AND abs(ei.unit_price - ei.unit_cost) > 0.005"""
+    ).fetchall():
+        if cost:
+            money = cost
+            quoted_value = price if (quoted is None and price) else quoted
+        else:
+            money = price
+            # A quote of 0 on a line whose cost was 0 is the frozen miss the
+            # old agent door left, not a real $0 quote; NULL means "none
+            # recorded" and every reader then falls back to unit_cost.
+            quoted_value = None if quoted == 0 else quoted
+        line_total = round(quantity * money, 2)
+        if kind == "credit":
+            # A credit line is stored positive but subtracts -- the sign rule
+            # of workflow.estimate_line_total, restated because of the import
+            # direction above.
+            line_total = -line_total
+        db.execute(
+            "UPDATE estimate_items SET unit_price=?, unit_cost=?, quoted_unit_cost=?, line_total=? WHERE id=?",
+            (money, money, quoted_value, line_total, item_id),
+        )
+        healed_estimates.add(estimate_id)
+    for estimate_id in healed_estimates:
+        # The same arithmetic recompute_estimate_totals (app/parts.py) uses:
+        # subtotal off line_total, tax off part lines only.
+        totals = db.execute(
+            "SELECT coalesce(sum(line_total),0), coalesce(sum(CASE WHEN kind='part' THEN line_total ELSE 0 END),0)"
+            " FROM estimate_items WHERE estimate_id=?",
+            (estimate_id,),
+        ).fetchone()
+        tax_rate = db.execute("SELECT tax_rate FROM estimates WHERE id=?", (estimate_id,)).fetchone()[0]
+        subtotal = round(totals[0], 2)
+        tax = round(totals[1] * float(tax_rate), 2)
+        db.execute(
+            "UPDATE estimates SET subtotal=?, tax=?, total=? WHERE id=?",
+            (subtotal, tax, round(subtotal + tax, 2), estimate_id),
+        )
+
     # Give every vehicle row a unit, matching on VIN so the recon-side and
     # we-owe-side rows for one physical car land on the same one. Scoped to
     # unit_id IS NULL, so this is a no-op on every start after the first and

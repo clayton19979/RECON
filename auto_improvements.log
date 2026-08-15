@@ -1874,3 +1874,46 @@ Next time, in rough priority order:
      (five runs now -- do it or drop it).
   4. Carried: Add Vehicle dialog could offer Decode VIN.
   5. Carried: Other Vehicles rows could offer + Write RO directly.
+
+=== 2026-08-15 ===
+Receiving a part now moves the ticket's own total on recon/we-owe. The
+doors that WRITE a line keep price==cost since #129/#130, but posting
+the vendor's bill (both receive doors: the car's Receive Selected and
+A/P's Post a Vendor Invoice) moved only unit_cost -- the ticket's
+subtotal, and the customer invoice cut at close, kept the written-up
+price while the car's rollups read the billed one. A part written at
+$100 and billed at $175 left the ticket saying $100 under a car that
+cost $175, and closing it billed the lot $100. Retail untouched
+(markup must survive receiving); the written price still survives in
+quoted_unit_cost, so Over Quote / still-to-spend are unchanged.
+
+Also did item 1 from last run: init_db now heals rows already split in
+live DBs (old agent one-sided lines and pre-fix receive splits) once
+at startup -- blank side takes the other; both present, the billed
+cost wins and the replaced price is preserved as quoted_unit_cost when
+none was recorded; estimate totals recomputed. Idempotent, scoped to
+recon/we_owe, nothing deleted.
+
+* app/parts.py receive_parts + app/accounting.py invoice-process
+  UPDATE branch: at-cost lines set unit_price=unit_cost and redo
+  line_total; totals recompute was already downstream of both.
+* app/db.py _migrate: the heal (segments named literally -- workflow
+  imports db).
+* tests/test_receive_reprices_at_cost_ticket.py: 11 tests -- both
+  doors, we-owe, retail no-touch, invoice-at-close, four heal shapes,
+  idempotence. 1012 passed, 7 skipped, check.py ALL CLEAN.
+  Live-verified on the seeded DB: receive at $175 moved subtotal
+  520->595, car total_cost agreed; a reinstated pre-fix split healed
+  on init_db with the quote preserved.
+
+Next time, in rough priority order:
+  1. Customer invoices cut at close BEFORE this fix still carry the
+     written-up numbers on tickets whose parts were billed differently;
+     the heal fixes the estimate, not issued invoice rows. Decide
+     whether touching issued paper is ever OK.
+  2. Carried from run 32: live shop DBs still store the old commented
+     schema text; first live DROP COLUMN migration must normalize first.
+  3. Carried: detail page Escape/keyboard joining wireListKeyboard
+     (six runs now -- do it or drop it).
+  4. Carried: Add Vehicle dialog could offer Decode VIN.
+  5. Carried: Other Vehicles rows could offer + Write RO directly.

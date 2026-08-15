@@ -21,6 +21,7 @@ from .accounting import (
 from .db import inserted_id, purchase_order_number
 from .recon import age_days, assert_vehicle_editable
 from .workflow import (
+    AT_COST_SEGMENTS,
     assert_estimate_editable,
     assert_parts_receivable,
     estimate_line_total,
@@ -1593,6 +1594,18 @@ def build_parts_router(connect: Callable[[], sqlite3.Connection], now_fn: Callab
                         row["id"],
                     ),
                 )
+                if current_order["segment"] in AT_COST_SEGMENTS:
+                    # On the lot's own work a line's price IS its cost (see
+                    # workflow.reconcile_at_cost_money). Moving only unit_cost
+                    # above left the ticket's subtotal -- and the invoice the
+                    # lot is billed with at close -- at the written-up price
+                    # while the car's rollups read the billed one. The written
+                    # price is not lost: quoted_unit_cost holds it.
+                    db.execute(
+                        "UPDATE estimate_items SET unit_price=unit_cost,"
+                        "line_total=round(quantity*unit_cost,2) WHERE id=?",
+                        (row["id"],),
+                    )
 
             recompute_estimate_totals(db, estimate["id"])
             record_activity(

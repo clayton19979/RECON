@@ -933,6 +933,12 @@
                 <div style="margin-top:8px">
                   <button type="button" class="btn btn-ghost btn-sm" id="ap-add-line">＋ Line</button>
                 </div>
+                <!-- What picking a ticket just did to the lines above, or
+                     offers to do: the ticket's own unbilled parts, pulled in
+                     so a stack-of-bills morning is checking costs against
+                     paper instead of retyping them. See offerTicketParts()
+                     in accounting.js. Hidden whenever there's nothing to say. -->
+                <div class="hint" id="ap-prefill-note" style="margin:8px 0 0" hidden></div>
                 <!-- Totals read bottom-up, under the lines that produce them.
                      Subtotal and Total are outputs, not fields -- only Tax is
                      typed. Both are recomputed from the lines on every input,

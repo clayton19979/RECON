@@ -433,6 +433,115 @@ function addApLine() {
   recalcApTotals();
 }
 
+/* ---------- the ticket's own parts, pulled into the editor ----------
+
+   The normal lot flow writes a part on the ticket, orders it, and then the
+   vendor's bill turns up on the counter days later. Every line on that bill
+   is usually already written on the ticket -- so picking the ticket here
+   pulls its unbilled part lines straight into the editor, and posting a
+   stack of bills becomes checking costs against paper instead of retyping
+   part numbers into a second screen.
+
+   Only part lines with a part number are pulled: posting matches billed
+   lines to the ticket by part number (process_invoice), so a line without
+   one can't land on its own ticket row -- it would be added to the ticket
+   again as a second received line and the car would carry the part twice.
+   Those lines are called out instead and pointed at the car page's receive
+   flow, which works by the line itself rather than its number. */
+
+// True while every line in the editor came from pullTicketParts and hasn't
+// been touched since -- the one case where switching tickets rewrites the
+// lines instead of offering a button. Cleared by any real input in the grid
+// (see wireAccountingView); pullTicketParts' programmatic fills fire nothing.
+let apAutoFilled = false;
+// What the offer button would add, held between renders of the note.
+let apOfferedParts = [];
+
+// A ticket's part lines a vendor bill could still be for: not returned, not
+// yet fully received. `remaining` is what's still outstanding, so a split
+// delivery prefills the quantity this bill can actually cover.
+function outstandingPartLines(order) {
+  return (order?.estimate?.items || [])
+    .filter((i) => i.kind === "part" && !i.part_returned)
+    .map((i) => ({
+      ...i,
+      remaining: Math.round(((Number(i.quantity) || 0) - (Number(i.received_quantity) || 0)) * 100) / 100,
+    }))
+    .filter((i) => i.remaining > 0);
+}
+
+function pullTicketParts(parts, { replace }) {
+  const box = $("#ap-invoice-items");
+  if (replace) box.innerHTML = "";
+  for (const p of parts) {
+    addApLine();
+    const tr = box.lastElementChild;
+    tr.querySelector(".apl-part").value = p.part_number;
+    tr.querySelector(".apl-desc").value = p.description || "";
+    tr.querySelector(".apl-qty").value = p.remaining;
+    tr.querySelector(".apl-cost").value = p.unit_cost || 0;
+  }
+  recalcApTotals();
+}
+
+function renderApPrefillNote(html) {
+  const box = $("#ap-prefill-note");
+  box.hidden = !html;
+  box.innerHTML = html || "";
+}
+
+const partCount = (n) => `${n} unbilled part${n === 1 ? "" : "s"}`;
+
+// The lines that can't be pulled, said plainly enough to stop someone typing
+// them in by hand here -- which would put them on the car twice.
+function unmatchableSentence(n) {
+  if (!n) return "";
+  return n === 1
+    ? " 1 more part on the ticket has no part number, so a posted bill can't find it — receive it from the car's own page instead."
+    : ` ${n} more parts on the ticket have no part number, so a posted bill can't find them — receive them from the car's own page instead.`;
+}
+
+async function offerTicketParts() {
+  const orderId = $("#ap-order").value;
+  apOfferedParts = [];
+  renderApPrefillNote("");
+  if (!orderId) return;
+  let order;
+  try {
+    order = await get(`/api/orders/${orderId}`);
+  } catch {
+    return; // no offer, and the editor still works exactly as it always did
+  }
+  if ($("#ap-order").value !== orderId) return; // the pick changed mid-fetch
+  const outstanding = outstandingPartLines(order);
+  const parts = outstanding.filter((i) => (i.part_number || "").trim());
+  const unmatched = outstanding.length - parts.length;
+  const option = $("#ap-order").selectedOptions[0];
+  const ref = esc((option && option.dataset.po) || order.number || "this ticket");
+  if (!parts.length) {
+    renderApPrefillNote(unmatchableSentence(unmatched).trim());
+    return;
+  }
+  const gridBlank = $$("#ap-invoice-items tr").every((tr) => apLineState(tr) === "blank");
+  if (gridBlank || apAutoFilled) {
+    pullTicketParts(parts, { replace: true });
+    apAutoFilled = true;
+    renderApPrefillNote(
+      `Pulled ${partCount(parts.length)} from ${ref}'s ticket — check each cost against the bill,`
+      + ` and remove any line this bill doesn't cover.${unmatchableSentence(unmatched)}`
+    );
+  } else {
+    // Something is already typed in the grid; adding rows under someone's
+    // half-finished invoice uninvited is how lines get posted twice.
+    apOfferedParts = parts;
+    renderApPrefillNote(
+      `${ref}'s ticket already has ${partCount(parts.length)} written on it.`
+      + ` <button type="button" class="btn btn-ghost btn-sm" id="ap-prefill-pull">Add them as lines</button>`
+      + unmatchableSentence(unmatched)
+    );
+  }
+}
+
 // Structured post-result feedback in place of the old grey run-on hint line.
 function renderApAlert(res) {
   const box = $("#ap-invoice-note");
@@ -454,6 +563,11 @@ function clearApInvoiceForm() {
   $("#ap-invoice-items").innerHTML = "";
   addApLine();
   renderApAlert(null);
+  // reset() put the ticket picker back to "No ticket", so an offer or a
+  // pulled-lines note would now be about a pick that no longer exists.
+  apAutoFilled = false;
+  apOfferedParts = [];
+  renderApPrefillNote("");
 }
 
 export function wireAccountingView() {
@@ -474,13 +588,38 @@ export function wireAccountingView() {
     form.hidden = false;
     form.elements.namedItem("name").focus();
   });
-  $("#ap-add-line").addEventListener("click", addApLine);
+  // Adding a line by hand means the grid is the user's now -- switching
+  // tickets must offer, not overwrite. Same for typing in it or removing a
+  // row, both caught by the delegated listeners below.
+  $("#ap-add-line").addEventListener("click", () => {
+    apAutoFilled = false;
+    addApLine();
+  });
+  $("#ap-invoice-items").addEventListener("input", () => {
+    apAutoFilled = false;
+  });
+  $("#ap-invoice-items").addEventListener("click", (e) => {
+    if (e.target.closest(".rm-btn")) apAutoFilled = false;
+  });
+  // The "Add them as lines" button lives inside the note's innerHTML, so the
+  // listener has to sit on the note itself and survive every re-render.
+  $("#ap-prefill-note").addEventListener("click", (e) => {
+    if (!e.target.closest("#ap-prefill-pull")) return;
+    const parts = apOfferedParts;
+    apOfferedParts = [];
+    pullTicketParts(parts, { replace: false });
+    renderApPrefillNote(
+      `Added ${partCount(parts.length)} from the ticket under your own lines — check each cost against the bill.`
+    );
+  });
   // Picking a ticket fills in the reference the vendor was actually given
-  // (the stock number), unless something has already been typed there.
+  // (the stock number), unless something has already been typed there --
+  // and pulls the ticket's own unbilled parts into the editor.
   $("#ap-order").addEventListener("change", (e) => {
     const option = e.target.selectedOptions[0];
     const po = $("#ap-po");
     if (option && option.dataset.po && !po.value.trim()) po.value = option.dataset.po;
+    offerTicketParts();
   });
   $("#ap-tax").addEventListener("input", recalcApTotals);
   $("#ap-clear-invoice").addEventListener("click", clearApInvoiceForm);

@@ -1874,3 +1874,52 @@ Next time, in rough priority order:
      (five runs now -- do it or drop it).
   4. Carried: Add Vehicle dialog could offer Decode VIN.
   5. Carried: Other Vehicles rows could offer + Write RO directly.
+
+=== 2026-08-16 ===
+The A/P editor now pulls the picked ticket's parts in by itself. The
+stack-of-bills morning worked like this: the bill in your hand is for
+parts that are already written on the ticket (that's how they got
+ordered), and the Post a Vendor Invoice form made you retype every one
+of them -- kind, part number, description, quantity, cost -- into a
+second screen. Now picking the Repair Order pulls the ticket's unbilled
+part lines into the grid prefilled, and posting a bill becomes checking
+costs against paper instead of retyping. A split delivery prefills the
+remaining quantity; returned, fully-billed and labor lines stay out.
+
+Only lines WITH a part number are pulled, on purpose: process_invoice
+matches billed lines to the ticket by part number, so a line without
+one would be appended to the ticket as a second received line and the
+car would carry the part twice. The note calls those out and points at
+the car page's receive flow instead -- which also warns off typing them
+in here by hand (that trap existed before this change; now it's said
+out loud). A grid the user has typed in is never overwritten:
+switching tickets offers an "Add them as lines" button instead, while
+an untouched auto-fill follows the pick so a wrong first pick costs
+nothing.
+
+* static/js/accounting.js: offerTicketParts() + pull/note helpers, all
+  wired in wireAccountingView; clearApInvoiceForm resets the story.
+* static/index.html: #ap-prefill-note under the line grid.
+* tests/dom/ap_prefill_smoke.mjs: the whole contract -- prefill values,
+  split-delivery remainder, every excluded-line kind, the no-part-number
+  callout, offer-vs-overwrite, posted payload, Clear/No-ticket resets.
+  1002 passed, 7 skipped, check.py ALL CLEAN. Live-verified end to end:
+  a prefilled-shape post landed on the ticket's own lines (received,
+  billed cost applied, no duplicates).
+
+Next time, in rough priority order:
+  1. The keyboard item carried since run 32 was DONE by PR #131
+     (Escape to board + Alt+Up/Down between cars) -- off the list.
+  2. Carried: Add Vehicle dialog could offer Decode VIN.
+  3. Carried: Other Vehicles rows could offer + Write RO directly.
+  4. New: seed_mock_data.py age_the_board() stamps created_at /
+     last_activity_at with datetime.now(UTC).isoformat() -- aware
+     "+00:00" strings in a schema that is naive shop-local everywhere
+     else. Mock data only, but seeded ages/idle read ~5h off and the
+     board's fixtures never exercise aware strings. One-word fix
+     (now() from app.db) next time someone is in there.
+  5. New: the A/P door appends any posted part line whose number isn't
+     on the ticket -- a typo'd part number silently doubles the part on
+     the car. The prefill sidesteps it for pulled lines; the door
+     itself could hold a near-miss (same description, different
+     number) for review someday.

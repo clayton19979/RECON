@@ -72,6 +72,7 @@ const detailFetches = [];
 const patches = [];
 const roPosts = [];
 const vehiclePosts = [];
+const decodePosts = [];
 
 const { w, doc, settle, ok, finish, rejections } = await boot({
   expose: ["state", "showView", "loadCustomersView", "renderCustomersTable", "toggleCustomerExpand"],
@@ -103,6 +104,10 @@ const { w, doc, settle, ok, finish, rejections } = await boot({
       other_vehicles: Number(retail[1]) === 12
         ? [{ id: 11, year: 2020, make: "Kia", model: "Soul", plate: "ABC123", plate_state: "IN", vin: "VIN0001", order_count: 2, open_orders: 1 }]
         : [] };
+    if (url === "/api/vehicles/decode-vin" && opts.method === "POST") {
+      decodePosts.push(JSON.parse(opts.body));
+      return { vin: "1HGCM82633A004352", year: 2003, make: "HONDA", model: "Accord", trim: "EX", engine: "2.4L 4-cyl", color: "" };
+    }
     if (url === "/api/vehicles" && opts.method === "POST") {
       const body = JSON.parse(opts.body);
       vehiclePosts.push(body);
@@ -283,6 +288,30 @@ click(w, $("#vd-add-other-vehicle"));
 const addDialog = $("#vehicle-add-dialog");
 ok(addDialog && addDialog.open, "+ Add Vehicle opens the dialog");
 ok($("#vehicle-add-customer").textContent === "Marta Alvarez", "the dialog names the customer");
+
+/* ---------- Decode VIN: the dash plate types the car for you ----------
+   Same decoder the intake and edit dialogs have. The button lights up the
+   moment the VIN proves its check digit while make/model are still empty,
+   and one click fills year/make/model. */
+const decodeBtn = $("#vehicle-add-decode-vin");
+ok(decodeBtn && !decodeBtn.classList.contains("btn-decode-ready"),
+   "an empty form should leave the Decode button at rest");
+input($("#vehicle-add-vin"), "1hgcm82633a004352");
+ok($("#vehicle-add-vin").value === "1HGCM82633A004352", "the VIN box masks to the stored shape");
+ok($("#vehicle-add-vin-verdict").classList.contains("ok"),
+   "a VIN whose check digit works out should say so here too");
+ok(decodeBtn.classList.contains("btn-decode-ready"),
+   "a proven VIN over an empty make/model should light up Decode VIN");
+click(w, decodeBtn);
+await settle();
+ok(decodePosts.length === 1 && decodePosts[0].vin === "1HGCM82633A004352",
+   `the decode POST carries the VIN, got ${JSON.stringify(decodePosts)}`);
+ok($("#vehicle-add-year").value === "2003" && $("#vehicle-add-make").value === "HONDA"
+   && $("#vehicle-add-model").value === "Accord",
+   `decoding fills year/make/model, got "${$("#vehicle-add-year").value} ${$("#vehicle-add-make").value} ${$("#vehicle-add-model").value}"`);
+ok(!decodeBtn.classList.contains("btn-decode-ready"),
+   "a filled make/model puts the Decode button back to rest");
+
 input($("#vehicle-add-year"), "2020");
 input($("#vehicle-add-make"), "Ford");
 input($("#vehicle-add-model"), "F-150");
@@ -340,6 +369,8 @@ click(w, $("#customers-table .cust-add-vehicle"));
 ok(addDialog.open, "it opens the same dialog");
 ok($("#vehicle-add-customer").textContent === "Marta Alvarez", "prefilled with the row's customer");
 ok($("#vehicle-add-make").value === "", "the form arrives blank, not with the last car's values");
+ok($("#vehicle-add-vin-verdict").hidden && !$("#vehicle-add-decode-vin").classList.contains("btn-decode-ready"),
+   "the last car's VIN verdict and lit Decode button don't greet the next one");
 input($("#vehicle-add-year"), "2012");
 input($("#vehicle-add-make"), "Honda");
 input($("#vehicle-add-model"), "Odyssey");

@@ -1874,3 +1874,41 @@ Next time, in rough priority order:
      (five runs now -- do it or drop it).
   4. Carried: Add Vehicle dialog could offer Decode VIN.
   5. Carried: Other Vehicles rows could offer + Write RO directly.
+
+=== 2026-08-17 ===
+The Add Vehicle dialog (another car for an existing customer -- opened
+from the Customers screen and the retail page's Other Vehicles card) was
+the last place a VIN got typed with no Decode VIN button next to it: the
+recon intake, we-owe intake and Edit Vehicle dialogs all decode, this
+one made you hand-type year/make/model anyway. Carried on the idea list
+since run ~31; done.
+
+* static/dialogs/vehicle-add-dialog.html: Decode VIN button on the VIN
+  row (same form-row-btn-end pattern as recon intake); Mileage+Color now
+  pair on one row, Plate+State on the next, so the narrow dialog's rows
+  stay balanced. Its plate-state placeholder also said "MI"; it says
+  "IN" like every other plate-state box (the shop is in Indiana).
+* static/js/customers.js: same nudge the intake dialogs have -- button
+  lights btn-decode-ready when the VIN proves its check digit while
+  make/model are still empty, rests when either is typed or the decode
+  fills them. Decode fills year/make/model only (what the form shows is
+  what the record will say; trim/engine stay for Edit Vehicle).
+* tests/dom/customers_smoke.mjs: decode flow covered -- lit button,
+  POST carries the VIN, fields fill, button rests, reopen arrives blank.
+* 1001 passed, 7 skipped, check.py ALL CLEAN. Live-verified: served
+  page carries the button; POST /api/vehicles/decode-vin round-trips a
+  real VIN (2003 HONDA Accord).
+
+Next time, in rough priority order:
+  1. Carried: existing at-cost rows in a LIVE shop DB written split
+     (agent lines from before #129) stay split until re-saved through
+     the grid; a one-time normalize needs the obviously-safe bar.
+  2. Carried: live shop DBs still store the old commented schema text;
+     first live DROP COLUMN migration must normalize first.
+  3. Carried: detail page Escape/keyboard joining wireListKeyboard
+     (six runs now -- do it or drop it).
+  4. Carried: Other Vehicles rows could offer + Write RO directly.
+  5. Seed's age_the_board() writes UTC-aware stamps (+00:00) into
+     created_at/last_activity_at while the app writes naive local --
+     mock-data-only inconsistency, but it makes seeded idle/age drift
+     an hour and doesn't match what the app itself would write.

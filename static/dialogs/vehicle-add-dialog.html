@@ -17,12 +17,19 @@
       <label>Model<input id="vehicle-add-model" required></label>
       <div class="form-row">
         <label style="flex:2">VIN<input id="vehicle-add-vin" maxlength="17" autocapitalize="characters" autocomplete="off" spellcheck="false"><span class="vin-verdict" id="vehicle-add-vin-verdict" hidden></span></label>
-        <label style="flex:1">Mileage<input id="vehicle-add-mileage" type="number" min="0"></label>
+        <!-- Same decoder the intake and edit dialogs have: type the VIN off
+             the dash plate, and year/make/model fill themselves (see
+             wireAddVehicleDialog). Lights up the moment the VIN proves
+             itself while those boxes are still empty. -->
+        <button type="button" class="btn btn-ghost form-row-btn-end" id="vehicle-add-decode-vin">Decode VIN</button>
+      </div>
+      <div class="form-row">
+        <label>Mileage<input id="vehicle-add-mileage" type="number" min="0"></label>
+        <label>Color<input id="vehicle-add-color"></label>
       </div>
       <div class="form-row">
         <label style="flex:2">Plate<input id="vehicle-add-plate" autocapitalize="characters" autocomplete="off"></label>
-        <label style="flex:1">Plate state<input id="vehicle-add-plate-state" maxlength="2" autocapitalize="characters" placeholder="MI" autocomplete="off"></label>
-        <label style="flex:2">Color<input id="vehicle-add-color"></label>
+        <label style="flex:1">Plate state<input id="vehicle-add-plate-state" maxlength="2" autocapitalize="characters" placeholder="IN" autocomplete="off"></label>
       </div>
     </div>
     <div class="modal-actions">

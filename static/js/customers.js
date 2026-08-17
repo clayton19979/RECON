@@ -536,6 +536,17 @@ let addVehicleTarget = null; // { customerId, onCreated } while the dialog is op
 /* Re-run the VIN verdict after the field is cleared from code on open;
    assigned in wireAddVehicleDialog. */
 let syncAddVehicleVin = () => {};
+/* The last VIN state wireVinField reported, for the Decode nudge below. */
+let addVehicleVinState = "empty";
+
+/* Same nudge the intake dialogs have: light up Decode VIN the moment it
+   becomes the shortest path -- the VIN just proved itself and make/model are
+   still waiting to be typed. Filling either by hand, or decoding, puts the
+   button back to rest. */
+function syncAddVehicleDecodeNudge() {
+  const untyped = !$("#vehicle-add-make").value.trim() && !$("#vehicle-add-model").value.trim();
+  $("#vehicle-add-decode-vin").classList.toggle("btn-decode-ready", addVehicleVinState === "ok" && untyped);
+}
 
 export function openAddVehicleDialog(customerId, customerName, onCreated) {
   addVehicleTarget = { customerId, onCreated };
@@ -553,8 +564,35 @@ export function wireAddVehicleDialog() {
   // normalizes to -- so what the form shows is what the record will say.
   // The VIN box also counts its characters and checks the finished number's
   // check digit, the same live verdict the intake dialogs give (see vin.js).
-  syncAddVehicleVin = wireVinField($("#vehicle-add-vin"), $("#vehicle-add-vin-verdict"));
+  syncAddVehicleVin = wireVinField($("#vehicle-add-vin"), $("#vehicle-add-vin-verdict"), (vinState) => {
+    addVehicleVinState = vinState;
+    syncAddVehicleDecodeNudge();
+  });
   wirePlateFields("#vehicle-add-plate", "#vehicle-add-plate-state");
+  // Typing the make or model by hand answers the question the lit-up Decode
+  // button was asking, so it goes back to rest.
+  for (const sel of ["#vehicle-add-make", "#vehicle-add-model"]) {
+    $(sel).addEventListener("input", () => syncAddVehicleDecodeNudge());
+  }
+  $("#vehicle-add-decode-vin").addEventListener("click", async () => {
+    const vin = $("#vehicle-add-vin").value.trim();
+    if (vin.length < 5) return fieldError($("#vehicle-add-vin"), "Enter a VIN first");
+    try {
+      const data = await post("/api/vehicles/decode-vin", { vin });
+      $("#vehicle-add-year").value = data.year;
+      $("#vehicle-add-make").value = data.make;
+      $("#vehicle-add-model").value = data.model;
+      // Filled from code, so no input events fired: put the lit-up Decode
+      // button (its job is done) back to rest. Trim and engine come back
+      // from the decoder too but this form doesn't show them, and what the
+      // form shows is what the record will say -- the Edit Vehicle dialog
+      // picks them up later if anyone cares.
+      syncAddVehicleDecodeNudge();
+      toast("VIN decoded");
+    } catch (err) {
+      toast(err.message, true);
+    }
+  });
   $("#vehicle-add-form").addEventListener("submit", async (e) => {
     e.preventDefault();
     if (!addVehicleTarget) return;

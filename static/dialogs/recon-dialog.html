@@ -73,6 +73,14 @@
     </div>
     <div class="modal-actions">
       <button value="cancel" class="btn btn-ghost" formnovalidate type="button" id="recon-cancel-2">Cancel</button>
+      <!-- Auction days deliver cars in batches. This keeps the form open for
+           the next one, carrying the acquisition date and source over --
+           they're the two answers that are the same for the whole trailer.
+           type="button", not a second submit: Enter anywhere in the form must
+           keep meaning plain Save (the browser hands Enter to the first
+           submit button, and which one that is should never depend on markup
+           order). -->
+      <button class="btn btn-ghost" type="button" id="recon-save-again">Save &amp; Add Another</button>
       <button class="btn btn-primary" type="submit">Save Recon Vehicle</button>
     </div>
   </form>

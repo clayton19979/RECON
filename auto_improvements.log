@@ -1874,3 +1874,51 @@ Next time, in rough priority order:
      (five runs now -- do it or drop it).
   4. Carried: Add Vehicle dialog could offer Decode VIN.
   5. Carried: Other Vehicles rows could offer + Write RO directly.
+
+=== 2026-08-18 ===
+(Log lapsed since 2026-08-13; PRs #130-#135 happened in between -- read the
+merged PR titles for that stretch, not this file.)
+
+Intake now ends where the work starts. Saving a new recon car (or a new
+we-owe promise) lands on that record's own page -- where the Start Repair
+Order box is -- instead of dropping back to the board to go find the car
+you were holding a second ago. Same landing the Customers screen's
+add-vehicle flow already used; Escape backs out to the board, which
+reloads itself on the way in.
+
+And for auction days: the recon intake dialog grew Save & Add Another.
+It saves the car, keeps the form open for the next one off the trailer,
+carries the acquisition date and source over (one auction, one answer for
+the whole batch), clears everything that was the last car's, and puts the
+cursor back in the stock number box. type="button" on purpose, so Enter
+anywhere in the form still means plain Save; it runs reportValidity()
+itself so a blank car can't slip past the browser's submit checks.
+
+* static/dialogs/recon-dialog.html: the new button.
+* static/js/dialog-new-recon.js: save refactored into saveReconVehicle()
+  with the two exits; dialog-new-weowe.js save lands on the new promise.
+* tests/dom/intake_smoke.mjs + weowe_intake_smoke.mjs: both landings
+  proven non-vacuously (view forced back to the board first), the batch
+  carry-over, the cleared identity fields, the blank-car refusal.
+* 1001 passed, 7 skipped, check.py ALL CLEAN (same count as the run's
+  baseline -- the new assertions live inside the two existing intake
+  smoke files). Live-verified the endpoints
+  the new paths call (POST /api/recon/vehicles returns the id the landing
+  needs; POST /api/we-owe likewise).
+
+Next time, in rough priority order:
+  1. Carried from run 32: live shop DBs still store the old commented
+     schema text; first live DROP COLUMN migration must normalize first.
+  2. Carried: existing at-cost rows in a LIVE shop DB written split (agent
+     lines from before #129) stay split until re-saved through the grid;
+     a one-time normalize needs the obviously-safe-migration bar.
+  3. Daily-friction spotted and left: opening a car fetches the segment's
+     whole ticket list (/api/orders?segment=...) and filters in the
+     browser -- fine today, but it's the one per-car screen that gets
+     slower every month. A ?recon_vehicle_id= filter would cap it.
+  4. Daily-friction spotted and left: a stock number could suggest itself
+     at intake (next free number in the R-#### run) -- worth asking
+     Clayton if their numbering is really sequential before building it.
+  5. Dropped after five carries: detail-page keyboard joining
+     wireListKeyboard -- #131 already shipped Escape + Alt-arrows, which
+     is the part anybody asked for.

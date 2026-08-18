@@ -40,10 +40,12 @@ function lookup(name, phone) {
 }
 
 const vehiclesAsked = [];
+const savedPromises = []; // what Save We-Owe actually put on the wire
+const weOweOpened = [];   // the promise pages loaded after a save
 
 const { w, doc, settle, ok, finish, rejections } = await boot({
-  expose: ["openWeOweDialog"],
-  fetch: async (url) => {
+  expose: ["openWeOweDialog", "showView"],
+  fetch: async (url, opts) => {
     if (url.startsWith("/api/customers/match")) {
       const params = new URLSearchParams(url.split("?")[1] || "");
       return lookup(params.get("name") || "", params.get("phone") || "");
@@ -53,8 +55,23 @@ const { w, doc, settle, ok, finish, rejections } = await boot({
       vehiclesAsked.push(url);
       return [{ id: 41, customer_id: IRIS.customer_id, year: 2019, make: "Honda", model: "Civic" }];
     }
+    if (url === "/api/we-owe" && opts.method === "POST") {
+      savedPromises.push(JSON.parse(opts.body));
+      return { id: 55 };
+    }
+    if (url === "/api/we-owe/55" && opts.method === "GET") {
+      weOweOpened.push(url);
+      return {
+        id: 55, customer_id: IRIS.customer_id, customer_name: IRIS.name, vehicle_id: 41,
+        year: 2019, make: "Honda", model: "Civic", vin: "", mileage: 0,
+        description: "Replace missing passenger mirror", category: "other", status: "open",
+        target_date: "", sale_reference: "", lot_stock_number: "", notes: "",
+        archived_at: "", orders: [], payments: [], total_cost: 0, quoted_cost: 0,
+      };
+    }
     if (url === "/api/vehicles-board" || url.startsWith("/api/vehicles-board?")) return [];
-    if (url === "/api/staff" || url === "/api/tasks" || url === "/api/orders") return [];
+    if (url === "/api/staff" || url === "/api/tasks") return [];
+    if (url === "/api/orders" || url.startsWith("/api/orders?")) return [];
     return null;
   },
 });
@@ -163,6 +180,29 @@ ok($("#we-owe-new-customer-name").value === "", "the form should be empty again"
 ok(preview.hidden, "last promise's head line must not greet the next one");
 ok(verdict.hidden, "last car's VIN verdict must not greet the next one");
 
+/* ---------- Save lands on the promise it just made ----------
+
+   Same landing as recon intake: the next thing done with a fresh we-owe is
+   writing its ticket, and the Start Repair Order box is on the promise's own
+   page -- the board would only be a search for the record just saved. */
+$("#we-owe-customer").value = String(IRIS.customer_id);
+$("#we-owe-customer").dispatchEvent(new w.Event("change", { bubbles: true }));
+await settle();
+const civic = Array.from($("#we-owe-vehicle").options).find((o) => /Civic/.test(o.textContent));
+$("#we-owe-vehicle").value = civic.value;
+$("#we-owe-vehicle").dispatchEvent(new w.Event("change", { bubbles: true }));
+$("#we-owe-description").value = "Replace missing passenger mirror";
+w.showView("vehicles");
+await settle();
+$("#we-owe-form").dispatchEvent(new w.Event("submit", { bubbles: true, cancelable: true }));
+await settle();
+ok(savedPromises.length === 1, `the form should have saved once, saved ${savedPromises.length} times`);
+ok(!$("#we-owe-dialog").open, "Save should close the dialog");
+ok($("#view-vehicle-detail").classList.contains("active"),
+   "Save should land on the promise's own page, not back on the board");
+ok(weOweOpened.length === 1,
+   `the landing should load the promise the save returned, requested: ${weOweOpened.join(", ") || "nothing"}`);
+
 ok(rejections.length === 0, `unhandled rejections during the run: ${rejections.map((r) => r && r.message).join("; ")}`);
 
-finish("we-owe intake: a customer already on file is caught and picked in one click, the head line assembles the promise, the VIN checks itself");
+finish("we-owe intake: a customer already on file is caught and picked in one click, the head line assembles the promise, Save lands on the promise's page");

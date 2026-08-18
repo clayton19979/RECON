@@ -1,8 +1,7 @@
 import { $, get, post } from "./core.js";
 import { toast } from "./notify.js";
 import { esc, fieldError, fmtDate, money, withLoading } from "./shortcuts.js";
-import { loadVehiclesView } from "./vehicles-board.js";
-import { phoneFieldOk, wirePhoneInput } from "./vehicle-detail.js";
+import { openVehicleDetail, phoneFieldOk, wirePhoneInput } from "./vehicle-detail.js";
 import { wireVinField } from "./vin.js";
 
 /* ==================================================================
@@ -319,7 +318,7 @@ export function wireWeOweDialog() {
           vehicleId = Number($("#we-owe-vehicle").value);
         }
         const salePrice = $("#we-owe-new-sale-price").value.trim();
-        await post("/api/we-owe", {
+        const created = await post("/api/we-owe", {
           customer_id: customerId,
           vehicle_id: vehicleId,
           description: $("#we-owe-description").value.trim(),
@@ -333,7 +332,12 @@ export function wireWeOweDialog() {
         });
         $("#we-owe-dialog").close();
         toast("We-owe item added");
-        loadVehiclesView();
+        // Straight to the promise's own page, where the Start Repair Order
+        // box is -- writing the ticket is what a fresh we-owe is for, and the
+        // board would only be a search for the record just saved. Same
+        // landing the recon intake and the Customers add-vehicle flow use;
+        // the board reloads itself on the way back in (see showView).
+        await openVehicleDetail("we_owe", created.id);
       } catch (err) {
         toast(err.message, true);
       }

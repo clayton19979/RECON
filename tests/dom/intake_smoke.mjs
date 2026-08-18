@@ -28,7 +28,7 @@ const opened = [];
 const saved = []; // what Save Recon Vehicle actually put on the wire
 
 const { w, doc, settle, ok, finish, rejections } = await boot({
-  expose: ["openReconDialog", "openVehicleDetail"],
+  expose: ["openReconDialog", "openVehicleDetail", "showView"],
   fetch: async (url, opts) => {
     if (url.startsWith("/api/recon/vehicles/lookup")) {
       const params = new URLSearchParams(url.split("?")[1] || "");
@@ -50,7 +50,10 @@ const { w, doc, settle, ok, finish, rejections } = await boot({
     if (url === "/api/vehicles-board" || url.startsWith("/api/vehicles-board?")) return [];
     if (url === "/api/staff") return [];
     if (url === "/api/tasks") return [];
-    if (url === "/api/orders" || url === "/api/customers") return [];
+    // The car's page loads the segment's ticket list to find this car's; a
+    // just-added car has none.
+    if (url === "/api/orders" || url.startsWith("/api/orders?")) return [];
+    if (url === "/api/customers") return [];
     return null;
   },
 });
@@ -191,12 +194,59 @@ plateBox.value = "tk7-q419";
 plateBox.dispatchEvent(new w.Event("input", { bubbles: true }));
 ok(plateBox.value === "TK7Q419", `the box should show what will be stored, shows "${plateBox.value}"`);
 $("#recon-plate-state").value = "IN";
+// Earlier, Open It already walked to a car's page; stand back on the board
+// first so the landing below is provably the save's doing.
+w.showView("vehicles");
+await settle();
+const openedBeforeSave = opened.length;
 $("#recon-form").dispatchEvent(new w.Event("submit", { bubbles: true, cancelable: true }));
 await settle();
 ok(saved.length === 1, `the form should have saved once, saved ${saved.length} times`);
 ok(saved[0].plate === "TK7Q419", `the plate never reached the server: ${JSON.stringify(saved[0])}`);
 ok(saved[0].plate_state === "IN", `the plate's state never reached the server: ${JSON.stringify(saved[0])}`);
 
+/* ---------- Save lands on the car it just made ----------
+
+   The next thing done with a just-added car is writing its ticket, and the
+   Start Repair Order box lives on the car's own page -- going back to the
+   board meant finding the car you were holding a second ago. */
+ok(!$("#recon-dialog").open, "Save should close the intake form");
+ok($("#view-vehicle-detail").classList.contains("active"),
+   "Save should land on the new car's own page, not back on the board");
+ok(opened.length > openedBeforeSave && opened[opened.length - 1].includes("/api/recon/vehicles/7"),
+   `the landing should load the car the save returned, requested: ${opened.join(", ") || "nothing"}`);
+
+/* ---------- Save & Add Another keeps the form open for the trailer ----------
+
+   Auction cars arrive in batches, and the acquisition date and source are
+   the same for the whole load -- so those two survive, everything that was
+   the last car's is cleared, and the pen stays at the stock number box. */
+w.openReconDialog();
+await settle();
+$("#recon-stock").value = "R-2201";
+$("#recon-make").value = "Ford";
+$("#recon-model").value = "Escape";
+$("#recon-source").value = "Kenosha auction";
+$("#recon-date").value = "2026-08-12";
+click(w, $("#recon-save-again"));
+await settle();
+ok(saved.length === 2, `Save & Add Another should save the car, saved ${saved.length - 1} extra times`);
+ok(saved[1].stock_number === "R-2201" && saved[1].acquisition_source === "Kenosha auction"
+   && saved[1].acquisition_date === "2026-08-12",
+   `the batch car should save whole: ${JSON.stringify(saved[1])}`);
+ok($("#recon-dialog").open, "the form should stay open for the next car off the trailer");
+ok($("#recon-stock").value === "" && $("#recon-make").value === "" && $("#recon-model").value === "",
+   "the last car's identity should be gone from the form");
+ok($("#recon-source").value === "Kenosha auction" && $("#recon-date").value === "2026-08-12",
+   "the batch's source and date should carry over to the next car");
+ok(doc.activeElement === $("#recon-stock"), "the pen should be back at the stock number box");
+
+/* An empty form must not save a blank car -- the button skips the browser's
+   own submit checks, so it has to run them itself. */
+click(w, $("#recon-save-again"));
+await settle();
+ok(saved.length === 2, "Save & Add Another on an empty form should refuse, not save a blank car");
+
 ok(rejections.length === 0, `unhandled rejections during the run: ${rejections.map((r) => r && r.message).join("; ")}`);
 
-finish("recon intake: duplicates caught before the form is typed, the VIN checks itself as it lands, the head line assembles the car, plate saved");
+finish("recon intake: duplicates caught before the form is typed, the VIN checks itself as it lands, Save lands on the car, Save & Add Another holds the batch");

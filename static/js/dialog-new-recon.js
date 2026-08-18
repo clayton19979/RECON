@@ -181,36 +181,81 @@ export function wireReconDialog() {
       toast(err.message, true);
     }
   });
-  $("#recon-form").addEventListener("submit", async (e) => {
-    e.preventDefault();
-    await withLoading(e.submitter, "Saving…", async () => {
-      try {
-        await post("/api/recon/vehicles", {
-          stock_number: $("#recon-stock").value.trim(),
-          vin: $("#recon-vin").value.trim(),
-          year: Number($("#recon-year").value),
-          make: $("#recon-make").value.trim(),
-          model: $("#recon-model").value.trim(),
-          trim: $("#recon-trim").value.trim(),
-          engine: $("#recon-engine").value.trim(),
-          color: $("#recon-color").value.trim(),
-          // The form has always asked for these two and used to throw both
-          // away at Save, so a lot car never had a plate on file and the
-          // search bar could never find one by it.
-          plate: $("#recon-plate").value.trim(),
-          plate_state: $("#recon-plate-state").value.trim(),
-          mileage: Number($("#recon-mileage").value || 0),
-          odometer_broken: $("#recon-odo-broken").checked,
-          acquisition_source: $("#recon-source").value.trim(),
-          acquisition_date: $("#recon-date").value,
-          notes: $("#recon-notes").value.trim(),
-        });
+  /* One save, two ways out.
+
+     Plain Save lands on the car's own page: the next thing done with a car
+     that was just written down is writing its ticket, and the page with the
+     Start Repair Order box on it is where that happens -- the board would
+     only be a search for the car you were just holding. (Same landing the
+     Customers screen's add-vehicle flow uses, for the same reason. Backing
+     out is one press of Escape, and the board reloads itself on the way in.)
+
+     Save & Add Another is for the trailer-load: the dialog stays open for
+     the next car, keeping the acquisition date and source -- one auction,
+     one delivery, one answer for the whole batch -- and clearing everything
+     that belongs to the car that just drove off the form. */
+  async function saveReconVehicle({ addAnother }) {
+    try {
+      const created = await post("/api/recon/vehicles", {
+        stock_number: $("#recon-stock").value.trim(),
+        vin: $("#recon-vin").value.trim(),
+        year: Number($("#recon-year").value),
+        make: $("#recon-make").value.trim(),
+        model: $("#recon-model").value.trim(),
+        trim: $("#recon-trim").value.trim(),
+        engine: $("#recon-engine").value.trim(),
+        color: $("#recon-color").value.trim(),
+        // The form has always asked for these two and used to throw both
+        // away at Save, so a lot car never had a plate on file and the
+        // search bar could never find one by it.
+        plate: $("#recon-plate").value.trim(),
+        plate_state: $("#recon-plate-state").value.trim(),
+        mileage: Number($("#recon-mileage").value || 0),
+        odometer_broken: $("#recon-odo-broken").checked,
+        acquisition_source: $("#recon-source").value.trim(),
+        acquisition_date: $("#recon-date").value,
+        notes: $("#recon-notes").value.trim(),
+      });
+      if (!addAnother) {
         $("#recon-dialog").close();
         toast("Recon vehicle added");
-        loadVehiclesView();
-      } catch (err) {
-        toast(err.message, true);
+        await openVehicleDetail("recon", created.id);
+        return;
       }
-    });
+      toast(`${created.stock_number} saved — ready for the next car`);
+      clearMatchNote();
+      // Everything that was that car's, not the batch's. The year goes back
+      // to the same default a fresh form gets rather than lingering -- two
+      // cars off one trailer agreeing on their year is luck, not a rule.
+      for (const sel of ["#recon-stock", "#recon-vin", "#recon-plate", "#recon-plate-state",
+        "#recon-make", "#recon-model", "#recon-trim", "#recon-engine", "#recon-color", "#recon-notes"]) {
+        $(sel).value = "";
+      }
+      $("#recon-year").value = new Date().getFullYear();
+      $("#recon-mileage").value = 0;
+      $("#recon-odo-broken").checked = false;
+      // All set from code, so no input events fired: rebuild the head line
+      // and the VIN verdict the way the decode buttons already do.
+      syncReconPreview();
+      syncReconVin();
+      $("#recon-stock").focus();
+      // The board behind the dialog picks the saved car up now rather than
+      // when the dialog finally closes.
+      loadVehiclesView();
+    } catch (err) {
+      toast(err.message, true);
+    }
+  }
+
+  $("#recon-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    await withLoading(e.submitter, "Saving…", () => saveReconVehicle({ addAnother: false }));
+  });
+  $("#recon-save-again").addEventListener("click", async (e) => {
+    // A type="button" skips the browser's own required-field check that a
+    // real submit gets, so it has to ask for it -- otherwise this path could
+    // save a car with no stock number.
+    if (!$("#recon-form").reportValidity()) return;
+    await withLoading(e.currentTarget, "Saving…", () => saveReconVehicle({ addAnother: true }));
   });
 }
